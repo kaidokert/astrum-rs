@@ -5,5 +5,6 @@ pub mod kernel;
 pub mod mpu;
 pub mod partition;
 pub mod scheduler;
+pub mod svc;
 pub mod syscall;
 pub mod tick;

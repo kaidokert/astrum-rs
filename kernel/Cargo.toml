@@ -50,5 +50,13 @@ required-features = ["qemu"]
 name = "scheduler_tick"
 required-features = ["qemu"]
 
+[[example]]
+name = "mpu_partition"
+required-features = ["qemu"]
+
+[[example]]
+name = "svc_yield"
+required-features = ["qemu"]
+
 [features]
 qemu = []
