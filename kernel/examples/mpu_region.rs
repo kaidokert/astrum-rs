@@ -3,6 +3,7 @@
 
 use cortex_m_rt::entry;
 use cortex_m_semihosting::{debug, hprintln};
+use kernel::mpu;
 use panic_semihosting as _;
 
 #[entry]
@@ -16,39 +17,14 @@ fn main() -> ! {
     cortex_m::asm::isb();
 
     // Region 0: base 0x2000_0000, 256 bytes, RW, XN
-    //
-    // RBAR (Region Base Address Register):
-    //   bits [31:5] = base address (must be aligned to region size)
-    //   bit  [4]    = VALID (1 = use region number in bits 3:0)
-    //   bits [3:0]  = region number
-    let region: u32 = 0;
-    let rbar_val: u32 = 0x2000_0000 | (1 << 4) | region;
-
-    // RASR (Region Attribute and Size Register):
-    //   bit  [28]    = XN (execute never)
-    //   bits [26:24] = AP (access permission, 0b011 = full access RW)
-    //   bits [21:19] = TEX (type extension, 0b000 for normal memory)
-    //   bit  [18]    = S (shareable)
-    //   bit  [17]    = C (cacheable)
-    //   bit  [16]    = B (bufferable)
-    //   bits [15:8]  = SRD (sub-region disable, 0 = all enabled)
-    //   bits [5:1]   = SIZE (7 → 2^(7+1) = 256 bytes)
-    //   bit  [0]     = ENABLE
-    let rasr_val: u32 = (1 << 28)        // XN
-        | (0b011 << 24)                  // AP = full access
-        | (1 << 18)                      // S
-        | (1 << 17)                      // C
-        | (7 << 1)                       // SIZE = 7
-        | 1; // ENABLE
+    let size_field = mpu::encode_size(256).unwrap();
+    let rbar_val = mpu::build_rbar(0x2000_0000, 0).unwrap();
+    let rasr_val = mpu::build_rasr(size_field, 0b011, true, (true, true, false));
 
     hprintln!("RBAR: write={:#010x}", rbar_val);
     hprintln!("RASR: write={:#010x}", rasr_val);
 
-    // SAFETY: writing MPU RBAR and RASR to configure region 0.
-    unsafe {
-        p.MPU.rbar.write(rbar_val);
-        p.MPU.rasr.write(rasr_val);
-    }
+    mpu::configure_region(&p.MPU, rbar_val, rasr_val);
 
     // Enable MPU with PRIVDEFENA so privileged code keeps default memory map
     // SAFETY: enabling the MPU with privileged default map.
