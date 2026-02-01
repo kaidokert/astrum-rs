@@ -32,6 +32,9 @@ impl<const P: usize, const S: usize> KernelState<P, S> {
     pub fn partitions(&self) -> &PartitionTable<P> {
         &self.partitions
     }
+    pub fn partitions_mut(&mut self) -> &mut PartitionTable<P> {
+        &mut self.partitions
+    }
     pub fn schedule(&self) -> &ScheduleTable<S> {
         &self.schedule
     }

@@ -49,6 +49,7 @@ pub struct PartitionControlBlock {
     stack_size: u32,
     mpu_region: MpuRegion,
     event_flags: u32,
+    event_wait_mask: u32,
 }
 
 impl PartitionControlBlock {
@@ -68,6 +69,7 @@ impl PartitionControlBlock {
             stack_size: stack_pointer.wrapping_sub(stack_base),
             mpu_region,
             event_flags: 0,
+            event_wait_mask: 0,
         }
     }
 
@@ -101,6 +103,22 @@ impl PartitionControlBlock {
 
     pub fn event_flags(&self) -> u32 {
         self.event_flags
+    }
+
+    pub fn set_event_flags(&mut self, bits: u32) {
+        self.event_flags |= bits;
+    }
+
+    pub fn clear_event_flags(&mut self, bits: u32) {
+        self.event_flags &= !bits;
+    }
+
+    pub fn event_wait_mask(&self) -> u32 {
+        self.event_wait_mask
+    }
+
+    pub fn set_event_wait_mask(&mut self, mask: u32) {
+        self.event_wait_mask = mask;
     }
 
     pub fn transition(&mut self, to: PartitionState) -> Result<(), TransitionError> {
