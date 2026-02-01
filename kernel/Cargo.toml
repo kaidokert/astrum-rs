@@ -1,0 +1,19 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+cortex-m-semihosting = "0.5"
+panic-halt = "1.0"
+
+# TODO: reviewer asked to remove [[example]] and [features], but required-features
+# is needed to prevent `cargo test` (host) from compiling no_std examples.
+[[example]]
+name = "hello"
+required-features = ["qemu"]
+
+[features]
+qemu = []

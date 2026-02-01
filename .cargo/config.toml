@@ -1,0 +1,7 @@
+# TODO: reviewer requested [build] target = "thumbv7m-none-eabi" here,
+# but that forces `cargo test` onto the embedded target where no test
+# harness exists, breaking host tests.  Omitted until a per-crate
+# target override is available.
+
+[target.thumbv7m-none-eabi]
+runner = "qemu-system-arm -cpu cortex-m3 -machine lm3s6965evb -nographic -semihosting-config enable=on,target=native -kernel"
