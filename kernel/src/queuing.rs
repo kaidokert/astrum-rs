@@ -1,5 +1,17 @@
 use crate::sampling::PortDirection;
 
+/// Status information for a queuing port, returned by the `QueuingStatus` syscall.
+/// `#[repr(C)]` ensures a stable layout for writing directly to user-provided pointers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueuingPortStatus {
+    pub nb_messages: u32,
+    pub max_nb_messages: u32,
+    pub max_message_size: u32,
+    /// 0 = Source, 1 = Destination.
+    pub direction: u32,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum QueuingError {
     PoolFull,
@@ -17,6 +29,17 @@ pub enum SendQueuingOutcome {
     SenderBlocked { expiry_tick: u64 },
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum RecvQueuingOutcome {
+    Received {
+        msg_len: usize,
+        wake_sender: Option<u8>,
+    },
+    ReceiverBlocked {
+        expiry_tick: u64,
+    },
+}
+
 /// A queuing port with FIFO message buffering.
 /// `D` = depth, `M` = max message size in bytes, `W` = wait-queue capacity.
 ///
@@ -28,6 +51,7 @@ pub struct QueuingPort<const D: usize, const M: usize, const W: usize> {
     buf: heapless::Deque<(usize, [u8; M]), D>,
     sender_wq: heapless::Deque<(u8, u64), W>,
     receiver_wq: heapless::Deque<u8, W>,
+    connected_port: Option<usize>,
 }
 
 #[allow(clippy::new_without_default)]
@@ -38,6 +62,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
             buf: heapless::Deque::new(),
             sender_wq: heapless::Deque::new(),
             receiver_wq: heapless::Deque::new(),
+            connected_port: None,
         }
     }
 
@@ -154,6 +179,49 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
             .map_err(|_| QueuingError::WaitQueueFull)?;
         Err(QueuingError::QueueEmpty)
     }
+
+    pub fn receive_queuing_message(
+        &mut self,
+        caller: u8,
+        buf: &mut [u8],
+        timeout_ticks: u64,
+        current_tick: u64,
+    ) -> Result<RecvQueuingOutcome, QueuingError> {
+        if self.direction != PortDirection::Destination {
+            return Err(QueuingError::DirectionViolation);
+        }
+        if let Some((len, msg)) = self.buf.pop_front() {
+            let copy_len = len.min(buf.len());
+            buf[..copy_len].copy_from_slice(&msg[..copy_len]);
+            return Ok(RecvQueuingOutcome::Received {
+                msg_len: len,
+                wake_sender: self.sender_wq.pop_front().map(|(pid, _)| pid),
+            });
+        }
+        if timeout_ticks == 0 {
+            return Err(QueuingError::QueueEmpty);
+        }
+        let expiry = current_tick + timeout_ticks;
+        self.receiver_wq
+            .push_back(caller)
+            .map_err(|_| QueuingError::WaitQueueFull)?;
+        Ok(RecvQueuingOutcome::ReceiverBlocked {
+            expiry_tick: expiry,
+        })
+    }
+
+    /// Returns the full status of this queuing port as a C-compatible struct.
+    pub fn status(&self) -> QueuingPortStatus {
+        QueuingPortStatus {
+            nb_messages: self.buf.len() as u32,
+            max_nb_messages: D as u32,
+            max_message_size: M as u32,
+            direction: match self.direction {
+                PortDirection::Source => 0,
+                PortDirection::Destination => 1,
+            },
+        }
+    }
 }
 
 /// Fixed-capacity pool of queuing ports.
@@ -208,6 +276,44 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
             .get_mut(port_id)
             .ok_or(QueuingError::InvalidPort)?
             .send_queuing_message(caller, data, timeout_ticks, current_tick)
+    }
+
+    pub fn receive_queuing_message(
+        &mut self,
+        port_id: usize,
+        caller: u8,
+        buf: &mut [u8],
+        timeout_ticks: u64,
+        current_tick: u64,
+    ) -> Result<RecvQueuingOutcome, QueuingError> {
+        self.ports
+            .get_mut(port_id)
+            .ok_or(QueuingError::InvalidPort)?
+            .receive_queuing_message(caller, buf, timeout_ticks, current_tick)
+    }
+
+    pub fn get_queuing_port_status(
+        &self,
+        port_id: usize,
+    ) -> Result<QueuingPortStatus, QueuingError> {
+        self.ports
+            .get(port_id)
+            .ok_or(QueuingError::InvalidPort)
+            .map(|p| p.status())
+    }
+
+    pub fn connect_ports(&mut self, src_id: usize, dst_id: usize) -> Result<(), QueuingError> {
+        if src_id >= self.ports.len() || dst_id >= self.ports.len() {
+            return Err(QueuingError::InvalidPort);
+        }
+        if self.ports[src_id].direction != PortDirection::Source {
+            return Err(QueuingError::DirectionViolation);
+        }
+        if self.ports[dst_id].direction != PortDirection::Destination {
+            return Err(QueuingError::DirectionViolation);
+        }
+        self.ports[src_id].connected_port = Some(dst_id);
+        Ok(())
     }
 }
 
@@ -424,6 +530,167 @@ mod tests {
         let mut pool = QueuingPortPool::<4, 2, 8, 4>::new();
         assert_eq!(
             pool.send_queuing_message(99, 0, &[1], 0, 0),
+            Err(QueuingError::InvalidPort)
+        );
+    }
+
+    #[test]
+    fn receive_queuing_delivers_and_wakes_sender() {
+        let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
+        p.buf.push_back((2, [1, 2, 0, 0])).unwrap();
+        p.sender_wq.push_back((3, 999)).unwrap();
+        let mut buf = [0u8; 4];
+        let o = p.receive_queuing_message(0, &mut buf, 0, 0).unwrap();
+        assert_eq!(
+            o,
+            RecvQueuingOutcome::Received {
+                msg_len: 2,
+                wake_sender: Some(3),
+            }
+        );
+        assert_eq!(&buf[..2], &[1, 2]);
+    }
+
+    #[test]
+    fn receive_queuing_empty_zero_timeout_returns_error() {
+        let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
+        let mut buf = [0u8; 4];
+        assert_eq!(
+            p.receive_queuing_message(0, &mut buf, 0, 10),
+            Err(QueuingError::QueueEmpty)
+        );
+        assert_eq!(p.pending_receivers(), 0);
+    }
+
+    #[test]
+    fn receive_queuing_empty_nonzero_timeout_blocks() {
+        let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
+        let mut buf = [0u8; 4];
+        let o = p.receive_queuing_message(1, &mut buf, 50, 100).unwrap();
+        assert_eq!(o, RecvQueuingOutcome::ReceiverBlocked { expiry_tick: 150 });
+        assert_eq!(p.pending_receivers(), 1);
+    }
+
+    #[test]
+    fn receive_queuing_rejects_source_port() {
+        let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
+        let mut buf = [0u8; 4];
+        assert_eq!(
+            src.receive_queuing_message(0, &mut buf, 0, 0),
+            Err(QueuingError::DirectionViolation)
+        );
+    }
+
+    #[test]
+    fn receive_queuing_no_sender_to_wake() {
+        let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
+        p.buf.push_back((3, [10, 20, 30, 0])).unwrap();
+        let mut buf = [0u8; 4];
+        let o = p.receive_queuing_message(0, &mut buf, 0, 0).unwrap();
+        assert_eq!(
+            o,
+            RecvQueuingOutcome::Received {
+                msg_len: 3,
+                wake_sender: None,
+            }
+        );
+        assert_eq!(&buf[..3], &[10, 20, 30]);
+    }
+
+    #[test]
+    fn status_returns_all_fields() {
+        let mut p = QueuingPort::<8, 16, 4>::new(PortDirection::Source);
+        let s = p.status();
+        assert_eq!(s.nb_messages, 0);
+        assert_eq!(s.max_nb_messages, 8);
+        assert_eq!(s.max_message_size, 16);
+        assert_eq!(s.direction, 0); // Source = 0
+
+        p.buf.push_back((4, [0u8; 16])).unwrap();
+        p.buf.push_back((4, [0u8; 16])).unwrap();
+        let s = p.status();
+        assert_eq!(s.nb_messages, 2);
+        assert_eq!(s.max_nb_messages, 8);
+        assert_eq!(s.max_message_size, 16);
+        assert_eq!(s.direction, 0); // Source = 0
+    }
+
+    #[test]
+    fn status_via_pool() {
+        let mut pool = QueuingPortPool::<4, 4, 8, 4>::new();
+        let id = pool.create_port(PortDirection::Destination).unwrap();
+        let s = pool.get_queuing_port_status(id).unwrap();
+        assert_eq!(s.nb_messages, 0);
+        assert_eq!(s.max_nb_messages, 4);
+        assert_eq!(s.max_message_size, 8);
+        assert_eq!(s.direction, 1); // Destination = 1
+    }
+
+    #[test]
+    fn status_pool_invalid_port() {
+        let pool = QueuingPortPool::<4, 4, 4, 4>::new();
+        assert_eq!(
+            pool.get_queuing_port_status(99),
+            Err(QueuingError::InvalidPort)
+        );
+    }
+
+    #[test]
+    fn connect_ports_sets_connected_port() {
+        let mut pool = QueuingPortPool::<4, 4, 4, 4>::new();
+        let s = pool.create_port(PortDirection::Source).unwrap();
+        let d = pool.create_port(PortDirection::Destination).unwrap();
+        pool.connect_ports(s, d).unwrap();
+        assert_eq!(pool.get(s).unwrap().connected_port, Some(d));
+    }
+
+    #[test]
+    fn connect_ports_rejects_wrong_directions() {
+        let mut pool = QueuingPortPool::<4, 4, 4, 4>::new();
+        let d1 = pool.create_port(PortDirection::Destination).unwrap();
+        let d2 = pool.create_port(PortDirection::Destination).unwrap();
+        let s1 = pool.create_port(PortDirection::Source).unwrap();
+        // src must be Source
+        assert_eq!(
+            pool.connect_ports(d1, d2),
+            Err(QueuingError::DirectionViolation)
+        );
+        // dst must be Destination
+        assert_eq!(
+            pool.connect_ports(s1, s1),
+            Err(QueuingError::DirectionViolation)
+        );
+    }
+
+    #[test]
+    fn connect_ports_rejects_invalid_ids() {
+        let mut pool = QueuingPortPool::<4, 4, 4, 4>::new();
+        let s = pool.create_port(PortDirection::Source).unwrap();
+        assert_eq!(pool.connect_ports(s, 99), Err(QueuingError::InvalidPort));
+        assert_eq!(pool.connect_ports(99, s), Err(QueuingError::InvalidPort));
+    }
+
+    #[test]
+    fn receive_queuing_pool_delegates_and_rejects_invalid() {
+        let mut pool = QueuingPortPool::<4, 4, 4, 4>::new();
+        let d = pool.create_port(PortDirection::Destination).unwrap();
+        pool.get_mut(d)
+            .unwrap()
+            .buf
+            .push_back((1, [42, 0, 0, 0]))
+            .unwrap();
+        let mut buf = [0u8; 4];
+        let o = pool.receive_queuing_message(d, 0, &mut buf, 0, 0).unwrap();
+        assert_eq!(
+            o,
+            RecvQueuingOutcome::Received {
+                msg_len: 1,
+                wake_sender: None,
+            }
+        );
+        assert_eq!(buf[0], 42);
+        assert_eq!(
+            pool.receive_queuing_message(99, 0, &mut buf, 0, 0),
             Err(QueuingError::InvalidPort)
         );
     }

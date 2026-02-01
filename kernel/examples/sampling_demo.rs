@@ -151,6 +151,8 @@ fn main() -> ! {
             messages: kernel::message::MessagePool::new(),
             tick: kernel::tick::TickCounter::new(),
             sampling: kernel::sampling::SamplingPortPool::new(),
+            queuing: kernel::queuing::QueuingPortPool::new(),
+            current_partition: 0,
         };
         let s0 = k.sampling.create_port(PortDirection::Source, 10).unwrap();
         let d0 = k

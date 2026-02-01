@@ -3,6 +3,7 @@ use crate::events;
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
 use crate::mutex::MutexPool;
 use crate::partition::{PartitionState, PartitionTable};
+use crate::queuing::{QueuingPortPool, QueuingPortStatus, SendQueuingOutcome};
 use crate::sampling::SamplingPortPool;
 use crate::semaphore::SemaphorePool;
 use crate::syscall::SyscallId;
@@ -33,23 +34,38 @@ core::arch::global_asm!(
 /// explicit Rust-level reference, the linker may discard the object.
 pub static SVC_HANDLER: unsafe extern "C" fn(&mut ExceptionFrame) = dispatch_svc;
 
+/// Optional application-provided dispatch hook. When set, `dispatch_svc`
+/// forwards every SVC frame to this function instead of using the built-in
+/// minimal dispatch. Applications set this to route syscalls through a
+/// full `Kernel::dispatch` that has access to all kernel service pools.
+///
+/// # Safety
+///
+/// The pointer must refer to a function with the same signature and safety
+/// requirements as `dispatch_svc`. It must remain valid for the lifetime
+/// of the program (typically a `static` function).
+// TODO: Replace global mutable state with a more robust design that passes
+// the execution context (including current partition ID) through the dispatch
+// chain, e.g. by storing a &mut Kernel in a critical-section-guarded cell or
+// by extending the assembly trampoline to pass additional context.
+pub static mut SVC_DISPATCH_HOOK: Option<unsafe extern "C" fn(&mut ExceptionFrame)> = None;
+
 /// Dispatch an SVC call based on the syscall number in `frame.r0`.
+///
+/// If [`SVC_DISPATCH_HOOK`] is set, the call is forwarded to the
+/// application-provided handler. Otherwise a minimal built-in handler
+/// processes `Yield` and returns error codes for all other syscalls.
 ///
 /// # Safety
 ///
 /// The caller must pass a valid pointer to the hardware-stacked
 /// `ExceptionFrame` on the process stack (PSP). This is guaranteed
 /// when called from the SVCall assembly trampoline above.
-///
-/// # Note
-///
-/// Event syscalls require a partition table. In production, the caller
-/// must wire a global `KernelState` so that `dispatch_svc` can obtain
-/// `&mut PartitionTable`. See [`dispatch_syscall`] for the core logic.
-// TODO: wire a global KernelState pointer so dispatch_svc can forward
-// event syscalls in the real (non-test) interrupt handler path.
 #[no_mangle]
 pub unsafe extern "C" fn dispatch_svc(frame: &mut ExceptionFrame) {
+    if let Some(hook) = SVC_DISPATCH_HOOK {
+        return hook(frame);
+    }
     frame.r0 = match SyscallId::from_u32(frame.r0) {
         Some(SyscallId::Yield) => handle_yield(),
         Some(SyscallId::EventWait | SyscallId::EventSet | SyscallId::EventClear) => {
@@ -103,6 +119,11 @@ pub struct Kernel<
     pub messages: MessagePool<QS, QD, QM, QW>,
     pub tick: TickCounter,
     pub sampling: SamplingPortPool<SP, SM>,
+    pub queuing: QueuingPortPool<QS, QD, QM, QW>,
+    /// The partition index of the currently executing partition, set by the
+    /// scheduler before entering user code. Used as the trusted caller identity
+    /// for syscalls, rather than reading from a user-controlled register.
+    pub current_partition: u8,
 }
 
 impl<
@@ -119,25 +140,29 @@ impl<
         const SM: usize,
     > Kernel<N, S, SW, MS, MW, QS, QD, QM, QW, SP, SM>
 {
-    /// Full syscall dispatch including semaphore, mutex, and message operations.
+    /// Full syscall dispatch including semaphore, mutex, message, sampling,
+    /// and queuing operations.
     ///
     /// Frame register convention:
     /// - `r0`: syscall ID (overwritten with return value)
-    /// - `r1`: resource ID (semaphore/mutex/queue index)
-    /// - `r2`: caller partition index
-    /// - `r3`: pointer to user data buffer (for msg_send/msg_recv)
+    /// - `r1`: resource ID (semaphore/mutex/queue/port index)
+    /// - `r2`: second argument (event mask, data length, or status pointer)
+    /// - `r3`: pointer to user data buffer (for msg/queuing send/recv)
     ///
-    /// For `MsgSend`: the kernel copies `QM` bytes from `r3` (data_ptr) into
-    /// the queue. For `MsgRecv`: the kernel copies `QM` bytes from the queue
-    /// into `r3` (buf_ptr). This implements true pointer-based inter-partition
-    /// data transfer.
+    /// For queuing syscalls, the caller's partition identity is taken from
+    /// `self.current_partition` (set by the scheduler), **not** from a
+    /// user-controlled register, to prevent partition impersonation.
+    ///
+    /// For `QueuingStatus`: `r2` must point to a writable
+    /// [`QueuingPortStatus`] struct where the kernel writes the full status.
     ///
     /// # Safety
     ///
-    /// For message syscalls, `r3` must point to a readable (send) or writable
-    /// (recv) buffer of at least `QM` bytes within the calling partition's
-    /// memory region. The caller is responsible for ensuring this; in
-    /// production the MPU enforces partition isolation.
+    /// For message/queuing syscalls, `r3` must point to a readable (send) or
+    /// writable (recv) buffer of at least `QM` bytes within the calling
+    /// partition's memory region. For `QueuingStatus`, `r2` must point to a
+    /// writable `QueuingPortStatus`. The caller is responsible for ensuring
+    /// this; in production the MPU enforces partition isolation.
     pub unsafe fn dispatch(&mut self, frame: &mut ExceptionFrame) {
         frame.r0 = match SyscallId::from_u32(frame.r0) {
             Some(SyscallId::Yield) => handle_yield(),
@@ -229,6 +254,59 @@ impl<
                     .read_sampling_message(frame.r1 as usize, b, self.tick.get())
                 {
                     Ok((sz, _)) => sz as u32,
+                    Err(_) => u32::MAX,
+                }
+            }
+            Some(SyscallId::QueuingSend) => {
+                let d = unsafe {
+                    core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
+                };
+                match self.queuing.send_queuing_message(
+                    frame.r1 as usize,
+                    self.current_partition,
+                    d,
+                    0,
+                    self.tick.get(),
+                ) {
+                    Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
+                        if let Some(pid) = w {
+                            try_transition(&mut self.partitions, pid, PartitionState::Ready);
+                        }
+                        0
+                    }
+                    Ok(SendQueuingOutcome::SenderBlocked { .. }) => 0,
+                    Err(_) => u32::MAX,
+                }
+            }
+            Some(SyscallId::QueuingRecv) => {
+                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, QM) };
+                match self.queuing.receive_queuing_message(
+                    frame.r1 as usize,
+                    self.current_partition,
+                    b,
+                    0,
+                    self.tick.get(),
+                ) {
+                    Ok(crate::queuing::RecvQueuingOutcome::Received {
+                        msg_len,
+                        wake_sender: w,
+                    }) => {
+                        if let Some(pid) = w {
+                            try_transition(&mut self.partitions, pid, PartitionState::Ready);
+                        }
+                        msg_len as u32
+                    }
+                    Ok(_) => 0,
+                    Err(_) => u32::MAX,
+                }
+            }
+            Some(SyscallId::QueuingStatus) => {
+                let status_ptr = frame.r2 as *mut QueuingPortStatus;
+                match self.queuing.get_queuing_port_status(frame.r1 as usize) {
+                    Ok(status) => {
+                        unsafe { core::ptr::write(status_ptr, status) };
+                        0
+                    }
                     Err(_) => u32::MAX,
                 }
             }
@@ -376,6 +454,8 @@ mod tests {
             messages: msgs,
             tick: TickCounter::new(),
             sampling: SamplingPortPool::new(),
+            queuing: QueuingPortPool::new(),
+            current_partition: 0,
         };
         // Add semaphores
         for _ in 0..sem_count {
