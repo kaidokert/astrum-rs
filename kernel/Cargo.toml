@@ -62,5 +62,9 @@ required-features = ["qemu"]
 name = "integration"
 required-features = ["qemu"]
 
+[[example]]
+name = "sampling_demo"
+required-features = ["qemu"]
+
 [features]
 qemu = []
