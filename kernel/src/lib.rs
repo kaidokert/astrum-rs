@@ -2,3 +2,4 @@
 
 pub mod mpu;
 pub mod partition;
+pub mod scheduler;
