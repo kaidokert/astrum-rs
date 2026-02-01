@@ -56,16 +56,16 @@ impl PartitionControlBlock {
         id: u8,
         entry_point: u32,
         stack_base: u32,
-        stack_size: u32,
+        stack_pointer: u32,
         mpu_region: MpuRegion,
     ) -> Self {
         Self {
             id,
             state: PartitionState::Ready,
-            stack_pointer: stack_base.wrapping_add(stack_size),
+            stack_pointer,
             entry_point,
             stack_base,
-            stack_size,
+            stack_size: stack_pointer.wrapping_sub(stack_base),
             mpu_region,
             event_flags: 0,
         }
@@ -120,6 +120,15 @@ impl PartitionControlBlock {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PartitionConfig {
+    pub id: u8,
+    pub entry_point: u32,
+    pub stack_base: u32,
+    pub stack_size: u32,
+    pub mpu_region: MpuRegion,
+}
+
 /// Fixed-capacity table of partition control blocks.
 pub struct PartitionTable<const N: usize> {
     partitions: Vec<PartitionControlBlock, N>,
@@ -172,7 +181,7 @@ mod tests {
             1,
             0x0800_0000,
             0x2000_0000,
-            1024,
+            0x2000_0400,
             MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
         )
     }
@@ -238,21 +247,21 @@ mod tests {
             0,
             0x0800_0000,
             0x2000_0000,
-            1024,
+            0x2000_0400,
             MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
         );
         let pcb2 = PartitionControlBlock::new(
             1,
             0x0800_1000,
             0x2000_1000,
-            1024,
+            0x2000_1400,
             MpuRegion::new(0x2000_1000, 4096, 0x0306_0000),
         );
         let pcb3 = PartitionControlBlock::new(
             2,
             0x0800_2000,
             0x2000_2000,
-            1024,
+            0x2000_2400,
             MpuRegion::new(0x2000_2000, 4096, 0x0306_0000),
         );
         assert!(table.add(pcb1).is_ok());
