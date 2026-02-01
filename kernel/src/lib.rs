@@ -3,6 +3,7 @@
 pub mod context;
 pub mod events;
 pub mod kernel;
+pub mod message;
 pub mod mpu;
 pub mod mutex;
 pub mod partition;
