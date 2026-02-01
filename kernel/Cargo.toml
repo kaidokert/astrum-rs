@@ -17,5 +17,9 @@ required-features = ["qemu"]
 name = "panic_test"
 required-features = ["qemu"]
 
+[[example]]
+name = "mpu_info"
+required-features = ["qemu"]
+
 [features]
 qemu = []
