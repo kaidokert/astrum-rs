@@ -8,6 +8,13 @@ pub enum QueuingError {
     QueueFull,
     QueueEmpty,
     WaitQueueFull,
+    InvalidPort,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SendQueuingOutcome {
+    Delivered { wake_receiver: Option<u8> },
+    SenderBlocked { expiry_tick: u64 },
 }
 
 /// A queuing port with FIFO message buffering.
@@ -19,7 +26,7 @@ pub enum QueuingError {
 pub struct QueuingPort<const D: usize, const M: usize, const W: usize> {
     direction: PortDirection,
     buf: heapless::Deque<(usize, [u8; M]), D>,
-    sender_wq: heapless::Deque<u8, W>,
+    sender_wq: heapless::Deque<(u8, u64), W>,
     receiver_wq: heapless::Deque<u8, W>,
 }
 
@@ -79,12 +86,47 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         let mut msg = [0u8; M];
         msg[..data.len()].copy_from_slice(data);
         if self.buf.push_back((data.len(), msg)).is_err() {
+            // u64::MAX = no timeout; kernel wakes this sender unconditionally on next recv.
             self.sender_wq
-                .push_back(caller)
+                .push_back((caller, u64::MAX))
                 .map_err(|_| QueuingError::WaitQueueFull)?;
             return Err(QueuingError::QueueFull);
         }
         Ok(self.receiver_wq.pop_front())
+    }
+
+    pub fn send_queuing_message(
+        &mut self,
+        caller: u8,
+        data: &[u8],
+        timeout_ticks: u64,
+        current_tick: u64,
+    ) -> Result<SendQueuingOutcome, QueuingError> {
+        if self.direction != PortDirection::Source {
+            return Err(QueuingError::DirectionViolation);
+        }
+        if data.len() > M {
+            return Err(QueuingError::MessageTooLarge);
+        }
+        if self.buf.is_full() {
+            if timeout_ticks == 0 {
+                return Err(QueuingError::QueueFull);
+            }
+            let expiry = current_tick + timeout_ticks;
+            self.sender_wq
+                .push_back((caller, expiry))
+                .map_err(|_| QueuingError::WaitQueueFull)?;
+            return Ok(SendQueuingOutcome::SenderBlocked {
+                expiry_tick: expiry,
+            });
+        }
+        let mut msg = [0u8; M];
+        msg[..data.len()].copy_from_slice(data);
+        // push_back cannot fail: we just confirmed the buffer is not full.
+        let _ = self.buf.push_back((data.len(), msg));
+        Ok(SendQueuingOutcome::Delivered {
+            wake_receiver: self.receiver_wq.pop_front(),
+        })
     }
 
     /// Dequeue a message. Only allowed on Destination ports.
@@ -105,7 +147,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         if let Some((len, msg)) = self.buf.pop_front() {
             let copy_len = len.min(buf.len());
             buf[..copy_len].copy_from_slice(&msg[..copy_len]);
-            return Ok((len, self.sender_wq.pop_front()));
+            return Ok((len, self.sender_wq.pop_front().map(|(pid, _)| pid)));
         }
         self.receiver_wq
             .push_back(caller)
@@ -152,6 +194,20 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
 
     pub fn is_empty(&self) -> bool {
         self.ports.is_empty()
+    }
+
+    pub fn send_queuing_message(
+        &mut self,
+        port_id: usize,
+        caller: u8,
+        data: &[u8],
+        timeout_ticks: u64,
+        current_tick: u64,
+    ) -> Result<SendQueuingOutcome, QueuingError> {
+        self.ports
+            .get_mut(port_id)
+            .ok_or(QueuingError::InvalidPort)?
+            .send_queuing_message(caller, data, timeout_ticks, current_tick)
     }
 }
 
@@ -230,7 +286,7 @@ mod tests {
         assert_eq!(src.send(0, &[1; 4]).unwrap(), Some(2));
         let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         dst.buf.push_back((4, [1; 4])).unwrap();
-        dst.sender_wq.push_back(3).unwrap();
+        dst.sender_wq.push_back((3, u64::MAX)).unwrap();
         let mut buf = [0u8; 4];
         let (sz, wake) = dst.recv(1, &mut buf).unwrap();
         assert_eq!((sz, wake), (4, Some(3)));
@@ -284,5 +340,91 @@ mod tests {
         // msg_len is the original length; caller detects truncation
         assert_eq!(msg_len, 5);
         assert_eq!(small, [1, 2, 3]);
+    }
+
+    #[test]
+    fn send_queuing_delivers_when_space_available() {
+        let mut p = QueuingPort::<2, 8, 4>::new(PortDirection::Source);
+        let o = p.send_queuing_message(0, &[1, 2, 3], 100, 50).unwrap();
+        assert_eq!(
+            o,
+            SendQueuingOutcome::Delivered {
+                wake_receiver: None
+            }
+        );
+        assert_eq!(p.nb_messages(), 1);
+    }
+
+    #[test]
+    fn send_queuing_wakes_blocked_receiver() {
+        let mut p = QueuingPort::<2, 8, 4>::new(PortDirection::Source);
+        p.receiver_wq.push_back(5).unwrap();
+        let o = p.send_queuing_message(1, &[4; 4], 0, 0).unwrap();
+        assert_eq!(
+            o,
+            SendQueuingOutcome::Delivered {
+                wake_receiver: Some(5)
+            }
+        );
+    }
+
+    #[test]
+    fn send_queuing_rejects_destination_port() {
+        let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
+        assert_eq!(
+            dst.send_queuing_message(0, &[1; 4], 0, 0),
+            Err(QueuingError::DirectionViolation)
+        );
+    }
+
+    #[test]
+    fn send_queuing_rejects_oversized_message() {
+        let mut p = QueuingPort::<2, 8, 4>::new(PortDirection::Source);
+        assert_eq!(
+            p.send_queuing_message(0, &[1; 9], 0, 0),
+            Err(QueuingError::MessageTooLarge)
+        );
+    }
+
+    #[test]
+    fn send_queuing_full_zero_timeout_returns_queue_full() {
+        let mut q = QueuingPort::<1, 4, 4>::new(PortDirection::Source);
+        q.send_queuing_message(0, &[1; 4], 0, 0).unwrap();
+        assert_eq!(
+            q.send_queuing_message(1, &[2; 4], 0, 10),
+            Err(QueuingError::QueueFull)
+        );
+        assert_eq!(q.pending_senders(), 0);
+    }
+
+    #[test]
+    fn send_queuing_full_nonzero_timeout_blocks_sender() {
+        let mut q = QueuingPort::<1, 4, 4>::new(PortDirection::Source);
+        q.send_queuing_message(0, &[1; 4], 0, 0).unwrap();
+        let o = q.send_queuing_message(1, &[2; 4], 50, 100).unwrap();
+        assert_eq!(o, SendQueuingOutcome::SenderBlocked { expiry_tick: 150 });
+        assert_eq!(q.pending_senders(), 1);
+    }
+
+    #[test]
+    fn send_queuing_pool_delivers() {
+        let mut pool = QueuingPortPool::<4, 2, 8, 4>::new();
+        let id = pool.create_port(PortDirection::Source).unwrap();
+        let o = pool.send_queuing_message(id, 0, &[1, 2], 0, 0).unwrap();
+        assert_eq!(
+            o,
+            SendQueuingOutcome::Delivered {
+                wake_receiver: None
+            }
+        );
+    }
+
+    #[test]
+    fn send_queuing_pool_invalid_port() {
+        let mut pool = QueuingPortPool::<4, 2, 8, 4>::new();
+        assert_eq!(
+            pool.send_queuing_message(99, 0, &[1], 0, 0),
+            Err(QueuingError::InvalidPort)
+        );
     }
 }
