@@ -58,5 +58,9 @@ required-features = ["qemu"]
 name = "svc_yield"
 required-features = ["qemu"]
 
+[[example]]
+name = "integration"
+required-features = ["qemu"]
+
 [features]
 qemu = []
