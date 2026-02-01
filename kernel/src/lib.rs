@@ -7,6 +7,7 @@ pub mod message;
 pub mod mpu;
 pub mod mutex;
 pub mod partition;
+pub mod sampling;
 pub mod scheduler;
 pub mod semaphore;
 pub mod svc;
