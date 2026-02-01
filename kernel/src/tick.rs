@@ -2,6 +2,40 @@
 
 use crate::kernel::KernelState;
 
+/// Monotonic tick counter incremented on every SysTick interrupt.
+pub struct TickCounter {
+    ticks: u64,
+}
+
+impl Default for TickCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TickCounter {
+    /// Create a new counter starting at zero.
+    pub const fn new() -> Self {
+        Self { ticks: 0 }
+    }
+
+    /// Increment the counter by one tick.
+    pub fn increment(&mut self) {
+        self.ticks = self.ticks.wrapping_add(1);
+    }
+
+    /// Return the current tick count.
+    pub fn get(&self) -> u64 {
+        self.ticks
+    }
+
+    /// Set the tick count to an arbitrary value (crate-internal, for testing).
+    #[cfg(test)]
+    pub(crate) fn set(&mut self, value: u64) {
+        self.ticks = value;
+    }
+}
+
 /// ICSR register address (Interrupt Control and State Register).
 pub const SCB_ICSR: u32 = 0xE000_ED04;
 /// Bit 28: PENDSVSET — set PendSV pending.
@@ -26,6 +60,23 @@ pub fn on_systick<const P: usize, const S: usize>(state: &mut KernelState<P, S>)
         #[cfg(not(test))]
         unsafe {
             core::ptr::write_volatile(SCB_ICSR as *mut u32, ICSR_PENDSVSET);
+        }
+    }
+    next
+}
+
+/// Like [`on_systick`], but also reconfigures the MPU for the new partition
+/// before PendSV fires. Call this from the SysTick handler when MPU
+/// isolation is required.
+#[cfg(not(test))]
+pub fn on_systick_mpu<const P: usize, const S: usize>(
+    state: &mut KernelState<P, S>,
+    mpu: &cortex_m::peripheral::MPU,
+) -> Option<u8> {
+    let next = on_systick(state);
+    if let Some(pid) = next {
+        if let Some(pcb) = state.partitions().get(pid as usize) {
+            crate::mpu::apply_partition_mpu(mpu, pcb);
         }
     }
     next
@@ -100,5 +151,28 @@ mod tests {
     fn icsr_constants() {
         assert_eq!(SCB_ICSR, 0xE000_ED04);
         assert_eq!(ICSR_PENDSVSET, 1 << 28);
+    }
+
+    #[test]
+    fn tick_counter_starts_at_zero() {
+        let tc = TickCounter::new();
+        assert_eq!(tc.get(), 0);
+    }
+
+    #[test]
+    fn tick_counter_increments() {
+        let mut tc = TickCounter::new();
+        tc.increment();
+        assert_eq!(tc.get(), 1);
+        tc.increment();
+        tc.increment();
+        assert_eq!(tc.get(), 3);
+    }
+
+    #[test]
+    fn tick_counter_wraps_at_max() {
+        let mut tc = TickCounter { ticks: u64::MAX };
+        tc.increment();
+        assert_eq!(tc.get(), 0);
     }
 }

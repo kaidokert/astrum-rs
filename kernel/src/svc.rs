@@ -5,6 +5,7 @@ use crate::mutex::MutexPool;
 use crate::partition::{PartitionState, PartitionTable};
 use crate::semaphore::SemaphorePool;
 use crate::syscall::SyscallId;
+use crate::tick::TickCounter;
 
 // TODO: cortex-m-rt's #[exception] macro requires SVCall handlers to have
 // signature `fn() [-> !]` — it cannot pass the exception frame. Because we
@@ -97,6 +98,7 @@ pub struct Kernel<
     pub semaphores: SemaphorePool<S, SW>,
     pub mutexes: MutexPool<MS, MW>,
     pub messages: MessagePool<QS, QD, QM, QW>,
+    pub tick: TickCounter,
 }
 
 impl<
@@ -202,6 +204,7 @@ impl<
                     Err(_) => u32::MAX,
                 }
             }
+            Some(SyscallId::GetTime) => self.tick.get() as u32,
             None => u32::MAX,
         };
     }
@@ -343,6 +346,7 @@ mod tests {
             semaphores: s,
             mutexes: m,
             messages: msgs,
+            tick: TickCounter::new(),
         };
         // Add semaphores
         for _ in 0..sem_count {
@@ -539,5 +543,44 @@ mod tests {
         );
         assert_eq!(apply_send_outcome(&mut k.partitions, outcome), 0);
         assert_eq!(k.partitions.get(0).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn get_time_returns_zero_initially() {
+        let mut k = kernel(0, 0, 0);
+        let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+    }
+
+    #[test]
+    fn get_time_after_increments() {
+        let mut k = kernel(0, 0, 0);
+        for _ in 0..5 {
+            k.tick.increment();
+        }
+        let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 5);
+    }
+
+    #[test]
+    fn get_time_preserves_other_registers() {
+        let mut k = kernel(0, 0, 0);
+        k.tick.increment();
+        let mut ef = frame(crate::syscall::SYS_GET_TIME, 0xAA, 0xBB);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 1);
+        assert_eq!(ef.r1, 0xAA);
+        assert_eq!(ef.r2, 0xBB);
+    }
+
+    #[test]
+    fn get_time_truncates_to_u32() {
+        let mut k = kernel(0, 0, 0);
+        k.tick.set((1u64 << 32) + 7);
+        let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 7);
     }
 }

@@ -10,6 +10,7 @@ pub const SYS_MTX_LOCK: u32 = 7;
 pub const SYS_MTX_UNLOCK: u32 = 8;
 pub const SYS_MSG_SEND: u32 = 9;
 pub const SYS_MSG_RECV: u32 = 10;
+pub const SYS_GET_TIME: u32 = 11;
 
 /// Typed syscall identifier for use in the kernel dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +25,7 @@ pub enum SyscallId {
     MutexUnlock,
     MsgSend,
     MsgRecv,
+    GetTime,
 }
 
 impl SyscallId {
@@ -43,6 +45,7 @@ impl SyscallId {
             SYS_MTX_UNLOCK => Some(Self::MutexUnlock),
             SYS_MSG_SEND => Some(Self::MsgSend),
             SYS_MSG_RECV => Some(Self::MsgRecv),
+            SYS_GET_TIME => Some(Self::GetTime),
             _ => None,
         }
     }
@@ -60,6 +63,7 @@ impl SyscallId {
             Self::MutexUnlock => SYS_MTX_UNLOCK,
             Self::MsgSend => SYS_MSG_SEND,
             Self::MsgRecv => SYS_MSG_RECV,
+            Self::GetTime => SYS_GET_TIME,
         }
     }
 }
@@ -80,6 +84,7 @@ mod tests {
         (SYS_MTX_UNLOCK, SyscallId::MutexUnlock),
         (SYS_MSG_SEND, SyscallId::MsgSend),
         (SYS_MSG_RECV, SyscallId::MsgRecv),
+        (SYS_GET_TIME, SyscallId::GetTime),
     ];
 
     #[test]
@@ -106,7 +111,7 @@ mod tests {
         // Gap at 1 (reserved for SYS_GET_ID, not in this enum).
         assert_eq!(SyscallId::from_u32(1), None);
         // Just above the defined range.
-        assert_eq!(SyscallId::from_u32(11), None);
+        assert_eq!(SyscallId::from_u32(12), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -115,10 +120,10 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        assert_eq!(ALL_VARIANTS.len(), 10);
+        assert_eq!(ALL_VARIANTS.len(), 11);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
-        assert_eq!(SYS_MSG_RECV, 10);
+        assert_eq!(SYS_GET_TIME, 11);
     }
 
     #[test]

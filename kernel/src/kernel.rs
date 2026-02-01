@@ -1,10 +1,12 @@
 use crate::partition::{PartitionConfig, PartitionControlBlock, PartitionTable};
 use crate::scheduler::ScheduleTable;
+use crate::tick::TickCounter;
 
 pub struct KernelState<const P: usize, const S: usize> {
     partitions: PartitionTable<P>,
     schedule: ScheduleTable<S>,
     active_partition: Option<u8>,
+    tick: TickCounter,
 }
 
 const fn align_down_8(addr: u32) -> u32 {
@@ -26,6 +28,7 @@ impl<const P: usize, const S: usize> KernelState<P, S> {
             partitions,
             schedule,
             active_partition: None,
+            tick: TickCounter::new(),
         })
     }
 
@@ -41,10 +44,14 @@ impl<const P: usize, const S: usize> KernelState<P, S> {
     pub fn active_partition(&self) -> Option<u8> {
         self.active_partition
     }
+    pub fn tick(&self) -> &TickCounter {
+        &self.tick
+    }
 
     /// Advance the schedule table by one tick. If a partition switch occurs,
     /// updates `active_partition` and returns `Some(partition_id)`.
     pub fn advance_schedule_tick(&mut self) -> Option<u8> {
+        self.tick.increment();
         let next = self.schedule.advance_tick();
         if let Some(pid) = next {
             self.active_partition = Some(pid);
@@ -79,9 +86,12 @@ mod tests {
     #[test]
     fn init_two_partitions() {
         let cfgs = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 2048)];
-        let ks: KernelState<4, 4> = KernelState::new(sched2(), &cfgs).unwrap();
+        let mut ks: KernelState<4, 4> = KernelState::new(sched2(), &cfgs).unwrap();
         assert_eq!(ks.partitions().len(), 2);
         assert_eq!(ks.active_partition(), None);
+        assert_eq!(ks.tick().get(), 0);
+        ks.advance_schedule_tick();
+        assert_eq!(ks.tick().get(), 1);
         assert_eq!(ks.schedule().major_frame_ticks, 200);
         let p0 = ks.partitions().get(0).unwrap();
         assert_eq!(p0.id(), 0);
