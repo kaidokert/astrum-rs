@@ -3,6 +3,7 @@ use crate::events;
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
 use crate::mutex::MutexPool;
 use crate::partition::{PartitionState, PartitionTable};
+use crate::sampling::SamplingPortPool;
 use crate::semaphore::SemaphorePool;
 use crate::syscall::SyscallId;
 use crate::tick::TickCounter;
@@ -93,12 +94,15 @@ pub struct Kernel<
     const QD: usize,
     const QM: usize,
     const QW: usize,
+    const SP: usize,
+    const SM: usize,
 > {
     pub partitions: PartitionTable<N>,
     pub semaphores: SemaphorePool<S, SW>,
     pub mutexes: MutexPool<MS, MW>,
     pub messages: MessagePool<QS, QD, QM, QW>,
     pub tick: TickCounter,
+    pub sampling: SamplingPortPool<SP, SM>,
 }
 
 impl<
@@ -111,7 +115,9 @@ impl<
         const QD: usize,
         const QM: usize,
         const QW: usize,
-    > Kernel<N, S, SW, MS, MW, QS, QD, QM, QW>
+        const SP: usize,
+        const SM: usize,
+    > Kernel<N, S, SW, MS, MW, QS, QD, QM, QW, SP, SM>
 {
     /// Full syscall dispatch including semaphore, mutex, and message operations.
     ///
@@ -201,6 +207,28 @@ impl<
                     .recv(frame.r1 as usize, frame.r2 as usize, buf)
                 {
                     Ok(outcome) => apply_recv_outcome(&mut self.partitions, outcome),
+                    Err(_) => u32::MAX,
+                }
+            }
+            Some(SyscallId::SamplingWrite) => {
+                let d = unsafe {
+                    core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
+                };
+                match self
+                    .sampling
+                    .write_sampling_message(frame.r1 as usize, d, self.tick.get())
+                {
+                    Ok(()) => 0,
+                    Err(_) => u32::MAX,
+                }
+            }
+            Some(SyscallId::SamplingRead) => {
+                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, SM) };
+                match self
+                    .sampling
+                    .read_sampling_message(frame.r1 as usize, b, self.tick.get())
+                {
+                    Ok((sz, _)) => sz as u32,
                     Err(_) => u32::MAX,
                 }
             }
@@ -333,7 +361,7 @@ mod tests {
         sem_count: usize,
         mtx_count: usize,
         msg_queue_count: usize,
-    ) -> Kernel<4, 4, 4, 4, 4, 4, 4, 4, 4> {
+    ) -> Kernel<4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 64> {
         let t = tbl();
         let s = SemaphorePool::<4, 4>::new();
         let m = MutexPool::<4, 4>::new(mtx_count);
@@ -347,6 +375,7 @@ mod tests {
             mutexes: m,
             messages: msgs,
             tick: TickCounter::new(),
+            sampling: SamplingPortPool::new(),
         };
         // Add semaphores
         for _ in 0..sem_count {
@@ -582,5 +611,50 @@ mod tests {
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 7);
+    }
+
+    fn frame4(r0: u32, r1: u32, r2: u32, r3: u32) -> ExceptionFrame {
+        ExceptionFrame {
+            r0,
+            r1,
+            r2,
+            r3,
+            r12: 0,
+            lr: 0,
+            pc: 0,
+            xpsr: 0,
+        }
+    }
+
+    #[test]
+    fn sampling_dispatch_write_read_and_errors() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::{SYS_SAMPLING_READ, SYS_SAMPLING_WRITE};
+        let mut k = kernel(0, 0, 0);
+        let src = k.sampling.create_port(PortDirection::Source, 1000).unwrap();
+        let dst = k
+            .sampling
+            .create_port(PortDirection::Destination, 1000)
+            .unwrap();
+        k.sampling.connect_ports(src, dst).unwrap();
+        // Write + read via pool (avoids 64-bit pointer truncation issue).
+        k.sampling
+            .write_sampling_message(src, &[0xAA, 0xBB], k.tick.get())
+            .unwrap();
+        let mut buf = [0u8; 64];
+        let (n, _) = k
+            .sampling
+            .read_sampling_message(dst, &mut buf, k.tick.get())
+            .unwrap();
+        assert_eq!((n, &buf[..n]), (2, &[0xAA, 0xBB][..]));
+        // Invalid port → u32::MAX for both write and read.
+        let d: [u8; 1] = [1];
+        let mut ef = frame4(SYS_SAMPLING_WRITE, 99, 1, d.as_ptr() as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, u32::MAX);
+        let mut rb = [0u8; 64];
+        let mut ef = frame4(SYS_SAMPLING_READ, 99, 0, rb.as_mut_ptr() as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, u32::MAX);
     }
 }
