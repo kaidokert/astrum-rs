@@ -4,7 +4,7 @@
 use cortex_m::asm;
 use cortex_m_rt::entry;
 use cortex_m_semihosting::{debug, hprintln};
-use panic_halt as _;
+use panic_semihosting as _;
 
 #[entry]
 fn main() -> ! {

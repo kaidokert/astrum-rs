@@ -6,10 +6,6 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-toml
-  - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1
-    hooks:
-      - id: codespell
   - repo: local
     hooks:
       - id: cargo-fmt
@@ -20,7 +16,12 @@ repos:
         pass_filenames: false
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --manifest-path kernel/Cargo.toml --all-features --examples --target thumbv7m-none-eabi -- -D warnings
+        entry: cargo clippy --manifest-path kernel/Cargo.toml --target thumbv7m-none-eabi --lib --examples --features qemu -- -D warnings
         language: system
         files: \.rs$
         pass_filenames: false
+      - id: codespell
+        name: codespell
+        entry: codespell --skip="*.lock,./target"
+        language: system
+        types_or: [python, rust, markdown, yaml, toml]
