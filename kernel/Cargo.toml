@@ -37,5 +37,9 @@ required-features = ["qemu"]
 name = "mpu_fault"
 required-features = ["qemu"]
 
+[[example]]
+name = "partition_switch"
+required-features = ["qemu"]
+
 [features]
 qemu = []
