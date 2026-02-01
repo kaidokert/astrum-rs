@@ -1,3 +1,6 @@
+/// AP field: no access for any privilege level.
+pub const AP_NO_ACCESS: u32 = 0b000;
+
 /// AP field: privileged read-only, unprivileged no access.
 pub const AP_PRIV_RO: u32 = 0b101;
 
@@ -71,6 +74,10 @@ mod tests {
 
     #[test]
     fn ap_constants_in_rasr() {
+        // No-access region: AP_NO_ACCESS
+        let rasr = build_rasr(7, AP_NO_ACCESS, true, (false, false, false));
+        assert_eq!((rasr >> 24) & 0x7, AP_NO_ACCESS);
+
         // RX region: AP_PRIV_RO, XN=false
         let rasr = build_rasr(7, AP_PRIV_RO, false, (false, false, false));
         assert_eq!((rasr >> 24) & 0x7, AP_PRIV_RO);
