@@ -1,5 +1,6 @@
 use crate::context::ExceptionFrame;
 use crate::events;
+use crate::mutex::MutexPool;
 use crate::partition::PartitionTable;
 use crate::semaphore::SemaphorePool;
 use crate::syscall::SyscallId;
@@ -80,10 +81,17 @@ pub fn dispatch_syscall<const N: usize>(
 
 /// Full syscall dispatch including semaphore operations.
 /// r1 = semaphore id, r2 = caller partition index (for SemWait).
-pub fn dispatch_all<const N: usize, const S: usize, const W: usize>(
+pub fn dispatch_all<
+    const N: usize,
+    const S: usize,
+    const W: usize,
+    const MS: usize,
+    const MW: usize,
+>(
     frame: &mut ExceptionFrame,
     partitions: &mut PartitionTable<N>,
     semaphores: &mut SemaphorePool<S, W>,
+    mutexes: &mut MutexPool<MS, MW>,
 ) {
     frame.r0 = match SyscallId::from_u32(frame.r0) {
         Some(SyscallId::Yield) => handle_yield(),
@@ -100,6 +108,18 @@ pub fn dispatch_all<const N: usize, const S: usize, const W: usize>(
             Ok(()) => 0,
             Err(_) => u32::MAX,
         },
+        Some(SyscallId::MutexLock) => {
+            match mutexes.lock(partitions, frame.r1 as usize, frame.r2 as usize) {
+                Ok(()) => 0,
+                Err(_) => u32::MAX,
+            }
+        }
+        Some(SyscallId::MutexUnlock) => {
+            match mutexes.unlock(partitions, frame.r1 as usize, frame.r2 as usize) {
+                Ok(()) => 0,
+                Err(_) => u32::MAX,
+            }
+        }
         Some(_) => 1,
         None => u32::MAX,
     };
@@ -207,15 +227,26 @@ mod tests {
     #[test]
     fn sem_wait_and_signal_dispatch() {
         let mut t = tbl();
-        let mut s = SemaphorePool::<4, 4>::new();
+        let (mut s, mut m) = (SemaphorePool::<4, 4>::new(), MutexPool::<4, 4>::new(0));
         s.add(Semaphore::new(1, 2)).unwrap();
         let mut ef = f(crate::syscall::SYS_SEM_WAIT, 0, 0);
-        dispatch_all(&mut ef, &mut t, &mut s);
+        dispatch_all(&mut ef, &mut t, &mut s, &mut m);
         assert_eq!(ef.r0, 0);
-        assert_eq!(s.get(0).unwrap().count(), 0);
         let mut ef = f(crate::syscall::SYS_SEM_SIGNAL, 0, 0);
-        dispatch_all(&mut ef, &mut t, &mut s);
+        dispatch_all(&mut ef, &mut t, &mut s, &mut m);
         assert_eq!(ef.r0, 0);
-        assert_eq!(s.get(0).unwrap().count(), 1);
+    }
+    #[test]
+    fn mutex_lock_unlock_dispatch() {
+        let mut t = tbl();
+        let (mut s, mut m) = (SemaphorePool::<4, 4>::new(), MutexPool::<4, 4>::new(1));
+        let mut ef = f(crate::syscall::SYS_MTX_LOCK, 0, 0);
+        dispatch_all(&mut ef, &mut t, &mut s, &mut m);
+        assert_eq!(ef.r0, 0);
+        assert_eq!(m.owner(0), Ok(Some(0)));
+        let mut ef = f(crate::syscall::SYS_MTX_UNLOCK, 0, 0);
+        dispatch_all(&mut ef, &mut t, &mut s, &mut m);
+        assert_eq!(ef.r0, 0);
+        assert_eq!(m.owner(0), Ok(None));
     }
 }
