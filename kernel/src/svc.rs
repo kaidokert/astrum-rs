@@ -1,6 +1,7 @@
 use crate::context::ExceptionFrame;
 use crate::events;
 use crate::partition::PartitionTable;
+use crate::semaphore::SemaphorePool;
 use crate::syscall::SyscallId;
 
 // TODO: cortex-m-rt's #[exception] macro requires SVCall handlers to have
@@ -77,6 +78,33 @@ pub fn dispatch_syscall<const N: usize>(
     };
 }
 
+/// Full syscall dispatch including semaphore operations.
+/// r1 = semaphore id, r2 = caller partition index (for SemWait).
+pub fn dispatch_all<const N: usize, const S: usize, const W: usize>(
+    frame: &mut ExceptionFrame,
+    partitions: &mut PartitionTable<N>,
+    semaphores: &mut SemaphorePool<S, W>,
+) {
+    frame.r0 = match SyscallId::from_u32(frame.r0) {
+        Some(SyscallId::Yield) => handle_yield(),
+        Some(SyscallId::EventWait) => events::event_wait(partitions, frame.r1 as usize, frame.r2),
+        Some(SyscallId::EventSet) => events::event_set(partitions, frame.r1 as usize, frame.r2),
+        Some(SyscallId::EventClear) => events::event_clear(partitions, frame.r1 as usize, frame.r2),
+        Some(SyscallId::SemWait) => {
+            match semaphores.wait(partitions, frame.r1 as usize, frame.r2 as usize) {
+                Ok(()) => 0,
+                Err(_) => u32::MAX,
+            }
+        }
+        Some(SyscallId::SemSignal) => match semaphores.signal(partitions, frame.r1 as usize) {
+            Ok(()) => 0,
+            Err(_) => u32::MAX,
+        },
+        Some(_) => 1,
+        None => u32::MAX,
+    };
+}
+
 fn handle_yield() -> u32 {
     #[cfg(not(test))]
     {
@@ -89,6 +117,7 @@ fn handle_yield() -> u32 {
 mod tests {
     use super::*;
     use crate::partition::{MpuRegion, PartitionControlBlock, PartitionState};
+    use crate::semaphore::Semaphore;
     use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_YIELD};
 
     #[rustfmt::skip]
@@ -174,5 +203,19 @@ mod tests {
         let mut ef = f(SYS_EVT_CLEAR, 99, 0b0001);
         dispatch_syscall(&mut ef, &mut t);
         assert_eq!(ef.r0, u32::MAX);
+    }
+    #[test]
+    fn sem_wait_and_signal_dispatch() {
+        let mut t = tbl();
+        let mut s = SemaphorePool::<4, 4>::new();
+        s.add(Semaphore::new(1, 2)).unwrap();
+        let mut ef = f(crate::syscall::SYS_SEM_WAIT, 0, 0);
+        dispatch_all(&mut ef, &mut t, &mut s);
+        assert_eq!(ef.r0, 0);
+        assert_eq!(s.get(0).unwrap().count(), 0);
+        let mut ef = f(crate::syscall::SYS_SEM_SIGNAL, 0, 0);
+        dispatch_all(&mut ef, &mut t, &mut s);
+        assert_eq!(ef.r0, 0);
+        assert_eq!(s.get(0).unwrap().count(), 1);
     }
 }
