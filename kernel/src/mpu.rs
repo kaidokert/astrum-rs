@@ -1,3 +1,9 @@
+/// AP field: privileged read-only, unprivileged no access.
+pub const AP_PRIV_RO: u32 = 0b101;
+
+/// AP field: full read-write access (privileged + unprivileged).
+pub const AP_FULL_ACCESS: u32 = 0b011;
+
 /// Encode region size in bytes to the 5-bit RASR SIZE field (`log2(size) - 1`).
 /// Returns `None` if `size_bytes` is not a power of 2 or is less than 32.
 pub fn encode_size(size_bytes: u32) -> Option<u32> {
@@ -61,6 +67,19 @@ mod tests {
         assert_eq!(build_rbar(0x0800_0000, 7), Some(0x0800_0000 | (1 << 4) | 7));
         assert_eq!(build_rbar(0x2000_0000, 8), None); // region out of range
         assert_eq!(build_rbar(0x2000_0001, 0), None); // misaligned
+    }
+
+    #[test]
+    fn ap_constants_in_rasr() {
+        // RX region: AP_PRIV_RO, XN=false
+        let rasr = build_rasr(7, AP_PRIV_RO, false, (false, false, false));
+        assert_eq!((rasr >> 24) & 0x7, AP_PRIV_RO);
+        assert_eq!((rasr >> 28) & 1, 0); // XN=0
+
+        // RW/XN region: AP_FULL_ACCESS, XN=true
+        let rasr = build_rasr(7, AP_FULL_ACCESS, true, (true, true, false));
+        assert_eq!((rasr >> 24) & 0x7, AP_FULL_ACCESS);
+        assert_eq!((rasr >> 28) & 1, 1); // XN=1
     }
 
     #[test]

@@ -29,5 +29,9 @@ required-features = ["qemu"]
 name = "systick"
 required-features = ["qemu"]
 
+[[example]]
+name = "mpu_wx"
+required-features = ["qemu"]
+
 [features]
 qemu = []
