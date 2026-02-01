@@ -38,6 +38,16 @@ impl<const P: usize, const S: usize> KernelState<P, S> {
     pub fn active_partition(&self) -> Option<u8> {
         self.active_partition
     }
+
+    /// Advance the schedule table by one tick. If a partition switch occurs,
+    /// updates `active_partition` and returns `Some(partition_id)`.
+    pub fn advance_schedule_tick(&mut self) -> Option<u8> {
+        let next = self.schedule.advance_tick();
+        if let Some(pid) = next {
+            self.active_partition = Some(pid);
+        }
+        next
+    }
 }
 
 #[cfg(test)]

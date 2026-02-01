@@ -6,3 +6,4 @@ pub mod mpu;
 pub mod partition;
 pub mod scheduler;
 pub mod syscall;
+pub mod tick;
