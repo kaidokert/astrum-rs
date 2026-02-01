@@ -15,6 +15,7 @@ pub enum SamplingError {
     PoolFull,
     DirectionViolation,
     MessageTooLarge,
+    InvalidPort,
 }
 
 #[derive(Debug)]
@@ -150,6 +151,59 @@ impl<const S: usize, const M: usize> SamplingPortPool<S, M> {
     pub fn is_empty(&self) -> bool {
         self.ports.is_empty()
     }
+
+    pub fn write_sampling_message(
+        &mut self,
+        port_id: usize,
+        data: &[u8],
+        timestamp: u64,
+    ) -> Result<(), SamplingError> {
+        let port = self.get_mut(port_id).ok_or(SamplingError::InvalidPort)?;
+        port.write_data(data, timestamp)
+    }
+
+    pub fn read_sampling_message(
+        &self,
+        port_id: usize,
+        buf: &mut [u8],
+        current_tick: u64,
+    ) -> Result<(usize, Validity), SamplingError> {
+        let port = self.get(port_id).ok_or(SamplingError::InvalidPort)?;
+        let (data, _ts) = port.read_data()?;
+        let size = data.len();
+        buf[..size].copy_from_slice(data);
+        let validity = port.validity(current_tick);
+        Ok((size, validity))
+    }
+
+    /// Kernel-side transfer: copies the current message from a source port
+    /// into a destination port.
+    pub fn transfer(
+        &mut self,
+        source_id: usize,
+        destination_id: usize,
+    ) -> Result<(), SamplingError> {
+        let src = self.get(source_id).ok_or(SamplingError::InvalidPort)?;
+        if src.direction() != PortDirection::Source {
+            return Err(SamplingError::DirectionViolation);
+        }
+        let len = src.current_size();
+        let ts = src.timestamp();
+        // Copy source data to a stack buffer to release the immutable borrow
+        let mut tmp = [0u8; M];
+        tmp[..len].copy_from_slice(src.data());
+
+        let dst = self
+            .get_mut(destination_id)
+            .ok_or(SamplingError::InvalidPort)?;
+        if dst.direction() != PortDirection::Destination {
+            return Err(SamplingError::DirectionViolation);
+        }
+        dst.data[..len].copy_from_slice(&tmp[..len]);
+        dst.current_size = len;
+        dst.timestamp = ts;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -238,13 +292,15 @@ mod tests {
 
     #[test]
     fn read_data_on_destination_port() {
-        let mut port = SamplingPort::<16>::new(0, PortDirection::Destination, 100);
-        // Simulate data arrival (in real use, the kernel copies from source to destination)
-        port.data[..3].copy_from_slice(&[10, 20, 30]);
-        port.current_size = 3;
-        port.timestamp = 75;
+        let mut pool = SamplingPortPool::<4, 16>::new();
+        let src = pool.create_port(PortDirection::Source, 100).unwrap();
+        let dst = pool.create_port(PortDirection::Destination, 100).unwrap();
 
-        let (data, ts) = port.read_data().unwrap();
+        pool.write_sampling_message(src, &[10, 20, 30], 75).unwrap();
+        pool.transfer(src, dst).unwrap();
+
+        let dst_port = pool.get(dst).unwrap();
+        let (data, ts) = dst_port.read_data().unwrap();
         assert_eq!(data, &[10, 20, 30]);
         assert_eq!(ts, 75);
     }
@@ -281,5 +337,91 @@ mod tests {
         let mut port = SamplingPort::<16>::new(0, PortDirection::Source, 100);
         port.write_data(&[1], 50).unwrap();
         assert_eq!(port.validity(200), Validity::Invalid);
+    }
+
+    #[test]
+    fn pool_write_and_read_round_trip() {
+        let mut pool = SamplingPortPool::<4, 64>::new();
+        let src = pool.create_port(PortDirection::Source, 100).unwrap();
+        let dst = pool.create_port(PortDirection::Destination, 100).unwrap();
+
+        pool.write_sampling_message(src, &[10, 20, 30], 50).unwrap();
+        pool.transfer(src, dst).unwrap();
+
+        let mut buf = [0u8; 64];
+        let (size, validity) = pool.read_sampling_message(dst, &mut buf, 80).unwrap();
+        assert_eq!(size, 3);
+        assert_eq!(&buf[..size], &[10, 20, 30]);
+        assert_eq!(validity, Validity::Valid);
+    }
+
+    #[test]
+    fn pool_write_overwrites_previous() {
+        let mut pool = SamplingPortPool::<4, 16>::new();
+        let id = pool.create_port(PortDirection::Source, 100).unwrap();
+
+        pool.write_sampling_message(id, &[1, 2, 3], 10).unwrap();
+        pool.write_sampling_message(id, &[4, 5], 20).unwrap();
+
+        let port = pool.get(id).unwrap();
+        assert_eq!(port.data(), &[4, 5]);
+        assert_eq!(port.current_size(), 2);
+        assert_eq!(port.timestamp(), 20);
+    }
+
+    #[test]
+    fn pool_read_validity_stale() {
+        let mut pool = SamplingPortPool::<4, 16>::new();
+        let src = pool.create_port(PortDirection::Source, 50).unwrap();
+        let dst = pool.create_port(PortDirection::Destination, 50).unwrap();
+
+        pool.write_sampling_message(src, &[7, 8], 10).unwrap();
+        pool.transfer(src, dst).unwrap();
+
+        let mut buf = [0u8; 16];
+        let (size, validity) = pool.read_sampling_message(dst, &mut buf, 100).unwrap();
+        assert_eq!(size, 2);
+        assert_eq!(&buf[..size], &[7, 8]);
+        assert_eq!(validity, Validity::Invalid);
+    }
+
+    #[test]
+    fn pool_write_wrong_direction() {
+        let mut pool = SamplingPortPool::<4, 16>::new();
+        let dst = pool.create_port(PortDirection::Destination, 100).unwrap();
+        let result = pool.write_sampling_message(dst, &[1], 10);
+        assert_eq!(result, Err(SamplingError::DirectionViolation));
+    }
+
+    #[test]
+    fn pool_read_wrong_direction() {
+        let mut pool = SamplingPortPool::<4, 16>::new();
+        let src = pool.create_port(PortDirection::Source, 100).unwrap();
+        let mut buf = [0u8; 16];
+        let result = pool.read_sampling_message(src, &mut buf, 0);
+        assert_eq!(result, Err(SamplingError::DirectionViolation));
+    }
+
+    #[test]
+    fn pool_write_invalid_port() {
+        let mut pool = SamplingPortPool::<4, 16>::new();
+        let result = pool.write_sampling_message(99, &[1], 10);
+        assert_eq!(result, Err(SamplingError::InvalidPort));
+    }
+
+    #[test]
+    fn pool_read_invalid_port() {
+        let pool = SamplingPortPool::<4, 16>::new();
+        let mut buf = [0u8; 16];
+        let result = pool.read_sampling_message(99, &mut buf, 0);
+        assert_eq!(result, Err(SamplingError::InvalidPort));
+    }
+
+    #[test]
+    fn pool_write_size_too_large() {
+        let mut pool = SamplingPortPool::<4, 4>::new();
+        let id = pool.create_port(PortDirection::Source, 100).unwrap();
+        let result = pool.write_sampling_message(id, &[1, 2, 3, 4, 5], 10);
+        assert_eq!(result, Err(SamplingError::MessageTooLarge));
     }
 }
