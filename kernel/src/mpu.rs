@@ -50,7 +50,7 @@ pub fn encode_size(size_bytes: u32) -> Option<u32> {
 
 /// Build RBAR value: base address with VALID bit and region number (0..=7).
 /// Returns `None` if `region > 7` or `base` has any of bits [4:0] set.
-pub fn build_rbar(base: u32, region: u32) -> Option<u32> {
+pub const fn build_rbar(base: u32, region: u32) -> Option<u32> {
     if region > 7 || base & 0x1F != 0 {
         return None;
     }
@@ -138,13 +138,15 @@ pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32);
 pub fn deny_all_regions() -> [(u32, u32); 4] {
     let bg_size_field = 31u32; // 4 GiB = 2^32 → SIZE field = 31
 
-    // SAFETY: base=0x0 is 32-byte aligned and region=0 is in [0,7],
-    // so build_rbar cannot return None for these compile-time constants.
-    let bg_rbar = build_rbar(0x0000_0000, 0).unwrap();
+    // Precomputed at compile time — base=0x0 is aligned, region=0 is in range.
+    const BG_RBAR: u32 = match build_rbar(0x0000_0000, 0) {
+        Some(v) => v,
+        None => panic!("invariant: base=0x0 aligned, region=0 in range"),
+    };
     let bg_rasr = build_rasr(bg_size_field, AP_NO_ACCESS, true, (false, false, false));
 
     [
-        (bg_rbar, bg_rasr),
+        (BG_RBAR, bg_rasr),
         (0, 0), // region 1 disabled (RASR enable bit = 0)
         (0, 0), // region 2 disabled
         (0, 0), // region 3 disabled
