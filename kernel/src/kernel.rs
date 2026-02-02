@@ -80,6 +80,7 @@ impl<const P: usize, const S: usize> KernelState<P, S> {
 
         let mut partitions = PartitionTable::new();
         for c in configs {
+            c.validate()?;
             let sp = align_down_8(c.stack_base.wrapping_add(c.stack_size));
             let pcb =
                 PartitionControlBlock::new(c.id, c.entry_point, c.stack_base, sp, c.mpu_region);
@@ -234,10 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn unaligned_stack_and_capacity() {
-        let ks: KernelState<4, 4> =
-            KernelState::new(sched1(), &[pcfg(0, 0x2000_0000, 1023)]).unwrap();
-        assert_eq!(ks.partitions().get(0).unwrap().stack_pointer(), 0x2000_03F8);
+    fn capacity_full_returns_error() {
         let two = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 1024)];
         assert!(KernelState::<1, 4>::new(sched2(), &two).is_err());
     }
@@ -368,5 +366,50 @@ mod tests {
         s.add(ScheduleEntry::new(1, 100)).unwrap();
         let cfgs = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 1024)];
         assert!(KernelState::<4, 4>::new(s, &cfgs).is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // PartitionConfig validation through KernelState::new
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn new_rejects_non_power_of_two_stack_size() {
+        let cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 100, // not a power of two
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        };
+        match KernelState::<4, 4>::new(sched1(), &[cfg]) {
+            Err(ConfigError::StackSizeInvalid { partition_id: 0 }) => {}
+            Err(e) => panic!("expected StackSizeInvalid, got Err({e:?})"),
+            Ok(_) => panic!("expected StackSizeInvalid, got Ok"),
+        }
+    }
+
+    #[test]
+    fn new_rejects_misaligned_stack_base() {
+        let cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0100, // not aligned to 1024
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        };
+        match KernelState::<4, 4>::new(sched1(), &[cfg]) {
+            Err(ConfigError::StackBaseNotAligned { partition_id: 0 }) => {}
+            Err(e) => panic!("expected StackBaseNotAligned, got Err({e:?})"),
+            Ok(_) => panic!("expected StackBaseNotAligned, got Ok"),
+        }
+    }
+
+    #[test]
+    fn new_succeeds_with_valid_configs() {
+        let cfgs = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 2048)];
+        let ks = KernelState::<4, 4>::new(sched2(), &cfgs);
+        assert!(ks.is_ok());
+        let ks = ks.unwrap();
+        assert_eq!(ks.partitions().len(), 2);
     }
 }
