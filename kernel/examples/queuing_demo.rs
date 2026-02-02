@@ -1,8 +1,10 @@
 //! 2-partition command/response pipeline via paired queuing ports.
 //!
 //! Demonstrates: FIFO message delivery, command→response round-trips,
-//! and **queue-full detection** (the commander sends more messages than
-//! the queue depth and verifies that the overflow is reported).
+//! **queue-full detection** (the commander sends more messages than
+//! the queue depth and verifies that the overflow is reported), and
+//! **timed receive** (`SYS_QUEUING_RECV_TIMED` with a non-zero timeout
+//! to block until a message arrives).
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
@@ -17,7 +19,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc,
     svc::Kernel,
-    syscall::{SYS_QUEUING_RECV, SYS_QUEUING_SEND, SYS_YIELD},
+    syscall::{SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_YIELD},
     unpack_r0,
 };
 use panic_semihosting as _;
@@ -66,10 +68,13 @@ const CMD_STOP: u8 = 3;
 const CMD_EXTRA_1: u8 = 4; // overflow probe: exceeds QUEUE_DEPTH
 const CMD_EXTRA_2: u8 = 5; // overflow probe: exceeds QUEUE_DEPTH
 
+const CMD_TIMED: u8 = 6; // Phase 3: timed receive test
+
 const RSP_START_ACK: u8 = 0x10;
 const RSP_MEASURE_ACK: u8 = 0x20;
 const RSP_STOP_ACK: u8 = 0x30;
 const RSP_EXTRA_1_ACK: u8 = 0x40;
+const RSP_TIMED_ACK: u8 = 0x60; // Phase 3: timed receive response
 const RSP_UNKNOWN: u8 = 0xFF;
 
 /// The syscall returns an error code with the high bit set on failure
@@ -163,6 +168,51 @@ extern "C" fn commander_main() -> ! {
         }
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
+
+    // Phase 3: Timed receive – the worker will use SYS_QUEUING_RECV_TIMED
+    // to block waiting for a command. We yield first so the worker enters
+    // the timed-recv wait, then send a late command to wake it.
+    hprintln!("[commander] phase 3: timed receive test");
+    svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+
+    // Send a late command – this wakes the blocked worker.
+    let cmd = [CMD_TIMED];
+    let rc = svc!(SYS_QUEUING_SEND, cmd_port, 1u32, cmd.as_ptr() as u32);
+    if rc & SVC_ERROR_BIT != 0 {
+        hprintln!("queuing_demo: FAIL – could not send timed command");
+        debug::exit(debug::EXIT_FAILURE);
+    }
+    hprintln!("[commander] sent CMD_TIMED");
+
+    // Yield to let the worker process and respond.
+    svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+
+    // Collect the timed response.
+    loop {
+        let mut buf = [0u8; QUEUE_MSG_SIZE];
+        let sz = svc!(
+            SYS_QUEUING_RECV,
+            rsp_port,
+            QUEUE_MSG_SIZE as u32,
+            buf.as_mut_ptr() as u32
+        );
+        if sz & SVC_ERROR_BIT != 0 {
+            svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+            continue;
+        }
+        hprintln!(
+            "[commander] timed rsp=0x{:02X} (expected 0x{:02X})",
+            buf[0],
+            RSP_TIMED_ACK
+        );
+        if buf[0] != RSP_TIMED_ACK {
+            hprintln!("queuing_demo: FAIL – timed response mismatch");
+            debug::exit(debug::EXIT_FAILURE);
+        }
+        break;
+    }
+
     hprintln!("queuing_demo: all checks passed");
     debug::exit(debug::EXIT_SUCCESS);
     #[allow(clippy::empty_loop)]
@@ -176,7 +226,10 @@ extern "C" fn worker_main() -> ! {
     // Unpack port IDs: upper 16 bits = response Source port, lower 16 = command Destination port.
     let packed = unpack_r0!();
     let (rsp_port, cmd_port) = (packed >> 16, packed & 0xFFFF);
-    loop {
+
+    // Phase 1-2: Process the initial batch of commands using non-blocking recv.
+    let mut processed: usize = 0;
+    while processed < QUEUE_DEPTH {
         let mut buf = [0u8; QUEUE_MSG_SIZE];
         let sz = svc!(
             SYS_QUEUING_RECV,
@@ -197,6 +250,40 @@ extern "C" fn worker_main() -> ! {
         };
         hprintln!("[worker]    cmd={} -> rsp=0x{:02X}", buf[0], rsp);
         svc!(SYS_QUEUING_SEND, rsp_port, 1u32, [rsp].as_ptr() as u32);
+        processed += 1;
+        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    }
+
+    // Phase 3: Use timed receive to block waiting for the next command.
+    // The queue is empty; SYS_QUEUING_RECV_TIMED with timeout > 0 blocks
+    // the partition until the commander sends CMD_TIMED (which wakes us).
+    // This is a single blocking call – no polling loop needed.
+    hprintln!("[worker]    phase 3: timed recv (blocking)");
+    let mut buf = [0u8; QUEUE_MSG_SIZE];
+    let sz = svc!(
+        SYS_QUEUING_RECV_TIMED,
+        cmd_port,
+        100u32, // timeout: 100 ticks
+        buf.as_mut_ptr() as u32
+    );
+
+    // The kernel suspends this task until a message arrives or the timeout
+    // expires.  When we resume, check the result directly.
+    if sz & SVC_ERROR_BIT != 0 {
+        hprintln!("queuing_demo: FAIL – timed receive failed or timed out");
+        debug::exit(debug::EXIT_FAILURE);
+    }
+
+    let rsp = match buf[0] {
+        CMD_TIMED => RSP_TIMED_ACK,
+        _ => RSP_UNKNOWN,
+    };
+    hprintln!("[worker]    timed cmd={} -> rsp=0x{:02X}", buf[0], rsp);
+    svc!(SYS_QUEUING_SEND, rsp_port, 1u32, [rsp].as_ptr() as u32);
+
+    // Done – keep yielding forever.
+    #[allow(clippy::empty_loop)]
+    loop {
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
