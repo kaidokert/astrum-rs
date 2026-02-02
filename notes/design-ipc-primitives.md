@@ -1,3 +1,7 @@
+> **Deprecated**: This design document is superseded by
+> [notes/ipc-reference.md](ipc-reference.md), which contains the
+> consolidated, implementation-accurate IPC reference.
+
 # IPC Primitives Design: Sampling Ports, Queuing Ports, Blackboards, GET_TIME, and Port Connection Routing
 
 ## Table of Contents

@@ -1,3 +1,7 @@
+> **Deprecated**: This design document is superseded by
+> [notes/ipc-reference.md](ipc-reference.md), which contains the
+> consolidated, implementation-accurate IPC reference.
+
 # Design: Queuing Ports and Blackboards
 
 ## Table of Contents
