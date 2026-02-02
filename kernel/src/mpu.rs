@@ -1,3 +1,29 @@
+// -- RBAR field masks --
+// See ARMv7-M Architecture Reference Manual, section B3.5.6 (MPU Region Base Address Register).
+
+/// RBAR address mask: bits [31:5] hold the base address.
+/// ARMv7-M ARM B3.5.6, Table B3-38: ADDR field = bits [31:5].
+pub const RBAR_ADDR_MASK: u32 = !0x1F;
+
+// -- RASR field positions and masks --
+// See ARMv7-M Architecture Reference Manual, section B3.5.7 (MPU Region Attribute and Size Register).
+
+/// Bit position of the SIZE field within RASR (bits [5:1]).
+/// ARMv7-M ARM B3.5.7, Table B3-39: SIZE field = bits [5:1].
+pub const RASR_SIZE_SHIFT: u32 = 1;
+
+/// Mask for the 5-bit SIZE field (after shifting).
+/// ARMv7-M ARM B3.5.7, Table B3-39: SIZE is a 5-bit field.
+pub const RASR_SIZE_MASK: u32 = 0x1F;
+
+/// Bit position of the AP field within RASR (bits [26:24]).
+/// ARMv7-M ARM B3.5.7, Table B3-39: AP field = bits [26:24].
+pub const RASR_AP_SHIFT: u32 = 24;
+
+/// Mask for the 3-bit AP field (after shifting).
+/// ARMv7-M ARM B3.5.7, Table B3-39: AP is a 3-bit field.
+pub const RASR_AP_MASK: u32 = 0x7;
+
 /// AP field: no access for any privilege level.
 pub const AP_NO_ACCESS: u32 = 0b000;
 
