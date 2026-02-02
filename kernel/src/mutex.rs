@@ -1,4 +1,5 @@
-use crate::partition::{PartitionState, PartitionTable};
+use crate::partition::{PartitionState, PartitionTable, TransitionError};
+use crate::waitqueue::WaitQueue;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MutexError {
@@ -7,11 +8,17 @@ pub enum MutexError {
     WaitQueueFull,
     NotOwner,
     AlreadyOwned,
+    Transition(TransitionError),
+}
+impl From<TransitionError> for MutexError {
+    fn from(e: TransitionError) -> Self {
+        MutexError::Transition(e)
+    }
 }
 
 pub struct MutexPool<const S: usize, const W: usize> {
     owners: [Option<u8>; S],
-    queues: [heapless::Deque<u8, W>; S],
+    queues: [WaitQueue<W>; S],
     len: usize,
 }
 
@@ -20,7 +27,7 @@ impl<const S: usize, const W: usize> MutexPool<S, W> {
     pub fn new(count: usize) -> Self {
         Self {
             owners: [None; S],
-            queues: core::array::from_fn(|_| heapless::Deque::new()),
+            queues: core::array::from_fn(|_| WaitQueue::new()),
             len: count.min(S),
         }
     }
@@ -48,18 +55,15 @@ impl<const S: usize, const W: usize> MutexPool<S, W> {
             self.owners[id] = Some(caller as u8);
             return Ok(());
         }
-        self.queues[id]
-            .push_back(caller as u8)
-            .map_err(|_| MutexError::WaitQueueFull)?;
-        if parts
+        if self.queues[id].is_full() {
+            return Err(MutexError::WaitQueueFull);
+        }
+        parts
             .get_mut(caller)
             .ok_or(MutexError::InvalidPartition)?
-            .transition(PartitionState::Waiting)
-            .is_err()
-        {
-            self.queues[id].pop_back();
-            return Err(MutexError::InvalidPartition);
-        }
+            .transition(PartitionState::Waiting)?;
+        // push cannot fail: we checked is_full above and hold &mut self.
+        let _ = self.queues[id].push(caller as u8);
         Ok(())
     }
     pub fn unlock<const N: usize>(
@@ -73,15 +77,10 @@ impl<const S: usize, const W: usize> MutexPool<S, W> {
             return Err(MutexError::NotOwner);
         }
         if let Some(pid) = self.queues[id].pop_front() {
-            if parts
+            parts
                 .get_mut(pid as usize)
                 .ok_or(MutexError::InvalidPartition)?
-                .transition(PartitionState::Ready)
-                .is_err()
-            {
-                self.queues[id].push_front(pid).unwrap();
-                return Err(MutexError::InvalidPartition);
-            }
+                .transition(PartitionState::Ready)?;
             self.owners[id] = Some(pid);
             return Ok(());
         }

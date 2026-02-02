@@ -1,4 +1,5 @@
 use crate::partition::{PartitionState, PartitionTable, TransitionError};
+use crate::waitqueue::WaitQueue;
 #[derive(Debug, PartialEq, Eq)]
 pub enum SemaphoreError {
     InvalidSemaphore,
@@ -16,14 +17,14 @@ impl From<TransitionError> for SemaphoreError {
 pub struct Semaphore<const W: usize> {
     count: u32,
     max_count: u32,
-    wait_queue: heapless::Deque<u8, W>,
+    wait_queue: WaitQueue<W>,
 }
 impl<const W: usize> Semaphore<W> {
     pub const fn new(initial: u32, max_count: u32) -> Self {
         Self {
             count: initial,
             max_count,
-            wait_queue: heapless::Deque::new(),
+            wait_queue: WaitQueue::new(),
         }
     }
     pub fn count(&self) -> u32 {
@@ -60,20 +61,15 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
             sem.count -= 1;
             return Ok(());
         }
-        sem.wait_queue
-            .push_back(caller as u8)
-            .map_err(|_| SemaphoreError::WaitQueueFull)?;
-        let pcb = match parts.get_mut(caller) {
-            Some(p) => p,
-            None => {
-                sem.wait_queue.pop_back();
-                return Err(SemaphoreError::InvalidPartition);
-            }
-        };
-        if let Err(e) = pcb.transition(PartitionState::Waiting) {
-            sem.wait_queue.pop_back();
-            return Err(e.into());
+        if sem.wait_queue.is_full() {
+            return Err(SemaphoreError::WaitQueueFull);
         }
+        let pcb = parts
+            .get_mut(caller)
+            .ok_or(SemaphoreError::InvalidPartition)?;
+        pcb.transition(PartitionState::Waiting)?;
+        // push cannot fail: we checked is_full above and hold &mut self.
+        let _ = sem.wait_queue.push(caller as u8);
         Ok(())
     }
     pub fn signal<const N: usize>(
@@ -86,17 +82,10 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
             .get_mut(sem_id)
             .ok_or(SemaphoreError::InvalidSemaphore)?;
         if let Some(pid) = sem.wait_queue.pop_front() {
-            let pcb = match parts.get_mut(pid as usize) {
-                Some(p) => p,
-                None => {
-                    sem.wait_queue.push_front(pid).unwrap();
-                    return Err(SemaphoreError::InvalidPartition);
-                }
-            };
-            if let Err(e) = pcb.transition(PartitionState::Ready) {
-                sem.wait_queue.push_front(pid).unwrap();
-                return Err(e.into());
-            }
+            let pcb = parts
+                .get_mut(pid as usize)
+                .ok_or(SemaphoreError::InvalidPartition)?;
+            pcb.transition(PartitionState::Ready)?;
             return Ok(());
         }
         if sem.count < sem.max_count {
