@@ -864,8 +864,38 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
-            // TODO: wire up timed queuing send dispatch
-            Some(SyscallId::QueuingSendTimed) => SvcError::NotImplemented.to_u32(),
+            Some(SyscallId::QueuingSendTimed) => {
+                let data_len = (frame.r2 & 0xFFFF) as usize;
+                let timeout = (frame.r2 >> 16) as u64;
+                validated_ptr!(self, frame.r3, data_len, {
+                    // SAFETY: validated_ptr confirmed [r3, r3+data_len) lies within
+                    // the calling partition's MPU data region.
+                    let d = unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, data_len) };
+                    match self.queuing.send_routed(
+                        frame.r1 as usize,
+                        self.current_partition,
+                        d,
+                        timeout,
+                        self.tick.get(),
+                    ) {
+                        Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
+                            if let Some(pid) = w {
+                                try_transition(&mut self.partitions, pid, PartitionState::Ready);
+                            }
+                            0
+                        }
+                        Ok(SendQueuingOutcome::SenderBlocked { .. }) => {
+                            try_transition(
+                                &mut self.partitions,
+                                self.current_partition,
+                                PartitionState::Waiting,
+                            );
+                            0
+                        }
+                        Err(_) => SvcError::InvalidResource.to_u32(),
+                    }
+                })
+            }
             None => SvcError::InvalidSyscall.to_u32(),
         };
     }
@@ -1992,6 +2022,150 @@ mod tests {
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
         // Partition should NOT be in Waiting (no blocking happened)
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Running
+        );
+    }
+
+    // ---- QueuingSendTimed dispatch tests ----
+
+    /// Helper: create a connected Source→Destination pair, return (src_id, dst_id).
+    fn connected_send_pair(k: &mut Kernel<TestConfig>) -> (usize, usize) {
+        use crate::sampling::PortDirection;
+        let s = k.queuing.create_port(PortDirection::Source).unwrap();
+        let d = k.queuing.create_port(PortDirection::Destination).unwrap();
+        k.queuing.connect_ports(s, d).unwrap();
+        (s, d)
+    }
+
+    /// Pack r2 for QueuingSendTimed: timeout_hi16 << 16 | data_len_lo16.
+    fn pack_r2(timeout: u16, data_len: u16) -> u32 {
+        ((timeout as u32) << 16) | (data_len as u32)
+    }
+
+    #[test]
+    fn queuing_send_timed_delivers_message_and_wakes_receiver() {
+        use crate::syscall::SYS_QUEUING_SEND_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let (s, d) = connected_send_pair(&mut k);
+        // Enqueue a blocked receiver on the destination port
+        k.queuing
+            .get_mut(d)
+            .unwrap()
+            .enqueue_blocked_receiver(1, u64::MAX);
+        let ptr = low32_buf(0);
+        // Write two bytes of data into the buffer
+        // SAFETY: test-only, writing to a known-mapped page.
+        unsafe {
+            *ptr = 0xAA;
+            *ptr.add(1) = 0xBB;
+        }
+        let r2 = pack_r2(100, 2);
+        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Blocked receiver (partition 1) should be woken to Ready
+        assert_eq!(k.partitions.get(1).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn queuing_send_timed_blocks_on_full_queue() {
+        use crate::syscall::SYS_QUEUING_SEND_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let (s, d) = connected_send_pair(&mut k);
+        // Fill the destination queue to capacity (QD=4)
+        for _ in 0..4 {
+            k.queuing.get_mut(d).unwrap().inject_message(1, &[0x42]);
+        }
+        let ptr = low32_buf(0);
+        let r2 = pack_r2(50, 1);
+        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Caller (partition 0) should transition to Waiting
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(k.queuing.get(d).unwrap().pending_senders(), 1);
+    }
+
+    #[test]
+    fn queuing_send_timed_zero_timeout_full_returns_error() {
+        use crate::syscall::SYS_QUEUING_SEND_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let (s, d) = connected_send_pair(&mut k);
+        // Fill destination queue
+        for _ in 0..4 {
+            k.queuing.get_mut(d).unwrap().inject_message(1, &[0x42]);
+        }
+        let ptr = low32_buf(0);
+        let r2 = pack_r2(0, 1);
+        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        // timeout=0 with full queue → QueueFull → InvalidResource
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+    }
+
+    #[test]
+    fn queuing_send_timed_invalid_port_returns_error() {
+        use crate::syscall::SYS_QUEUING_SEND_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let ptr = low32_buf(0);
+        let r2 = pack_r2(10, 1);
+        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, 99, r2, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+    }
+
+    #[test]
+    fn queuing_send_timed_rejects_out_of_bounds_pointer() {
+        use crate::syscall::SYS_QUEUING_SEND_TIMED;
+        let mut k = kernel(0, 0, 0);
+        connected_send_pair(&mut k);
+        let r2 = pack_r2(10, 4);
+        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, 0, r2, 0xDEAD_0000);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
+    }
+
+    #[test]
+    fn queuing_send_timed_delivered_no_receiver_to_wake() {
+        use crate::syscall::SYS_QUEUING_SEND_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let (s, _d) = connected_send_pair(&mut k);
+        let ptr = low32_buf(0);
+        let r2 = pack_r2(100, 1);
+        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // No receiver was blocked, so partition 1 should remain Running
+        assert_eq!(
+            k.partitions.get(1).unwrap().state(),
+            PartitionState::Running
+        );
+    }
+
+    #[test]
+    fn queuing_send_original_unchanged_still_uses_zero_timeout() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_SEND;
+        let mut k = kernel(0, 0, 0);
+        let s = k.queuing.create_port(PortDirection::Source).unwrap();
+        let d = k.queuing.create_port(PortDirection::Destination).unwrap();
+        k.queuing.connect_ports(s, d).unwrap();
+        // Fill destination queue
+        for _ in 0..4 {
+            k.queuing.get_mut(d).unwrap().inject_message(1, &[0x42]);
+        }
+        let ptr = low32_buf(0);
+        // Original QueuingSend: r2=data_len (used as raw len), timeout=0
+        // Full queue with timeout=0 → QueueFull → InvalidResource
+        let mut ef = frame4(SYS_QUEUING_SEND, s as u32, 1, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+        // Partition should NOT be in Waiting (no blocking with original handler)
         assert_eq!(
             k.partitions.get(0).unwrap().state(),
             PartitionState::Running
