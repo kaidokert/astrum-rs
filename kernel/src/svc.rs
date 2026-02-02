@@ -175,6 +175,28 @@ where
     pub current_partition: u8,
 }
 
+impl<C: KernelConfig> Default for Kernel<C>
+where
+    [(); C::N]:,
+    [(); C::S]:,
+    [(); C::SW]:,
+    [(); C::MS]:,
+    [(); C::MW]:,
+    [(); C::QS]:,
+    [(); C::QD]:,
+    [(); C::QM]:,
+    [(); C::QW]:,
+    [(); C::SP]:,
+    [(); C::SM]:,
+    [(); C::BS]:,
+    [(); C::BM]:,
+    [(); C::BW]:,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<C: KernelConfig> Kernel<C>
 where
     [(); C::N]:,
@@ -192,6 +214,21 @@ where
     [(); C::BM]:,
     [(); C::BW]:,
 {
+    /// Create a new `Kernel` with empty resource pools and partition table.
+    pub fn new() -> Self {
+        Self {
+            partitions: PartitionTable::new(),
+            semaphores: SemaphorePool::new(),
+            mutexes: MutexPool::new(0),
+            messages: MessagePool::new(),
+            tick: TickCounter::new(),
+            sampling: SamplingPortPool::new(),
+            queuing: QueuingPortPool::new(),
+            blackboards: BlackboardPool::new(),
+            current_partition: 0,
+        }
+    }
+
     /// Full syscall dispatch including semaphore, mutex, message, sampling,
     /// and queuing operations.
     ///

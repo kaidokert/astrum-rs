@@ -21,8 +21,12 @@ use panic_semihosting as _;
 const MAX_SCHEDULE_ENTRIES: usize = 8;
 const NUM_PARTITIONS: usize = 3;
 
-struct Cfg;
-impl kernel::config::KernelConfig for Cfg {
+/// Kernel configuration for the sampling-port demo.
+///
+/// Sized for 4 partitions, 8 sampling ports with 4-byte messages, and
+/// moderate pool sizes for all resource types.
+struct DemoConfig;
+impl KernelConfig for DemoConfig {
     const N: usize = 4;
     const S: usize = 4;
     const SW: usize = 4;
@@ -38,7 +42,6 @@ impl kernel::config::KernelConfig for Cfg {
     const BM: usize = 4;
     const BW: usize = 4;
 }
-type K = Kernel<Cfg>;
 static mut STACKS: [[u32; 256]; NUM_PARTITIONS] = [[0; 256]; NUM_PARTITIONS];
 #[no_mangle]
 static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
@@ -46,8 +49,8 @@ static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
 static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
-static mut KERN: Option<K> = None;
-static mut KS: Option<KernelState<{ Cfg::N }, MAX_SCHEDULE_ENTRIES>> = None;
+static mut KERN: Option<Kernel<DemoConfig>> = None;
+static mut KS: Option<KernelState<{ DemoConfig::N }, MAX_SCHEDULE_ENTRIES>> = None;
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();
@@ -141,17 +144,7 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("sampling_demo: start");
     unsafe {
-        let mut k = K {
-            partitions: kernel::partition::PartitionTable::new(),
-            semaphores: kernel::semaphore::SemaphorePool::new(),
-            mutexes: kernel::mutex::MutexPool::new(0),
-            messages: kernel::message::MessagePool::new(),
-            tick: kernel::tick::TickCounter::new(),
-            sampling: kernel::sampling::SamplingPortPool::new(),
-            queuing: kernel::queuing::QueuingPortPool::new(),
-            blackboards: kernel::blackboard::BlackboardPool::new(),
-            current_partition: 0,
-        };
+        let mut k = Kernel::<DemoConfig>::new();
         let s0 = k.sampling.create_port(PortDirection::Source, 10).unwrap();
         let d0 = k
             .sampling

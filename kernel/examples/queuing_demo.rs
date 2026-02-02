@@ -34,8 +34,12 @@ const QUEUE_MSG_SIZE: usize = 4;
 const MAX_SCHEDULE_ENTRIES: usize = 8;
 const NUM_PARTITIONS: usize = 2;
 
-struct Cfg;
-impl kernel::config::KernelConfig for Cfg {
+/// Kernel configuration for the queuing-port demo.
+///
+/// Sized for 4 partitions, depth-4 queuing ports with 4-byte messages,
+/// and moderate pool sizes for all resource types.
+struct DemoConfig;
+impl KernelConfig for DemoConfig {
     const N: usize = 4;
     const S: usize = 4;
     const SW: usize = 4;
@@ -51,7 +55,6 @@ impl kernel::config::KernelConfig for Cfg {
     const BM: usize = 4;
     const BW: usize = 4;
 }
-type K = Kernel<Cfg>;
 
 // ---------------------------------------------------------------------------
 // Command / response protocol constants
@@ -95,8 +98,8 @@ static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
 static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
-static mut KERN: Option<K> = None;
-static mut KS: Option<KernelState<{ Cfg::N }, MAX_SCHEDULE_ENTRIES>> = None;
+static mut KERN: Option<Kernel<DemoConfig>> = None;
+static mut KS: Option<KernelState<{ DemoConfig::N }, MAX_SCHEDULE_ENTRIES>> = None;
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();
@@ -251,17 +254,7 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("queuing_demo: start");
     unsafe {
-        let mut k = K {
-            partitions: kernel::partition::PartitionTable::new(),
-            semaphores: kernel::semaphore::SemaphorePool::new(),
-            mutexes: kernel::mutex::MutexPool::new(0),
-            messages: kernel::message::MessagePool::new(),
-            tick: kernel::tick::TickCounter::new(),
-            sampling: kernel::sampling::SamplingPortPool::new(),
-            queuing: kernel::queuing::QueuingPortPool::new(),
-            blackboards: kernel::blackboard::BlackboardPool::new(),
-            current_partition: 0,
-        };
+        let mut k = Kernel::<DemoConfig>::new();
 
         // Command channel: commander (Source cs) -> worker (Destination cd)
         let cs = k.queuing.create_port(PortDirection::Source).unwrap();

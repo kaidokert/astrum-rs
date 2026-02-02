@@ -41,8 +41,12 @@ use panic_semihosting as _;
 const MAX_SCHEDULE_ENTRIES: usize = 4;
 const NUM_PARTITIONS: usize = 3;
 
-struct Cfg;
-impl kernel::config::KernelConfig for Cfg {
+/// Kernel configuration for the blackboard demo.
+///
+/// Sized for 3 partitions, 1 semaphore, 1 blackboard (4-byte messages,
+/// 3-deep wait queue), and minimal allocations for unused resource pools.
+struct DemoConfig;
+impl KernelConfig for DemoConfig {
     const N: usize = 3;
     const S: usize = 1;
     const SW: usize = 3;
@@ -58,7 +62,6 @@ impl kernel::config::KernelConfig for Cfg {
     const BM: usize = 4;
     const BW: usize = 3;
 }
-type K = Kernel<Cfg>;
 
 // ---------------------------------------------------------------------------
 // R0 packing helpers
@@ -79,8 +82,8 @@ static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
 static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
-static mut KERN: Option<K> = None;
-static mut KS: Option<KernelState<{ Cfg::N }, MAX_SCHEDULE_ENTRIES>> = None;
+static mut KERN: Option<Kernel<DemoConfig>> = None;
+static mut KS: Option<KernelState<{ DemoConfig::N }, MAX_SCHEDULE_ENTRIES>> = None;
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();
@@ -209,17 +212,7 @@ fn main() -> ! {
     hprintln!("blackboard_demo: start");
 
     unsafe {
-        let mut k = K {
-            partitions: kernel::partition::PartitionTable::new(),
-            semaphores: kernel::semaphore::SemaphorePool::new(),
-            mutexes: kernel::mutex::MutexPool::new(0),
-            messages: kernel::message::MessagePool::new(),
-            tick: kernel::tick::TickCounter::new(),
-            sampling: kernel::sampling::SamplingPortPool::new(),
-            queuing: kernel::queuing::QueuingPortPool::new(),
-            blackboards: kernel::blackboard::BlackboardPool::new(),
-            current_partition: 0,
-        };
+        let mut k = Kernel::<DemoConfig>::new();
 
         let bb: u32 = k.blackboards.create().unwrap() as u32;
         k.semaphores.add(Semaphore::new(1, 1)).unwrap();
