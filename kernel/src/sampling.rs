@@ -109,8 +109,11 @@ impl<const M: usize> SamplingPort<M> {
 
 pub struct SamplingPortPool<const S: usize, const M: usize> {
     ports: heapless::Vec<SamplingPort<M>, S>,
-    // TODO: ID allocation uses Vec index, which is fragile if port deletion is added.
-    // Replace with a monotonic counter or generation-based ID scheme when delete is needed.
+    // Port IDs equal their Vec index (port N is at ports[N]). This invariant holds
+    // because ports are append-only — deletion is deliberately unsupported. ARINC 653
+    // sampling ports are created at system init and persist for the partition's lifetime,
+    // so deletion is out of scope. If deletion were ever added, a generation-based ID
+    // scheme (or a slot map) would be needed to prevent stale-ID aliasing.
     next_id: usize,
 }
 
@@ -136,12 +139,14 @@ impl<const S: usize, const M: usize> SamplingPortPool<S, M> {
         Ok(id)
     }
 
+    /// O(1) lookup by port ID. Port IDs equal their Vec index (see invariant above).
     pub fn get(&self, id: usize) -> Option<&SamplingPort<M>> {
-        self.ports.iter().find(|p| p.id == id)
+        self.ports.get(id)
     }
 
+    /// O(1) mutable lookup by port ID.
     pub fn get_mut(&mut self, id: usize) -> Option<&mut SamplingPort<M>> {
-        self.ports.iter_mut().find(|p| p.id == id)
+        self.ports.get_mut(id)
     }
 
     pub fn len(&self) -> usize {
@@ -455,6 +460,37 @@ mod tests {
         let id = pool.create_port(PortDirection::Source, 100).unwrap();
         let result = pool.write_sampling_message(id, &[1, 2, 3, 4, 5], 10);
         assert_eq!(result, Err(SamplingError::MessageTooLarge));
+    }
+
+    #[test]
+    fn id_lookup_after_multiple_creations() {
+        let mut pool = SamplingPortPool::<8, 32>::new();
+        let mut ids = [0usize; 5];
+        for (i, slot) in ids.iter_mut().enumerate() {
+            let dir = if i % 2 == 0 {
+                PortDirection::Source
+            } else {
+                PortDirection::Destination
+            };
+            *slot = pool.create_port(dir, (i as u32 + 1) * 10).unwrap();
+        }
+
+        // Each ID should match its creation order and retrieve the correct port.
+        for (i, &id) in ids.iter().enumerate() {
+            assert_eq!(id, i, "port ID should equal creation index");
+            let port = pool.get(id).expect("get() must find the port");
+            assert_eq!(port.id(), id);
+            assert_eq!(port.refresh_period(), (i as u32 + 1) * 10);
+        }
+
+        // Mutable lookup should also work for every port.
+        for &id in &ids {
+            assert!(pool.get_mut(id).is_some(), "get_mut() must find the port");
+        }
+
+        // Out-of-range IDs must return None.
+        assert!(pool.get(ids.len()).is_none());
+        assert!(pool.get(usize::MAX).is_none());
     }
 
     #[test]
