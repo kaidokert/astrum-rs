@@ -78,6 +78,10 @@ required-features = ["qemu"]
 name = "mpu_dynamic"
 required-features = ["qemu", "dynamic-mpu"]
 
+[[example]]
+name = "mpu_dynamic_test"
+required-features = ["qemu", "dynamic-mpu"]
+
 [features]
 qemu = []
 dynamic-mpu = []

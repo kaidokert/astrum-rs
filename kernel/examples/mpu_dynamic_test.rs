@@ -1,0 +1,223 @@
+//! QEMU test: dynamic MPU region verification across partition switches.
+//!
+//! Two partitions with distinct data-region bases and sizes. On each
+//! context switch the SysTick handler reads back MPU R4 RBAR and RASR
+//! registers via the memory-mapped MPU interface and verifies they match
+//! the expected partition-specific values.  Runs for several major-frame
+//! cycles, printing PASS/FAIL for every check.  Exits with
+//! EXIT_SUCCESS when all checks pass.
+
+#![no_std]
+#![no_main]
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
+
+use core::cell::RefCell;
+use cortex_m::interrupt::Mutex;
+use cortex_m::peripheral::scb::SystemHandler;
+use cortex_m::peripheral::syst::SystClkSource;
+use cortex_m_rt::{entry, exception};
+use cortex_m_semihosting::{debug, hprintln};
+use kernel::{
+    kernel::KernelState,
+    mpu::{self, build_rasr, encode_size, AP_FULL_ACCESS, RBAR_ADDR_MASK},
+    mpu_strategy::DynamicStrategy,
+    partition::{MpuRegion, PartitionConfig},
+    scheduler::{ScheduleEntry, ScheduleTable},
+};
+use panic_semihosting as _;
+
+const NP: usize = 2;
+const STACK_WORDS: usize = 256;
+const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
+/// Partition 0: 4 KiB data region at 0x2000_0000.
+/// Partition 1: 8 KiB data region at 0x2000_8000.
+const DATA_BASES: [u32; NP] = [0x2000_0000, 0x2000_8000];
+const DATA_SIZES: [u32; NP] = [4096, 8192];
+/// Run for 3 full major frames (each frame = 2 partitions × 2 ticks = 4 ticks).
+/// That yields 6 partition switches total.
+const TARGET_SWITCHES: u32 = 6;
+
+static mut STACKS: [[u32; STACK_WORDS]; NP] = [[0; STACK_WORDS]; NP];
+
+// These #[no_mangle] statics are required by the PendSV assembly handler
+// (define_pendsv_dynamic!) which references them by symbol name. They cannot
+// be encapsulated behind a Mutex because the assembly performs raw loads/stores.
+#[no_mangle]
+static mut PARTITION_SP: [u32; NP] = [0; NP];
+#[no_mangle]
+static mut CURRENT_PARTITION: u32 = u32::MAX;
+#[no_mangle]
+static mut NEXT_PARTITION: u32 = 0;
+
+/// Kernel state protected by a critical-section Mutex so SysTick can
+/// access it without bare `static mut`.
+static KS: Mutex<RefCell<Option<KernelState<NP, 4>>>> = Mutex::new(RefCell::new(None));
+static STRATEGY: DynamicStrategy = DynamicStrategy::new();
+
+kernel::define_pendsv_dynamic!(STRATEGY);
+
+/// Compute the expected RASR value for partition `pid`.
+///
+/// This mirrors the kernel's `partition_mpu_regions` data-region formula:
+/// AP_FULL_ACCESS, XN=true, S=true, C=true, B=false.
+fn expected_rasr(pid: usize) -> u32 {
+    let sf = encode_size(DATA_SIZES[pid]).expect("valid size");
+    build_rasr(sf, AP_FULL_ACCESS, true, (true, true, false))
+}
+
+extern "C" fn partition_main() -> ! {
+    loop {
+        cortex_m::asm::nop();
+    }
+}
+
+#[exception]
+fn SysTick() {
+    static mut SW: u32 = 0;
+    static mut LAST_PID: Option<u8> = None;
+    static mut FAIL: bool = false;
+
+    // SAFETY: sole MPU accessor at this priority; steal() yields a
+    // reference to the memory-mapped MPU registers.
+    let p = unsafe { cortex_m::Peripherals::steal() };
+
+    // After a switch, PendSV has executed and programmed R4. Verify.
+    if let Some(active_pid) = *LAST_PID {
+        // SAFETY: RNR write selects region; RBAR/RASR reads have no
+        // side effects beyond returning the register value.
+        let (got_rbar, got_rasr) = unsafe {
+            p.MPU.rnr.write(4);
+            (p.MPU.rbar.read(), p.MPU.rasr.read())
+        };
+
+        let got_base = got_rbar & RBAR_ADDR_MASK;
+        let exp_base = DATA_BASES[active_pid as usize];
+        let exp_rasr = expected_rasr(active_pid as usize);
+
+        let base_ok = got_base == exp_base;
+        let rasr_ok = got_rasr == exp_rasr;
+        let pass = base_ok && rasr_ok;
+
+        if !pass {
+            *FAIL = true;
+        }
+
+        hprintln!(
+            "sw{}: p{} RBAR={:#010x} exp={:#010x} {} | RASR={:#010x} exp={:#010x} {} => {}",
+            *SW,
+            active_pid,
+            got_base,
+            exp_base,
+            if base_ok { "OK" } else { "FAIL" },
+            got_rasr,
+            exp_rasr,
+            if rasr_ok { "OK" } else { "FAIL" },
+            if pass { "PASS" } else { "FAIL" },
+        );
+
+        if *SW >= TARGET_SWITCHES {
+            // Final descriptor check via DynamicStrategy software state.
+            let desc = STRATEGY.slot(4).expect("R4 occupied");
+            let desc_ok = desc.base == exp_base && desc.owner == active_pid;
+            hprintln!(
+                "desc: base={:#010x} owner={} => {}",
+                desc.base,
+                desc.owner,
+                if desc_ok { "PASS" } else { "FAIL" },
+            );
+            if !desc_ok {
+                *FAIL = true;
+            }
+
+            if *FAIL {
+                hprintln!("mpu_dynamic_test: FAIL");
+                debug::exit(debug::EXIT_FAILURE);
+            } else {
+                hprintln!("mpu_dynamic_test: all checks passed — PASS");
+                debug::exit(debug::EXIT_SUCCESS);
+            }
+        }
+    }
+
+    cortex_m::interrupt::free(|cs| {
+        let mut ks_ref = KS.borrow(cs).borrow_mut();
+        let state = ks_ref.as_mut().expect("KS");
+        if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) =
+            kernel::tick::on_systick_dynamic(state, &p.MPU, &STRATEGY)
+        {
+            // SAFETY: single-core exclusive write; PendSV reads this after
+            // SysTick returns but cannot preempt us (lower priority).
+            unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
+
+            *SW += 1;
+            *LAST_PID = Some(pid);
+        }
+    });
+}
+
+#[entry]
+fn main() -> ! {
+    let mut cp = cortex_m::Peripherals::take().unwrap();
+    hprintln!(
+        "mpu_dynamic_test: start ({} switches over 3 major frames)",
+        TARGET_SWITCHES
+    );
+
+    // SAFETY: before interrupts; single-core exclusive.
+    unsafe {
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 2)).unwrap();
+        sched.add(ScheduleEntry::new(1, 2)).unwrap();
+        sched.start();
+
+        // stack_base/stack_size point at the actual partition stacks (STACKS
+        // array), not the data regions. mpu_region carries the data-region
+        // descriptor that DynamicStrategy programs into MPU R4.
+        let cfgs: [PartitionConfig; NP] = core::array::from_fn(|i| {
+            let stk_base = STACKS[i].as_ptr() as u32;
+            PartitionConfig {
+                id: i as u8,
+                entry_point: 0,
+                stack_base: stk_base,
+                stack_size: STACK_SIZE,
+                mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SIZES[i], 0),
+            }
+        });
+
+        cortex_m::interrupt::free(|cs| {
+            KS.borrow(cs)
+                .replace(Some(KernelState::new(sched, &cfgs).unwrap()));
+        });
+
+        for i in 0..NP {
+            let stk = &mut STACKS[i];
+            let ix = kernel::context::init_stack_frame(
+                stk,
+                partition_main as *const () as u32,
+                Some(i as u32),
+            )
+            .expect("init_stack_frame");
+            PARTITION_SP[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
+        }
+        cp.SCB.set_priority(SystemHandler::SVCall, 0x00);
+        cp.SCB.set_priority(SystemHandler::PendSV, 0xFF);
+        cp.SCB.set_priority(SystemHandler::SysTick, 0xFE);
+    }
+
+    // SAFETY: Interrupts not yet enabled. PRIVDEFENA ensures privileged
+    // code retains a default memory map.
+    unsafe { cp.MPU.ctrl.write(mpu::MPU_CTRL_ENABLE_PRIVDEFENA) };
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+
+    cp.SYST.set_clock_source(SystClkSource::Core);
+    cp.SYST.set_reload(120_000 - 1);
+    cp.SYST.clear_current();
+    cp.SYST.enable_counter();
+    cp.SYST.enable_interrupt();
+    cortex_m::peripheral::SCB::set_pendsv();
+    loop {
+        cortex_m::asm::wfi();
+    }
+}
