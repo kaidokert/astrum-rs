@@ -8,21 +8,15 @@
 //!   bits [31:24] = partition ID (so workers can self-identify)
 //!   bits [23:16] = semaphore ID
 //!   bits [15:0]  = blackboard ID
-// TODO: The per-example boilerplate (statics, SysTick, partition/scheduler
-// setup) is duplicated across all QEMU examples. Extract a shared
-// `qemu_harness` module or proc-macro crate to eliminate this when
-// the kernel's example infrastructure matures.
 #![no_std]
 #![no_main]
 #![allow(clippy::empty_loop)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
-use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    context::init_stack_frame,
     kernel::KernelState,
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
@@ -42,6 +36,7 @@ use panic_semihosting as _;
 // ---------------------------------------------------------------------------
 const MAX_SCHEDULE_ENTRIES: usize = 4;
 const NUM_PARTITIONS: usize = 3;
+const STACK_WORDS: usize = 256;
 
 /// Kernel configuration for the blackboard demo.
 ///
@@ -74,21 +69,12 @@ const fn pack_r0(partition_id: u32, sem: u32, bb: u32) -> u32 {
     (partition_id << 24) | (sem << 16) | bb
 }
 
-// ---------------------------------------------------------------------------
-// Boilerplate: kernel statics, SVC dispatch hook, asm macros
-// ---------------------------------------------------------------------------
-static mut STACKS: [[u32; 256]; NUM_PARTITIONS] = [[0; 256]; NUM_PARTITIONS];
-#[no_mangle]
-static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
-#[no_mangle]
-static mut CURRENT_PARTITION: u32 = u32::MAX;
-#[no_mangle]
-static mut NEXT_PARTITION: u32 = 0;
-kernel::define_dispatch_hook!(DemoConfig);
-static mut KS: Option<KernelState<{ DemoConfig::N }, MAX_SCHEDULE_ENTRIES>> = None;
-#[used]
-static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
-kernel::define_pendsv!();
+kernel::define_harness!(
+    DemoConfig,
+    NUM_PARTITIONS,
+    MAX_SCHEDULE_ENTRIES,
+    STACK_WORDS
+);
 
 // ---------------------------------------------------------------------------
 // Config partition: displays config on blackboard, waits for worker acks
@@ -146,20 +132,6 @@ extern "C" fn worker_b() -> ! {
 }
 
 // ---------------------------------------------------------------------------
-// SysTick handler: drives the round-robin scheduler
-// ---------------------------------------------------------------------------
-#[exception]
-fn SysTick() {
-    let p = &raw mut KS;
-    if let Some(ks) = unsafe { (*p).as_mut() } {
-        if let Some(pid) = ks.advance_schedule_tick() {
-            unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
-            SCB::set_pendsv();
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Entry point: create resources, configure partitions and scheduler, start OS
 // ---------------------------------------------------------------------------
 #[entry]
@@ -168,7 +140,7 @@ fn main() -> ! {
     hprintln!("blackboard_demo: start");
 
     let (bb, sem);
-    // SAFETY: accessing static-mut globals; single-core, interrupts not yet
+    // SAFETY: accessing static-mut KS; single-core, interrupts not yet
     // enabled so there is no data race.
     unsafe {
         let mut k = Kernel::<DemoConfig>::new();
@@ -196,34 +168,20 @@ fn main() -> ! {
             }
         });
         KS = Some(KernelState::new(sched, &cfgs).unwrap());
-
-        // Pack per-partition R0 values:
-        //   config_main (partition 0): only needs blackboard ID
-        //   worker_a    (partition 1): needs partition_id=1, sem, bb
-        //   worker_b    (partition 2): needs partition_id=2, sem, bb
-        let hints: [u32; NUM_PARTITIONS] = [
-            pack_r0(0, sem, bb),
-            pack_r0(1, sem, bb),
-            pack_r0(2, sem, bb),
-        ];
-        let eps: [extern "C" fn() -> !; NUM_PARTITIONS] = [config_main, worker_a, worker_b];
-        let (stk, sp) = (&raw mut STACKS, &raw mut PARTITION_SP);
-        for (i, (ep, &hv)) in eps.iter().zip(hints.iter()).enumerate() {
-            let ix = init_stack_frame(&mut (*stk)[i], *ep as *const () as u32, Some(hv)).unwrap();
-            (*sp)[i] = (*stk)[i].as_ptr() as u32 + (ix as u32) * 4;
-        }
-
-        p.SCB.set_priority(SystemHandler::SVCall, 0x00);
-        p.SCB.set_priority(SystemHandler::PendSV, 0xFF);
-        p.SCB.set_priority(SystemHandler::SysTick, 0xFE);
     }
-    p.SYST.set_clock_source(SystClkSource::Core);
-    p.SYST.set_reload(120_000 - 1);
-    p.SYST.clear_current();
-    p.SYST.enable_counter();
-    p.SYST.enable_interrupt();
-    SCB::set_pendsv();
-    loop {
-        cortex_m::asm::wfi()
-    }
+
+    // Pack per-partition R0 values:
+    //   config_main (partition 0): only needs blackboard ID
+    //   worker_a    (partition 1): needs partition_id=1, sem, bb
+    //   worker_b    (partition 2): needs partition_id=2, sem, bb
+    let hints: [u32; NUM_PARTITIONS] = [
+        pack_r0(0, sem, bb),
+        pack_r0(1, sem, bb),
+        pack_r0(2, sem, bb),
+    ];
+    let eps: [extern "C" fn() -> !; NUM_PARTITIONS] = [config_main, worker_a, worker_b];
+    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
+        core::array::from_fn(|i| (eps[i], hints[i]));
+
+    boot(&parts, &mut p)
 }

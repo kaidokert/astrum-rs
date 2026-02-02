@@ -1,3 +1,9 @@
+// TODO: Not migrated to define_harness! — this integration test uses
+// a custom SysTick handler that lazily initialises KernelState and
+// MessageQueue as handler-local statics, performs inline MPU and IPC
+// assertions, and exits via semihosting. Its structure is
+// fundamentally different from the standard harness pattern.
+
 //! Integration test: SysTick scheduling, MPU, and IPC under QEMU.
 #![no_std]
 #![no_main]

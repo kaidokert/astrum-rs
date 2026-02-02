@@ -114,7 +114,7 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("sampling_demo: start");
     let (s0, d0, s1, d1);
-    // SAFETY: accessing static-mut globals; single-core, interrupts not yet
+    // SAFETY: accessing static-mut KS; single-core, interrupts not yet
     // enabled so there is no data race.
     unsafe {
         let mut k = Kernel::<DemoConfig>::new();
@@ -148,20 +148,18 @@ fn main() -> ! {
             }
         });
         KS = Some(KernelState::new(sched, &cfgs).unwrap());
-        // TODO: bit-packing port IDs into u32 is brittle; replace with a
-        // typed partition-config / init-args mechanism when the kernel supports one.
-        let h: [u32; NUM_PARTITIONS] = [
-            (s0 as u32) << 16,
-            ((s1 as u32) << 16) | d0 as u32,
-            d1 as u32,
-        ];
-        let eps: [extern "C" fn() -> !; NUM_PARTITIONS] = [sensor_main, control_main, display_main];
-        let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
-            core::array::from_fn(|i| (eps[i], h[i]));
-
-        // SAFETY: STACKS and PARTITION_SP are valid static-mut arrays of
-        // length NUM_PARTITIONS; interrupts are not yet enabled.
-        // TODO: reviewer false positive – this call is already inside an unsafe block (line 113).
-        kernel::harness::boot::<STACK_WORDS>(&raw mut STACKS, &raw mut PARTITION_SP, &parts, &mut p)
     }
+
+    // TODO: bit-packing port IDs into u32 is brittle; replace with a
+    // typed partition-config / init-args mechanism when the kernel supports one.
+    let h: [u32; NUM_PARTITIONS] = [
+        (s0 as u32) << 16,
+        ((s1 as u32) << 16) | d0 as u32,
+        d1 as u32,
+    ];
+    let eps: [extern "C" fn() -> !; NUM_PARTITIONS] = [sensor_main, control_main, display_main];
+    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
+        core::array::from_fn(|i| (eps[i], h[i]));
+
+    boot(&parts, &mut p)
 }

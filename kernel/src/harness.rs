@@ -1,8 +1,9 @@
 //! Shared runtime harness for QEMU demo examples.
 //!
 //! The [`define_harness!`] macro emits the boilerplate statics, SVC
-//! linkage, PendSV context-switch handler, and SysTick exception
-//! handler that every multi-partition example duplicates.
+//! linkage, PendSV context-switch handler, SysTick exception handler,
+//! and a safe `boot()` function that every multi-partition example
+//! would otherwise duplicate.
 //!
 //! # Usage
 //!
@@ -23,68 +24,16 @@
 //! | `SysTick` exception handler | Drives the round-robin scheduler |
 //! | `KERN` / `dispatch_hook` / `store_kernel` | Via [`define_dispatch_hook!`] |
 //! | `PendSV` handler | Via [`define_pendsv!`] |
+//! | `boot()` | Safe function: inits stacks, configures exceptions, starts OS |
 //!
-//! After invoking the macro, call [`boot`] from `main()` to perform
-//! the common startup sequence (partition stack init, exception
-//! priorities, SysTick configuration, and first PendSV trigger).
+//! After invoking the macro, call the generated `boot()` from `main()`
+//! to perform the common startup sequence (partition stack init,
+//! exception priorities, SysTick configuration, and first PendSV
+//! trigger).
 
-/// Initialise partition stacks, configure exception priorities, start
-/// SysTick, trigger the first PendSV, and enter the idle loop.
-///
-/// # Type parameters
-///
-/// - `STACK_WORDS`: number of `u32` words per partition stack (e.g. `256`).
-///
-/// # Safety
-///
-/// Must be called exactly once from `main()` with interrupts disabled
-/// (before the scheduler has started). The caller must ensure:
-/// - `stacks` points to a valid `static mut [[u32; STACK_WORDS]; N]` array
-///   with at least `partitions.len()` entries.
-/// - `partition_sp` points to a valid `static mut [u32; N]` array
-///   with at least `partitions.len()` entries.
-/// - `partitions` contains valid `(entry_point, r0_hint)` pairs.
-#[cfg(not(test))]
-pub unsafe fn boot<const STACK_WORDS: usize>(
-    stacks: *mut [[u32; STACK_WORDS]],
-    partition_sp: *mut [u32],
-    partitions: &[(extern "C" fn() -> !, u32)],
-    peripherals: &mut cortex_m::Peripherals,
-) -> ! {
-    use cortex_m::peripheral::scb::SystemHandler;
-    use cortex_m::peripheral::syst::SystClkSource;
-    use cortex_m::peripheral::SCB;
-
-    // SAFETY: caller guarantees the pointers are valid and we have
-    // exclusive access (interrupts disabled, single-core).
-    let stacks = &mut *stacks;
-    let partition_sp = &mut *partition_sp;
-
-    for (i, &(ep, hint)) in partitions.iter().enumerate() {
-        let stk = &mut stacks[i];
-        let ix = crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
-            .expect("init_stack_frame");
-        partition_sp[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
-    }
-
-    peripherals.SCB.set_priority(SystemHandler::SVCall, 0x00);
-    peripherals.SCB.set_priority(SystemHandler::PendSV, 0xFF);
-    peripherals.SCB.set_priority(SystemHandler::SysTick, 0xFE);
-
-    peripherals.SYST.set_clock_source(SystClkSource::Core);
-    peripherals.SYST.set_reload(120_000 - 1);
-    peripherals.SYST.clear_current();
-    peripherals.SYST.enable_counter();
-    peripherals.SYST.enable_interrupt();
-    SCB::set_pendsv();
-
-    loop {
-        cortex_m::asm::wfi();
-    }
-}
-
-/// Declare all runtime statics, the SysTick handler, SVC linkage, and
-/// PendSV handler for a QEMU demo example.
+/// Declare all runtime statics, the SysTick handler, SVC linkage,
+/// PendSV handler, and a safe `boot()` function for a QEMU demo
+/// example.
 ///
 /// # Parameters
 ///
@@ -92,6 +41,20 @@ pub unsafe fn boot<const STACK_WORDS: usize>(
 /// - `$NP`: number of partitions (e.g. `3`)
 /// - `$MS`: maximum schedule entries (e.g. `8`)
 /// - `$SW`: per-partition stack size in `u32` words (e.g. `256`)
+///
+/// # Generated `boot()` function
+///
+/// ```ignore
+/// fn boot(
+///     partitions: &[(extern "C" fn() -> !, u32)],
+///     peripherals: &mut cortex_m::Peripherals,
+/// ) -> !
+/// ```
+///
+/// Initialises partition stacks, configures exception priorities,
+/// starts SysTick, triggers the first PendSV, and enters the idle
+/// loop.  Must be called exactly once from `main()` before the
+/// scheduler has started (interrupts disabled).
 ///
 /// # Example
 ///
@@ -103,6 +66,12 @@ pub unsafe fn boot<const STACK_WORDS: usize>(
 /// impl KernelConfig for DemoConfig { /* … */ }
 ///
 /// kernel::define_harness!(DemoConfig, NUM_PARTITIONS, MAX_SCHEDULE_ENTRIES, STACK_WORDS);
+///
+/// fn main() -> ! {
+///     let mut p = cortex_m::Peripherals::take().unwrap();
+///     // … create kernel, schedule, KS …
+///     boot(&parts, &mut p)
+/// }
 /// ```
 #[macro_export]
 macro_rules! define_harness {
@@ -143,6 +112,53 @@ macro_rules! define_harness {
                 // SAFETY: same single-core exclusivity as above.
                 unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
                 cortex_m::peripheral::SCB::set_pendsv();
+            }
+        }
+
+        /// Initialise partition stacks, configure exception priorities,
+        /// start SysTick, trigger the first PendSV, and enter the idle
+        /// loop.
+        ///
+        /// Must be called exactly once from `main()` before the scheduler
+        /// has started (interrupts disabled, single-core).
+        fn boot(
+            partitions: &[(extern "C" fn() -> !, u32)],
+            peripherals: &mut cortex_m::Peripherals,
+        ) -> ! {
+            use cortex_m::peripheral::scb::SystemHandler;
+            use cortex_m::peripheral::syst::SystClkSource;
+            use cortex_m::peripheral::SCB;
+
+            // SAFETY: called exactly once from main() with interrupts
+            // disabled (before the scheduler has started). Single-core
+            // Cortex-M guarantees exclusive access to these statics and
+            // to the exception priority registers.
+            unsafe {
+                let stacks = &mut *(&raw mut STACKS);
+                let partition_sp = &mut *(&raw mut PARTITION_SP);
+
+                for (i, &(ep, hint)) in partitions.iter().enumerate() {
+                    let stk = &mut stacks[i];
+                    let ix =
+                        $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
+                            .expect("init_stack_frame");
+                    partition_sp[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
+                }
+
+                peripherals.SCB.set_priority(SystemHandler::SVCall, 0x00);
+                peripherals.SCB.set_priority(SystemHandler::PendSV, 0xFF);
+                peripherals.SCB.set_priority(SystemHandler::SysTick, 0xFE);
+            }
+
+            peripherals.SYST.set_clock_source(SystClkSource::Core);
+            peripherals.SYST.set_reload(120_000 - 1);
+            peripherals.SYST.clear_current();
+            peripherals.SYST.enable_counter();
+            peripherals.SYST.enable_interrupt();
+            SCB::set_pendsv();
+
+            loop {
+                cortex_m::asm::wfi();
             }
         }
     };

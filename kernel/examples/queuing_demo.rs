@@ -3,20 +3,14 @@
 //! Demonstrates: FIFO message delivery, command→response round-trips,
 //! and **queue-full detection** (the commander sends more messages than
 //! the queue depth and verifies that the overflow is reported).
-// TODO: The per-example boilerplate (statics, SysTick, partition/scheduler
-// setup) is duplicated across all QEMU examples. Extract a shared
-// `qemu_harness` module or proc-macro crate to eliminate this when
-// the kernel's example infrastructure matures.
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
-use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    context::init_stack_frame,
     kernel::KernelState,
     partition::PartitionConfig,
     sampling::PortDirection,
@@ -35,6 +29,7 @@ const QUEUE_DEPTH: usize = 4;
 const QUEUE_MSG_SIZE: usize = 4;
 const MAX_SCHEDULE_ENTRIES: usize = 8;
 const NUM_PARTITIONS: usize = 2;
+const STACK_WORDS: usize = 256;
 
 /// Kernel configuration for the queuing-port demo.
 ///
@@ -93,21 +88,12 @@ const EXPECTED_RSPS: [u8; QUEUE_DEPTH] = [
     RSP_EXTRA_1_ACK,
 ];
 
-// ---------------------------------------------------------------------------
-// Boilerplate: kernel statics, SVC dispatch hook, asm macros
-// ---------------------------------------------------------------------------
-static mut STACKS: [[u32; 256]; NUM_PARTITIONS] = [[0; 256]; NUM_PARTITIONS];
-#[no_mangle]
-static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
-#[no_mangle]
-static mut CURRENT_PARTITION: u32 = u32::MAX;
-#[no_mangle]
-static mut NEXT_PARTITION: u32 = 0;
-kernel::define_dispatch_hook!(DemoConfig);
-static mut KS: Option<KernelState<{ DemoConfig::N }, MAX_SCHEDULE_ENTRIES>> = None;
-#[used]
-static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
-kernel::define_pendsv!();
+kernel::define_harness!(
+    DemoConfig,
+    NUM_PARTITIONS,
+    MAX_SCHEDULE_ENTRIES,
+    STACK_WORDS
+);
 
 // ---------------------------------------------------------------------------
 // Commander partition: sends commands, detects queue-full, receives responses
@@ -212,21 +198,6 @@ extern "C" fn worker_main() -> ! {
 }
 
 // ---------------------------------------------------------------------------
-// SysTick handler: drives the round-robin scheduler
-// ---------------------------------------------------------------------------
-#[exception]
-fn SysTick() {
-    let p = &raw mut KS;
-    if let Some(pid) = unsafe { (*p).as_mut() }
-        .expect("KS")
-        .advance_schedule_tick()
-    {
-        unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
-        SCB::set_pendsv();
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Entry point: create ports, configure partitions and scheduler, start OS
 // ---------------------------------------------------------------------------
 #[entry]
@@ -234,7 +205,7 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("queuing_demo: start");
     let (cs, cd, rs, rd);
-    // SAFETY: accessing static-mut globals; single-core, interrupts not yet
+    // SAFETY: accessing static-mut KS; single-core, interrupts not yet
     // enabled so there is no data race.
     unsafe {
         let mut k = Kernel::<DemoConfig>::new();
@@ -268,31 +239,17 @@ fn main() -> ! {
             }
         });
         KS = Some(KernelState::new(sched, &cfgs).unwrap());
-
-        // Pack two port IDs into a single u32 passed to each partition via r0:
-        //   bits [31:16] = outgoing (Source) port ID
-        //   bits [15:0]  = incoming (Destination) port ID
-        // Commander: sends on cs, receives on rd.
-        // Worker:    sends on rs, receives on cd.
-        let hints = [(cs as u32) << 16 | rd as u32, (rs as u32) << 16 | cd as u32];
-        let eps: [extern "C" fn() -> !; NUM_PARTITIONS] = [commander_main, worker_main];
-        let (stk, sp) = (&raw mut STACKS, &raw mut PARTITION_SP);
-        for (i, (ep, &hv)) in eps.iter().zip(hints.iter()).enumerate() {
-            let ix = init_stack_frame(&mut (*stk)[i], *ep as *const () as u32, Some(hv)).unwrap();
-            (*sp)[i] = (*stk)[i].as_ptr() as u32 + (ix as u32) * 4;
-        }
-
-        p.SCB.set_priority(SystemHandler::SVCall, 0x00);
-        p.SCB.set_priority(SystemHandler::PendSV, 0xFF);
-        p.SCB.set_priority(SystemHandler::SysTick, 0xFE);
     }
-    p.SYST.set_clock_source(SystClkSource::Core);
-    p.SYST.set_reload(120_000 - 1);
-    p.SYST.clear_current();
-    p.SYST.enable_counter();
-    p.SYST.enable_interrupt();
-    SCB::set_pendsv();
-    loop {
-        cortex_m::asm::wfi()
-    }
+
+    // Pack two port IDs into a single u32 passed to each partition via r0:
+    //   bits [31:16] = outgoing (Source) port ID
+    //   bits [15:0]  = incoming (Destination) port ID
+    // Commander: sends on cs, receives on rd.
+    // Worker:    sends on rs, receives on cd.
+    let hints = [(cs as u32) << 16 | rd as u32, (rs as u32) << 16 | cd as u32];
+    let eps: [extern "C" fn() -> !; NUM_PARTITIONS] = [commander_main, worker_main];
+    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
+        core::array::from_fn(|i| (eps[i], hints[i]));
+
+    boot(&parts, &mut p)
 }
