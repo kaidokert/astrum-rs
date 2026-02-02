@@ -13,8 +13,10 @@ use kernel::{
     partition::PartitionConfig,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
+    svc,
     svc::Kernel,
     syscall::{SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_YIELD},
+    unpack_r0,
 };
 use panic_semihosting as _;
 
@@ -54,16 +56,6 @@ static mut KS: Option<KernelState<{ DemoConfig::N }, MAX_SCHEDULE_ENTRIES>> = No
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();
-macro_rules! svc {
-    ($id:expr, $a:expr, $b:expr, $c:expr) => {{ let r: u32; #[cfg(target_arch = "arm")]
-        unsafe { core::arch::asm!("svc #0", inout("r0") $id => r,
-            in("r1") $a, in("r2") $b, in("r3") $c, out("r12") _) }
-        #[cfg(not(target_arch = "arm"))] { let _ = ($id, $a, $b, $c); r = 0; } r }};
-}
-macro_rules! unpack_r0 {
-    () => {{ let p: u32; #[cfg(target_arch = "arm")] unsafe { core::arch::asm!("", out("r0") p) }
-        #[cfg(not(target_arch = "arm"))] { p = 0; } p }};
-}
 extern "C" fn sensor_main() -> ! {
     let (src, mut v) = (unpack_r0!() >> 16, 0u8);
     loop {

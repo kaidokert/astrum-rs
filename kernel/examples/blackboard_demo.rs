@@ -8,9 +8,9 @@
 //!   bits [31:24] = partition ID (so workers can self-identify)
 //!   bits [23:16] = semaphore ID
 //!   bits [15:0]  = blackboard ID
-// TODO: The per-example boilerplate (statics, svc macro, unpack_r0, SysTick,
-// partition/scheduler setup) is duplicated across all QEMU examples. Extract
-// a shared `qemu_harness` module or proc-macro crate to eliminate this when
+// TODO: The per-example boilerplate (statics, SysTick, partition/scheduler
+// setup) is duplicated across all QEMU examples. Extract a shared
+// `qemu_harness` module or proc-macro crate to eliminate this when
 // the kernel's example infrastructure matures.
 #![no_std]
 #![no_main]
@@ -27,11 +27,13 @@ use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     semaphore::Semaphore,
+    svc,
     svc::Kernel,
     syscall::{
         SYS_BB_DISPLAY, SYS_BB_READ, SYS_EVT_SET, SYS_EVT_WAIT, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
         SYS_YIELD,
     },
+    unpack_r0,
 };
 use panic_semihosting as _;
 
@@ -87,45 +89,6 @@ static mut KS: Option<KernelState<{ DemoConfig::N }, MAX_SCHEDULE_ENTRIES>> = No
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();
-
-macro_rules! svc {
-    ($id:expr, $a:expr, $b:expr, $c:expr) => {{
-        let r: u32;
-        #[cfg(target_arch = "arm")]
-        unsafe {
-            core::arch::asm!(
-                "svc #0",
-                inout("r0") $id => r,
-                in("r1") $a,
-                in("r2") $b,
-                in("r3") $c,
-                out("r12") _,
-            )
-        }
-        #[cfg(not(target_arch = "arm"))]
-        {
-            let _ = ($id, $a, $b, $c);
-            r = 0;
-        }
-        r
-    }};
-}
-
-/// Read the value the kernel placed in r0 before entering this partition.
-macro_rules! unpack_r0 {
-    () => {{
-        let p: u32;
-        #[cfg(target_arch = "arm")]
-        unsafe {
-            core::arch::asm!("", out("r0") p)
-        }
-        #[cfg(not(target_arch = "arm"))]
-        {
-            p = 0;
-        }
-        p
-    }};
-}
 
 // ---------------------------------------------------------------------------
 // Config partition: displays config on blackboard, waits for worker acks

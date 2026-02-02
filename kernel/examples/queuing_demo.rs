@@ -3,9 +3,9 @@
 //! Demonstrates: FIFO message delivery, command→response round-trips,
 //! and **queue-full detection** (the commander sends more messages than
 //! the queue depth and verifies that the overflow is reported).
-// TODO: The per-example boilerplate (statics, svc macro, unpack_r0, SysTick,
-// partition/scheduler setup) is duplicated across all QEMU examples. Extract
-// a shared `qemu_harness` module or proc-macro crate to eliminate this when
+// TODO: The per-example boilerplate (statics, SysTick, partition/scheduler
+// setup) is duplicated across all QEMU examples. Extract a shared
+// `qemu_harness` module or proc-macro crate to eliminate this when
 // the kernel's example infrastructure matures.
 #![no_std]
 #![no_main]
@@ -21,8 +21,10 @@ use kernel::{
     partition::PartitionConfig,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
+    svc,
     svc::Kernel,
     syscall::{SYS_QUEUING_RECV, SYS_QUEUING_SEND, SYS_YIELD},
+    unpack_r0,
 };
 use panic_semihosting as _;
 
@@ -106,25 +108,6 @@ static mut KS: Option<KernelState<{ DemoConfig::N }, MAX_SCHEDULE_ENTRIES>> = No
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();
-macro_rules! svc {
-    ($id:expr, $a:expr, $b:expr, $c:expr) => {{ let r: u32;
-        #[cfg(target_arch = "arm")]
-        unsafe { core::arch::asm!("svc #0", inout("r0") $id => r,
-            in("r1") $a, in("r2") $b, in("r3") $c, out("r12") _) }
-        #[cfg(not(target_arch = "arm"))] { let _ = ($id, $a, $b, $c); r = 0; } r }};
-}
-
-/// Read the value the kernel placed in r0 before entering this partition.
-///
-/// Port IDs are packed into a single u32 passed via r0 at partition entry:
-///   bits [31:16] = "outgoing" port (the Source port this partition writes to)
-///   bits [15:0]  = "incoming" port (the Destination port this partition reads from)
-///
-/// This avoids needing shared memory or an extra syscall for port discovery.
-macro_rules! unpack_r0 {
-    () => {{ let p: u32; #[cfg(target_arch = "arm")] unsafe { core::arch::asm!("", out("r0") p) }
-        #[cfg(not(target_arch = "arm"))] { p = 0; } p }};
-}
 
 // ---------------------------------------------------------------------------
 // Commander partition: sends commands, detects queue-full, receives responses

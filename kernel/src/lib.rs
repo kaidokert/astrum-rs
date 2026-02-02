@@ -2,6 +2,8 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
+pub mod macros;
+
 pub mod blackboard;
 pub mod config;
 pub mod context;
