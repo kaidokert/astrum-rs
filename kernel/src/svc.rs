@@ -560,7 +560,9 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
-            Some(SyscallId::QueuingSend) => {
+            Some(SyscallId::QueuingSend) => validated_ptr!(self, frame.r3, frame.r2 as usize, {
+                // SAFETY: validated_ptr confirmed [r3, r3+r2) lies within
+                // the calling partition's MPU data region.
                 let d = unsafe {
                     core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                 };
@@ -580,8 +582,10 @@ where
                     Ok(SendQueuingOutcome::SenderBlocked { .. }) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
-            }
-            Some(SyscallId::QueuingRecv) => {
+            }),
+            Some(SyscallId::QueuingRecv) => validated_ptr!(self, frame.r3, C::QM, {
+                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
+                // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
                 match self.queuing.receive_queuing_message(
                     frame.r1 as usize,
@@ -602,16 +606,20 @@ where
                     Ok(_) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
-            }
+            }),
             Some(SyscallId::QueuingStatus) => {
-                let status_ptr = frame.r2 as *mut QueuingPortStatus;
-                match self.queuing.get_queuing_port_status(frame.r1 as usize) {
-                    Ok(status) => {
-                        unsafe { core::ptr::write(status_ptr, status) };
-                        0
+                validated_ptr!(self, frame.r2, core::mem::size_of::<QueuingPortStatus>(), {
+                    // SAFETY: validated_ptr confirmed [r2, r2+size_of QueuingPortStatus)
+                    // lies within the calling partition's MPU data region.
+                    let status_ptr = frame.r2 as *mut QueuingPortStatus;
+                    match self.queuing.get_queuing_port_status(frame.r1 as usize) {
+                        Ok(status) => {
+                            unsafe { core::ptr::write(status_ptr, status) };
+                            0
+                        }
+                        Err(_) => SvcError::InvalidResource.to_u32(),
                     }
-                    Err(_) => SvcError::InvalidResource.to_u32(),
-                }
+                })
             }
             Some(SyscallId::BbDisplay) => {
                 let d = unsafe {
@@ -1636,6 +1644,53 @@ mod tests {
                 k.sampling.create_port(*dir, 1000).unwrap();
             }
             let mut ef = frame4(sys_id, r1, r2, 0xDEAD_0000);
+            unsafe { k.dispatch(&mut ef) };
+            assert_eq!(
+                ef.r0,
+                SvcError::InvalidPointer.to_u32(),
+                "syscall {sys_id:#X} should reject out-of-bounds pointer"
+            );
+        }
+    }
+
+    /// Queuing syscalls (Send, Recv, Status) must reject out-of-bounds
+    /// pointers with `SvcError::InvalidPointer`.
+    #[test]
+    fn queuing_syscalls_reject_out_of_bounds_pointer() {
+        use crate::sampling::PortDirection;
+
+        // (syscall_id, r1, r2, r3, queuing_port_direction)
+        let cases: &[(u32, u32, u32, u32, PortDirection)] = &[
+            // QueuingSend: r3 = data ptr (out-of-bounds), r2 = len
+            (
+                crate::syscall::SYS_QUEUING_SEND,
+                0,
+                4,
+                0xDEAD_0000,
+                PortDirection::Source,
+            ),
+            // QueuingRecv: r3 = buf ptr (out-of-bounds)
+            (
+                crate::syscall::SYS_QUEUING_RECV,
+                0,
+                0,
+                0xDEAD_0000,
+                PortDirection::Destination,
+            ),
+            // QueuingStatus: r2 = status ptr (out-of-bounds)
+            (
+                crate::syscall::SYS_QUEUING_STATUS,
+                0,
+                0xDEAD_0000,
+                0,
+                PortDirection::Source,
+            ),
+        ];
+
+        for &(sys_id, r1, r2, r3, dir) in cases {
+            let mut k = kernel(0, 0, 0);
+            k.queuing.create_port(dir).unwrap();
+            let mut ef = frame4(sys_id, r1, r2, r3);
             unsafe { k.dispatch(&mut ef) };
             assert_eq!(
                 ef.r0,
