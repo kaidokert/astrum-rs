@@ -214,6 +214,31 @@ impl DynamicStrategy {
     }
 }
 
+/// Validate MPU window parameters for alignment and size constraints.
+///
+/// Returns `Ok(())` if `base` and `size` satisfy all ARMv7-M MPU region
+/// requirements, or the first applicable [`MpuError`] variant:
+///
+/// 1. `size >= 32` (minimum MPU region size)
+/// 2. `size` is a power of two
+/// 3. `base` is aligned to `size` (`base & (size - 1) == 0`)
+/// 4. `base + size` does not overflow `u32`
+pub fn validate_window_params(base: u32, size: u32) -> Result<(), MpuError> {
+    if size < 32 {
+        return Err(MpuError::SizeTooSmall);
+    }
+    if !size.is_power_of_two() {
+        return Err(MpuError::SizeNotPowerOfTwo);
+    }
+    if base & (size - 1) != 0 {
+        return Err(MpuError::BaseNotAligned);
+    }
+    if base.checked_add(size).is_none() {
+        return Err(MpuError::AddressOverflow);
+    }
+    Ok(())
+}
+
 impl MpuStrategy for DynamicStrategy {
     fn configure_partition(
         &self,
@@ -249,6 +274,8 @@ impl MpuStrategy for DynamicStrategy {
         permissions: u32,
         owner: u8,
     ) -> Result<u8, MpuError> {
+        validate_window_params(base, size)?;
+
         with_cs(|cs| {
             let mut slots = self.slots.borrow(cs).borrow_mut();
             // Scan slots 1..3 (R5-R7) for a free entry.
@@ -866,5 +893,147 @@ mod tests {
         assert!(format!("{:?}", MpuError::BaseNotAligned).contains("BaseNotAligned"));
         assert!(format!("{:?}", MpuError::AddressOverflow).contains("AddressOverflow"));
         assert!(format!("{:?}", MpuError::SlotExhausted).contains("SlotExhausted"));
+    }
+
+    // ------------------------------------------------------------------
+    // validate_window_params
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn validate_rejects_size_too_small() {
+        assert_eq!(validate_window_params(0, 0), Err(MpuError::SizeTooSmall));
+        assert_eq!(validate_window_params(0, 1), Err(MpuError::SizeTooSmall));
+        assert_eq!(validate_window_params(0, 16), Err(MpuError::SizeTooSmall));
+        assert_eq!(validate_window_params(0, 31), Err(MpuError::SizeTooSmall));
+    }
+
+    #[test]
+    fn validate_rejects_non_power_of_two() {
+        assert_eq!(
+            validate_window_params(0, 48),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
+        assert_eq!(
+            validate_window_params(0, 100),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
+        assert_eq!(
+            validate_window_params(0, 255),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
+        assert_eq!(
+            validate_window_params(0, 1000),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_misaligned_base() {
+        // base=64 not aligned to size=256 (64 & 255 != 0)
+        assert_eq!(
+            validate_window_params(64, 256),
+            Err(MpuError::BaseNotAligned)
+        );
+        // base=0x2000_0100 not aligned to size=4096
+        assert_eq!(
+            validate_window_params(0x2000_0100, 4096),
+            Err(MpuError::BaseNotAligned)
+        );
+        // base=32 not aligned to size=64
+        assert_eq!(
+            validate_window_params(32, 64),
+            Err(MpuError::BaseNotAligned)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_address_overflow() {
+        // base near u32::MAX, size causes overflow
+        assert_eq!(
+            validate_window_params(0xFFFF_FF00, 256),
+            Err(MpuError::AddressOverflow)
+        );
+        // Exact overflow: 0x8000_0000 + 0x8000_0000 = 2^33
+        assert_eq!(
+            validate_window_params(0x8000_0000, 0x8000_0000),
+            Err(MpuError::AddressOverflow)
+        );
+    }
+
+    #[test]
+    fn validate_accepts_valid_params() {
+        // Minimum valid: size=32, base aligned
+        assert_eq!(validate_window_params(0, 32), Ok(()));
+        assert_eq!(validate_window_params(32, 32), Ok(()));
+        assert_eq!(validate_window_params(0x2000_0000, 256), Ok(()));
+        assert_eq!(validate_window_params(0x2000_0000, 4096), Ok(()));
+        // Large but valid: base + size fits in u32
+        assert_eq!(validate_window_params(0x4000_0000, 0x4000_0000), Ok(()));
+    }
+
+    #[test]
+    fn validate_boundary_size_32() {
+        // size=32 is the minimum valid power-of-two
+        assert_eq!(validate_window_params(0, 32), Ok(()));
+        assert_eq!(validate_window_params(32, 32), Ok(()));
+        assert_eq!(validate_window_params(64, 32), Ok(()));
+    }
+
+    // ------------------------------------------------------------------
+    // DynamicStrategy::add_window validation integration
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn dynamic_add_window_rejects_size_too_small() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0, 16, 0, 1), Err(MpuError::SizeTooSmall));
+    }
+
+    #[test]
+    fn dynamic_add_window_rejects_non_power_of_two() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0, 48, 0, 1), Err(MpuError::SizeNotPowerOfTwo));
+    }
+
+    #[test]
+    fn dynamic_add_window_rejects_misaligned_base() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(64, 256, 0, 1), Err(MpuError::BaseNotAligned));
+    }
+
+    #[test]
+    fn dynamic_add_window_rejects_overflow() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(
+            ds.add_window(0xFFFF_FF00, 256, 0, 1),
+            Err(MpuError::AddressOverflow)
+        );
+    }
+
+    #[test]
+    fn dynamic_add_window_validation_before_slot_check() {
+        let ds = DynamicStrategy::new();
+        // Fill all dynamic slots with valid windows.
+        ds.add_window(0x2001_0000, 256, 0, 1).unwrap(); // R5
+        ds.add_window(0x2002_0000, 256, 0, 1).unwrap(); // R6
+        ds.add_window(0x2003_0000, 256, 0, 1).unwrap(); // R7
+
+        // Even with all slots full, invalid params yield validation
+        // errors, not SlotExhausted.
+        assert_eq!(ds.add_window(0, 16, 0, 1), Err(MpuError::SizeTooSmall));
+        assert_eq!(ds.add_window(0, 48, 0, 1), Err(MpuError::SizeNotPowerOfTwo));
+        assert_eq!(ds.add_window(64, 256, 0, 1), Err(MpuError::BaseNotAligned));
+    }
+
+    #[test]
+    fn dynamic_add_window_valid_params_still_succeed() {
+        let ds = DynamicStrategy::new();
+        // Valid aligned pair should succeed and return region ID.
+        assert_eq!(ds.add_window(0x2001_0000, 256, 0xAA, 1), Ok(5));
+        let d = ds.slot(5).unwrap();
+        assert_eq!(d.base, 0x2001_0000);
+        assert_eq!(d.size, 256);
+        assert_eq!(d.permissions, 0xAA);
+        assert_eq!(d.owner, 1);
     }
 }

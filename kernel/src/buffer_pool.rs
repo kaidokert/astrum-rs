@@ -355,7 +355,7 @@ mod tests {
     }
 
     #[test] fn lend_writable_sets_ap_full_access() {
-        let mut pool = BufferPool::<2, 64>::new();
+        let mut pool = BufferPool::<2, 32>::new();
         let ds = DynamicStrategy::new();
         let rid = pool.lend_to_partition(0, 2, true, &ds).unwrap();
         assert_eq!(rid, 5);
@@ -368,7 +368,7 @@ mod tests {
         let ap = (desc.permissions >> RASR_AP_SHIFT) & RASR_AP_MASK;
         assert_eq!(ap, AP_FULL_ACCESS);
         assert_eq!(desc.owner, 2);
-        assert_eq!(desc.size, 64);
+        assert_eq!(desc.size, 32);
     }
 
     #[test] fn lend_revoke_lifecycle() {
