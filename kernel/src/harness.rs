@@ -214,9 +214,22 @@ macro_rules! define_harness {
                     partition_sp[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
                 }
 
-                peripherals.SCB.set_priority(SystemHandler::SVCall, 0x00);
-                peripherals.SCB.set_priority(SystemHandler::PendSV, 0xFF);
-                peripherals.SCB.set_priority(SystemHandler::SysTick, 0xFE);
+                // Compile-time check: PendSV must be lower priority
+                // (larger number) than SysTick.
+                const { $crate::config::assert_priority_order::<$Config>() }
+
+                peripherals.SCB.set_priority(
+                    SystemHandler::SVCall,
+                    <$Config as $crate::config::KernelConfig>::SVCALL_PRIORITY,
+                );
+                peripherals.SCB.set_priority(
+                    SystemHandler::PendSV,
+                    <$Config as $crate::config::KernelConfig>::PENDSV_PRIORITY,
+                );
+                peripherals.SCB.set_priority(
+                    SystemHandler::SysTick,
+                    <$Config as $crate::config::KernelConfig>::SYSTICK_PRIORITY,
+                );
             }
 
             peripherals.SYST.set_clock_source(SystClkSource::Core);
