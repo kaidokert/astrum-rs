@@ -211,15 +211,17 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("blackboard_demo: start");
 
+    let (bb, sem);
+    // SAFETY: accessing static-mut globals; single-core, interrupts not yet
+    // enabled so there is no data race.
     unsafe {
         let mut k = Kernel::<DemoConfig>::new();
 
-        let bb: u32 = k.blackboards.create().unwrap() as u32;
+        bb = k.blackboards.create().unwrap() as u32;
         k.semaphores.add(Semaphore::new(1, 1)).unwrap();
-        let sem: u32 = 0; // first (and only) semaphore in the pool
+        sem = 0u32; // first (and only) semaphore in the pool
 
         KERN = Some(k);
-        kernel::svc::set_dispatch_hook(hook);
 
         let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
         for i in 0..NUM_PARTITIONS as u8 {
@@ -259,6 +261,7 @@ fn main() -> ! {
         p.SCB.set_priority(SystemHandler::PendSV, 0xFF);
         p.SCB.set_priority(SystemHandler::SysTick, 0xFE);
     }
+    kernel::svc::set_dispatch_hook(hook);
 
     p.SYST.set_clock_source(SystClkSource::Core);
     p.SYST.set_reload(120_000 - 1);

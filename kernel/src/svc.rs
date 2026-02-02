@@ -115,17 +115,17 @@ where
     f(unsafe { &cortex_m::interrupt::CriticalSection::new() })
 }
 
-/// Safely install an application-provided SVC dispatch hook.
+/// Install an application-provided SVC dispatch hook.
 ///
 /// The hook function will be called by `dispatch_svc` for every SVC
 /// exception instead of the built-in minimal handler.
 ///
-/// # Safety
-///
-/// The caller must ensure `hook` points to a function with the same safety
-/// requirements as `dispatch_svc` and that it remains valid for the lifetime
-/// of the program (typically a `static` function).
-pub unsafe fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
+/// The function pointer is stored behind a `Mutex<RefCell<…>>` so this
+/// is safe to call from any non-interrupt context on single-core
+/// Cortex-M.  The hook itself is `unsafe extern "C"` because it will
+/// be invoked from the SVCall exception with a raw `ExceptionFrame`
+/// pointer, but *installing* it is a safe operation.
+pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
     with_cs(|cs| {
         SVC_DISPATCH_HOOK.borrow(cs).replace(Some(hook));
     });
@@ -1044,8 +1044,7 @@ mod tests {
     fn set_dispatch_hook_installs_hook() {
         unsafe extern "C" fn my_hook(_: &mut ExceptionFrame) {}
         clear_dispatch_hook();
-        // SAFETY: my_hook is a valid static function.
-        unsafe { set_dispatch_hook(my_hook) };
+        set_dispatch_hook(my_hook);
         assert!(read_dispatch_hook().is_some());
         clear_dispatch_hook();
     }
@@ -1057,8 +1056,7 @@ mod tests {
             frame.r0 = 0xCAFE;
         }
         clear_dispatch_hook();
-        // SAFETY: sentinel_hook is a valid static function.
-        unsafe { set_dispatch_hook(sentinel_hook) };
+        set_dispatch_hook(sentinel_hook);
         let mut ef = frame(SYS_YIELD, 0, 0);
         // SAFETY: ef is a valid ExceptionFrame on the stack.
         unsafe { dispatch_svc(&mut ef) };

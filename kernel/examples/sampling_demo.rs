@@ -143,22 +143,25 @@ fn SysTick() {
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("sampling_demo: start");
+    let (s0, d0, s1, d1);
+    // SAFETY: accessing static-mut globals; single-core, interrupts not yet
+    // enabled so there is no data race.
     unsafe {
         let mut k = Kernel::<DemoConfig>::new();
-        let s0 = k.sampling.create_port(PortDirection::Source, 10).unwrap();
-        let d0 = k
+        s0 = k.sampling.create_port(PortDirection::Source, 10).unwrap();
+        d0 = k
             .sampling
             .create_port(PortDirection::Destination, 10)
             .unwrap();
         k.sampling.connect_ports(s0, d0).unwrap();
-        let s1 = k.sampling.create_port(PortDirection::Source, 10).unwrap();
-        let d1 = k
+        s1 = k.sampling.create_port(PortDirection::Source, 10).unwrap();
+        d1 = k
             .sampling
             .create_port(PortDirection::Destination, 10)
             .unwrap();
         k.sampling.connect_ports(s1, d1).unwrap();
         KERN = Some(k);
-        kernel::svc::set_dispatch_hook(hook);
+
         let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
         for i in 0..NUM_PARTITIONS as u8 {
             sched.add(ScheduleEntry::new(i, 2)).unwrap();
@@ -192,6 +195,7 @@ fn main() -> ! {
         p.SCB.set_priority(SystemHandler::PendSV, 0xFF);
         p.SCB.set_priority(SystemHandler::SysTick, 0xFE);
     }
+    kernel::svc::set_dispatch_hook(hook);
     p.SYST.set_clock_source(SystClkSource::Core);
     p.SYST.set_reload(120_000 - 1);
     p.SYST.clear_current();

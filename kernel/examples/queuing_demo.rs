@@ -256,21 +256,23 @@ fn SysTick() {
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("queuing_demo: start");
+    let (cs, cd, rs, rd);
+    // SAFETY: accessing static-mut globals; single-core, interrupts not yet
+    // enabled so there is no data race.
     unsafe {
         let mut k = Kernel::<DemoConfig>::new();
 
         // Command channel: commander (Source cs) -> worker (Destination cd)
-        let cs = k.queuing.create_port(PortDirection::Source).unwrap();
-        let cd = k.queuing.create_port(PortDirection::Destination).unwrap();
+        cs = k.queuing.create_port(PortDirection::Source).unwrap();
+        cd = k.queuing.create_port(PortDirection::Destination).unwrap();
         k.queuing.connect_ports(cs, cd).unwrap();
 
         // Response channel: worker (Source rs) -> commander (Destination rd)
-        let rs = k.queuing.create_port(PortDirection::Source).unwrap();
-        let rd = k.queuing.create_port(PortDirection::Destination).unwrap();
+        rs = k.queuing.create_port(PortDirection::Source).unwrap();
+        rd = k.queuing.create_port(PortDirection::Destination).unwrap();
         k.queuing.connect_ports(rs, rd).unwrap();
 
         KERN = Some(k);
-        kernel::svc::set_dispatch_hook(hook);
 
         let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
         for i in 0..NUM_PARTITIONS as u8 {
@@ -307,6 +309,7 @@ fn main() -> ! {
         p.SCB.set_priority(SystemHandler::PendSV, 0xFF);
         p.SCB.set_priority(SystemHandler::SysTick, 0xFE);
     }
+    kernel::svc::set_dispatch_hook(hook);
     p.SYST.set_clock_source(SystClkSource::Core);
     p.SYST.set_reload(120_000 - 1);
     p.SYST.clear_current();
