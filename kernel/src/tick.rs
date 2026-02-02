@@ -36,11 +36,6 @@ impl TickCounter {
     }
 }
 
-/// ICSR register address (Interrupt Control and State Register).
-pub const SCB_ICSR: u32 = 0xE000_ED04;
-/// Bit 28: PENDSVSET — set PendSV pending.
-pub const ICSR_PENDSVSET: u32 = 1 << 28;
-
 /// Configure the SysTick timer with the given reload value.
 #[cfg(not(test))]
 pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
@@ -58,9 +53,7 @@ pub fn on_systick<const P: usize, const S: usize>(state: &mut KernelState<P, S>)
     let next = state.advance_schedule_tick();
     if next.is_some() {
         #[cfg(not(test))]
-        unsafe {
-            core::ptr::write_volatile(SCB_ICSR as *mut u32, ICSR_PENDSVSET);
-        }
+        cortex_m::peripheral::SCB::set_pendsv();
     }
     next
 }
@@ -145,12 +138,6 @@ mod tests {
             }
         }
         assert_eq!(sw.as_slice(), &[1, 0, 1, 0]);
-    }
-
-    #[test]
-    fn icsr_constants() {
-        assert_eq!(SCB_ICSR, 0xE000_ED04);
-        assert_eq!(ICSR_PENDSVSET, 1 << 28);
     }
 
     #[test]
