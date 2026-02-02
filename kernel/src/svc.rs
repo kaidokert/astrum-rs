@@ -29,6 +29,9 @@ pub enum SvcError {
     /// A catch-all for operation-specific failures (e.g. direction violation,
     /// message too large, board empty on non-blocking read).
     OperationFailed,
+    /// A user-supplied pointer (and length) does not lie within the calling
+    /// partition's MPU data region or the arithmetic overflows `u32`.
+    InvalidPointer,
 }
 
 impl SvcError {
@@ -56,9 +59,50 @@ impl SvcError {
             Self::TransitionFailed => 0xFFFF_FFFC,
             Self::InvalidPartition => 0xFFFF_FFFB,
             Self::OperationFailed => 0xFFFF_FFFA,
+            Self::InvalidPointer => 0xFFFF_FFF9,
         }
     }
 }
+/// Check that a user-space pointer `[ptr, ptr+len)` lies entirely within the
+/// MPU data region of partition `pid`.
+///
+/// Returns `true` when **all** of the following hold:
+/// 1. `pid` refers to an existing partition in `partitions`.
+/// 2. `ptr >= region_base`.
+/// 3. `ptr + len <= region_base + region_size` (the end is inclusive of the
+///    last valid byte, so `ptr + len` may equal `base + size`).
+/// 4. `ptr + len` does not overflow `u32`.
+///
+/// A zero-length range (`len == 0`) is considered valid as long as `ptr`
+/// itself falls within `[base, base + size]`, but the caller should avoid
+/// dereferencing such a pointer.
+pub fn validate_user_ptr<const N: usize>(
+    partitions: &PartitionTable<N>,
+    pid: u8,
+    ptr: u32,
+    len: usize,
+) -> bool {
+    let pcb = match partitions.get(pid as usize) {
+        Some(p) => p,
+        None => return false,
+    };
+    let region = pcb.mpu_region();
+    let base = region.base();
+    let size = region.size();
+
+    // Compute end of the user range with overflow check.
+    let end = match ptr.checked_add(len as u32) {
+        Some(e) => e,
+        None => return false,
+    };
+
+    // MPU region validity (base + size not overflowing) is enforced at
+    // region creation time, so a simple add is correct here.
+    let region_end = base + size;
+
+    ptr >= base && end <= region_end
+}
+
 use crate::events;
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
 use crate::mutex::MutexPool;
@@ -1289,6 +1333,7 @@ mod tests {
         SvcError::TransitionFailed,
         SvcError::InvalidPartition,
         SvcError::OperationFailed,
+        SvcError::InvalidPointer,
     ];
 
     #[test]
@@ -1446,5 +1491,90 @@ mod tests {
         let mut ef = frame4(SYS_DEV_IOCTL, 99, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
+    }
+
+    // ---- InvalidPointer and validate_user_ptr tests ----
+
+    #[test]
+    fn invalid_pointer_error_code() {
+        assert_eq!(SvcError::InvalidPointer.to_u32(), 0xFFFF_FFF9);
+        assert!(SvcError::is_error(SvcError::InvalidPointer.to_u32()));
+    }
+
+    /// Build a partition table with one partition whose MPU data region
+    /// spans `[base, base + size)`.
+    fn ptr_table(base: u32, size: u32) -> PartitionTable<4> {
+        let mut t = PartitionTable::new();
+        t.add(PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            base,
+            base + 0x400,
+            MpuRegion::new(base, size, 0),
+        ))
+        .unwrap();
+        t
+    }
+
+    #[test]
+    fn validate_ptr_valid_at_start() {
+        let t = ptr_table(0x2000_0000, 4096);
+        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 16));
+    }
+
+    #[test]
+    fn validate_ptr_valid_middle() {
+        let t = ptr_table(0x2000_0000, 4096);
+        assert!(validate_user_ptr(&t, 0, 0x2000_0100, 64));
+    }
+
+    #[test]
+    fn validate_ptr_valid_exact_end() {
+        // ptr + len == base + size (last byte is at base + size - 1)
+        let t = ptr_table(0x2000_0000, 4096);
+        assert!(validate_user_ptr(&t, 0, 0x2000_0FF0, 16));
+    }
+
+    #[test]
+    fn validate_ptr_before_region() {
+        let t = ptr_table(0x2000_0000, 4096);
+        assert!(!validate_user_ptr(&t, 0, 0x1FFF_FFF0, 32));
+    }
+
+    #[test]
+    fn validate_ptr_after_region() {
+        let t = ptr_table(0x2000_0000, 4096);
+        assert!(!validate_user_ptr(&t, 0, 0x2000_1000, 1));
+    }
+
+    #[test]
+    fn validate_ptr_overflow_wraps() {
+        let t = ptr_table(0x2000_0000, 4096);
+        // ptr + len overflows u32
+        assert!(!validate_user_ptr(&t, 0, 0xFFFF_FFF0, 0x20));
+    }
+
+    #[test]
+    fn validate_ptr_zero_length() {
+        let t = ptr_table(0x2000_0000, 4096);
+        // Zero-length at region start is valid.
+        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 0));
+        // Zero-length at region end (ptr == base + size) is valid.
+        assert!(validate_user_ptr(&t, 0, 0x2000_1000, 0));
+        // Zero-length outside the region is invalid.
+        assert!(!validate_user_ptr(&t, 0, 0x1FFF_FFFF, 0));
+    }
+
+    #[test]
+    fn validate_ptr_nonexistent_partition() {
+        let t = ptr_table(0x2000_0000, 4096);
+        assert!(!validate_user_ptr(&t, 99, 0x2000_0000, 16));
+    }
+
+    #[test]
+    fn validate_ptr_spans_past_end() {
+        let t = ptr_table(0x2000_0000, 4096);
+        // Starts inside but extends 1 byte past the region.
+        assert!(!validate_user_ptr(&t, 0, 0x2000_0FF0, 17));
     }
 }
