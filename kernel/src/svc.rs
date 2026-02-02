@@ -622,41 +622,49 @@ where
                 })
             }
             Some(SyscallId::BbDisplay) => {
-                let d = unsafe {
-                    core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
-                };
-                match self.blackboards.display_blackboard(frame.r1 as usize, d) {
-                    Ok(woken) => {
-                        for &pid in woken.iter() {
-                            try_transition(&mut self.partitions, pid, PartitionState::Ready);
+                validated_ptr!(self, frame.r3, frame.r2 as usize, {
+                    // SAFETY: validated_ptr confirmed [r3, r3+r2) lies within
+                    // the calling partition's MPU data region.
+                    let d = unsafe {
+                        core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
+                    };
+                    match self.blackboards.display_blackboard(frame.r1 as usize, d) {
+                        Ok(woken) => {
+                            for &pid in woken.iter() {
+                                try_transition(&mut self.partitions, pid, PartitionState::Ready);
+                            }
+                            0
                         }
-                        0
+                        Err(_) => SvcError::InvalidResource.to_u32(),
                     }
-                    Err(_) => SvcError::InvalidResource.to_u32(),
-                }
+                })
             }
             Some(SyscallId::BbRead) => {
-                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
-                match self.blackboards.read_blackboard_timed(
-                    frame.r1 as usize,
-                    self.current_partition,
-                    b,
-                    frame.r2,
-                    self.tick.get(),
-                ) {
-                    Ok(crate::blackboard::ReadBlackboardOutcome::Read { msg_len }) => {
-                        msg_len as u32
+                validated_ptr!(self, frame.r3, C::BM, {
+                    // SAFETY: validated_ptr confirmed [r3, r3+BM) lies within
+                    // the calling partition's MPU data region.
+                    let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
+                    match self.blackboards.read_blackboard_timed(
+                        frame.r1 as usize,
+                        self.current_partition,
+                        b,
+                        frame.r2,
+                        self.tick.get(),
+                    ) {
+                        Ok(crate::blackboard::ReadBlackboardOutcome::Read { msg_len }) => {
+                            msg_len as u32
+                        }
+                        Ok(crate::blackboard::ReadBlackboardOutcome::ReaderBlocked) => {
+                            try_transition(
+                                &mut self.partitions,
+                                self.current_partition,
+                                PartitionState::Waiting,
+                            );
+                            0
+                        }
+                        Err(_) => SvcError::InvalidResource.to_u32(),
                     }
-                    Ok(crate::blackboard::ReadBlackboardOutcome::ReaderBlocked) => {
-                        try_transition(
-                            &mut self.partitions,
-                            self.current_partition,
-                            PartitionState::Waiting,
-                        );
-                        0
-                    }
-                    Err(_) => SvcError::InvalidResource.to_u32(),
-                }
+                })
             }
             Some(SyscallId::BbClear) => {
                 match self.blackboards.clear_blackboard(frame.r1 as usize) {
@@ -690,64 +698,68 @@ where
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferWrite) => {
-                use crate::buffer_pool::BorrowState;
-                let slot_idx = frame.r1 as usize;
-                let len = frame.r2 as usize;
-                let data_ptr = frame.r3 as *const u8;
-                match self.buffers.get_mut(slot_idx) {
-                    Some(slot)
-                        if slot.state()
-                            == (BorrowState::BorrowedWrite {
-                                owner: self.current_partition,
-                            }) =>
-                    {
-                        let buf = slot.data_mut();
-                        if len > buf.len() {
-                            SvcError::OperationFailed.to_u32()
-                        } else {
-                            // SAFETY: The caller must provide a valid readable
-                            // buffer of at least `len` bytes within its memory
-                            // region. The MPU enforces partition isolation in
-                            // production.
-                            let src = unsafe { core::slice::from_raw_parts(data_ptr, len) };
-                            buf[..len].copy_from_slice(src);
-                            len as u32
-                        }
-                    }
-                    _ => SvcError::InvalidResource.to_u32(),
-                }
-            }
-            #[cfg(feature = "dynamic-mpu")]
-            Some(
-                sid @ (SyscallId::DevOpen
-                | SyscallId::DevRead
-                | SyscallId::DevWrite
-                | SyscallId::DevIoctl),
-            ) => self.dev_dispatch(frame.r1 as u8, |dev, pid| match sid {
-                SyscallId::DevOpen => {
-                    dev.open(pid)?;
-                    Ok(0)
-                }
-                SyscallId::DevRead => {
-                    let len = frame.r2 as usize;
-                    let buf_ptr = frame.r3 as *mut u8;
-                    // SAFETY: The caller must provide a valid writable buffer of
-                    // at least `len` bytes within the calling partition's memory
-                    // region. The MPU enforces partition isolation in production.
-                    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, len) };
-                    Ok(dev.read(pid, buf)? as u32)
-                }
-                SyscallId::DevWrite => {
+                validated_ptr!(self, frame.r3, frame.r2 as usize, {
+                    use crate::buffer_pool::BorrowState;
+                    let slot_idx = frame.r1 as usize;
                     let len = frame.r2 as usize;
                     let data_ptr = frame.r3 as *const u8;
-                    // SAFETY: The caller must provide a valid readable buffer of
-                    // at least `len` bytes within the calling partition's memory
-                    // region. The MPU enforces partition isolation in production.
-                    let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
-                    Ok(dev.write(pid, data)? as u32)
-                }
-                SyscallId::DevIoctl => dev.ioctl(pid, frame.r2, frame.r3),
-                _ => unreachable!(),
+                    match self.buffers.get_mut(slot_idx) {
+                        Some(slot)
+                            if slot.state()
+                                == (BorrowState::BorrowedWrite {
+                                    owner: self.current_partition,
+                                }) =>
+                        {
+                            let buf = slot.data_mut();
+                            if len > buf.len() {
+                                SvcError::OperationFailed.to_u32()
+                            } else {
+                                // SAFETY: validated_ptr confirmed [r3, r3+r2)
+                                // lies within the calling partition's MPU data
+                                // region.
+                                let src = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+                                buf[..len].copy_from_slice(src);
+                                len as u32
+                            }
+                        }
+                        _ => SvcError::InvalidResource.to_u32(),
+                    }
+                })
+            }
+            #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::DevOpen) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
+                dev.open(pid)?;
+                Ok(0)
+            }),
+            #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::DevRead) => {
+                validated_ptr!(self, frame.r3, frame.r2 as usize, {
+                    let len = frame.r2 as usize;
+                    let buf_ptr = frame.r3 as *mut u8;
+                    self.dev_dispatch(frame.r1 as u8, |dev, pid| {
+                        // SAFETY: validated_ptr confirmed [r3, r3+r2) lies
+                        // within the calling partition's MPU data region.
+                        let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, len) };
+                        Ok(dev.read(pid, buf)? as u32)
+                    })
+                })
+            }
+            #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::DevWrite) => {
+                validated_ptr!(self, frame.r3, frame.r2 as usize, {
+                    let len = frame.r2 as usize;
+                    let data_ptr = frame.r3 as *const u8;
+                    self.dev_dispatch(frame.r1 as u8, |dev, pid| {
+                        // SAFETY: validated_ptr confirmed [r3, r3+r2) lies
+                        // within the calling partition's MPU data region.
+                        let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+                        Ok(dev.write(pid, data)? as u32)
+                    })
+                })
+            }
+            #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::DevIoctl) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
+                dev.ioctl(pid, frame.r2, frame.r3)
             }),
             None => SvcError::InvalidSyscall.to_u32(),
         };
@@ -1434,7 +1446,7 @@ mod tests {
         extern "C" {
             fn mmap(a: *mut u8, l: usize, p: i32, f: i32, d: i32, o: i64) -> *mut u8;
         }
-        let addr = 0x1000_0000 + page * 4096;
+        let addr = 0x2000_0000 + page * 4096;
         // SAFETY: MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED at a known-free
         // low address. The mapping is intentionally leaked (test-only).
         let ptr = unsafe { mmap(addr as *mut u8, 4096, 0x3, 0x32, -1, 0) };
@@ -1470,7 +1482,7 @@ mod tests {
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         k.uart_pair.a.push_rx(&[0xDE, 0xAD]);
-        let ptr = low32_buf(1);
+        let ptr = low32_buf(0);
         let mut ef = frame4(SYS_DEV_READ, 0, 4, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 2);
@@ -1502,19 +1514,20 @@ mod tests {
     fn dev_invalid_id_returns_invalid_resource() {
         use crate::syscall::{SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE};
         let inv = SvcError::InvalidResource.to_u32();
+        let inv_ptr = SvcError::InvalidPointer.to_u32();
         let mut k = kernel(0, 0, 0);
         // Open invalid device
         let mut ef = frame(SYS_DEV_OPEN, 99, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
-        // Write to invalid device (r3 unused — returns before dereference)
+        // Write to invalid device — pointer validation rejects first
         let mut ef = frame4(SYS_DEV_WRITE, 99, 1, 0);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, inv);
-        // Read from invalid device (r3 unused — returns before dereference)
+        assert_eq!(ef.r0, inv_ptr);
+        // Read from invalid device — pointer validation rejects first
         let mut ef = frame4(SYS_DEV_READ, 99, 4, 0);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, inv);
+        assert_eq!(ef.r0, inv_ptr);
         // Ioctl on invalid device
         let mut ef = frame4(SYS_DEV_IOCTL, 99, 0, 0);
         unsafe { k.dispatch(&mut ef) };
@@ -1698,5 +1711,32 @@ mod tests {
                 "syscall {sys_id:#X} should reject out-of-bounds pointer"
             );
         }
+    }
+
+    /// BbDisplay and BbRead must reject out-of-bounds pointers with
+    /// `SvcError::InvalidPointer`.
+    #[test]
+    fn blackboard_syscalls_reject_out_of_bounds_pointer() {
+        // BbDisplay: r1 = board id, r2 = data len, r3 = data ptr (out-of-bounds)
+        let mut k = kernel(0, 0, 0);
+        k.blackboards.create().unwrap();
+        let mut ef = frame4(crate::syscall::SYS_BB_DISPLAY, 0, 4, 0xDEAD_0000);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(
+            ef.r0,
+            SvcError::InvalidPointer.to_u32(),
+            "BbDisplay should reject out-of-bounds pointer"
+        );
+
+        // BbRead: r1 = board id, r2 = timeout, r3 = buf ptr (out-of-bounds)
+        let mut k = kernel(0, 0, 0);
+        k.blackboards.create().unwrap();
+        let mut ef = frame4(crate::syscall::SYS_BB_READ, 0, 0, 0xDEAD_0000);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(
+            ef.r0,
+            SvcError::InvalidPointer.to_u32(),
+            "BbRead should reject out-of-bounds pointer"
+        );
     }
 }
