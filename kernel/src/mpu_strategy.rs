@@ -1129,4 +1129,143 @@ mod tests {
         assert_eq!(d.permissions, 0xAA);
         assert_eq!(d.owner, 1);
     }
+
+    // ------------------------------------------------------------------
+    // DynamicStrategy::add_window — exhaustive validation coverage
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn add_window_size_zero_returns_size_too_small() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0, 0, 0, 0), Err(MpuError::SizeTooSmall));
+    }
+
+    #[test]
+    fn add_window_size_16_returns_size_too_small() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0, 16, 0, 0), Err(MpuError::SizeTooSmall));
+    }
+
+    #[test]
+    fn add_window_size_48_returns_not_power_of_two() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0, 48, 0, 0), Err(MpuError::SizeNotPowerOfTwo));
+    }
+
+    #[test]
+    fn add_window_size_100_returns_not_power_of_two() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(
+            ds.add_window(0, 100, 0, 0),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
+    }
+
+    #[test]
+    fn add_window_base_off_by_one_returns_not_aligned() {
+        let ds = DynamicStrategy::new();
+        // 0x2000_0001 is 1 byte past a 256-byte boundary.
+        assert_eq!(
+            ds.add_window(0x2000_0001, 256, 0, 1),
+            Err(MpuError::BaseNotAligned)
+        );
+    }
+
+    #[test]
+    fn add_window_base_half_aligned_returns_not_aligned() {
+        let ds = DynamicStrategy::new();
+        // 0x2000_0080 is 128-aligned but not 256-aligned.
+        assert_eq!(
+            ds.add_window(0x2000_0080, 256, 0, 1),
+            Err(MpuError::BaseNotAligned)
+        );
+    }
+
+    #[test]
+    fn add_window_max_address_overflow() {
+        let ds = DynamicStrategy::new();
+        // base near u32::MAX with small valid size overflows.
+        assert_eq!(
+            ds.add_window(0xFFFF_FFE0, 32, 0, 0),
+            Err(MpuError::AddressOverflow)
+        );
+    }
+
+    #[test]
+    fn add_window_overflow_base_0xffff_ff00_size_256() {
+        let ds = DynamicStrategy::new();
+        // 0xFFFF_FF00 + 256 = 0x1_0000_0000 which overflows u32.
+        assert_eq!(
+            ds.add_window(0xFFFF_FF00, 256, 0, 0),
+            Err(MpuError::AddressOverflow)
+        );
+    }
+
+    #[test]
+    fn add_window_size_32_succeeds() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0x2000_0000, 32, 0, 0), Ok(5));
+    }
+
+    #[test]
+    fn add_window_size_64_succeeds() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0x2000_0040, 64, 0, 0), Ok(5));
+    }
+
+    #[test]
+    fn add_window_size_4096_succeeds() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0x2001_0000, 4096, 0, 0), Ok(5));
+    }
+
+    #[test]
+    fn add_window_base_zero_size_32_succeeds() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0, 32, 0, 0), Ok(5));
+    }
+
+    #[test]
+    fn add_window_base_zero_size_64_succeeds() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0, 64, 0, 0), Ok(5));
+    }
+
+    #[test]
+    fn add_window_base_zero_size_4096_succeeds() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.add_window(0, 4096, 0, 0), Ok(5));
+    }
+
+    #[test]
+    fn add_window_validation_precedes_slot_exhaustion_all_variants() {
+        let ds = DynamicStrategy::new();
+        // Fill all 3 dynamic slots.
+        ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
+        ds.add_window(0x2002_0000, 256, 0, 1).unwrap();
+        ds.add_window(0x2003_0000, 256, 0, 1).unwrap();
+
+        // Every validation error is returned instead of SlotExhausted.
+        assert_eq!(ds.add_window(0, 0, 0, 0), Err(MpuError::SizeTooSmall));
+        assert_eq!(ds.add_window(0, 16, 0, 0), Err(MpuError::SizeTooSmall));
+        assert_eq!(ds.add_window(0, 48, 0, 0), Err(MpuError::SizeNotPowerOfTwo));
+        assert_eq!(
+            ds.add_window(0, 100, 0, 0),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
+        assert_eq!(
+            ds.add_window(0x2000_0001, 256, 0, 0),
+            Err(MpuError::BaseNotAligned)
+        );
+        assert_eq!(
+            ds.add_window(0xFFFF_FF00, 256, 0, 0),
+            Err(MpuError::AddressOverflow)
+        );
+
+        // But a valid request on full slots gives SlotExhausted.
+        assert_eq!(
+            ds.add_window(0x2004_0000, 256, 0, 1),
+            Err(MpuError::SlotExhausted)
+        );
+    }
 }
