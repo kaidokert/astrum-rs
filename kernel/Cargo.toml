@@ -90,6 +90,10 @@ required-features = ["qemu", "dynamic-mpu"]
 name = "virtual_uart_demo"
 required-features = ["qemu", "dynamic-mpu"]
 
+[[example]]
+name = "uart1_loopback"
+required-features = ["qemu", "dynamic-mpu"]
+
 [features]
 qemu = []
 dynamic-mpu = []

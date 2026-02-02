@@ -111,6 +111,26 @@ impl HwUartBackend {
         count
     }
 
+    /// Drain bytes from the TX ring buffer into `buf`.
+    ///
+    /// Pops bytes until the TX ring is empty or `buf` is full.
+    /// Returns the number of bytes transferred. Useful for software
+    /// loopback where the caller wants to capture TX data without
+    /// writing to hardware.
+    pub fn drain_tx(&mut self, buf: &mut [u8]) -> usize {
+        let mut count = 0;
+        for slot in buf.iter_mut() {
+            match self.tx.pop_front() {
+                Some(b) => {
+                    *slot = b;
+                    count += 1;
+                }
+                None => break,
+            }
+        }
+        count
+    }
+
     /// Bottom-half drain: pop bytes from the TX ring buffer and write
     /// them to UART DR.
     ///
