@@ -34,4 +34,11 @@ pub trait KernelConfig {
     const BM: usize;
     /// Blackboard wait-queue depth.
     const BW: usize;
+
+    /// Buffer pool slot count (only used with `dynamic-mpu` feature).
+    #[cfg(feature = "dynamic-mpu")]
+    const BP: usize;
+    /// Buffer slot size in bytes (only used with `dynamic-mpu` feature).
+    #[cfg(feature = "dynamic-mpu")]
+    const BZ: usize;
 }

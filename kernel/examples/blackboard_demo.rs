@@ -58,6 +58,10 @@ impl KernelConfig for DemoConfig {
     const BS: usize = 1;
     const BM: usize = 4;
     const BW: usize = 3;
+    #[cfg(feature = "dynamic-mpu")]
+    const BP: usize = 1;
+    #[cfg(feature = "dynamic-mpu")]
+    const BZ: usize = 32;
 }
 
 // ---------------------------------------------------------------------------

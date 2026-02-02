@@ -253,6 +253,10 @@ where
     [(); C::BS]:,
     [(); C::BM]:,
     [(); C::BW]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
 {
     pub partitions: PartitionTable<{ C::N }>,
     pub semaphores: SemaphorePool<{ C::S }, { C::SW }>,
@@ -266,6 +270,8 @@ where
     /// scheduler before entering user code. Used as the trusted caller identity
     /// for syscalls, rather than reading from a user-controlled register.
     pub current_partition: u8,
+    #[cfg(feature = "dynamic-mpu")]
+    pub buffers: crate::buffer_pool::BufferPool<{ C::BP }, { C::BZ }>,
 }
 
 impl<C: KernelConfig> Default for Kernel<C>
@@ -284,6 +290,10 @@ where
     [(); C::BS]:,
     [(); C::BM]:,
     [(); C::BW]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
 {
     fn default() -> Self {
         Self::new()
@@ -306,6 +316,10 @@ where
     [(); C::BS]:,
     [(); C::BM]:,
     [(); C::BW]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
 {
     /// Create a new `Kernel` with empty resource pools and partition table.
     pub fn new() -> Self {
@@ -319,6 +333,8 @@ where
             queuing: QueuingPortPool::new(),
             blackboards: BlackboardPool::new(),
             current_partition: 0,
+            #[cfg(feature = "dynamic-mpu")]
+            buffers: crate::buffer_pool::BufferPool::new(),
         }
     }
 
@@ -536,6 +552,29 @@ where
                 }
             }
             Some(SyscallId::GetTime) => self.tick.get() as u32,
+            #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::BufferAlloc) => {
+                use crate::buffer_pool::BorrowMode;
+                let m = if frame.r1 == 0 {
+                    BorrowMode::Read
+                } else {
+                    BorrowMode::Write
+                };
+                match self.buffers.alloc(self.current_partition, m) {
+                    Some(slot) => slot as u32,
+                    None => SvcError::OperationFailed.to_u32(),
+                }
+            }
+            #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::BufferRelease) => {
+                match self
+                    .buffers
+                    .release(frame.r1 as usize, self.current_partition)
+                {
+                    Ok(()) => 0,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
+                }
+            }
             None => SvcError::InvalidSyscall.to_u32(),
         };
     }
@@ -639,6 +678,10 @@ mod tests {
         const BS: usize = 4;
         const BM: usize = 64;
         const BW: usize = 4;
+        #[cfg(feature = "dynamic-mpu")]
+        const BP: usize = 4;
+        #[cfg(feature = "dynamic-mpu")]
+        const BZ: usize = 32;
     }
 
     fn frame(r0: u32, r1: u32, r2: u32) -> ExceptionFrame {
@@ -698,6 +741,8 @@ mod tests {
             queuing: QueuingPortPool::new(),
             blackboards: BlackboardPool::new(),
             current_partition: 0,
+            #[cfg(feature = "dynamic-mpu")]
+            buffers: crate::buffer_pool::BufferPool::new(),
         };
         // Add semaphores
         for _ in 0..sem_count {
@@ -1153,5 +1198,33 @@ mod tests {
             );
             assert!(seen.insert(code), "{e:?} has duplicate code {code:#010X}");
         }
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_alloc_release_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_RELEASE};
+        let (eop, eres) = (
+            SvcError::OperationFailed.to_u32(),
+            SvcError::InvalidResource.to_u32(),
+        );
+        let mut k = kernel(0, 0, 0);
+        macro_rules! svc {
+            ($r0:expr,$r1:expr) => {{
+                let mut ef = frame($r0, $r1, 0);
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+        }
+        for i in 0..4u32 {
+            assert_eq!(svc!(SYS_BUF_ALLOC, 1), i);
+        }
+        assert_eq!(svc!(SYS_BUF_ALLOC, 1), eop); // exhausted
+        assert_eq!(svc!(SYS_BUF_RELEASE, 0), 0); // release 0
+        assert_eq!(svc!(SYS_BUF_ALLOC, 0), 0); // re-alloc reuses 0
+        assert_eq!(svc!(SYS_BUF_RELEASE, 0), 0); // release 0 again
+        assert_eq!(svc!(SYS_BUF_RELEASE, 0), eres); // double-release
+        k.current_partition = 1; // switch to partition 1
+        assert_eq!(svc!(SYS_BUF_RELEASE, 1), eres); // wrong owner
     }
 }

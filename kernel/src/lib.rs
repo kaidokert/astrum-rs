@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
+#![feature(where_clause_attrs)]
 
 pub mod macros;
 
