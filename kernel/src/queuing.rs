@@ -50,7 +50,7 @@ pub struct QueuingPort<const D: usize, const M: usize, const W: usize> {
     direction: PortDirection,
     buf: heapless::Deque<(usize, [u8; M]), D>,
     sender_wq: heapless::Deque<(u8, u64), W>,
-    receiver_wq: heapless::Deque<u8, W>,
+    receiver_wq: heapless::Deque<(u8, u64), W>,
     connected_port: Option<usize>,
 }
 
@@ -117,7 +117,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
                 .map_err(|_| QueuingError::WaitQueueFull)?;
             return Err(QueuingError::QueueFull);
         }
-        Ok(self.receiver_wq.pop_front())
+        Ok(self.receiver_wq.pop_front().map(|(pid, _)| pid))
     }
 
     pub fn send_queuing_message(
@@ -150,7 +150,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         // push_back cannot fail: we just confirmed the buffer is not full.
         let _ = self.buf.push_back((data.len(), msg));
         Ok(SendQueuingOutcome::Delivered {
-            wake_receiver: self.receiver_wq.pop_front(),
+            wake_receiver: self.receiver_wq.pop_front().map(|(pid, _)| pid),
         })
     }
 
@@ -175,7 +175,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
             return Ok((len, self.sender_wq.pop_front().map(|(pid, _)| pid)));
         }
         self.receiver_wq
-            .push_back(caller)
+            .push_back((caller, u64::MAX))
             .map_err(|_| QueuingError::WaitQueueFull)?;
         Err(QueuingError::QueueEmpty)
     }
@@ -203,11 +203,64 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         }
         let expiry = current_tick + timeout_ticks;
         self.receiver_wq
-            .push_back(caller)
+            .push_back((caller, expiry))
             .map_err(|_| QueuingError::WaitQueueFull)?;
         Ok(RecvQueuingOutcome::ReceiverBlocked {
             expiry_tick: expiry,
         })
+    }
+
+    /// Remove expired waiters from `wq`, appending their partition IDs to `out`.
+    /// Skips the destructive pop/push cycle when no entries have expired.
+    ///
+    /// The caller must ensure `out` has enough remaining capacity for all
+    /// expired entries. In debug builds this is asserted; in release the
+    /// excess entries are silently dropped (the waiter is still removed from
+    /// the queue, so it will not block forever).
+    fn drain_expired<const E: usize>(
+        wq: &mut heapless::Deque<(u8, u64), W>,
+        current_tick: u64,
+        out: &mut heapless::Vec<u8, E>,
+    ) {
+        if !wq.iter().any(|&(_, expiry)| current_tick >= expiry) {
+            return;
+        }
+        let n = wq.len();
+        for _ in 0..n {
+            if let Some((pid, expiry)) = wq.pop_front() {
+                if current_tick >= expiry {
+                    debug_assert!(
+                        !out.is_full(),
+                        "tick_timeouts: output vec capacity E={} is too small",
+                        E
+                    );
+                    let _ = out.push(pid);
+                } else {
+                    let _ = wq.push_back((pid, expiry));
+                }
+            }
+        }
+    }
+
+    /// Remove senders whose timeout has expired, appending their partition IDs
+    /// to `out`. The caller provides the output vector so that capacity is
+    /// managed in one place (see `tick_timeouts`).
+    pub fn drain_expired_senders<const E: usize>(
+        &mut self,
+        current_tick: u64,
+        out: &mut heapless::Vec<u8, E>,
+    ) {
+        Self::drain_expired(&mut self.sender_wq, current_tick, out);
+    }
+
+    /// Remove receivers whose timeout has expired, appending their partition
+    /// IDs to `out`.
+    pub fn drain_expired_receivers<const E: usize>(
+        &mut self,
+        current_tick: u64,
+        out: &mut heapless::Vec<u8, E>,
+    ) {
+        Self::drain_expired(&mut self.receiver_wq, current_tick, out);
     }
 
     /// Returns the full status of this queuing port as a C-compatible struct.
@@ -302,6 +355,24 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
             .map(|p| p.status())
     }
 
+    /// Check all queuing port wait queues for expired timeouts.
+    /// Returns the partition IDs that were unblocked (up to `E` entries).
+    /// The kernel should transition each returned partition to Ready.
+    ///
+    /// # Panics
+    ///
+    /// Panics (debug) if more than `E` waiters expire in a single tick.
+    /// The caller must size `E` to cover the worst case (sum of all wait-queue
+    /// capacities across every port).
+    pub fn tick_timeouts<const E: usize>(&mut self, current_tick: u64) -> heapless::Vec<u8, E> {
+        let mut unblocked = heapless::Vec::new();
+        for port in self.ports.iter_mut() {
+            port.drain_expired_senders(current_tick, &mut unblocked);
+            port.drain_expired_receivers(current_tick, &mut unblocked);
+        }
+        unblocked
+    }
+
     pub fn connect_ports(&mut self, src_id: usize, dst_id: usize) -> Result<(), QueuingError> {
         if src_id >= self.ports.len() || dst_id >= self.ports.len() {
             return Err(QueuingError::InvalidPort);
@@ -388,7 +459,7 @@ mod tests {
     #[test]
     fn wake_blocked_receiver_and_sender() {
         let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
-        src.receiver_wq.push_back(2).unwrap();
+        src.receiver_wq.push_back((2, u64::MAX)).unwrap();
         assert_eq!(src.send(0, &[1; 4]).unwrap(), Some(2));
         let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         dst.buf.push_back((4, [1; 4])).unwrap();
@@ -464,7 +535,7 @@ mod tests {
     #[test]
     fn send_queuing_wakes_blocked_receiver() {
         let mut p = QueuingPort::<2, 8, 4>::new(PortDirection::Source);
-        p.receiver_wq.push_back(5).unwrap();
+        p.receiver_wq.push_back((5, u64::MAX)).unwrap();
         let o = p.send_queuing_message(1, &[4; 4], 0, 0).unwrap();
         assert_eq!(
             o,
@@ -693,5 +764,103 @@ mod tests {
             pool.receive_queuing_message(99, 0, &mut buf, 0, 0),
             Err(QueuingError::InvalidPort)
         );
+    }
+
+    // --- tick_timeouts tests ---
+
+    #[test]
+    fn tick_timeouts_expires_single_sender() {
+        let mut pool = QueuingPortPool::<4, 1, 4, 4>::new();
+        let s = pool.create_port(PortDirection::Source).unwrap();
+        // Fill queue, then block a sender with expiry at tick 100
+        pool.send_queuing_message(s, 0, &[1; 4], 0, 0).unwrap();
+        let o = pool.send_queuing_message(s, 1, &[2; 4], 50, 50).unwrap();
+        assert_eq!(o, SendQueuingOutcome::SenderBlocked { expiry_tick: 100 });
+        assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
+
+        // Tick 99: not yet expired
+        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(99);
+        assert!(unblocked.is_empty());
+        assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
+
+        // Tick 100: expired
+        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(100);
+        assert_eq!(unblocked.as_slice(), &[1]);
+        assert_eq!(pool.get(s).unwrap().pending_senders(), 0);
+    }
+
+    #[test]
+    fn tick_timeouts_expires_single_receiver() {
+        let mut pool = QueuingPortPool::<4, 4, 4, 4>::new();
+        let d = pool.create_port(PortDirection::Destination).unwrap();
+        // Block a receiver with expiry at tick 200
+        let mut buf = [0u8; 4];
+        let o = pool
+            .receive_queuing_message(d, 2, &mut buf, 100, 100)
+            .unwrap();
+        assert_eq!(o, RecvQueuingOutcome::ReceiverBlocked { expiry_tick: 200 });
+        assert_eq!(pool.get(d).unwrap().pending_receivers(), 1);
+
+        // Tick 199: not yet expired
+        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(199);
+        assert!(unblocked.is_empty());
+        assert_eq!(pool.get(d).unwrap().pending_receivers(), 1);
+
+        // Tick 200: expired
+        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(200);
+        assert_eq!(unblocked.as_slice(), &[2]);
+        assert_eq!(pool.get(d).unwrap().pending_receivers(), 0);
+    }
+
+    #[test]
+    fn tick_timeouts_no_expiry_keeps_waiters() {
+        let mut pool = QueuingPortPool::<4, 1, 4, 4>::new();
+        let s = pool.create_port(PortDirection::Source).unwrap();
+        pool.send_queuing_message(s, 0, &[1; 4], 0, 0).unwrap();
+        // Block with expiry at tick 500
+        pool.send_queuing_message(s, 1, &[2; 4], 400, 100).unwrap();
+
+        // Tick 200: well before expiry
+        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(200);
+        assert!(unblocked.is_empty());
+        assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
+    }
+
+    #[test]
+    fn tick_timeouts_multiple_concurrent() {
+        let mut pool = QueuingPortPool::<4, 1, 4, 4>::new();
+        let s = pool.create_port(PortDirection::Source).unwrap();
+        let d = pool.create_port(PortDirection::Destination).unwrap();
+
+        // Block two senders with different expiries
+        pool.send_queuing_message(s, 0, &[1; 4], 0, 0).unwrap();
+        pool.send_queuing_message(s, 1, &[2; 4], 50, 50).unwrap(); // expiry 100
+        pool.send_queuing_message(s, 2, &[3; 4], 100, 50).unwrap(); // expiry 150
+
+        // Block one receiver
+        let mut buf = [0u8; 4];
+        pool.receive_queuing_message(d, 3, &mut buf, 50, 50)
+            .unwrap(); // expiry 100
+
+        // Tick 100: sender 1 and receiver 3 expire; sender 2 stays
+        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(100);
+        assert_eq!(unblocked.len(), 2);
+        assert!(unblocked.contains(&1));
+        assert!(unblocked.contains(&3));
+        assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
+        assert_eq!(pool.get(d).unwrap().pending_receivers(), 0);
+
+        // Tick 150: sender 2 expires
+        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(150);
+        assert_eq!(unblocked.as_slice(), &[2]);
+        assert_eq!(pool.get(s).unwrap().pending_senders(), 0);
+    }
+
+    #[test]
+    fn tick_timeouts_empty_pool_returns_empty() {
+        let mut pool = QueuingPortPool::<4, 4, 4, 4>::new();
+        pool.create_port(PortDirection::Source).unwrap();
+        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(1000);
+        assert!(unblocked.is_empty());
     }
 }
