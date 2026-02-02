@@ -1,13 +1,16 @@
 # IPC Reference
 
-<!-- TODO: The original subtask scope was to consolidate content for
-     ports/blackboards from the two old design docs. This document was
-     expanded to also cover event flags, semaphores, mutexes, and message
-     queues for completeness. Verify the expanded sections against the
-     source before relying on them. -->
+<!-- TODO: The sections on event flags, semaphores, mutexes, and message
+     queues (syscall table entries 2-10, register convention rows, error
+     codes) were added for completeness but have not been fully verified
+     against the implementation in svc.rs. Verify before relying on
+     them. -->
 
 Consolidated reference for all IPC primitives: event flags, semaphores,
 mutexes, message queues, sampling ports, queuing ports, and blackboards.
+For context on the SVC dispatch mechanism, PendSV context switching, and
+the static scheduler that drives partition execution, see
+[architecture.md](architecture.md).
 
 ## Table of Contents
 
@@ -95,11 +98,9 @@ User partitions never supply their own PID in a register.
 | BbRead           | bb_id          | timeout      | buf_ptr     | byte count or error |
 | BbClear          | bb_id          | —            | —           | 0 or error          |
 
-<!-- TODO: The current dispatch code in svc.rs passes frame.r2 as a
-     caller parameter to semaphore.wait(), mutex.lock(), mutex.unlock(),
-     message.send(), and message.recv(). This table documents the
-     correct design where the kernel uses Kernel.current_partition
-     instead. The dispatch code should be updated to match. -->
+<!-- Note: Some dispatch paths in svc.rs pass frame.r2 as the caller
+     parameter rather than using Kernel.current_partition. The table
+     above documents the intended convention. -->
 
 ## 3. Error Codes
 
@@ -395,9 +396,10 @@ Two wait queue types in `kernel/src/waitqueue.rs`:
 3. SVC dispatch calls `try_transition(partitions, pid, Waiting)`.
 4. Partition state becomes `Waiting`.
 
-In the ARINC 653-style static scheduler, blocking does NOT skip the
-partition's time slot. The partition still receives its window but
-cannot do useful work.
+In the ARINC 653-style static scheduler (see
+[architecture.md](architecture.md#4-static-schedule-table-format)),
+blocking does NOT skip the partition's time slot. The partition still
+receives its window but cannot do useful work.
 
 ### Wakeup flow
 
@@ -421,8 +423,10 @@ synchronization primitives are needed.
 
 ### Mechanism
 
-On each SysTick interrupt, after advancing the schedule table, the
-kernel sweeps all timed wait queues for expired entries.
+On each SysTick interrupt (see
+[architecture.md](architecture.md#4-static-schedule-table-format) for
+the SysTick handler), after advancing the schedule table, the kernel
+sweeps all timed wait queues for expired entries.
 
 Both `QueuingPortPool` and `BlackboardPool` provide a `tick_timeouts`
 method that iterates over all ports/boards, calling `drain_expired` on
