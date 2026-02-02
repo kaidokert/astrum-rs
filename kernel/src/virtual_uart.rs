@@ -5,6 +5,15 @@
 
 use heapless::Deque;
 
+use crate::virtual_device::{DeviceError, VirtualDevice};
+
+/// IOCTL command: drain all bytes from the TX ring buffer.
+pub const IOCTL_FLUSH: u32 = 0x01;
+/// IOCTL command: return number of bytes available in the RX ring buffer.
+pub const IOCTL_AVAILABLE: u32 = 0x02;
+/// IOCTL command: set the loopback peer device ID (`arg` is the peer ID).
+pub const IOCTL_SET_PEER: u32 = 0x03;
+
 /// Kernel-side state for one virtual UART channel.
 pub struct VirtualUartBackend {
     device_id: u8,
@@ -116,6 +125,68 @@ impl VirtualUartBackend {
 
     pub fn rx_len(&self) -> usize {
         self.rx.len()
+    }
+}
+
+impl VirtualUartBackend {
+    /// Validate partition_id range and check that the partition has opened
+    /// this device. Consolidates the repeated open-check boilerplate.
+    fn require_open(&self, partition_id: u8) -> Result<(), DeviceError> {
+        if partition_id >= 8 {
+            return Err(DeviceError::InvalidPartition);
+        }
+        if !self.is_open(partition_id) {
+            return Err(DeviceError::NotOpen);
+        }
+        Ok(())
+    }
+}
+
+impl VirtualDevice for VirtualUartBackend {
+    fn device_id(&self) -> u8 {
+        self.device_id
+    }
+
+    fn open(&mut self, partition_id: u8) -> Result<(), DeviceError> {
+        if partition_id >= 8 {
+            return Err(DeviceError::InvalidPartition);
+        }
+        self.open_partitions |= 1 << partition_id;
+        Ok(())
+    }
+
+    fn close(&mut self, partition_id: u8) -> Result<(), DeviceError> {
+        if partition_id >= 8 {
+            return Err(DeviceError::InvalidPartition);
+        }
+        self.open_partitions &= !(1 << partition_id);
+        Ok(())
+    }
+
+    fn read(&mut self, partition_id: u8, buf: &mut [u8]) -> Result<usize, DeviceError> {
+        self.require_open(partition_id)?;
+        Ok(self.pop_rx(buf))
+    }
+
+    fn write(&mut self, partition_id: u8, data: &[u8]) -> Result<usize, DeviceError> {
+        self.require_open(partition_id)?;
+        Ok(self.push_tx(data))
+    }
+
+    fn ioctl(&mut self, partition_id: u8, cmd: u32, arg: u32) -> Result<u32, DeviceError> {
+        self.require_open(partition_id)?;
+        match cmd {
+            IOCTL_FLUSH => {
+                while self.pop_tx().is_some() {}
+                Ok(0)
+            }
+            IOCTL_AVAILABLE => Ok(self.rx_len() as u32),
+            IOCTL_SET_PEER => {
+                self.set_loopback_peer(arg as u8);
+                Ok(0)
+            }
+            _ => Err(DeviceError::NotFound),
+        }
     }
 }
 
@@ -235,5 +306,234 @@ mod tests {
         assert_eq!(buf, [10, 20]);
         assert_eq!(ub.tx_len(), 2);
         assert_eq!(ub.rx_len(), 1);
+    }
+
+    // ---- VirtualDevice trait tests ----
+
+    #[test]
+    fn trait_open_close_manages_bitmask() {
+        let mut ub = VirtualUartBackend::new(5);
+        assert_eq!(VirtualDevice::device_id(&ub), 5);
+
+        // Open partition 2
+        VirtualDevice::open(&mut ub, 2).unwrap();
+        assert!(ub.is_open(2));
+        assert_eq!(ub.open_partitions(), 0b0000_0100);
+
+        // Open partition 0 as well
+        VirtualDevice::open(&mut ub, 0).unwrap();
+        assert_eq!(ub.open_partitions(), 0b0000_0101);
+
+        // Close partition 2
+        VirtualDevice::close(&mut ub, 2).unwrap();
+        assert!(!ub.is_open(2));
+        assert!(ub.is_open(0));
+        assert_eq!(ub.open_partitions(), 0b0000_0001);
+
+        // Close partition 0
+        VirtualDevice::close(&mut ub, 0).unwrap();
+        assert_eq!(ub.open_partitions(), 0);
+    }
+
+    #[test]
+    fn trait_read_write_not_open_error() {
+        let mut ub = VirtualUartBackend::new(1);
+        let mut buf = [0u8; 4];
+
+        // read/write without opening should fail
+        assert_eq!(
+            VirtualDevice::read(&mut ub, 0, &mut buf),
+            Err(DeviceError::NotOpen)
+        );
+        assert_eq!(
+            VirtualDevice::write(&mut ub, 0, &[1, 2]),
+            Err(DeviceError::NotOpen)
+        );
+    }
+
+    #[test]
+    fn trait_write_delegates_to_push_tx() {
+        let mut ub = VirtualUartBackend::new(1);
+        VirtualDevice::open(&mut ub, 0).unwrap();
+
+        // Write data via trait — should go into TX buffer
+        let n = VirtualDevice::write(&mut ub, 0, &[0xAA, 0xBB, 0xCC]).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(ub.tx_len(), 3);
+
+        // Verify FIFO order via pop_tx
+        assert_eq!(ub.pop_tx(), Some(0xAA));
+        assert_eq!(ub.pop_tx(), Some(0xBB));
+        assert_eq!(ub.pop_tx(), Some(0xCC));
+    }
+
+    #[test]
+    fn trait_read_delegates_to_pop_rx() {
+        let mut ub = VirtualUartBackend::new(1);
+        VirtualDevice::open(&mut ub, 0).unwrap();
+
+        // Pre-fill RX buffer (as if ISR pushed data)
+        ub.push_rx(&[10, 20, 30, 40]);
+
+        // Read via trait
+        let mut buf = [0u8; 3];
+        let n = VirtualDevice::read(&mut ub, 0, &mut buf).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(buf, [10, 20, 30]);
+        assert_eq!(ub.rx_len(), 1); // one byte left
+    }
+
+    #[test]
+    fn trait_full_lifecycle() {
+        let mut ub = VirtualUartBackend::new(3);
+
+        // 1. open
+        VirtualDevice::open(&mut ub, 1).unwrap();
+
+        // 2. write
+        let written = VirtualDevice::write(&mut ub, 1, &[1, 2, 3]).unwrap();
+        assert_eq!(written, 3);
+
+        // 3. simulate RX data arrival
+        ub.push_rx(&[0xDE, 0xAD]);
+
+        // 4. read
+        let mut buf = [0u8; 4];
+        let read = VirtualDevice::read(&mut ub, 1, &mut buf).unwrap();
+        assert_eq!(read, 2);
+        assert_eq!(&buf[..2], &[0xDE, 0xAD]);
+
+        // 5. close
+        VirtualDevice::close(&mut ub, 1).unwrap();
+
+        // 6. operations fail after close
+        assert_eq!(
+            VirtualDevice::read(&mut ub, 1, &mut buf),
+            Err(DeviceError::NotOpen)
+        );
+        assert_eq!(
+            VirtualDevice::write(&mut ub, 1, &[0]),
+            Err(DeviceError::NotOpen)
+        );
+    }
+
+    #[test]
+    fn trait_ioctl_not_open_error() {
+        let mut ub = VirtualUartBackend::new(1);
+        assert_eq!(
+            VirtualDevice::ioctl(&mut ub, 0, IOCTL_FLUSH, 0),
+            Err(DeviceError::NotOpen)
+        );
+    }
+
+    #[test]
+    fn trait_ioctl_flush_drains_tx() {
+        let mut ub = VirtualUartBackend::new(1);
+        VirtualDevice::open(&mut ub, 0).unwrap();
+
+        VirtualDevice::write(&mut ub, 0, &[1, 2, 3, 4, 5]).unwrap();
+        assert_eq!(ub.tx_len(), 5);
+
+        let result = VirtualDevice::ioctl(&mut ub, 0, IOCTL_FLUSH, 0).unwrap();
+        assert_eq!(result, 0);
+        assert_eq!(ub.tx_len(), 0);
+    }
+
+    #[test]
+    fn trait_ioctl_available_returns_rx_len() {
+        let mut ub = VirtualUartBackend::new(1);
+        VirtualDevice::open(&mut ub, 0).unwrap();
+
+        let avail = VirtualDevice::ioctl(&mut ub, 0, IOCTL_AVAILABLE, 0).unwrap();
+        assert_eq!(avail, 0);
+
+        ub.push_rx(&[10, 20, 30]);
+        let avail = VirtualDevice::ioctl(&mut ub, 0, IOCTL_AVAILABLE, 0).unwrap();
+        assert_eq!(avail, 3);
+    }
+
+    #[test]
+    fn trait_ioctl_set_peer() {
+        let mut ub = VirtualUartBackend::new(1);
+        VirtualDevice::open(&mut ub, 0).unwrap();
+
+        assert_eq!(ub.loopback_peer(), None);
+        let result = VirtualDevice::ioctl(&mut ub, 0, IOCTL_SET_PEER, 42).unwrap();
+        assert_eq!(result, 0);
+        assert_eq!(ub.loopback_peer(), Some(42));
+    }
+
+    #[test]
+    fn trait_ioctl_unknown_command() {
+        let mut ub = VirtualUartBackend::new(1);
+        VirtualDevice::open(&mut ub, 0).unwrap();
+
+        assert_eq!(
+            VirtualDevice::ioctl(&mut ub, 0, 0xFF, 0),
+            Err(DeviceError::NotFound)
+        );
+    }
+
+    #[test]
+    fn trait_invalid_partition_id_rejected() {
+        let mut ub = VirtualUartBackend::new(1);
+        let mut buf = [0u8; 4];
+
+        // partition_id >= 8 must be rejected on all trait methods
+        assert_eq!(
+            VirtualDevice::open(&mut ub, 8),
+            Err(DeviceError::InvalidPartition)
+        );
+        assert_eq!(
+            VirtualDevice::close(&mut ub, 8),
+            Err(DeviceError::InvalidPartition)
+        );
+        assert_eq!(
+            VirtualDevice::read(&mut ub, 8, &mut buf),
+            Err(DeviceError::InvalidPartition)
+        );
+        assert_eq!(
+            VirtualDevice::write(&mut ub, 8, &[1]),
+            Err(DeviceError::InvalidPartition)
+        );
+        assert_eq!(
+            VirtualDevice::ioctl(&mut ub, 8, IOCTL_FLUSH, 0),
+            Err(DeviceError::InvalidPartition)
+        );
+
+        // u8::MAX should also be rejected
+        assert_eq!(
+            VirtualDevice::open(&mut ub, 255),
+            Err(DeviceError::InvalidPartition)
+        );
+    }
+
+    #[test]
+    fn trait_multi_partition_isolation() {
+        let mut ub = VirtualUartBackend::new(1);
+
+        // Partition 0 opens the device
+        VirtualDevice::open(&mut ub, 0).unwrap();
+
+        // Partition 1 hasn't opened — should fail
+        assert_eq!(
+            VirtualDevice::write(&mut ub, 1, &[0xAA]),
+            Err(DeviceError::NotOpen)
+        );
+
+        // Partition 0 can write
+        assert_eq!(VirtualDevice::write(&mut ub, 0, &[0xBB]).unwrap(), 1);
+
+        // Now partition 1 opens
+        VirtualDevice::open(&mut ub, 1).unwrap();
+        assert_eq!(VirtualDevice::write(&mut ub, 1, &[0xCC]).unwrap(), 1);
+
+        // Close partition 0 — partition 1 should still work
+        VirtualDevice::close(&mut ub, 0).unwrap();
+        assert_eq!(
+            VirtualDevice::write(&mut ub, 0, &[0xDD]),
+            Err(DeviceError::NotOpen)
+        );
+        assert_eq!(VirtualDevice::write(&mut ub, 1, &[0xEE]).unwrap(), 1);
     }
 }

@@ -8,6 +8,7 @@ pub enum DeviceError {
     NotOpen,
     BufferFull,
     BufferEmpty,
+    InvalidPartition,
 }
 
 /// Partition-aware virtual device trait.
