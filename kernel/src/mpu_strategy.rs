@@ -5,8 +5,34 @@
 //! management.  [`StaticStrategy`] delegates directly to the existing
 //! [`crate::mpu`] helpers with no behaviour change.
 
+use core::cell::RefCell;
+use cortex_m::interrupt::Mutex;
+
 #[cfg(not(test))]
 use crate::mpu;
+
+/// Execute `f` inside a critical section.
+///
+/// On the target this disables interrupts via `cortex_m::interrupt::free`.
+/// In host-mode unit tests the closure runs directly with a synthetic
+/// `CriticalSection` token (single-threaded test runner, no real interrupts).
+#[cfg(not(test))]
+fn with_cs<F, R>(f: F) -> R
+where
+    F: FnOnce(&cortex_m::interrupt::CriticalSection) -> R,
+{
+    cortex_m::interrupt::free(f)
+}
+
+#[cfg(test)]
+fn with_cs<F, R>(f: F) -> R
+where
+    F: FnOnce(&cortex_m::interrupt::CriticalSection) -> R,
+{
+    // SAFETY: Tests run single-threaded on the host — there are no real
+    // interrupts to mask, so a synthetic CriticalSection token is sound.
+    f(unsafe { &cortex_m::interrupt::CriticalSection::new() })
+}
 
 /// Trait abstracting how MPU regions are managed for a partition.
 ///
@@ -25,9 +51,10 @@ pub trait MpuStrategy {
 
     /// Dynamically add a temporary memory window.
     ///
+    /// `owner` identifies the partition that owns the window.
     /// Returns the MPU region ID on success, or `None` if no free
     /// region slot is available.
-    fn add_window(&self, base: u32, size: u32, permissions: u32) -> Option<u8>;
+    fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8) -> Option<u8>;
 
     /// Remove a previously added window by its region ID.
     fn remove_window(&self, region_id: u8);
@@ -39,6 +66,119 @@ pub enum MpuError {
     /// The caller supplied a region count that does not match the expected
     /// fixed layout (e.g. 3 regions for the static strategy).
     RegionCountMismatch,
+}
+
+/// Descriptor for a dynamically-assigned MPU window: base, size,
+/// permissions, and owning partition ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowDescriptor {
+    pub base: u32,
+    pub size: u32,
+    pub permissions: u32,
+    pub owner: u8,
+}
+
+/// Number of dynamic region slots (R4 through R7).
+const DYNAMIC_SLOT_COUNT: usize = 4;
+
+/// First hardware MPU region number used by the dynamic strategy.
+const DYNAMIC_REGION_BASE: u8 = 4;
+
+/// Dynamic MPU strategy — manages regions R4-R7 at runtime.
+///
+/// Slot 0 (R4) holds the partition's private RAM. Slots 1-3 (R5-R7)
+/// are ad-hoc windows. Pure data-structure tracker — no hardware writes.
+///
+/// Interior mutability is provided by `Mutex<RefCell<…>>`, which uses a
+/// critical section (interrupt-disable) on single-core Cortex-M to ensure
+/// exclusive access.
+pub struct DynamicStrategy {
+    slots: Mutex<RefCell<[Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT]>>,
+}
+
+impl Default for DynamicStrategy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DynamicStrategy {
+    /// Create a new strategy with all slots empty.
+    pub const fn new() -> Self {
+        Self {
+            slots: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
+        }
+    }
+
+    /// Return a copy of the descriptor for a given hardware region ID (4-7),
+    /// or `None` if the slot is empty or the ID is out of range.
+    pub fn slot(&self, region_id: u8) -> Option<WindowDescriptor> {
+        let idx = region_id.checked_sub(DYNAMIC_REGION_BASE)? as usize;
+        with_cs(|cs| {
+            let slots = self.slots.borrow(cs);
+            let slots = slots.borrow();
+            slots.get(idx).copied().flatten()
+        })
+    }
+}
+
+impl MpuStrategy for DynamicStrategy {
+    fn configure_partition(
+        &self,
+        partition_id: u8,
+        regions: &[(u32, u32)],
+    ) -> Result<(), MpuError> {
+        // The static regions (R0-R2) are handled elsewhere; we only
+        // care about the single private-RAM region destined for R4.
+        if regions.is_empty() {
+            return Err(MpuError::RegionCountMismatch);
+        }
+
+        let (rbar, rasr) = regions[0];
+        let base = rbar & crate::mpu::RBAR_ADDR_MASK;
+        let size_field = (rasr >> crate::mpu::RASR_SIZE_SHIFT) & crate::mpu::RASR_SIZE_MASK;
+        let size = 1u32 << (size_field + 1);
+
+        with_cs(|cs| {
+            self.slots.borrow(cs).borrow_mut()[0] = Some(WindowDescriptor {
+                base,
+                size,
+                permissions: rasr,
+                owner: partition_id,
+            });
+        });
+        Ok(())
+    }
+
+    fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8) -> Option<u8> {
+        with_cs(|cs| {
+            let mut slots = self.slots.borrow(cs).borrow_mut();
+            // Scan slots 1..3 (R5-R7) for a free entry.
+            for (idx, slot) in slots.iter_mut().enumerate().skip(1) {
+                if slot.is_none() {
+                    *slot = Some(WindowDescriptor {
+                        base,
+                        size,
+                        permissions,
+                        owner,
+                    });
+                    return Some(DYNAMIC_REGION_BASE + idx as u8);
+                }
+            }
+            None // All dynamic slots occupied.
+        })
+    }
+
+    fn remove_window(&self, region_id: u8) {
+        let idx = match region_id.checked_sub(DYNAMIC_REGION_BASE) {
+            Some(i) if (i as usize) < DYNAMIC_SLOT_COUNT => i as usize,
+            _ => return,
+        };
+
+        with_cs(|cs| {
+            self.slots.borrow(cs).borrow_mut()[idx] = None;
+        });
+    }
 }
 
 /// Static MPU strategy — delegates to existing [`mpu`] helpers.
@@ -65,7 +205,7 @@ impl MpuStrategy for StaticStrategy {
         Ok(())
     }
 
-    fn add_window(&self, _base: u32, _size: u32, _permissions: u32) -> Option<u8> {
+    fn add_window(&self, _base: u32, _size: u32, _permissions: u32, _owner: u8) -> Option<u8> {
         // Static strategy does not support dynamic windows.
         None
     }
@@ -237,7 +377,7 @@ mod tests {
     #[test]
     fn static_strategy_add_window_returns_none() {
         let strategy = StaticStrategy;
-        assert_eq!(strategy.add_window(0x2000_0000, 256, 0), None);
+        assert_eq!(strategy.add_window(0x2000_0000, 256, 0, 0), None);
     }
 
     #[test]
@@ -255,10 +395,186 @@ mod tests {
     #[test]
     fn static_strategy_satisfies_trait_object() {
         let strategy: &dyn MpuStrategy = &StaticStrategy;
-        assert_eq!(strategy.add_window(0, 0, 0), None);
+        assert_eq!(strategy.add_window(0, 0, 0, 0), None);
         assert_eq!(
             strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0)]),
             Ok(()),
         );
+    }
+
+    // ------------------------------------------------------------------
+    // DynamicStrategy
+    // ------------------------------------------------------------------
+
+    /// Helper: build an (RBAR, RASR) pair for a RW/XN data region.
+    fn data_region(base: u32, size_bytes: u32, region: u32) -> (u32, u32) {
+        let sf = encode_size(size_bytes).unwrap();
+        let rasr = build_rasr(sf, AP_FULL_ACCESS, true, (false, false, false));
+        (build_rbar(base, region).unwrap(), rasr)
+    }
+
+    #[test]
+    fn dynamic_new_has_empty_slots() {
+        let ds = DynamicStrategy::new();
+        for rid in 4..=7 {
+            assert!(ds.slot(rid).is_none());
+        }
+    }
+
+    #[test]
+    fn dynamic_configure_partition_stores_r4() {
+        let ds = DynamicStrategy::new();
+        let size_field = encode_size(4096).unwrap(); // 11
+        let rasr = build_rasr(size_field, AP_FULL_ACCESS, true, (true, true, false));
+        let rbar = build_rbar(0x2000_0000, 4).unwrap();
+        assert_eq!(ds.configure_partition(2, &[(rbar, rasr)]), Ok(()));
+
+        let desc = ds.slot(4).expect("R4 should be occupied");
+        assert_eq!(desc.base, 0x2000_0000);
+        assert_eq!(desc.size, 4096);
+        assert_eq!(desc.permissions, rasr);
+        assert_eq!(desc.owner, 2);
+    }
+
+    #[test]
+    fn dynamic_configure_partition_rejects_empty() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(
+            ds.configure_partition(0, &[]),
+            Err(MpuError::RegionCountMismatch),
+        );
+    }
+
+    #[test]
+    fn dynamic_add_window_allocates_r5_r6_r7() {
+        let ds = DynamicStrategy::new();
+        let r5 = ds.add_window(0x2001_0000, 256, 0xAA, 1);
+        assert_eq!(r5, Some(5));
+
+        let r6 = ds.add_window(0x2002_0000, 512, 0xBB, 2);
+        assert_eq!(r6, Some(6));
+
+        let r7 = ds.add_window(0x2003_0000, 1024, 0xCC, 3);
+        assert_eq!(r7, Some(7));
+
+        // Verify stored descriptors.
+        let d5 = ds.slot(5).unwrap();
+        assert_eq!(d5.base, 0x2001_0000);
+        assert_eq!(d5.size, 256);
+        assert_eq!(d5.permissions, 0xAA);
+        assert_eq!(d5.owner, 1);
+
+        let d6 = ds.slot(6).unwrap();
+        assert_eq!(d6.base, 0x2002_0000);
+        assert_eq!(d6.size, 512);
+        assert_eq!(d6.owner, 2);
+
+        let d7 = ds.slot(7).unwrap();
+        assert_eq!(d7.base, 0x2003_0000);
+        assert_eq!(d7.size, 1024);
+        assert_eq!(d7.owner, 3);
+    }
+
+    #[test]
+    fn dynamic_add_window_exhaustion() {
+        let ds = DynamicStrategy::new();
+        assert!(ds.add_window(0x2001_0000, 256, 0, 1).is_some()); // R5
+        assert!(ds.add_window(0x2002_0000, 256, 0, 1).is_some()); // R6
+        assert!(ds.add_window(0x2003_0000, 256, 0, 1).is_some()); // R7
+
+        // Fourth dynamic window should fail — only 3 dynamic slots.
+        assert_eq!(ds.add_window(0x2004_0000, 256, 0, 1), None);
+    }
+
+    #[test]
+    fn dynamic_remove_window_clears_slot() {
+        let ds = DynamicStrategy::new();
+        let rid = ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
+        assert_eq!(rid, 5);
+        assert!(ds.slot(5).is_some());
+
+        ds.remove_window(5);
+        assert!(ds.slot(5).is_none());
+    }
+
+    #[test]
+    fn dynamic_remove_window_out_of_range_is_noop() {
+        let ds = DynamicStrategy::new();
+        // Should not panic for out-of-range region IDs.
+        ds.remove_window(0);
+        ds.remove_window(3);
+        ds.remove_window(8);
+        ds.remove_window(255);
+    }
+
+    #[test]
+    fn dynamic_reallocation_after_removal() {
+        let ds = DynamicStrategy::new();
+        let r5 = ds.add_window(0x2001_0000, 256, 0x11, 1).unwrap();
+        let r6 = ds.add_window(0x2002_0000, 512, 0x22, 2).unwrap();
+        let r7 = ds.add_window(0x2003_0000, 1024, 0x33, 3).unwrap();
+        assert_eq!((r5, r6, r7), (5, 6, 7));
+
+        // Remove R6, then a new add should reuse slot index 2 → R6.
+        ds.remove_window(6);
+        assert!(ds.slot(6).is_none());
+
+        let new = ds.add_window(0x2004_0000, 2048, 0x44, 4).unwrap();
+        assert_eq!(new, 6);
+        let d = ds.slot(6).unwrap();
+        assert_eq!(d.base, 0x2004_0000);
+        assert_eq!(d.size, 2048);
+        assert_eq!(d.permissions, 0x44);
+        assert_eq!(d.owner, 4);
+    }
+
+    #[test]
+    fn dynamic_slot_out_of_range_returns_none() {
+        let ds = DynamicStrategy::new();
+        assert!(ds.slot(0).is_none());
+        assert!(ds.slot(3).is_none());
+        assert!(ds.slot(8).is_none());
+    }
+
+    #[test]
+    fn dynamic_configure_partition_overwrites_r4() {
+        let ds = DynamicStrategy::new();
+        let r1 = data_region(0x2000_0000, 256, 4);
+        ds.configure_partition(1, &[r1]).unwrap();
+        assert_eq!(ds.slot(4).unwrap().owner, 1);
+
+        // Reconfigure with different partition.
+        let r2 = data_region(0x2000_8000, 1024, 4);
+        ds.configure_partition(3, &[r2]).unwrap();
+        let d = ds.slot(4).unwrap();
+        assert_eq!(d.owner, 3);
+        assert_eq!(d.base, 0x2000_8000);
+        assert_eq!(d.size, 1024);
+    }
+
+    #[test]
+    fn dynamic_add_window_does_not_touch_r4() {
+        let ds = DynamicStrategy::new();
+        let r = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[r]).unwrap();
+
+        // Fill all dynamic slots.
+        ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
+        ds.add_window(0x2002_0000, 256, 0, 1).unwrap();
+        ds.add_window(0x2003_0000, 256, 0, 1).unwrap();
+
+        // R4 should still hold the partition descriptor.
+        let d = ds.slot(4).unwrap();
+        assert_eq!(d.base, 0x2000_0000);
+        assert_eq!(d.owner, 0);
+    }
+
+    #[test]
+    fn dynamic_satisfies_trait_object() {
+        let ds = DynamicStrategy::new();
+        let strategy: &dyn MpuStrategy = &ds;
+        assert_eq!(strategy.add_window(0x2001_0000, 256, 0, 1), Some(5));
+        strategy.remove_window(5);
+        assert_eq!(strategy.add_window(0x2001_0000, 256, 0, 1), Some(5));
     }
 }
