@@ -56,6 +56,8 @@ use crate::sampling::SamplingPortPool;
 use crate::semaphore::SemaphorePool;
 use crate::syscall::SyscallId;
 use crate::tick::TickCounter;
+#[cfg(feature = "dynamic-mpu")]
+use crate::virtual_device::VirtualDevice;
 
 // TODO: cortex-m-rt's #[exception] macro requires SVCall handlers to have
 // signature `fn() [-> !]` — it cannot pass the exception frame. Because we
@@ -272,6 +274,8 @@ where
     pub current_partition: u8,
     #[cfg(feature = "dynamic-mpu")]
     pub buffers: crate::buffer_pool::BufferPool<{ C::BP }, { C::BZ }>,
+    #[cfg(feature = "dynamic-mpu")]
+    pub uart_pair: crate::virtual_uart::VirtualUartPair,
 }
 
 impl<C: KernelConfig> Default for Kernel<C>
@@ -335,6 +339,26 @@ where
             current_partition: 0,
             #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
+        }
+    }
+
+    /// Look up a virtual device by `device_id` and invoke `f` with a mutable
+    /// reference to the device (as a trait object) and the current partition.
+    /// Returns `InvalidResource` when the ID is unknown or `OperationFailed`
+    /// when the closure returns a `DeviceError`.
+    #[cfg(feature = "dynamic-mpu")]
+    fn dev_dispatch<F>(&mut self, device_id: u8, f: F) -> u32
+    where
+        F: FnOnce(&mut dyn VirtualDevice, u8) -> Result<u32, crate::virtual_device::DeviceError>,
+    {
+        match self.uart_pair.get_mut(device_id) {
+            Some(dev) => match f(dev, self.current_partition) {
+                Ok(val) => val,
+                Err(_) => SvcError::OperationFailed.to_u32(),
+            },
+            None => SvcError::InvalidResource.to_u32(),
         }
     }
 
@@ -577,11 +601,36 @@ where
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(
-                SyscallId::DevOpen | SyscallId::DevRead | SyscallId::DevWrite | SyscallId::DevIoctl,
-            ) => {
-                // Device registry dispatch will be wired in a future subtask.
-                SvcError::InvalidResource.to_u32()
-            }
+                sid @ (SyscallId::DevOpen
+                | SyscallId::DevRead
+                | SyscallId::DevWrite
+                | SyscallId::DevIoctl),
+            ) => self.dev_dispatch(frame.r1 as u8, |dev, pid| match sid {
+                SyscallId::DevOpen => {
+                    dev.open(pid)?;
+                    Ok(0)
+                }
+                SyscallId::DevRead => {
+                    let len = frame.r2 as usize;
+                    let buf_ptr = frame.r3 as *mut u8;
+                    // SAFETY: The caller must provide a valid writable buffer of
+                    // at least `len` bytes within the calling partition's memory
+                    // region. The MPU enforces partition isolation in production.
+                    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, len) };
+                    Ok(dev.read(pid, buf)? as u32)
+                }
+                SyscallId::DevWrite => {
+                    let len = frame.r2 as usize;
+                    let data_ptr = frame.r3 as *const u8;
+                    // SAFETY: The caller must provide a valid readable buffer of
+                    // at least `len` bytes within the calling partition's memory
+                    // region. The MPU enforces partition isolation in production.
+                    let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+                    Ok(dev.write(pid, data)? as u32)
+                }
+                SyscallId::DevIoctl => dev.ioctl(pid, frame.r2, frame.r3),
+                _ => unreachable!(),
+            }),
             None => SvcError::InvalidSyscall.to_u32(),
         };
     }
@@ -750,6 +799,8 @@ mod tests {
             current_partition: 0,
             #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
         };
         // Add semaphores
         for _ in 0..sem_count {
@@ -1233,5 +1284,119 @@ mod tests {
         assert_eq!(svc!(SYS_BUF_RELEASE, 0), eres); // double-release
         k.current_partition = 1; // switch to partition 1
         assert_eq!(svc!(SYS_BUF_RELEASE, 1), eres); // wrong owner
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_open_dispatch_valid_and_invalid() {
+        use crate::syscall::SYS_DEV_OPEN;
+        let mut k = kernel(0, 0, 0);
+        // Open device 0 (UART-A) — should succeed
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Open device 1 (UART-B) — should succeed
+        let mut ef = frame(SYS_DEV_OPEN, 1, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Open invalid device 99 — should return InvalidResource
+        let mut ef = frame(SYS_DEV_OPEN, 99, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+    }
+
+    /// Allocate a page at a fixed low address via `mmap` so that
+    /// `ptr as u32` round-trips correctly on 64-bit test hosts.
+    /// Each call site must use a distinct `page` offset. Leaked.
+    #[cfg(feature = "dynamic-mpu")]
+    fn low32_buf(page: usize) -> *mut u8 {
+        extern "C" {
+            fn mmap(a: *mut u8, l: usize, p: i32, f: i32, d: i32, o: i64) -> *mut u8;
+        }
+        let addr = 0x1000_0000 + page * 4096;
+        // SAFETY: MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED at a known-free
+        // low address. The mapping is intentionally leaked (test-only).
+        let ptr = unsafe { mmap(addr as *mut u8, 4096, 0x3, 0x32, -1, 0) };
+        assert_eq!(ptr as usize, addr, "mmap MAP_FIXED failed");
+        ptr
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_write_dispatch_routes_to_uart() {
+        use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_WRITE};
+        let mut k = kernel(0, 0, 0);
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        let ptr = low32_buf(0);
+        // SAFETY: ptr points to a valid mmap'd page.
+        unsafe { core::ptr::copy_nonoverlapping([0xAA, 0xBB, 0xCC].as_ptr(), ptr, 3) };
+        let mut ef = frame4(SYS_DEV_WRITE, 0, 3, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 3);
+        assert_eq!(k.uart_pair.a.pop_tx(), Some(0xAA));
+        assert_eq!(k.uart_pair.a.pop_tx(), Some(0xBB));
+        assert_eq!(k.uart_pair.a.pop_tx(), Some(0xCC));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_read_dispatch_routes_to_uart() {
+        use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ};
+        let mut k = kernel(0, 0, 0);
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        k.uart_pair.a.push_rx(&[0xDE, 0xAD]);
+        let ptr = low32_buf(1);
+        let mut ef = frame4(SYS_DEV_READ, 0, 4, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 2);
+        // SAFETY: ptr is valid for 4096 bytes (mmap via low32_buf), 2 were written.
+        let out = unsafe { core::slice::from_raw_parts(ptr, 2) };
+        assert_eq!(out, &[0xDE, 0xAD]);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_ioctl_dispatch_routes_to_uart() {
+        use crate::syscall::{SYS_DEV_IOCTL, SYS_DEV_OPEN};
+        use crate::virtual_uart::IOCTL_AVAILABLE;
+        let mut k = kernel(0, 0, 0);
+        // Open device 1
+        let mut ef = frame(SYS_DEV_OPEN, 1, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Push some RX data into UART-B
+        k.uart_pair.b.push_rx(&[1, 2, 3]);
+        // IOCTL_AVAILABLE should return 3
+        let mut ef = frame4(SYS_DEV_IOCTL, 1, IOCTL_AVAILABLE, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 3);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_invalid_id_returns_invalid_resource() {
+        use crate::syscall::{SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE};
+        let inv = SvcError::InvalidResource.to_u32();
+        let mut k = kernel(0, 0, 0);
+        // Open invalid device
+        let mut ef = frame(SYS_DEV_OPEN, 99, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, inv);
+        // Write to invalid device (r3 unused — returns before dereference)
+        let mut ef = frame4(SYS_DEV_WRITE, 99, 1, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, inv);
+        // Read from invalid device (r3 unused — returns before dereference)
+        let mut ef = frame4(SYS_DEV_READ, 99, 4, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, inv);
+        // Ioctl on invalid device
+        let mut ef = frame4(SYS_DEV_IOCTL, 99, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, inv);
     }
 }

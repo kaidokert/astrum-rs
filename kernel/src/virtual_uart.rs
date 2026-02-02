@@ -216,6 +216,18 @@ impl VirtualUartPair {
         Self { a, b }
     }
 
+    /// Look up a backend by device ID, returning a mutable trait-object
+    /// reference or `None`.
+    pub fn get_mut(&mut self, id: u8) -> Option<&mut dyn VirtualDevice> {
+        if self.a.device_id == id {
+            Some(&mut self.a)
+        } else if self.b.device_id == id {
+            Some(&mut self.b)
+        } else {
+            None
+        }
+    }
+
     /// Bottom-half work: drain UART-A TX → UART-B RX, then
     /// UART-B TX → UART-A RX. Returns `(a_to_b, b_to_a)` byte counts.
     pub fn transfer(&mut self) -> (usize, usize) {
