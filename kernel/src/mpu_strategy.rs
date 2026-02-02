@@ -8,6 +8,8 @@
 use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
 
+pub use crate::mpu::MpuError;
+
 #[cfg(not(test))]
 use crate::mpu;
 
@@ -59,37 +61,6 @@ pub trait MpuStrategy {
 
     /// Remove a previously added window by its region ID.
     fn remove_window(&self, region_id: u8);
-}
-
-/// Errors from MPU strategy operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MpuError {
-    /// The caller supplied a region count that does not match the expected
-    /// fixed layout (e.g. 4 regions for the static strategy).
-    RegionCountMismatch,
-    /// Requested region size is smaller than the 32-byte MPU minimum.
-    SizeTooSmall,
-    /// Requested region size is not a power of two.
-    SizeNotPowerOfTwo,
-    /// Base address is not aligned to the region size.
-    BaseNotAligned,
-    /// `base + size` overflows the 32-bit address space.
-    AddressOverflow,
-    /// All available MPU region slots are in use.
-    SlotExhausted,
-}
-
-impl core::fmt::Display for MpuError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::RegionCountMismatch => write!(f, "region count mismatch"),
-            Self::SizeTooSmall => write!(f, "size too small (minimum 32 bytes)"),
-            Self::SizeNotPowerOfTwo => write!(f, "size is not a power of two"),
-            Self::BaseNotAligned => write!(f, "base address not aligned to size"),
-            Self::AddressOverflow => write!(f, "base + size overflows u32"),
-            Self::SlotExhausted => write!(f, "no free MPU region slots"),
-        }
-    }
 }
 
 /// Descriptor for a dynamically-assigned MPU window: base, size,
@@ -223,31 +194,6 @@ impl DynamicStrategy {
     }
 }
 
-/// Validate MPU window parameters for alignment and size constraints.
-///
-/// Returns `Ok(())` if `base` and `size` satisfy all ARMv7-M MPU region
-/// requirements, or the first applicable [`MpuError`] variant:
-///
-/// 1. `size >= 32` (minimum MPU region size)
-/// 2. `size` is a power of two
-/// 3. `base` is aligned to `size` (`base & (size - 1) == 0`)
-/// 4. `base + size` does not overflow `u32`
-pub fn validate_window_params(base: u32, size: u32) -> Result<(), MpuError> {
-    if size < 32 {
-        return Err(MpuError::SizeTooSmall);
-    }
-    if !size.is_power_of_two() {
-        return Err(MpuError::SizeNotPowerOfTwo);
-    }
-    if base & (size - 1) != 0 {
-        return Err(MpuError::BaseNotAligned);
-    }
-    if base.checked_add(size).is_none() {
-        return Err(MpuError::AddressOverflow);
-    }
-    Ok(())
-}
-
 impl MpuStrategy for DynamicStrategy {
     fn configure_partition(
         &self,
@@ -283,7 +229,7 @@ impl MpuStrategy for DynamicStrategy {
         permissions: u32,
         owner: u8,
     ) -> Result<u8, MpuError> {
-        validate_window_params(base, size)?;
+        crate::mpu::validate_mpu_region(base, size)?;
 
         with_cs(|cs| {
             let mut slots = self.slots.borrow(cs).borrow_mut();
@@ -949,131 +895,6 @@ mod tests {
         // R7 — bad descriptor, fallback: disabled region.
         assert_eq!(vals[3].0, 7);
         assert_eq!(vals[3].1, 0); // disabled — RASR must be 0
-    }
-
-    // ------------------------------------------------------------------
-    // MpuError variants: Display, Debug, PartialEq
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn mpu_error_display_messages() {
-        assert_eq!(
-            format!("{}", MpuError::RegionCountMismatch),
-            "region count mismatch"
-        );
-        assert_eq!(
-            format!("{}", MpuError::SizeTooSmall),
-            "size too small (minimum 32 bytes)"
-        );
-        assert_eq!(
-            format!("{}", MpuError::SizeNotPowerOfTwo),
-            "size is not a power of two"
-        );
-        assert_eq!(
-            format!("{}", MpuError::BaseNotAligned),
-            "base address not aligned to size"
-        );
-        assert_eq!(
-            format!("{}", MpuError::AddressOverflow),
-            "base + size overflows u32"
-        );
-        assert_eq!(
-            format!("{}", MpuError::SlotExhausted),
-            "no free MPU region slots"
-        );
-    }
-
-    #[test]
-    fn mpu_error_debug_contains_variant_name() {
-        assert!(format!("{:?}", MpuError::SizeTooSmall).contains("SizeTooSmall"));
-        assert!(format!("{:?}", MpuError::SizeNotPowerOfTwo).contains("SizeNotPowerOfTwo"));
-        assert!(format!("{:?}", MpuError::BaseNotAligned).contains("BaseNotAligned"));
-        assert!(format!("{:?}", MpuError::AddressOverflow).contains("AddressOverflow"));
-        assert!(format!("{:?}", MpuError::SlotExhausted).contains("SlotExhausted"));
-    }
-
-    // ------------------------------------------------------------------
-    // validate_window_params
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn validate_rejects_size_too_small() {
-        assert_eq!(validate_window_params(0, 0), Err(MpuError::SizeTooSmall));
-        assert_eq!(validate_window_params(0, 1), Err(MpuError::SizeTooSmall));
-        assert_eq!(validate_window_params(0, 16), Err(MpuError::SizeTooSmall));
-        assert_eq!(validate_window_params(0, 31), Err(MpuError::SizeTooSmall));
-    }
-
-    #[test]
-    fn validate_rejects_non_power_of_two() {
-        assert_eq!(
-            validate_window_params(0, 48),
-            Err(MpuError::SizeNotPowerOfTwo)
-        );
-        assert_eq!(
-            validate_window_params(0, 100),
-            Err(MpuError::SizeNotPowerOfTwo)
-        );
-        assert_eq!(
-            validate_window_params(0, 255),
-            Err(MpuError::SizeNotPowerOfTwo)
-        );
-        assert_eq!(
-            validate_window_params(0, 1000),
-            Err(MpuError::SizeNotPowerOfTwo)
-        );
-    }
-
-    #[test]
-    fn validate_rejects_misaligned_base() {
-        // base=64 not aligned to size=256 (64 & 255 != 0)
-        assert_eq!(
-            validate_window_params(64, 256),
-            Err(MpuError::BaseNotAligned)
-        );
-        // base=0x2000_0100 not aligned to size=4096
-        assert_eq!(
-            validate_window_params(0x2000_0100, 4096),
-            Err(MpuError::BaseNotAligned)
-        );
-        // base=32 not aligned to size=64
-        assert_eq!(
-            validate_window_params(32, 64),
-            Err(MpuError::BaseNotAligned)
-        );
-    }
-
-    #[test]
-    fn validate_rejects_address_overflow() {
-        // base near u32::MAX, size causes overflow
-        assert_eq!(
-            validate_window_params(0xFFFF_FF00, 256),
-            Err(MpuError::AddressOverflow)
-        );
-        // Exact overflow: 0x8000_0000 + 0x8000_0000 = 2^33
-        assert_eq!(
-            validate_window_params(0x8000_0000, 0x8000_0000),
-            Err(MpuError::AddressOverflow)
-        );
-    }
-
-    #[test]
-    fn validate_accepts_valid_params() {
-        // Minimum valid: size=32, base aligned
-        assert_eq!(validate_window_params(0, 32), Ok(()));
-        assert_eq!(validate_window_params(32, 32), Ok(()));
-        assert_eq!(validate_window_params(0x2000_0000, 256), Ok(()));
-        assert_eq!(validate_window_params(0x2000_0000, 4096), Ok(()));
-        // Large but valid: base + size fits in u32
-        assert_eq!(validate_window_params(0x4000_0000, 0x4000_0000), Ok(()));
-    }
-
-    #[test]
-    fn validate_boundary_size_32() {
-        // size=32 is the minimum valid power-of-two
-        assert_eq!(validate_window_params(0, 32), Ok(()));
-        assert_eq!(validate_window_params(32, 32), Ok(()));
-        assert_eq!(validate_window_params(64, 32), Ok(()));
     }
 
     // ------------------------------------------------------------------

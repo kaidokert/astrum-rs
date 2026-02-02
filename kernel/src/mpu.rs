@@ -221,6 +221,62 @@ pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionContr
     cortex_m::asm::isb();
 }
 
+/// Errors from MPU region validation and strategy operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MpuError {
+    /// The caller supplied a region count that does not match the expected
+    /// fixed layout (e.g. 4 regions for the static strategy).
+    RegionCountMismatch,
+    /// Requested region size is smaller than the 32-byte MPU minimum.
+    SizeTooSmall,
+    /// Requested region size is not a power of two.
+    SizeNotPowerOfTwo,
+    /// Base address is not aligned to the region size.
+    BaseNotAligned,
+    /// `base + size` overflows the 32-bit address space.
+    AddressOverflow,
+    /// All available MPU region slots are in use.
+    SlotExhausted,
+}
+
+impl core::fmt::Display for MpuError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::RegionCountMismatch => write!(f, "region count mismatch"),
+            Self::SizeTooSmall => write!(f, "size too small (minimum 32 bytes)"),
+            Self::SizeNotPowerOfTwo => write!(f, "size is not a power of two"),
+            Self::BaseNotAligned => write!(f, "base address not aligned to size"),
+            Self::AddressOverflow => write!(f, "base + size overflows u32"),
+            Self::SlotExhausted => write!(f, "no free MPU region slots"),
+        }
+    }
+}
+
+/// Validate MPU region parameters for alignment and size constraints.
+///
+/// Returns `Ok(())` if `base` and `size` satisfy all ARMv7-M MPU region
+/// requirements, or the first applicable [`MpuError`] variant:
+///
+/// 1. `size >= 32` (minimum MPU region size)
+/// 2. `size` is a power of two
+/// 3. `base` is aligned to `size` (`base & (size - 1) == 0`)
+/// 4. `base + size` does not overflow `u32`
+pub fn validate_mpu_region(base: u32, size: u32) -> Result<(), MpuError> {
+    if size < 32 {
+        return Err(MpuError::SizeTooSmall);
+    }
+    if !size.is_power_of_two() {
+        return Err(MpuError::SizeNotPowerOfTwo);
+    }
+    if base & (size - 1) != 0 {
+        return Err(MpuError::BaseNotAligned);
+    }
+    if base.checked_add(size).is_none() {
+        return Err(MpuError::AddressOverflow);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,5 +523,94 @@ mod tests {
         let pcb = make_pcb(0x0000_0000, 0x2000_0000, 16);
         let regions = partition_mpu_regions_or_deny_all(&pcb);
         assert_eq!(regions, deny_all_regions());
+    }
+
+    // ------------------------------------------------------------------
+    // validate_mpu_region
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn validate_mpu_region_rejects_size_too_small() {
+        assert_eq!(validate_mpu_region(0, 0), Err(MpuError::SizeTooSmall));
+        assert_eq!(validate_mpu_region(0, 1), Err(MpuError::SizeTooSmall));
+        assert_eq!(validate_mpu_region(0, 16), Err(MpuError::SizeTooSmall));
+        assert_eq!(validate_mpu_region(0, 31), Err(MpuError::SizeTooSmall));
+    }
+
+    #[test]
+    fn validate_mpu_region_rejects_non_power_of_two() {
+        assert_eq!(validate_mpu_region(0, 48), Err(MpuError::SizeNotPowerOfTwo));
+        assert_eq!(
+            validate_mpu_region(0, 100),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
+        assert_eq!(
+            validate_mpu_region(0, 255),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
+    }
+
+    #[test]
+    fn validate_mpu_region_rejects_misaligned_base() {
+        assert_eq!(validate_mpu_region(64, 256), Err(MpuError::BaseNotAligned));
+        assert_eq!(
+            validate_mpu_region(0x2000_0100, 4096),
+            Err(MpuError::BaseNotAligned)
+        );
+    }
+
+    #[test]
+    fn validate_mpu_region_rejects_address_overflow() {
+        assert_eq!(
+            validate_mpu_region(0xFFFF_FF00, 256),
+            Err(MpuError::AddressOverflow)
+        );
+        assert_eq!(
+            validate_mpu_region(0x8000_0000, 0x8000_0000),
+            Err(MpuError::AddressOverflow)
+        );
+    }
+
+    #[test]
+    fn validate_mpu_region_accepts_valid_params() {
+        assert_eq!(validate_mpu_region(0, 32), Ok(()));
+        assert_eq!(validate_mpu_region(32, 32), Ok(()));
+        assert_eq!(validate_mpu_region(0x2000_0000, 256), Ok(()));
+        assert_eq!(validate_mpu_region(0x2000_0000, 4096), Ok(()));
+        assert_eq!(validate_mpu_region(0x4000_0000, 0x4000_0000), Ok(()));
+    }
+
+    #[test]
+    fn mpu_error_display_messages() {
+        assert_eq!(
+            format!("{}", MpuError::RegionCountMismatch),
+            "region count mismatch"
+        );
+        assert_eq!(
+            format!("{}", MpuError::SizeTooSmall),
+            "size too small (minimum 32 bytes)"
+        );
+        assert_eq!(
+            format!("{}", MpuError::SizeNotPowerOfTwo),
+            "size is not a power of two"
+        );
+        assert_eq!(
+            format!("{}", MpuError::BaseNotAligned),
+            "base address not aligned to size"
+        );
+        assert_eq!(
+            format!("{}", MpuError::AddressOverflow),
+            "base + size overflows u32"
+        );
+        assert_eq!(
+            format!("{}", MpuError::SlotExhausted),
+            "no free MPU region slots"
+        );
+    }
+
+    #[test]
+    fn mpu_error_debug_contains_variant_name() {
+        assert!(format!("{:?}", MpuError::SizeTooSmall).contains("SizeTooSmall"));
+        assert!(format!("{:?}", MpuError::SlotExhausted).contains("SlotExhausted"));
     }
 }
