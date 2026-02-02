@@ -75,6 +75,64 @@ pub fn on_systick_mpu<const P: usize, const S: usize>(
     next
 }
 
+/// Like [`on_systick_mpu`], but also prepares dynamic MPU regions R4-R7
+/// via a [`DynamicStrategy`](crate::mpu_strategy::DynamicStrategy).
+///
+/// On each partition switch this function:
+/// 1. Applies the static MPU regions (R0-R2) via `apply_partition_mpu`.
+/// 2. Calls `DynamicStrategy::configure_partition` with the new partition's
+///    data region so R4 tracks its private RAM.
+///
+/// **Hardware programming** of R4-R7 is deferred to the PendSV handler
+/// (via [`define_pendsv_dynamic!`](crate::define_pendsv_dynamic)).  This
+/// avoids a race condition where code executes with a stale memory map
+/// between SysTick and PendSV.
+#[cfg(all(not(test), feature = "dynamic-mpu"))]
+pub fn on_systick_dynamic<const P: usize, const S: usize>(
+    state: &mut KernelState<P, S>,
+    mpu: &cortex_m::peripheral::MPU,
+    strategy: &crate::mpu_strategy::DynamicStrategy,
+) -> Option<u8> {
+    use crate::mpu_strategy::MpuStrategy;
+    let next = on_systick(state);
+    if let Some(pid) = next {
+        if let Some(pcb) = state.partitions().get(pid as usize) {
+            // Program static regions R0-R2.
+            crate::mpu::apply_partition_mpu(mpu, pcb);
+
+            // Prepare dynamic R4 from the partition's data region.
+            // partition_mpu_regions returns [bg(R0), code(R1), data(R2)];
+            // the data region at index 2 is the one destined for R4.
+            if let Some(regions) = crate::mpu::partition_mpu_regions(pcb) {
+                let _ = strategy.configure_partition(pid, &regions[2..]);
+            }
+            // NOTE: program_regions() is NOT called here — the actual
+            // hardware write happens in PendSV (define_pendsv_dynamic!).
+        }
+    }
+    next
+}
+
+/// Test-mode helper: simulates [`on_systick_dynamic`] without hardware.
+#[cfg(all(test, feature = "dynamic-mpu"))]
+pub fn on_systick_dynamic_test<const P: usize, const S: usize>(
+    state: &mut KernelState<P, S>,
+    strategy: &crate::mpu_strategy::DynamicStrategy,
+) -> Option<u8> {
+    use crate::mpu_strategy::MpuStrategy;
+    let next = on_systick(state);
+    if let Some(pid) = next {
+        if let Some(pcb) = state.partitions().get(pid as usize) {
+            if let Some(regions) = crate::mpu::partition_mpu_regions(pcb) {
+                // partition_mpu_regions returns [bg(R0), code(R1), data(R2)];
+                // the data region at index 2 is the one destined for R4.
+                let _ = strategy.configure_partition(pid, &regions[2..]);
+            }
+        }
+    }
+    next
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +219,77 @@ mod tests {
         let mut tc = TickCounter { ticks: u64::MAX };
         tc.increment();
         assert_eq!(tc.get(), 0);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    mod dynamic_tests {
+        use super::*;
+        use crate::mpu::RBAR_ADDR_MASK;
+        use crate::mpu_strategy::DynamicStrategy;
+
+        fn dyn_state() -> KernelState<4, 8> {
+            let mut s = ScheduleTable::new();
+            s.add(ScheduleEntry::new(0, 2)).unwrap();
+            s.add(ScheduleEntry::new(1, 2)).unwrap();
+            s.start();
+            let pc = |i: u8, base: u32| PartitionConfig {
+                id: i,
+                entry_point: 0,
+                stack_base: base,
+                stack_size: 4096,
+                mpu_region: MpuRegion::new(base, 4096, 0),
+            };
+            KernelState::new(s, &[pc(0, 0x2000_0000), pc(1, 0x2000_8000)]).unwrap()
+        }
+
+        fn tick(st: &mut KernelState<4, 8>, ds: &DynamicStrategy) -> Option<u8> {
+            crate::tick::on_systick_dynamic_test(st, ds)
+        }
+
+        #[test]
+        fn configures_r4_on_switch() {
+            let (mut st, ds) = (dyn_state(), DynamicStrategy::new());
+            assert_eq!(tick(&mut st, &ds), None);
+            assert_eq!(tick(&mut st, &ds), Some(1));
+            let d = ds.slot(4).unwrap();
+            assert_eq!((d.base, d.owner), (0x2000_8000, 1));
+            assert_eq!(tick(&mut st, &ds), None); // still p1's slot
+            assert_eq!(tick(&mut st, &ds), Some(0));
+            let d = ds.slot(4).unwrap();
+            assert_eq!((d.base, d.owner), (0x2000_0000, 0));
+        }
+
+        #[test]
+        fn compute_region_values_after_configure() {
+            let (mut st, ds) = (dyn_state(), DynamicStrategy::new());
+            tick(&mut st, &ds);
+            tick(&mut st, &ds); // switch to p1
+            let vals = ds.compute_region_values();
+            assert_eq!(vals[0].0 & RBAR_ADDR_MASK, 0x2000_8000);
+            assert_ne!(vals[0].1, 0);
+            for &(_, rasr) in &vals[1..] {
+                assert_eq!(rasr, 0);
+            }
+        }
+
+        #[test]
+        fn no_switch_leaves_strategy_empty() {
+            let (mut st, ds) = (dyn_state(), DynamicStrategy::new());
+            assert_eq!(tick(&mut st, &ds), None);
+            assert!(ds.slot(4).is_none());
+        }
+
+        #[test]
+        fn multiple_frames_alternate_r4() {
+            let (mut st, ds) = (dyn_state(), DynamicStrategy::new());
+            let mut owners = heapless::Vec::<u8, 8>::new();
+            for _ in 0..8 {
+                if let Some(pid) = tick(&mut st, &ds) {
+                    assert_eq!(ds.slot(4).unwrap().owner, pid);
+                    owners.push(pid).unwrap();
+                }
+            }
+            assert_eq!(owners.as_slice(), &[1, 0, 1, 0]);
+        }
     }
 }

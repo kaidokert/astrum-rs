@@ -164,30 +164,18 @@ impl DynamicStrategy {
     /// memory access.
     ///
     /// Regions R0-R3 (static background/code/data) are left unchanged.
+    ///
+    /// The caller must pass an `&MPU` reference obtained from the
+    /// peripheral singleton to make the hardware dependency explicit.
     #[cfg(not(test))]
-    pub fn program_regions(&self) {
+    pub fn program_regions(&self, mpu_periph: &cortex_m::peripheral::MPU) {
         let values = self.compute_region_values();
 
-        // SAFETY: `Peripherals::steal()` creates a second handle to the
-        // device peripherals without checking the singleton flag.  This is
-        // sound here because `program_regions` is called during context
-        // switches in PendSV (lowest-priority exception), so no other code
-        // can concurrently access the MPU registers.
-        //
-        // Each (RBAR, RASR) pair targets regions 4-7 (computed by
-        // `compute_region_values`) and does not overlap with the static
-        // regions (0-2) managed elsewhere.
-        //
-        // DSB ensures all region writes are committed before ISB forces
-        // the pipeline to refetch with the updated MPU configuration.
-        unsafe {
-            let p = cortex_m::Peripherals::steal();
-            for &(rbar, rasr) in &values {
-                mpu::configure_region(&p.MPU, rbar, rasr);
-            }
-            cortex_m::asm::dsb();
-            cortex_m::asm::isb();
+        for &(rbar, rasr) in &values {
+            mpu::configure_region(mpu_periph, rbar, rasr);
         }
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
     }
 }
 
