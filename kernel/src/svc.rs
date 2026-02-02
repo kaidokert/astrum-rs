@@ -32,6 +32,18 @@ pub enum SvcError {
 }
 
 impl SvcError {
+    /// Bit mask shared by all error codes.  Every `SvcError` variant has this
+    /// bit set in its `u32` representation, while success values (small
+    /// non-negative integers) never do.
+    pub const ERROR_BIT: u32 = 0x8000_0000;
+
+    /// Return `true` when the raw `u32` returned by an SVC call indicates an
+    /// error (i.e. has the high bit set).
+    #[inline]
+    pub const fn is_error(code: u32) -> bool {
+        code & Self::ERROR_BIT != 0
+    }
+
     /// Map this error to a unique `u32` value with the high bit set.
     ///
     /// The values count down from `0xFFFF_FFFF` so they are easy to inspect in
