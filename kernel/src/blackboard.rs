@@ -53,7 +53,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
         self.is_empty
     }
     pub fn data(&self) -> &[u8] {
-        &self.data[..self.current_size]
+        &self.data[..self.current_size.min(M)]
     }
     pub fn waiting_readers(&self) -> usize {
         self.wait_queue.len()
@@ -63,6 +63,12 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
     #[cfg(test)]
     pub fn waiting_reader_pids(&self) -> std::vec::Vec<u8> {
         self.wait_queue.waiting_pids()
+    }
+
+    /// Corrupt `current_size` for defense-in-depth testing.
+    #[cfg(test)]
+    pub fn set_current_size_for_test(&mut self, size: usize) {
+        self.current_size = size;
     }
 
     /// Overwrite content and wake all blocked readers.
@@ -99,7 +105,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
                 .map_err(|_| BlackboardError::WaitQueueFull)?;
             return Ok(ReadBlackboardOutcome::ReaderBlocked);
         }
-        let n = self.current_size.min(buf.len());
+        let n = self.current_size.min(M).min(buf.len());
         buf[..n].copy_from_slice(&self.data[..n]);
         Ok(ReadBlackboardOutcome::Read {
             msg_len: self.current_size,
@@ -124,7 +130,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
                 .map_err(|_| BlackboardError::WaitQueueFull)?;
             return Ok(ReadBlackboardOutcome::ReaderBlocked);
         }
-        let n = self.current_size.min(buf.len());
+        let n = self.current_size.min(M).min(buf.len());
         buf[..n].copy_from_slice(&self.data[..n]);
         Ok(ReadBlackboardOutcome::Read {
             msg_len: self.current_size,
@@ -523,5 +529,46 @@ mod tests {
         assert_eq!(bb.waiting_readers(), 2);
         let remaining = bb.waiting_reader_pids();
         assert_eq!(remaining, vec![10, 30]);
+    }
+
+    /// Verify that `data()` clamps a corrupted `current_size` to M,
+    /// preventing an out-of-bounds slice panic.
+    #[test]
+    fn data_accessor_clamps_corrupted_current_size() {
+        let mut bb = Blackboard::<8, 2>::new(0);
+        let _: heapless::Vec<u8, 2> = bb.display(&[1, 2, 3]).unwrap();
+        // Corrupt current_size to exceed M
+        bb.set_current_size_for_test(100);
+        // data() should clamp to M=8, not panic
+        let d = bb.data();
+        assert_eq!(d.len(), 8);
+    }
+
+    /// Verify that `read` clamps a corrupted `current_size` to M,
+    /// preventing an out-of-bounds copy_from_slice panic.
+    #[test]
+    fn read_clamps_corrupted_current_size() {
+        let mut bb = Blackboard::<8, 2>::new(0);
+        let _: heapless::Vec<u8, 2> = bb.display(&[10, 20]).unwrap();
+        // Corrupt current_size to exceed M; is_empty already false from display
+        bb.set_current_size_for_test(200);
+        let mut buf = [0u8; 16];
+        // Should not panic — n is clamped to min(200, 8, 16) = 8
+        let result = bb.read(0, &mut buf, 0);
+        assert!(matches!(result, Ok(ReadBlackboardOutcome::Read { .. })));
+    }
+
+    /// Verify that `read_timed` clamps a corrupted `current_size` to M,
+    /// preventing an out-of-bounds copy_from_slice panic.
+    #[test]
+    fn read_timed_clamps_corrupted_current_size() {
+        let mut bb = Blackboard::<8, 2>::new(0);
+        let _: heapless::Vec<u8, 2> = bb.display(&[10, 20]).unwrap();
+        // Corrupt current_size to exceed M; is_empty already false from display
+        bb.set_current_size_for_test(200);
+        let mut buf = [0u8; 16];
+        // Should not panic — n is clamped to min(200, 8, 16) = 8
+        let result = bb.read_timed(0, &mut buf, 0, 0);
+        assert!(matches!(result, Ok(ReadBlackboardOutcome::Read { .. })));
     }
 }
