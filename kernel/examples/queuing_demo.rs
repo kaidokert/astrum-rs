@@ -233,13 +233,14 @@ fn main() -> ! {
         sched.start();
 
         let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| {
-            let b = 0x2000_0000 + (i as u32) * 0x2000;
+            let b = STACKS[i].0.as_ptr() as u32;
+            let sz = (STACK_WORDS * 4) as u32;
             PartitionConfig {
                 id: i as u8,
                 entry_point: 0,
                 stack_base: b,
-                stack_size: 1024,
-                mpu_region: kernel::partition::MpuRegion::new(b, 1024, 0),
+                stack_size: sz,
+                mpu_region: kernel::partition::MpuRegion::new(b, sz, 0),
             }
         });
         KS = Some(KernelState::new(sched, &cfgs).unwrap());

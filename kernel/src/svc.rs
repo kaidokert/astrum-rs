@@ -247,6 +247,18 @@ macro_rules! define_dispatch_hook {
             // `cortex_m::interrupt::free` masks interrupts, ensuring exclusive access.
             ::cortex_m::interrupt::free(|cs| {
                 if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+                    // Synchronise the kernel's caller identity from the
+                    // assembly-level CURRENT_PARTITION written by PendSV.
+                    // SAFETY: CURRENT_PARTITION is a #[no_mangle] static mut u32
+                    // written by the PendSV handler; reading it here is safe
+                    // because interrupts are masked by `interrupt::free` on
+                    // single-core Cortex-M, so no concurrent write can occur.
+                    extern "C" { static CURRENT_PARTITION: u32; }
+                    // SAFETY: read-only access; value is always a valid u8
+                    // partition index (set by PendSV from NEXT_PARTITION).
+                    k.current_partition =
+                        unsafe { core::ptr::read_volatile(&raw const CURRENT_PARTITION) } as u8;
+
                     // SAFETY: `dispatch_hook` is only installed via `set_dispatch_hook`
                     // which stores it in SVC_DISPATCH_HOOK; it is only ever called from
                     // `SVC_HANDLER` with a valid `ExceptionFrame` pointer derived from

@@ -145,7 +145,15 @@ macro_rules! _harness_handle_tick {
 #[macro_export]
 macro_rules! define_harness {
     ($Config:ty, $NP:expr, $MS:expr, $SW:expr) => {
-        static mut STACKS: [[u32; $SW]; $NP] = [[0; $SW]; $NP];
+        /// Wrapper that aligns each partition stack to its byte-size so
+        /// that the address is valid as an MPU region base.
+        #[repr(C, align(1024))]
+        struct AlignedStack([u32; $SW]);
+
+        static mut STACKS: [AlignedStack; $NP] = {
+            const ZERO: AlignedStack = AlignedStack([0; $SW]);
+            [ZERO; $NP]
+        };
 
         #[no_mangle]
         static mut PARTITION_SP: [u32; $NP] = [0; $NP];
@@ -207,7 +215,7 @@ macro_rules! define_harness {
                 let partition_sp = &mut *(&raw mut PARTITION_SP);
 
                 for (i, &(ep, hint)) in partitions.iter().enumerate() {
-                    let stk = &mut stacks[i];
+                    let stk = &mut stacks[i].0;
                     let ix =
                         $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
                             .expect("init_stack_frame");
