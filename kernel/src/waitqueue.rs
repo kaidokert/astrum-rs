@@ -111,6 +111,13 @@ impl<const W: usize> TimedWaitQueue<W> {
     /// their partition IDs to `out`. Non-expired entries are preserved
     /// in their original FIFO order.
     ///
+    /// Performs a single in-place pass over the deque with O(1) extra
+    /// space: each element is popped from the front and either collected
+    /// into `out` (expired) or pushed back (non-expired). Because
+    /// `heapless::Deque` lacks indexed access and interior removal,
+    /// pop-front/push-back is the only way to compact in-place without
+    /// allocating a temporary buffer.
+    ///
     /// # Panics
     ///
     /// Debug-asserts if `out` cannot hold all expired entries.
@@ -119,15 +126,12 @@ impl<const W: usize> TimedWaitQueue<W> {
         current_tick: u64,
         out: &mut heapless::Vec<u8, E>,
     ) {
-        // TODO: pop-and-requeue is a brute-force workaround for heapless::Deque
-        // lacking retain/partition. Revisit if heapless gains such an API.
         let len = self.inner.len();
         for _ in 0..len {
             if let Some((pid, expiry)) = self.inner.pop_front() {
                 if current_tick >= expiry {
                     debug_assert!(out.push(pid).is_ok(), "drain_expired: output buffer full");
                 } else {
-                    // Re-enqueue non-expired entry to preserve FIFO order.
                     let _ = self.inner.push_back((pid, expiry));
                 }
             }
@@ -419,5 +423,134 @@ mod tests {
         q.push(40, 80).unwrap();
         assert_eq!(q.pop_front(), Some((30, 70)));
         assert_eq!(q.pop_front(), Some((40, 80)));
+    }
+
+    #[test]
+    fn timed_drain_expired_empty_queue() {
+        let mut q = TimedWaitQueue::<4>::new();
+        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(1000, &mut expired);
+        assert!(expired.is_empty());
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn timed_drain_expired_single_expired() {
+        let mut q = TimedWaitQueue::<4>::new();
+        q.push(42, 50).unwrap();
+        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(50, &mut expired);
+        assert_eq!(expired.as_slice(), &[42]);
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn timed_drain_expired_single_not_expired() {
+        let mut q = TimedWaitQueue::<4>::new();
+        q.push(42, 100).unwrap();
+        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(50, &mut expired);
+        assert!(expired.is_empty());
+        assert_eq!(q.len(), 1);
+        assert_eq!(q.pop_front(), Some((42, 100)));
+    }
+
+    #[test]
+    fn timed_drain_expired_interleaved_pattern() {
+        // Alternating expired/not-expired entries
+        let mut q = TimedWaitQueue::<8>::new();
+        q.push(1, 10).unwrap(); // expired
+        q.push(2, 200).unwrap(); // kept
+        q.push(3, 20).unwrap(); // expired
+        q.push(4, 300).unwrap(); // kept
+        q.push(5, 30).unwrap(); // expired
+        q.push(6, 400).unwrap(); // kept
+
+        let mut expired: heapless::Vec<u8, 8> = heapless::Vec::new();
+        q.drain_expired(50, &mut expired);
+        assert_eq!(expired.as_slice(), &[1, 3, 5]);
+        // Survivors preserve FIFO order
+        assert_eq!(q.waiting_pids(), vec![2, 4, 6]);
+    }
+
+    #[test]
+    fn timed_drain_expired_all_at_full_capacity() {
+        // Fill to capacity and expire everything
+        let mut q = TimedWaitQueue::<4>::new();
+        q.push(1, 10).unwrap();
+        q.push(2, 20).unwrap();
+        q.push(3, 30).unwrap();
+        q.push(4, 40).unwrap();
+
+        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(100, &mut expired);
+        assert_eq!(expired.as_slice(), &[1, 2, 3, 4]);
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn timed_drain_expired_none_at_full_capacity() {
+        // Fill to capacity and expire nothing
+        let mut q = TimedWaitQueue::<4>::new();
+        q.push(1, 100).unwrap();
+        q.push(2, 200).unwrap();
+        q.push(3, 300).unwrap();
+        q.push(4, 400).unwrap();
+
+        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(50, &mut expired);
+        assert!(expired.is_empty());
+        assert_eq!(q.len(), 4);
+        assert_eq!(q.waiting_pids(), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn timed_drain_expired_successive_drains() {
+        // Multiple successive drain_expired calls with advancing ticks
+        let mut q = TimedWaitQueue::<4>::new();
+        q.push(1, 100).unwrap();
+        q.push(2, 200).unwrap();
+        q.push(3, 300).unwrap();
+
+        // First drain at tick 150: only pid 1 expires
+        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(150, &mut expired);
+        assert_eq!(expired.as_slice(), &[1]);
+        assert_eq!(q.waiting_pids(), vec![2, 3]);
+
+        // Second drain at tick 250: pid 2 expires
+        expired.clear();
+        q.drain_expired(250, &mut expired);
+        assert_eq!(expired.as_slice(), &[2]);
+        assert_eq!(q.waiting_pids(), vec![3]);
+
+        // Third drain at tick 300: pid 3 expires
+        expired.clear();
+        q.drain_expired(300, &mut expired);
+        assert_eq!(expired.as_slice(), &[3]);
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn timed_drain_expired_wrapping_ring_buffer() {
+        // Exercise the ring buffer wrap-around by pushing/popping
+        // before filling, so the internal head pointer is non-zero.
+        let mut q = TimedWaitQueue::<4>::new();
+        // Push and pop two entries to advance the ring buffer head
+        q.push(99, 1).unwrap();
+        q.push(98, 2).unwrap();
+        q.pop_front();
+        q.pop_front();
+
+        // Now head is at offset 2; push 4 entries that wrap around
+        q.push(1, 50).unwrap(); // expired
+        q.push(2, 200).unwrap(); // kept
+        q.push(3, 60).unwrap(); // expired
+        q.push(4, 300).unwrap(); // kept
+
+        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(100, &mut expired);
+        assert_eq!(expired.as_slice(), &[1, 3]);
+        assert_eq!(q.waiting_pids(), vec![2, 4]);
     }
 }
