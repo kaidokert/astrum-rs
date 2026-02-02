@@ -1,4 +1,9 @@
-//! Virtual device registry and trait for dynamic-MPU device abstraction.
+//! Partition-aware virtual device trait and fixed-capacity device registry.
+//!
+//! [`VirtualDevice`] defines an abstract interface for devices that enforce
+//! partition-level access control via `open`/`close` gating.
+//! [`DeviceRegistry`] provides O(n) lookup by device ID with compile-time
+//! capacity, suitable for static initialization on `no_std` targets.
 
 /// Errors returned by virtual device operations.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

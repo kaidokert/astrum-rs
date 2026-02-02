@@ -1,9 +1,10 @@
-/// Fixed-size buffer pool for shared-memory IPC between partitions.
-///
-/// Each slot contains a byte buffer and ownership/borrow metadata.
-/// When the `dynamic-mpu` feature is enabled, the pool can coordinate
-/// with [`crate::mpu_strategy::DynamicStrategy`] to map buffer slots
-/// as MPU windows for cross-partition lending.
+//! Fixed-size buffer pool for shared-memory IPC between partitions.
+//!
+//! Each slot contains a byte buffer and ownership/borrow metadata.
+//! When the `dynamic-mpu` feature is enabled, the pool can coordinate
+//! with [`crate::mpu_strategy::DynamicStrategy`] to map buffer slots
+//! as MPU windows for zero-copy cross-partition lending.
+
 use crate::mpu_strategy::MpuStrategy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
