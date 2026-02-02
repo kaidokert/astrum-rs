@@ -63,7 +63,11 @@ impl<const D: usize, const M: usize, const W: usize> MessageQueue<D, M, W> {
             return Err(MsgError::SizeMismatch);
         }
         let mut msg = [0u8; M];
-        msg.copy_from_slice(data);
+        // Defense-in-depth: use get/get_mut to avoid panicking indexing
+        // even though data.len() == M is already checked above.
+        let dst = msg.get_mut(..M).ok_or(MsgError::SizeMismatch)?;
+        let src = data.get(..M).ok_or(MsgError::SizeMismatch)?;
+        dst.copy_from_slice(src);
         if self.buf.push_back(msg).is_err() {
             self.sender_wq
                 .push(caller as u8)
@@ -87,7 +91,11 @@ impl<const D: usize, const M: usize, const W: usize> MessageQueue<D, M, W> {
             return Err(MsgError::SizeMismatch);
         }
         if let Some(msg) = self.buf.pop_front() {
-            buf.copy_from_slice(&msg);
+            // Defense-in-depth: use get/get_mut to avoid panicking indexing
+            // even though buf.len() == M is already checked above.
+            let dst = buf.get_mut(..M).ok_or(MsgError::SizeMismatch)?;
+            let src = msg.get(..M).ok_or(MsgError::SizeMismatch)?;
+            dst.copy_from_slice(src);
             let wake = self.sender_wq.pop_front();
             return Ok(RecvOutcome::Received { wake_sender: wake });
         }
