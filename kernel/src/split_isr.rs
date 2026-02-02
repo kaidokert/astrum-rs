@@ -69,7 +69,7 @@ impl<const D: usize, const M: usize> IsrRingBuffer<D, M> {
         }
         let tail = (self.head + self.count) % D;
         let copy_len = data.len().min(M);
-        let slot = &mut self.buf[tail];
+        let slot = self.buf.get_mut(tail).ok_or(RingBufferFull)?;
         slot.tag = tag;
         slot.len = copy_len;
         slot.payload[..copy_len].copy_from_slice(&data[..copy_len]);
@@ -88,8 +88,15 @@ impl<const D: usize, const M: usize> IsrRingBuffer<D, M> {
             return false;
         }
         let idx = self.head;
-        let slot = &self.buf[idx];
-        f(slot.tag, &slot.payload[..slot.len]);
+        let slot = match self.buf.get(idx) {
+            Some(s) => s,
+            None => return false,
+        };
+        let payload = match slot.payload.get(..slot.len) {
+            Some(p) => p,
+            None => return false,
+        };
+        f(slot.tag, payload);
         self.head = (self.head + 1) % D;
         self.count -= 1;
         true
