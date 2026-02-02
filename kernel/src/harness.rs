@@ -227,13 +227,41 @@ macro_rules! define_harness {
         fn SysTick() {
             // SAFETY: single-core Cortex-M — the SysTick handler has exclusive
             // access to KS because higher-priority interrupts do not touch it,
-            // and PendSV (lower priority) cannot preempt us.
-            // SAFETY: KS is initialised by boot() before SysTick is enabled,
-            // and is never set back to None.  The scheduler cannot run until
-            // boot() stores Some(…) into KS and starts SysTick, so this
-            // expect cannot fail at runtime.
-            let event = unsafe { KS.as_mut() }.expect("KS").advance_schedule_tick();
+            // and PendSV (lower priority) cannot preempt us.  KS is a
+            // `static mut Option<KernelState>` defined by this macro; only
+            // boot() writes `Some(…)` into it (once, with interrupts
+            // disabled) before enabling SysTick, and nothing ever writes
+            // `None` back, so the pointer returned by `as_mut()` is valid
+            // and unique for the lifetime of this handler invocation.
+            let ks = unsafe { KS.as_mut() };
+            let ks = if let Some(ks) = ks {
+                ks
+            } else {
+                // KS must be initialised before SysTick fires; if it is
+                // not, the kernel is in an unrecoverable state.
+                loop {}
+            };
+
+            let event = ks.advance_schedule_tick();
+
+            // TODO: _harness_handle_tick! (dynamic-mpu variant) enters its
+            // own interrupt::free / KERN borrow, so it cannot be merged into
+            // the critical section below without restructuring the macro.
             $crate::_harness_handle_tick!(event, NEXT_PARTITION);
+
+            // Expire timed waits (queuing ports, blackboards) each tick so
+            // blocked partitions are woken when their timeout elapses.
+            // Performed inside the same interrupt::free as the KERN borrow
+            // to keep tick processing atomic with respect to other
+            // interrupt-free sections.
+            let current_tick = ks.tick().get();
+            ::cortex_m::interrupt::free(|cs| {
+                if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+                    k.expire_timed_waits::<{ <$Config as $crate::config::KernelConfig>::N }>(
+                        current_tick,
+                    );
+                }
+            });
         }
 
         /// Initialise partition stacks, configure exception priorities,
