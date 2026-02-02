@@ -102,7 +102,15 @@ fn SysTick() {
     }
     let (ks, mq) = (KS.as_mut().unwrap(), MQ.as_mut().unwrap());
     *T += 1;
-    if let Some(pid) = ks.advance_schedule_tick() {
+    let _tick_result = ks.advance_schedule_tick();
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let switch_pid: Option<u8> = _tick_result;
+    #[cfg(feature = "dynamic-mpu")]
+    let switch_pid: Option<u8> = match _tick_result {
+        kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) => Some(pid),
+        _ => None,
+    };
+    if let Some(pid) = switch_pid {
         let pcb = ks.partitions().get(pid as usize).unwrap();
         assert!(mpu::partition_mpu_regions(pcb).is_some());
         hprintln!("[PASS] MPU + switch {} -> P{}", *SW + 1, pid);

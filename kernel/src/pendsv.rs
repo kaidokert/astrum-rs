@@ -126,7 +126,7 @@ macro_rules! define_pendsv_dynamic {
         #[no_mangle]
         extern "C" fn __pendsv_program_mpu() {
             // SAFETY: PendSV is the lowest-priority exception, so no
-            // other exception can pre-empt us while writing MPU registers.
+            // other exception can preempt us while writing MPU registers.
             // `steal()` is sound because we have exclusive access to the
             // MPU peripheral at this priority level.
             let p = unsafe { cortex_m::Peripherals::steal() };

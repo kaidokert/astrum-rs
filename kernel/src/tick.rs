@@ -49,6 +49,7 @@ pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
 
 /// Advance the schedule table by one tick. On partition switch, sets PendSV
 /// pending and returns the new active partition id.
+#[cfg(not(feature = "dynamic-mpu"))]
 pub fn on_systick<const P: usize, const S: usize>(state: &mut KernelState<P, S>) -> Option<u8> {
     let next = state.advance_schedule_tick();
     if next.is_some() {
@@ -58,10 +59,25 @@ pub fn on_systick<const P: usize, const S: usize>(state: &mut KernelState<P, S>)
     next
 }
 
+/// Advance the schedule table by one tick. Returns a
+/// [`ScheduleEvent`](crate::scheduler::ScheduleEvent) indicating what
+/// happened (partition switch, system window, or nothing).
+#[cfg(feature = "dynamic-mpu")]
+pub fn on_systick<const P: usize, const S: usize>(
+    state: &mut KernelState<P, S>,
+) -> crate::scheduler::ScheduleEvent {
+    let event = state.advance_schedule_tick();
+    if matches!(event, crate::scheduler::ScheduleEvent::PartitionSwitch(_)) {
+        #[cfg(not(test))]
+        cortex_m::peripheral::SCB::set_pendsv();
+    }
+    event
+}
+
 /// Like [`on_systick`], but also reconfigures the MPU for the new partition
 /// before PendSV fires. Call this from the SysTick handler when MPU
 /// isolation is required.
-#[cfg(not(test))]
+#[cfg(all(not(test), not(feature = "dynamic-mpu")))]
 pub fn on_systick_mpu<const P: usize, const S: usize>(
     state: &mut KernelState<P, S>,
     mpu: &cortex_m::peripheral::MPU,
@@ -92,10 +108,11 @@ pub fn on_systick_dynamic<const P: usize, const S: usize>(
     state: &mut KernelState<P, S>,
     mpu: &cortex_m::peripheral::MPU,
     strategy: &crate::mpu_strategy::DynamicStrategy,
-) -> Option<u8> {
+) -> crate::scheduler::ScheduleEvent {
     use crate::mpu_strategy::MpuStrategy;
-    let next = on_systick(state);
-    if let Some(pid) = next {
+    use crate::scheduler::ScheduleEvent;
+    let event = on_systick(state);
+    if let ScheduleEvent::PartitionSwitch(pid) = event {
         if let Some(pcb) = state.partitions().get(pid as usize) {
             // Program static regions R0-R2.
             crate::mpu::apply_partition_mpu(mpu, pcb);
@@ -110,7 +127,7 @@ pub fn on_systick_dynamic<const P: usize, const S: usize>(
             // hardware write happens in PendSV (define_pendsv_dynamic!).
         }
     }
-    next
+    event
 }
 
 /// Test-mode helper: simulates [`on_systick_dynamic`] without hardware.
@@ -118,10 +135,11 @@ pub fn on_systick_dynamic<const P: usize, const S: usize>(
 pub fn on_systick_dynamic_test<const P: usize, const S: usize>(
     state: &mut KernelState<P, S>,
     strategy: &crate::mpu_strategy::DynamicStrategy,
-) -> Option<u8> {
+) -> crate::scheduler::ScheduleEvent {
     use crate::mpu_strategy::MpuStrategy;
-    let next = on_systick(state);
-    if let Some(pid) = next {
+    use crate::scheduler::ScheduleEvent;
+    let event = on_systick(state);
+    if let ScheduleEvent::PartitionSwitch(pid) = event {
         if let Some(pcb) = state.partitions().get(pid as usize) {
             if let Some(regions) = crate::mpu::partition_mpu_regions(pcb) {
                 // partition_mpu_regions returns [bg(R0), code(R1), data(R2)];
@@ -130,7 +148,7 @@ pub fn on_systick_dynamic_test<const P: usize, const S: usize>(
             }
         }
     }
-    next
+    event
 }
 
 #[cfg(test)]
@@ -139,6 +157,7 @@ mod tests {
     use crate::partition::{MpuRegion, PartitionConfig};
     use crate::scheduler::{ScheduleEntry, ScheduleTable};
 
+    #[cfg(not(feature = "dynamic-mpu"))]
     fn make_state() -> KernelState<4, 8> {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 3)).unwrap();
@@ -168,6 +187,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "dynamic-mpu"))]
     fn tick_drives_partition_switches() {
         let mut st = make_state();
         assert_eq!((on_systick(&mut st), st.active_partition()), (None, None));
@@ -187,6 +207,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "dynamic-mpu"))]
     fn multiple_major_frames() {
         let mut st = make_state();
         let mut sw = heapless::Vec::<u8, 8>::new();
@@ -226,6 +247,7 @@ mod tests {
         use super::*;
         use crate::mpu::RBAR_ADDR_MASK;
         use crate::mpu_strategy::DynamicStrategy;
+        use crate::scheduler::ScheduleEvent;
 
         fn dyn_state() -> KernelState<4, 8> {
             let mut s = ScheduleTable::new();
@@ -242,19 +264,19 @@ mod tests {
             KernelState::new(s, &[pc(0, 0x2000_0000), pc(1, 0x2000_8000)]).unwrap()
         }
 
-        fn tick(st: &mut KernelState<4, 8>, ds: &DynamicStrategy) -> Option<u8> {
+        fn tick(st: &mut KernelState<4, 8>, ds: &DynamicStrategy) -> ScheduleEvent {
             crate::tick::on_systick_dynamic_test(st, ds)
         }
 
         #[test]
         fn configures_r4_on_switch() {
             let (mut st, ds) = (dyn_state(), DynamicStrategy::new());
-            assert_eq!(tick(&mut st, &ds), None);
-            assert_eq!(tick(&mut st, &ds), Some(1));
+            assert_eq!(tick(&mut st, &ds), ScheduleEvent::None);
+            assert_eq!(tick(&mut st, &ds), ScheduleEvent::PartitionSwitch(1));
             let d = ds.slot(4).unwrap();
             assert_eq!((d.base, d.owner), (0x2000_8000, 1));
-            assert_eq!(tick(&mut st, &ds), None); // still p1's slot
-            assert_eq!(tick(&mut st, &ds), Some(0));
+            assert_eq!(tick(&mut st, &ds), ScheduleEvent::None); // still p1's slot
+            assert_eq!(tick(&mut st, &ds), ScheduleEvent::PartitionSwitch(0));
             let d = ds.slot(4).unwrap();
             assert_eq!((d.base, d.owner), (0x2000_0000, 0));
         }
@@ -275,7 +297,7 @@ mod tests {
         #[test]
         fn no_switch_leaves_strategy_empty() {
             let (mut st, ds) = (dyn_state(), DynamicStrategy::new());
-            assert_eq!(tick(&mut st, &ds), None);
+            assert_eq!(tick(&mut st, &ds), ScheduleEvent::None);
             assert!(ds.slot(4).is_none());
         }
 
@@ -284,7 +306,7 @@ mod tests {
             let (mut st, ds) = (dyn_state(), DynamicStrategy::new());
             let mut owners = heapless::Vec::<u8, 8>::new();
             for _ in 0..8 {
-                if let Some(pid) = tick(&mut st, &ds) {
+                if let ScheduleEvent::PartitionSwitch(pid) = tick(&mut st, &ds) {
                     assert_eq!(ds.slot(4).unwrap().owner, pid);
                     owners.push(pid).unwrap();
                 }

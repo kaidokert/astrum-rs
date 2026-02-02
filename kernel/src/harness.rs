@@ -73,6 +73,34 @@
 ///     boot(&parts, &mut p)
 /// }
 /// ```
+/// Internal helper: dispatch the result of `advance_schedule_tick` inside
+/// the SysTick handler.  Two implementations are provided so the harness
+/// compiles under both feature configurations.
+#[cfg(not(feature = "dynamic-mpu"))]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _harness_handle_tick {
+    ($event:expr, $next:ident) => {
+        if let Some(pid) = $event {
+            unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+            cortex_m::peripheral::SCB::set_pendsv();
+        }
+    };
+}
+
+/// Internal helper (dynamic-mpu variant).
+#[cfg(feature = "dynamic-mpu")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _harness_handle_tick {
+    ($event:expr, $next:ident) => {
+        if let $crate::scheduler::ScheduleEvent::PartitionSwitch(pid) = $event {
+            unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+            cortex_m::peripheral::SCB::set_pendsv();
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! define_harness {
     ($Config:ty, $NP:expr, $MS:expr, $SW:expr) => {
@@ -105,14 +133,10 @@ macro_rules! define_harness {
             // SAFETY: single-core Cortex-M — the SysTick handler has exclusive
             // access to KS because higher-priority interrupts do not touch it,
             // and PendSV (lower priority) cannot preempt us.
-            if let Some(pid) = unsafe { (*p).as_mut() }
+            let event = unsafe { (*p).as_mut() }
                 .expect("KS")
-                .advance_schedule_tick()
-            {
-                // SAFETY: same single-core exclusivity as above.
-                unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
-                cortex_m::peripheral::SCB::set_pendsv();
-            }
+                .advance_schedule_tick();
+            $crate::_harness_handle_tick!(event, NEXT_PARTITION);
         }
 
         /// Initialise partition stacks, configure exception priorities,

@@ -1,4 +1,6 @@
 use crate::partition::{PartitionConfig, PartitionControlBlock, PartitionTable};
+#[cfg(feature = "dynamic-mpu")]
+use crate::scheduler::ScheduleEvent;
 use crate::scheduler::ScheduleTable;
 use crate::tick::TickCounter;
 
@@ -50,6 +52,7 @@ impl<const P: usize, const S: usize> KernelState<P, S> {
 
     /// Advance the schedule table by one tick. If a partition switch occurs,
     /// updates `active_partition` and returns `Some(partition_id)`.
+    #[cfg(not(feature = "dynamic-mpu"))]
     pub fn advance_schedule_tick(&mut self) -> Option<u8> {
         self.tick.increment();
         let next = self.schedule.advance_tick();
@@ -57,6 +60,18 @@ impl<const P: usize, const S: usize> KernelState<P, S> {
             self.active_partition = Some(pid);
         }
         next
+    }
+
+    /// Advance the schedule table by one tick. Returns a [`ScheduleEvent`]
+    /// that distinguishes partition switches from system window slots.
+    #[cfg(feature = "dynamic-mpu")]
+    pub fn advance_schedule_tick(&mut self) -> ScheduleEvent {
+        self.tick.increment();
+        let event = self.schedule.advance_tick();
+        if let ScheduleEvent::PartitionSwitch(pid) = event {
+            self.active_partition = Some(pid);
+        }
+        event
     }
 }
 

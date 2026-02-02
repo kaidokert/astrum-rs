@@ -91,7 +91,9 @@ fn SysTick() {
         }
     }
 
-    if let Some(pid) = kernel::tick::on_systick_dynamic(state, &p.MPU, &STRATEGY) {
+    if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) =
+        kernel::tick::on_systick_dynamic(state, &p.MPU, &STRATEGY)
+    {
         // SAFETY: single-core exclusive write.
         unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
 

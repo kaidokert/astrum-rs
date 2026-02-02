@@ -24,7 +24,13 @@ const MAX_SWITCHES: u32 = 6;
 fn SysTick() {
     cortex_m::interrupt::free(|cs| {
         if let Some(ref mut ks) = *STATE.borrow(cs).borrow_mut() {
+            #[cfg(not(feature = "dynamic-mpu"))]
             if let Some(pid) = on_systick(ks) {
+                hprintln!("switch -> partition {}", pid);
+                SWITCH_COUNT.fetch_add(1, Ordering::Relaxed);
+            }
+            #[cfg(feature = "dynamic-mpu")]
+            if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = on_systick(ks) {
                 hprintln!("switch -> partition {}", pid);
                 SWITCH_COUNT.fetch_add(1, Ordering::Relaxed);
             }
