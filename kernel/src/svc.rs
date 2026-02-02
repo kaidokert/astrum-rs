@@ -1938,7 +1938,15 @@ mod tests {
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 100, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 2);
+        assert_eq!(ef.r0, 2, "should return msg_len=2");
+        // Verify message data was delivered to the buffer.
+        // SAFETY: ptr was mmap'd by low32_buf and dispatch wrote into it.
+        let delivered = unsafe { core::slice::from_raw_parts(ptr, 2) };
+        assert_eq!(
+            delivered,
+            &[0xAA, 0xBB],
+            "buffer should contain delivered data"
+        );
         // Blocked sender (partition 1) should be woken to Ready
         assert_eq!(k.partitions.get(1).unwrap().state(), PartitionState::Ready);
     }
@@ -2003,7 +2011,11 @@ mod tests {
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 100, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 1);
+        assert_eq!(ef.r0, 1, "should return msg_len=1");
+        // Verify message data was actually delivered to the buffer.
+        // SAFETY: ptr was mmap'd by low32_buf and dispatch wrote into it.
+        let delivered = unsafe { core::slice::from_raw_parts(ptr, 1) };
+        assert_eq!(delivered[0], 42, "buffer should contain the delivered byte");
         assert_eq!(
             k.partitions.get(1).unwrap().state(),
             PartitionState::Running
