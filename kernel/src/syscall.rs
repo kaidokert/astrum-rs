@@ -24,6 +24,14 @@ pub const SYS_BB_CLEAR: u32 = 19;
 pub const SYS_BUF_ALLOC: u32 = 20;
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_RELEASE: u32 = 21;
+#[cfg(feature = "dynamic-mpu")]
+pub const SYS_DEV_OPEN: u32 = 22;
+#[cfg(feature = "dynamic-mpu")]
+pub const SYS_DEV_READ: u32 = 23;
+#[cfg(feature = "dynamic-mpu")]
+pub const SYS_DEV_WRITE: u32 = 24;
+#[cfg(feature = "dynamic-mpu")]
+pub const SYS_DEV_IOCTL: u32 = 25;
 
 /// Typed syscall identifier for use in the kernel dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +59,14 @@ pub enum SyscallId {
     BufferAlloc,
     #[cfg(feature = "dynamic-mpu")]
     BufferRelease,
+    #[cfg(feature = "dynamic-mpu")]
+    DevOpen,
+    #[cfg(feature = "dynamic-mpu")]
+    DevRead,
+    #[cfg(feature = "dynamic-mpu")]
+    DevWrite,
+    #[cfg(feature = "dynamic-mpu")]
+    DevIoctl,
 }
 
 impl SyscallId {
@@ -83,6 +99,14 @@ impl SyscallId {
             SYS_BUF_ALLOC => Some(Self::BufferAlloc),
             #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_RELEASE => Some(Self::BufferRelease),
+            #[cfg(feature = "dynamic-mpu")]
+            SYS_DEV_OPEN => Some(Self::DevOpen),
+            #[cfg(feature = "dynamic-mpu")]
+            SYS_DEV_READ => Some(Self::DevRead),
+            #[cfg(feature = "dynamic-mpu")]
+            SYS_DEV_WRITE => Some(Self::DevWrite),
+            #[cfg(feature = "dynamic-mpu")]
+            SYS_DEV_IOCTL => Some(Self::DevIoctl),
             _ => None,
         }
     }
@@ -113,6 +137,14 @@ impl SyscallId {
             Self::BufferAlloc => SYS_BUF_ALLOC,
             #[cfg(feature = "dynamic-mpu")]
             Self::BufferRelease => SYS_BUF_RELEASE,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevOpen => SYS_DEV_OPEN,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevRead => SYS_DEV_READ,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevWrite => SYS_DEV_WRITE,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevIoctl => SYS_DEV_IOCTL,
         }
     }
 }
@@ -146,6 +178,14 @@ mod tests {
         (SYS_BUF_ALLOC, SyscallId::BufferAlloc),
         #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_RELEASE, SyscallId::BufferRelease),
+        #[cfg(feature = "dynamic-mpu")]
+        (SYS_DEV_OPEN, SyscallId::DevOpen),
+        #[cfg(feature = "dynamic-mpu")]
+        (SYS_DEV_READ, SyscallId::DevRead),
+        #[cfg(feature = "dynamic-mpu")]
+        (SYS_DEV_WRITE, SyscallId::DevWrite),
+        #[cfg(feature = "dynamic-mpu")]
+        (SYS_DEV_IOCTL, SyscallId::DevIoctl),
     ];
 
     #[test]
@@ -175,7 +215,7 @@ mod tests {
         #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(SyscallId::from_u32(20), None);
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(SyscallId::from_u32(22), None);
+        assert_eq!(SyscallId::from_u32(26), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -187,7 +227,7 @@ mod tests {
         #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(ALL_VARIANTS.len(), 19);
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(ALL_VARIANTS.len(), 21);
+        assert_eq!(ALL_VARIANTS.len(), 25);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);

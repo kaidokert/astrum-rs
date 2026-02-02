@@ -30,4 +30,6 @@ pub mod split_isr;
 pub mod svc;
 pub mod syscall;
 pub mod tick;
+#[cfg(feature = "dynamic-mpu")]
+pub mod virtual_device;
 pub mod waitqueue;

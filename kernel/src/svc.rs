@@ -575,6 +575,13 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
+            #[cfg(feature = "dynamic-mpu")]
+            Some(
+                SyscallId::DevOpen | SyscallId::DevRead | SyscallId::DevWrite | SyscallId::DevIoctl,
+            ) => {
+                // Device registry dispatch will be wired in a future subtask.
+                SvcError::InvalidResource.to_u32()
+            }
             None => SvcError::InvalidSyscall.to_u32(),
         };
     }
