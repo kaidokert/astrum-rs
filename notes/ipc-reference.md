@@ -17,6 +17,8 @@ the static scheduler that drives partition execution, see
 - [7. Port Connection Routing](#7-port-connection-routing)
 - [8. Blocking and Wakeup Protocol](#8-blocking-and-wakeup-protocol)
 - [9. Timeout Enforcement](#9-timeout-enforcement)
+- [10. Buffer Pool](#10-buffer-pool)
+- [11. Virtual Devices](#11-virtual-devices)
 
 ## 1. SVC Syscall Table
 
@@ -99,6 +101,13 @@ User partitions never supply their own PID in a register.
 | BbDisplay        | bb_id          | data_len     | data_ptr    | 0 or error          |
 | BbRead           | bb_id          | timeout      | buf_ptr     | byte count or error |
 | BbClear          | bb_id          | —            | —           | 0 or error          |
+| BufferAlloc      | mode (0=R,1=W) | —            | —           | slot index or error |
+| BufferRelease    | slot_index     | —            | —           | 0 or error          |
+| BufferWrite      | slot_index     | data_len     | data_ptr    | bytes written or err|
+| DevOpen          | device_id      | —            | —           | 0 or error          |
+| DevRead          | device_id      | buf_len      | buf_ptr     | byte count or error |
+| DevWrite         | device_id      | data_len     | data_ptr    | byte count or error |
+| DevIoctl         | device_id      | cmd          | arg         | result or error     |
 
 <!-- Note: Some dispatch paths in svc.rs pass frame.r2 as the caller
      parameter rather than using Kernel.current_partition. The table
@@ -478,3 +487,215 @@ let expired_bb: Vec<u8, E> = kernel.blackboards.tick_timeouts(current_tick);
 
 Expired partitions are transitioned to `Ready` so they can be scheduled
 in their next time slot.
+
+## 10. Buffer Pool
+
+Source: `kernel/src/buffer_pool.rs`. Requires `dynamic-mpu` feature.
+
+### Data structures
+
+```
+BufferSlot<const SIZE: usize>    (#[repr(C, align(32))])
+    data:       [u8; SIZE]       // Fixed-size byte buffer (32-byte aligned)
+    state:      BorrowState      // Free | BorrowedRead{owner} | BorrowedWrite{owner}
+    mpu_region: Option<u8>       // MPU region ID (5-7) set by lend_to_partition
+
+BufferPool<const SLOTS: usize, const SIZE: usize>
+    slots: [BufferSlot<SIZE>; SLOTS]
+```
+
+`KernelConfig` provides two associated constants: `BP` (slot count =
+`SLOTS`) and `BZ` (slot size in bytes = `SIZE`). The kernel struct
+holds a `BufferPool<{C::BP}, {C::BZ}>`.
+
+### Borrow state machine
+
+```
+Free --alloc(pid,Read)--> BorrowedRead{owner}
+Free --alloc(pid,Write)--> BorrowedWrite{owner}
+BorrowedRead{owner} --release(owner)--> Free
+BorrowedWrite{owner} --release(owner)--> Free
+```
+
+Only the owning partition can release a slot. Attempting to borrow an
+already-borrowed slot returns `AlreadyBorrowed`. Releasing a free slot
+returns `NotBorrowed`.
+
+### Error enums
+
+```
+BufferPoolError { InvalidSlot, NotBorrowed, AlreadyBorrowed, NotOwner }
+BufferError     { InvalidSlot, SlotNotFree, SlotNotBorrowed, MpuWindowExhausted }
+```
+
+`BufferPoolError` is used by `alloc`/`borrow`/`release` (pure
+ownership operations). `BufferError` is used by `lend_to_partition`
+and `revoke_from_partition` (MPU-aware operations).
+
+### Syscall semantics
+
+**SYS_BUF_ALLOC (20)** — `r1` = borrow mode (0 = Read, 1 = Write).
+Scans for the first free slot and transitions it to the requested
+borrow state with the calling partition as owner. Returns the slot
+index on success, or `SvcError::OperationFailed` if no free slots.
+
+**SYS_BUF_RELEASE (21)** — `r1` = slot index. Releases the slot back
+to `Free` state. The caller must be the current owner; otherwise
+returns `SvcError::InvalidResource`.
+
+**SYS_BUF_WRITE (26)** — `r1` = slot index, `r2` = data length,
+`r3` = source data pointer (validated). Copies `r2` bytes from the
+user buffer into the slot's data array. The slot must be in
+`BorrowedWrite` state owned by the caller. If `r2` exceeds the
+slot's `SIZE`, the write is rejected entirely (no partial write) and
+returns `SvcError::OperationFailed`. On success, returns the number
+of bytes written (always equal to `r2`). Returns
+`SvcError::InvalidResource` if the slot index is invalid or the
+caller is not the write-owner.
+
+### Zero-copy lending model
+
+For cross-partition buffer sharing, the pool coordinates with
+`DynamicStrategy` (from `mpu_strategy.rs`) to install MPU windows:
+
+**lend_to_partition(slot, partition_id, writable, strategy)** — Slot
+must be `Free`. Computes the slot's physical base address and builds
+an MPU RASR value with `AP_RO_RO` (read-only) or `AP_FULL_ACCESS`
+(writable). Calls `strategy.add_window()` to claim a dynamic MPU
+region (R5-R7). On success, transitions the slot to `BorrowedRead`
+or `BorrowedWrite` and records the MPU region ID. Returns the region
+ID (5-7) or `BufferError::MpuWindowExhausted` if all 3 dynamic
+window slots are occupied.
+
+**revoke_from_partition(slot, strategy)** — Removes the MPU window
+via `strategy.remove_window(region_id)` and returns the slot to
+`Free`. Returns `SlotNotBorrowed` if the slot has no MPU region
+assigned.
+
+### MPU window integration
+
+The `BufferSlot` struct is `#[repr(C, align(32))]` so that the `data`
+field (placed first) is always 32-byte aligned — the minimum MPU
+region alignment for sizes >= 32. The `SIZE` const generic must be a
+power-of-two >= 32 for MPU compatibility.
+
+Dynamic MPU regions R5-R7 are managed by `DynamicStrategy`. Static
+partition regions (R0-R3: code, data, background, stack guard) are
+never disturbed by buffer lending. At most 3 buffer slots can be
+simultaneously lent across the system.
+
+## 11. Virtual Devices
+
+Source: `kernel/src/virtual_device.rs` and `kernel/src/virtual_uart.rs`.
+Requires `dynamic-mpu` feature.
+
+### VirtualDevice trait
+
+```rust
+pub trait VirtualDevice {
+    fn device_id(&self) -> u8;
+    fn open(&mut self, partition_id: u8)  -> Result<(), DeviceError>;
+    fn close(&mut self, partition_id: u8) -> Result<(), DeviceError>;
+    fn read(&mut self, partition_id: u8, buf: &mut [u8])  -> Result<usize, DeviceError>;
+    fn write(&mut self, partition_id: u8, data: &[u8])    -> Result<usize, DeviceError>;
+    fn ioctl(&mut self, partition_id: u8, cmd: u32, arg: u32) -> Result<u32, DeviceError>;
+}
+```
+
+Every method takes an explicit `partition_id` for access control. The
+kernel supplies `current_partition` — user code never provides its
+own PID.
+
+### DeviceError enum
+
+```
+DeviceError { NotFound, PermissionDenied, NotOpen, BufferFull, BufferEmpty, InvalidPartition }
+```
+
+### DeviceRegistry
+
+`DeviceRegistry<'a, const N: usize>` is a fixed-capacity array of
+`&mut dyn VirtualDevice` references with O(n) lookup by device ID.
+`add()` panics on duplicate IDs or full registry (these are
+configuration errors at init time). `get_mut(id)` returns a mutable
+trait object or `None`.
+
+### VirtualUartBackend
+
+Source: `kernel/src/virtual_uart.rs`.
+
+```
+VirtualUartBackend
+    device_id:       u8
+    tx:              Deque<u8, 64>    // Partition writes here
+    rx:              Deque<u8, 64>    // Partition reads from here
+    open_partitions: u8               // Bitmask (supports partitions 0-7)
+    loopback_peer:   Option<u8>       // Peer device ID for loopback wiring
+```
+
+Ring buffer capacity is 64 bytes (`VirtualUartBackend::CAPACITY`).
+
+**Open/close**: Sets/clears a bit in `open_partitions`. Multiple
+partitions can open the same UART simultaneously (bitmask, not
+exclusive). Partition IDs >= 8 return `InvalidPartition`.
+
+**Write** (via trait): Pushes bytes into the TX ring buffer. Returns
+the number of bytes enqueued (may be less than requested if the buffer
+is nearly full). Requires the partition to have opened the device.
+
+**Read** (via trait): Drains bytes from the RX ring buffer into the
+caller's buffer. Returns the number of bytes read (may be less than
+buffer size if fewer bytes are available).
+
+**IOCTL commands**:
+
+| Constant          | Value | Behavior                                |
+|-------------------|-------|-----------------------------------------|
+| `IOCTL_FLUSH`     | 0x01  | Drain all bytes from TX ring buffer     |
+| `IOCTL_AVAILABLE` | 0x02  | Return byte count in RX ring buffer     |
+| `IOCTL_SET_PEER`  | 0x03  | Set loopback peer device ID (`arg`)     |
+
+Unknown IOCTL commands return `DeviceError::NotFound`.
+
+### VirtualUartPair and loopback model
+
+`VirtualUartPair` holds two `VirtualUartBackend` instances (fields
+`a` and `b`) with their loopback peers cross-wired at construction.
+
+**transfer()** performs the bottom-half routing: drains UART-A's TX
+into UART-B's RX, then drains UART-B's TX into UART-A's RX. Returns
+`(a_to_b, b_to_a)` byte counts. If the destination's RX buffer is
+full, untransferred bytes remain in the source's TX buffer for a
+later `transfer()` call.
+
+In the kernel's system-window tick handler, `transfer()` is called
+during bottom-half processing to move data between the two UART
+endpoints.
+
+### Syscall semantics
+
+<!-- TODO: reviewer suggested lookup should use DeviceRegistry instead
+     of VirtualUartPair; current kernel code (svc.rs dev_dispatch) uses
+     self.uart_pair.get_mut(device_id) directly. Revisit if/when the
+     dispatch is refactored to use DeviceRegistry. -->
+**SYS_DEV_OPEN (22)** — `r1` = device ID. Looks up the device via
+`dev_dispatch`, which calls `self.uart_pair.get_mut(device_id)` on the
+kernel's `VirtualUartPair`, and then calls `open(current_partition)`.
+Returns 0 on success.
+
+**SYS_DEV_READ (23)** — `r1` = device ID, `r2` = buffer length,
+`r3` = buffer pointer (validated). Calls `read(pid, buf)` on the
+device. Returns byte count read.
+
+**SYS_DEV_WRITE (24)** — `r1` = device ID, `r2` = data length,
+`r3` = data pointer (validated). Calls `write(pid, data)` on the
+device. Returns byte count written.
+
+**SYS_DEV_IOCTL (25)** — `r1` = device ID, `r2` = command,
+`r3` = argument. Calls `ioctl(pid, cmd, arg)` on the device. Returns
+the IOCTL result value. No pointer validation (r2/r3 are opaque
+integers).
+
+All device syscalls use `dev_dispatch` in svc.rs, which resolves the
+device ID from `r1`, injects `current_partition` as the PID, and maps
+`DeviceError` variants to `SvcError` codes.
