@@ -1,3 +1,5 @@
+use crate::waitqueue::WaitQueue;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum MsgError {
     InvalidQueue,
@@ -34,8 +36,8 @@ pub enum RecvOutcome {
 #[derive(Debug)]
 pub struct MessageQueue<const D: usize, const M: usize, const W: usize> {
     buf: heapless::Deque<[u8; M], D>,
-    sender_wq: heapless::Deque<u8, W>,
-    receiver_wq: heapless::Deque<u8, W>,
+    sender_wq: WaitQueue<W>,
+    receiver_wq: WaitQueue<W>,
 }
 
 #[allow(clippy::new_without_default)]
@@ -43,8 +45,8 @@ impl<const D: usize, const M: usize, const W: usize> MessageQueue<D, M, W> {
     pub const fn new() -> Self {
         Self {
             buf: heapless::Deque::new(),
-            sender_wq: heapless::Deque::new(),
-            receiver_wq: heapless::Deque::new(),
+            sender_wq: WaitQueue::new(),
+            receiver_wq: WaitQueue::new(),
         }
     }
 
@@ -64,12 +66,13 @@ impl<const D: usize, const M: usize, const W: usize> MessageQueue<D, M, W> {
         msg.copy_from_slice(data);
         if self.buf.push_back(msg).is_err() {
             self.sender_wq
-                .push_back(caller as u8)
+                .push(caller as u8)
                 .map_err(|_| MsgError::WaitQueueFull)?;
             return Ok(SendOutcome::SenderBlocked {
                 blocked: caller as u8,
             });
         }
+        // TODO: reviewer false positive – WaitQueue<W>::pop_front() exists (waitqueue.rs:42)
         let wake = self.receiver_wq.pop_front();
         Ok(SendOutcome::Delivered {
             wake_receiver: wake,
@@ -86,11 +89,12 @@ impl<const D: usize, const M: usize, const W: usize> MessageQueue<D, M, W> {
         }
         if let Some(msg) = self.buf.pop_front() {
             buf.copy_from_slice(&msg);
+            // TODO: reviewer false positive – WaitQueue<W>::pop_front() exists (waitqueue.rs:42)
             let wake = self.sender_wq.pop_front();
             return Ok(RecvOutcome::Received { wake_sender: wake });
         }
         self.receiver_wq
-            .push_back(caller as u8)
+            .push(caller as u8)
             .map_err(|_| MsgError::WaitQueueFull)?;
         Ok(RecvOutcome::ReceiverBlocked {
             blocked: caller as u8,
