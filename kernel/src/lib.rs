@@ -32,4 +32,6 @@ pub mod syscall;
 pub mod tick;
 #[cfg(feature = "dynamic-mpu")]
 pub mod virtual_device;
+#[cfg(feature = "dynamic-mpu")]
+pub mod virtual_uart;
 pub mod waitqueue;
