@@ -72,7 +72,6 @@ impl<const D: usize, const M: usize, const W: usize> MessageQueue<D, M, W> {
                 blocked: caller as u8,
             });
         }
-        // TODO: reviewer false positive – WaitQueue<W>::pop_front() exists (waitqueue.rs:42)
         let wake = self.receiver_wq.pop_front();
         Ok(SendOutcome::Delivered {
             wake_receiver: wake,
@@ -89,7 +88,6 @@ impl<const D: usize, const M: usize, const W: usize> MessageQueue<D, M, W> {
         }
         if let Some(msg) = self.buf.pop_front() {
             buf.copy_from_slice(&msg);
-            // TODO: reviewer false positive – WaitQueue<W>::pop_front() exists (waitqueue.rs:42)
             let wake = self.sender_wq.pop_front();
             return Ok(RecvOutcome::Received { wake_sender: wake });
         }
