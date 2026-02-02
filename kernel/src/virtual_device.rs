@@ -15,6 +15,8 @@ pub enum DeviceError {
     BufferFull,
     BufferEmpty,
     InvalidPartition,
+    RegistryFull,
+    DuplicateId,
 }
 
 /// Partition-aware virtual device trait.
@@ -47,18 +49,22 @@ impl<'a, const N: usize> DeviceRegistry<'a, N> {
         }
     }
 
-    /// Register a device. Panics on duplicate IDs or full registry since these
-    /// indicate misconfiguration during system initialization.
-    pub fn add(&mut self, dev: &'a mut dyn VirtualDevice) {
+    /// Register a device. Returns `DuplicateId` if the device ID is already
+    /// registered, or `RegistryFull` if capacity is exhausted.
+    // TODO: when external callers (e.g. harness.rs, examples) adopt DeviceRegistry, ensure they handle Err variants instead of unwrap
+    pub fn add(&mut self, dev: &'a mut dyn VirtualDevice) -> Result<(), DeviceError> {
         let id = dev.device_id();
         for slot in self.devices[..self.count].iter().flatten() {
             if slot.device_id() == id {
-                panic!("duplicate device ID {}", id);
+                return Err(DeviceError::DuplicateId);
             }
         }
-        assert!(self.count < N, "device registry full (capacity {})", N);
+        if self.count >= N {
+            return Err(DeviceError::RegistryFull);
+        }
         self.devices[self.count] = Some(dev);
         self.count += 1;
+        Ok(())
     }
 
     pub fn get_mut(&mut self, id: u8) -> Option<&mut dyn VirtualDevice> {
@@ -130,8 +136,8 @@ mod tests {
         let (mut d1, mut d2) = (MockDev::new(1), MockDev::new(2));
         let mut reg = DeviceRegistry::<2>::new();
         assert!(reg.is_empty());
-        reg.add(&mut d1);
-        reg.add(&mut d2);
+        reg.add(&mut d1).unwrap();
+        reg.add(&mut d2).unwrap();
         assert_eq!(reg.len(), 2);
         assert_eq!(reg.get_mut(1).unwrap().device_id(), 1);
         assert_eq!(reg.get_mut(2).unwrap().device_id(), 2);
@@ -139,29 +145,27 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "device registry full")]
-    fn registry_panics_when_full() {
+    fn registry_returns_error_when_full() {
         let (mut d1, mut d2, mut d3) = (MockDev::new(1), MockDev::new(2), MockDev::new(3));
         let mut reg = DeviceRegistry::<2>::new();
-        reg.add(&mut d1);
-        reg.add(&mut d2);
-        reg.add(&mut d3);
+        reg.add(&mut d1).unwrap();
+        reg.add(&mut d2).unwrap();
+        assert_eq!(reg.add(&mut d3), Err(DeviceError::RegistryFull));
     }
 
     #[test]
-    #[should_panic(expected = "duplicate device ID")]
-    fn registry_panics_on_duplicate_id() {
+    fn registry_returns_error_on_duplicate_id() {
         let (mut d1, mut dup) = (MockDev::new(1), MockDev::new(1));
         let mut reg = DeviceRegistry::<4>::new();
-        reg.add(&mut d1);
-        reg.add(&mut dup);
+        reg.add(&mut d1).unwrap();
+        assert_eq!(reg.add(&mut dup), Err(DeviceError::DuplicateId));
     }
 
     #[test]
     fn get_mut_full_device_lifecycle() {
         let mut dev = MockDev::new(10);
         let mut reg = DeviceRegistry::<4>::new();
-        reg.add(&mut dev);
+        reg.add(&mut dev).unwrap();
         let d = reg.get_mut(10).unwrap();
         assert_eq!(d.read(1, &mut [0; 4]), Err(DeviceError::NotOpen));
         assert_eq!(d.write(1, &[1]), Err(DeviceError::NotOpen));
