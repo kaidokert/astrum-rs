@@ -1,6 +1,6 @@
 use heapless::Vec;
 
-use crate::mpu::MpuError;
+use crate::mpu::{validate_mpu_region, MpuError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartitionState {
@@ -147,6 +147,48 @@ pub struct PartitionConfig {
     pub stack_base: u32,
     pub stack_size: u32,
     pub mpu_region: MpuRegion,
+}
+
+impl PartitionConfig {
+    /// Validate all fields of this partition configuration.
+    ///
+    /// Checks performed (in order):
+    /// 1. `stack_size` must be a power of two and >= 32.
+    /// 2. `stack_base` must be aligned to `stack_size`.
+    /// 3. `stack_base + stack_size` must not overflow `u32`.
+    /// 4. The MPU region `(base, size)` must pass [`validate_mpu_region`].
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        // Stack size: power of two and >= 32
+        if self.stack_size < 32 || !self.stack_size.is_power_of_two() {
+            return Err(ConfigError::StackSizeInvalid {
+                partition_id: self.id,
+            });
+        }
+
+        // Stack base alignment
+        if self.stack_base & (self.stack_size - 1) != 0 {
+            return Err(ConfigError::StackBaseNotAligned {
+                partition_id: self.id,
+            });
+        }
+
+        // Stack overflow check
+        if self.stack_base.checked_add(self.stack_size).is_none() {
+            return Err(ConfigError::StackOverflow {
+                partition_id: self.id,
+            });
+        }
+
+        // MPU region validation
+        validate_mpu_region(self.mpu_region.base(), self.mpu_region.size()).map_err(|detail| {
+            ConfigError::MpuRegionInvalid {
+                partition_id: self.id,
+                detail,
+            }
+        })?;
+
+        Ok(())
+    }
 }
 
 /// Errors detected during static configuration validation.
@@ -525,5 +567,120 @@ mod tests {
                 "ConfigError display should contain MpuError display: {msg}"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // PartitionConfig::validate
+    // ------------------------------------------------------------------
+
+    fn valid_config() -> PartitionConfig {
+        PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_valid_config() {
+        assert_eq!(valid_config().validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_accepts_minimum_stack_size() {
+        let mut cfg = valid_config();
+        cfg.stack_size = 32;
+        cfg.stack_base = 0x2000_0000; // aligned to 32
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_rejects_stack_size_not_power_of_two() {
+        let mut cfg = valid_config();
+        cfg.stack_size = 100;
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::StackSizeInvalid { partition_id: 0 })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_stack_size_too_small() {
+        let mut cfg = valid_config();
+        cfg.stack_size = 16;
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::StackSizeInvalid { partition_id: 0 })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_stack_size_zero() {
+        let mut cfg = valid_config();
+        cfg.stack_size = 0;
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::StackSizeInvalid { partition_id: 0 })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_misaligned_stack_base() {
+        let mut cfg = valid_config();
+        cfg.stack_base = 0x2000_0100; // not aligned to 1024
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::StackBaseNotAligned { partition_id: 0 })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_stack_overflow() {
+        let mut cfg = valid_config();
+        cfg.stack_size = 0x8000_0000;
+        cfg.stack_base = 0x8000_0000; // aligned, but base + size = 2^32 overflow
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::StackOverflow { partition_id: 0 })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_invalid_mpu_region_size() {
+        let mut cfg = valid_config();
+        cfg.mpu_region = MpuRegion::new(0x2000_0000, 100, 0); // not power of 2
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::MpuRegionInvalid {
+                partition_id: 0,
+                detail: MpuError::SizeNotPowerOfTwo,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_invalid_mpu_region_alignment() {
+        let mut cfg = valid_config();
+        cfg.mpu_region = MpuRegion::new(0x2000_0100, 4096, 0); // misaligned base
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::MpuRegionInvalid {
+                partition_id: 0,
+                detail: MpuError::BaseNotAligned,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_preserves_partition_id_in_error() {
+        let mut cfg = valid_config();
+        cfg.id = 7;
+        cfg.stack_size = 16;
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::StackSizeInvalid { partition_id: 7 })
+        );
     }
 }
