@@ -28,6 +28,9 @@ pub enum BufferError {
     InvalidSlot,
     SlotNotFree,
     SlotNotBorrowed,
+    /// The buffer slot SIZE is not a valid MPU region size (must be
+    /// a power-of-two >= 32).
+    InvalidSize,
     /// An MPU operation failed — wraps the underlying [`MpuError`].
     Mpu(MpuError),
 }
@@ -206,12 +209,7 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         } else {
             crate::mpu::AP_RO_RO
         };
-        // SAFETY: SIZE is a compile-time const generic parameter.
-        // BufferSlot requires SIZE to be a power-of-two >= 32 for valid
-        // MPU region encoding.  This is a static invariant of the type;
-        // encode_size cannot return None for any valid BufferSlot<SIZE>.
-        let size_field = crate::mpu::encode_size(SIZE as u32)
-            .expect("BufferSlot SIZE must be a power-of-two >= 32");
+        let size_field = crate::mpu::encode_size(SIZE as u32).ok_or(BufferError::InvalidSize)?;
         let rasr = crate::mpu::build_rasr(size_field, ap, true, (false, false, false));
 
         let region_id = strategy
@@ -459,6 +457,16 @@ mod tests {
         assert_eq!(
             pool.lend_to_partition(5, 1, false, &ds),
             Err(BufferError::InvalidSlot),
+        );
+    }
+
+    #[test] fn lend_invalid_size_returns_error() {
+        // SIZE=16 is below the 32-byte MPU minimum → encode_size returns None.
+        let mut pool = BufferPool::<1, 16>::new();
+        let ds = DynamicStrategy::new();
+        assert_eq!(
+            pool.lend_to_partition(0, 1, false, &ds),
+            Err(BufferError::InvalidSize),
         );
     }
 
