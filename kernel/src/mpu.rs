@@ -116,6 +116,36 @@ pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32);
     ])
 }
 
+/// Build a deny-all MPU region set: region 0 is background no-access
+/// covering the full 4 GiB address space (XN), regions 1-3 are disabled.
+/// Used as a safe fallback when `partition_mpu_regions` returns `None`,
+/// ensuring the faulting partition gets no memory access instead of panicking.
+pub fn deny_all_regions() -> [(u32, u32); 4] {
+    let bg_size_field = 31u32; // 4 GiB = 2^32 → SIZE field = 31
+                               // base=0x0 and region=0 are always valid for build_rbar.
+    let bg_rbar = build_rbar(0x0000_0000, 0).unwrap();
+    let bg_rasr = build_rasr(bg_size_field, AP_NO_ACCESS, true, (false, false, false));
+
+    [
+        (bg_rbar, bg_rasr),
+        (0, 0), // region 1 disabled (RASR enable bit = 0)
+        (0, 0), // region 2 disabled
+        (0, 0), // region 3 disabled
+    ]
+}
+
+/// Return partition MPU regions, falling back to a deny-all configuration
+/// if the partition's MPU parameters are invalid.
+///
+/// This is the testable counterpart of `apply_partition_mpu`.  When
+/// `partition_mpu_regions` returns `None` (e.g. non-power-of-2 region size),
+/// the deny-all fallback ensures the partition gets zero memory access
+/// rather than causing a panic — critical for handler-mode safety where
+/// panics are unrecoverable.
+pub fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> [(u32, u32); 4] {
+    partition_mpu_regions(pcb).unwrap_or_else(deny_all_regions)
+}
+
 /// Index of the first dynamic region within the array returned by
 /// [`partition_mpu_regions`].  Regions before this index (background,
 /// code, stack guard) are static; the region at this index (data RW)
@@ -144,10 +174,21 @@ pub fn partition_dynamic_regions(
 /// Configure MPU regions for a partition: disable MPU, program four
 /// regions (background no-access, code RX, data RW/XN, stack guard),
 /// re-enable with PRIVDEFENA, and execute DSB/ISB barriers.
+///
+/// If the partition's MPU configuration is invalid, a deny-all fallback
+/// is applied instead of panicking.  This is necessary because this
+/// function is called from the SysTick handler (handler mode), where a
+/// panic is unrecoverable — there is no unwinding, and a panic in an
+/// ISR typically results in a HardFault double-fault lockup.
 #[cfg(not(test))]
 pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
-    let regions = partition_mpu_regions(pcb).expect("invalid MPU config");
+    let regions = partition_mpu_regions_or_deny_all(pcb);
 
+    // SAFETY: Disabling the MPU before reprogramming regions is required by
+    // the ARMv7-M architecture to avoid unpredictable behaviour from
+    // partially-configured regions.  We hold an exclusive `&MPU` reference,
+    // and the subsequent DSB/ISB ensures the write is visible before any
+    // region registers are modified.
     unsafe { mpu.ctrl.write(0) };
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
@@ -156,6 +197,12 @@ pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionContr
         configure_region(mpu, rbar, rasr);
     }
 
+    // SAFETY: Re-enabling the MPU with PRIVDEFENA after all regions have been
+    // programmed.  The exclusive `&MPU` reference guarantees no concurrent
+    // access, and the preceding region writes are complete.  PRIVDEFENA allows
+    // privileged code to use the default memory map, while unprivileged access
+    // is restricted to the explicitly configured regions (or denied entirely
+    // by the deny-all fallback).
     unsafe { mpu.ctrl.write(MPU_CTRL_ENABLE_PRIVDEFENA) };
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
@@ -342,5 +389,55 @@ mod tests {
     #[test]
     fn mpu_ctrl_constant() {
         assert_eq!(MPU_CTRL_ENABLE_PRIVDEFENA, 0b101);
+    }
+
+    #[test]
+    fn deny_all_regions_region0_is_background_no_access() {
+        let regions = deny_all_regions();
+        let (rbar, rasr) = regions[0];
+        // Region 0: base=0x0, VALID, region number 0
+        assert_eq!(rbar, build_rbar(0x0000_0000, 0).unwrap());
+        // AP = no access
+        assert_eq!((rasr >> RASR_AP_SHIFT) & RASR_AP_MASK, AP_NO_ACCESS);
+        // XN = 1
+        assert_eq!((rasr >> 28) & 1, 1);
+        // SIZE field = 31 (4 GiB)
+        assert_eq!((rasr >> RASR_SIZE_SHIFT) & RASR_SIZE_MASK, 31);
+        // Enable bit set
+        assert_eq!(rasr & 1, 1);
+    }
+
+    #[test]
+    fn deny_all_regions_regions_1_to_3_disabled() {
+        let regions = deny_all_regions();
+        for (i, &(rbar, rasr)) in regions.iter().enumerate().skip(1) {
+            assert_eq!(rbar, 0, "region {} RBAR should be 0", i);
+            assert_eq!(rasr, 0, "region {} RASR should be 0 (disabled)", i);
+        }
+    }
+
+    #[test]
+    fn partition_mpu_regions_or_deny_all_valid_pcb() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        let regions = partition_mpu_regions_or_deny_all(&pcb);
+        let expected = partition_mpu_regions(&pcb).unwrap();
+        assert_eq!(regions, expected);
+    }
+
+    #[test]
+    fn partition_mpu_regions_or_deny_all_invalid_pcb_returns_deny_all() {
+        // Non-power-of-2 size triggers None from partition_mpu_regions
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 100);
+        let regions = partition_mpu_regions_or_deny_all(&pcb);
+        let expected = deny_all_regions();
+        assert_eq!(regions, expected);
+    }
+
+    #[test]
+    fn partition_mpu_regions_or_deny_all_invalid_size_16() {
+        // Size < 32 also triggers None
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 16);
+        let regions = partition_mpu_regions_or_deny_all(&pcb);
+        assert_eq!(regions, deny_all_regions());
     }
 }
