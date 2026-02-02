@@ -581,6 +581,61 @@ mod tests {
     }
 
     #[test]
+    fn validate_mpu_region_table_driven() {
+        // Comprehensive table-driven test covering all MpuError variants,
+        // valid cases, boundary conditions, and error-priority ordering.
+        let cases: &[(u32, u32, Result<(), MpuError>)] = &[
+            // --- SizeTooSmall: size < 32 ---
+            (0, 0, Err(MpuError::SizeTooSmall)),
+            (0, 1, Err(MpuError::SizeTooSmall)),
+            (0, 16, Err(MpuError::SizeTooSmall)),
+            (0, 31, Err(MpuError::SizeTooSmall)),
+            // SizeTooSmall takes priority over SizeNotPowerOfTwo
+            (0, 3, Err(MpuError::SizeTooSmall)),
+            (0, 15, Err(MpuError::SizeTooSmall)),
+            // --- SizeNotPowerOfTwo: size >= 32 but not power of two ---
+            (0, 33, Err(MpuError::SizeNotPowerOfTwo)),
+            (0, 48, Err(MpuError::SizeNotPowerOfTwo)),
+            (0, 100, Err(MpuError::SizeNotPowerOfTwo)),
+            (0, 255, Err(MpuError::SizeNotPowerOfTwo)),
+            (0, 4000, Err(MpuError::SizeNotPowerOfTwo)),
+            // --- BaseNotAligned: base & (size - 1) != 0 ---
+            (1, 32, Err(MpuError::BaseNotAligned)),
+            (64, 256, Err(MpuError::BaseNotAligned)),
+            (0x2000_0100, 4096, Err(MpuError::BaseNotAligned)),
+            (0x0000_1000, 0x0001_0000, Err(MpuError::BaseNotAligned)),
+            // --- AddressOverflow: base + size > u32::MAX ---
+            (0x8000_0000, 0x8000_0000, Err(MpuError::AddressOverflow)),
+            (0xFFFF_FF00, 256, Err(MpuError::AddressOverflow)),
+            (0xFFFF_0000, 0x0001_0000, Err(MpuError::AddressOverflow)),
+            // --- Valid cases ---
+            // Minimum valid region
+            (0, 32, Ok(())),
+            (32, 32, Ok(())),
+            (0x2000_0000, 32, Ok(())),
+            // Various valid power-of-two sizes with base=0
+            (0, 64, Ok(())),
+            (0, 1024, Ok(())),
+            (0, 0x8000_0000, Ok(())),
+            // Aligned bases with larger sizes
+            (0x2000_0000, 256, Ok(())),
+            (0x2000_0000, 4096, Ok(())),
+            (0x2000_0000, 0x2000_0000, Ok(())),
+            (0x4000_0000, 0x4000_0000, Ok(())),
+            // Just under overflow boundary
+            (0x7FFF_F000, 4096, Ok(())),
+        ];
+
+        for (i, &(base, size, ref expected)) in cases.iter().enumerate() {
+            let result = validate_mpu_region(base, size);
+            assert_eq!(
+                result, *expected,
+                "case {i}: validate_mpu_region({base:#010X}, {size:#010X}) = {result:?}, expected {expected:?}"
+            );
+        }
+    }
+
+    #[test]
     fn mpu_error_display_messages() {
         assert_eq!(
             format!("{}", MpuError::RegionCountMismatch),
