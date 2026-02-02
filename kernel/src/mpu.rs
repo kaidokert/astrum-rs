@@ -80,6 +80,13 @@ pub fn configure_region(mpu: &cortex_m::peripheral::MPU, rbar: u32, rasr: u32) {
 use crate::partition::PartitionControlBlock;
 
 /// MPU CTRL value: enable MPU (bit 0) + PRIVDEFENA (bit 2).
+///
+/// PRIVDEFENA (bit 2) grants privileged code access to the default memory map
+/// when no MPU region matches.  This is a deliberate design choice: the kernel
+/// runs in privileged (handler) mode and relies on the default map for its own
+/// code, data, and peripheral access instead of dedicating scarce MPU regions
+/// to kernel memory.  Only unprivileged partition code is restricted to the
+/// explicitly configured regions (code RX, data RW, stack guard).
 pub const MPU_CTRL_ENABLE_PRIVDEFENA: u32 = (1 << 2) | 1;
 
 /// Compute four (RBAR, RASR) pairs for a partition's MPU layout.
@@ -198,6 +205,10 @@ pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionContr
     for &(rbar, rasr) in &regions {
         configure_region(mpu, rbar, rasr);
     }
+
+    // Verify PRIVDEFENA (bit 2) is set — the kernel relies on the default
+    // memory map for privileged access.  Evaluated at compile time.
+    const { assert!(MPU_CTRL_ENABLE_PRIVDEFENA & (1 << 2) != 0) }
 
     // SAFETY: Re-enabling the MPU with PRIVDEFENA after all regions have been
     // programmed.  The exclusive `&MPU` reference guarantees no concurrent
@@ -391,6 +402,21 @@ mod tests {
     #[test]
     fn mpu_ctrl_constant() {
         assert_eq!(MPU_CTRL_ENABLE_PRIVDEFENA, 0b101);
+
+        // ENABLE bit (bit 0): turns the MPU on.
+        assert_ne!(
+            MPU_CTRL_ENABLE_PRIVDEFENA & (1 << 0),
+            0,
+            "ENABLE (bit 0) must be set"
+        );
+
+        // PRIVDEFENA bit (bit 2): privileged code uses default memory map
+        // when no MPU region matches, avoiding dedicated kernel regions.
+        assert_ne!(
+            MPU_CTRL_ENABLE_PRIVDEFENA & (1 << 2),
+            0,
+            "PRIVDEFENA (bit 2) must be set"
+        );
     }
 
     #[test]

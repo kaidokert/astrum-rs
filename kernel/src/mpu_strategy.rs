@@ -394,6 +394,10 @@ fn apply_regions(regions: &[(u32, u32); STATIC_REGION_COUNT]) {
             rb.rasr.write(rasr);
         }
 
+        // Verify PRIVDEFENA (bit 2) is set — the kernel relies on the default
+        // memory map for privileged access.  Evaluated at compile time.
+        const { assert!(mpu::MPU_CTRL_ENABLE_PRIVDEFENA & (1 << 2) != 0) }
+
         rb.ctrl.write(mpu::MPU_CTRL_ENABLE_PRIVDEFENA);
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
