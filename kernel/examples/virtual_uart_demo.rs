@@ -80,12 +80,15 @@ extern "C" fn p1_main() -> ! {
     let rc = svc!(SYS_DEV_OPEN, UART_A, 0u32, 0u32);
     assert_or_fail(!SvcError::is_error(rc), "P1: DEV_OPEN UART-A failed");
 
-    hprintln!("[P1] writing {:?} to UART-A", MSG_HELLO);
+    // Copy static data to the stack so the pointer falls within the
+    // partition's MPU data region (required by validate_user_ptr).
+    let hello_buf: [u8; 2] = [MSG_HELLO[0], MSG_HELLO[1]];
+    hprintln!("[P1] writing {:?} to UART-A", &hello_buf);
     let rc = svc!(
         SYS_DEV_WRITE,
         UART_A,
-        MSG_HELLO.len() as u32,
-        MSG_HELLO.as_ptr() as u32
+        hello_buf.len() as u32,
+        hello_buf.as_ptr() as u32
     );
     assert_or_fail(rc == MSG_HELLO.len() as u32, "P1: DEV_WRITE short");
     hprintln!("[P1] wrote {} bytes to UART-A TX", rc);
@@ -155,12 +158,14 @@ extern "C" fn p2_main() -> ! {
         assert_or_fail(ok, "P2: received unexpected data");
 
         // Send the response back on UART-B TX.
-        hprintln!("[P2] writing {:?} to UART-B", MSG_REPLY);
+        // Copy static data to the stack for pointer validation.
+        let reply_buf: [u8; 2] = [MSG_REPLY[0], MSG_REPLY[1]];
+        hprintln!("[P2] writing {:?} to UART-B", &reply_buf);
         let rc = svc!(
             SYS_DEV_WRITE,
             UART_B,
-            MSG_REPLY.len() as u32,
-            MSG_REPLY.as_ptr() as u32
+            reply_buf.len() as u32,
+            reply_buf.as_ptr() as u32
         );
         assert_or_fail(rc == MSG_REPLY.len() as u32, "P2: DEV_WRITE short");
         hprintln!("[P2] wrote {} bytes to UART-B TX", rc);

@@ -76,6 +76,7 @@
 /// Internal helper: force-advance the schedule on yield and update
 /// `NEXT_PARTITION`.  Uses the [`YieldResult`] trait so a single
 /// implementation works for both feature gates.
+#[cfg(not(feature = "dynamic-mpu"))]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _harness_handle_yield {
@@ -86,6 +87,38 @@ macro_rules! _harness_handle_yield {
             // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
             // exclusive access; PendSV (priority 0xFF) cannot preempt.
             unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+        }
+    }};
+}
+
+/// Dynamic-mpu variant: if yield lands on a system window, run the
+/// bottom-half using the already-borrowed kernel reference and keep
+/// advancing until a partition slot is reached.
+#[cfg(feature = "dynamic-mpu")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _harness_handle_yield {
+    ($ks:expr, $next:ident, $kern:expr) => {{
+        use $crate::kernel::YieldResult;
+        loop {
+            let result = $ks.yield_current_slot();
+            if let Some(pid) = result.partition_id() {
+                // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
+                // exclusive access; PendSV (priority 0xFF) cannot preempt.
+                unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+                break;
+            }
+            if result.is_system_window() {
+                $crate::tick::run_bottom_half(
+                    &mut $kern.uart_pair,
+                    &mut $kern.isr_ring,
+                    &mut $kern.buffers,
+                    &mut $kern.hw_uart,
+                );
+                continue;
+            }
+            // ScheduleEvent::None — schedule not started or empty.
+            break;
         }
     }};
 }
@@ -170,7 +203,10 @@ macro_rules! define_harness {
             // exclusive access; PendSV cannot preempt us.  KS and
             // NEXT_PARTITION are defined by define_harness!.
             if let Some(ks) = unsafe { KS.as_mut() } {
+                #[cfg(not(feature = "dynamic-mpu"))]
                 $crate::_harness_handle_yield!(ks, NEXT_PARTITION);
+                #[cfg(feature = "dynamic-mpu")]
+                $crate::_harness_handle_yield!(ks, NEXT_PARTITION, _k);
             }
         });
 
@@ -214,6 +250,27 @@ macro_rules! define_harness {
             unsafe {
                 let stacks = &mut *(&raw mut STACKS);
                 let partition_sp = &mut *(&raw mut PARTITION_SP);
+
+                // Register partitions in the Kernel struct so that
+                // validate_user_ptr can verify SVC pointer arguments
+                // against each partition's MPU region.
+                let stack_bytes = ($SW * 4) as u32;
+                ::cortex_m::interrupt::free(|cs| {
+                    if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+                        for i in 0..partitions.len() {
+                            let base = stacks[i].0.as_ptr() as u32;
+                            let region = $crate::partition::MpuRegion::new(base, stack_bytes, 0);
+                            let pcb = $crate::partition::PartitionControlBlock::new(
+                                i as u8,
+                                0,
+                                base,
+                                base + stack_bytes,
+                                region,
+                            );
+                            k.partitions.add(pcb).ok();
+                        }
+                    }
+                });
 
                 for (i, &(ep, hint)) in partitions.iter().enumerate() {
                     let stk = &mut stacks[i].0;

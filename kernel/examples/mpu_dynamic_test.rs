@@ -21,9 +21,9 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     kernel::KernelState,
     mpu::{self, build_rasr, encode_size, AP_FULL_ACCESS, RBAR_ADDR_MASK},
-    mpu_strategy::DynamicStrategy,
+    mpu_strategy::{DynamicStrategy, MpuStrategy},
     partition::{MpuRegion, PartitionConfig},
-    scheduler::{ScheduleEntry, ScheduleTable},
+    scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
 };
 use panic_semihosting as _;
 
@@ -38,7 +38,16 @@ const DATA_SIZES: [u32; NP] = [4096, 8192];
 /// That yields 6 partition switches total.
 const TARGET_SWITCHES: u32 = 6;
 
-static mut STACKS: [[u32; STACK_WORDS]; NP] = [[0; STACK_WORDS]; NP];
+/// Aligned wrapper so each partition stack satisfies the MPU region
+/// alignment requirement (stack base must be 32-byte aligned for the
+/// stack guard and naturally aligned for the data region).
+#[repr(C, align(1024))]
+struct AlignedStack([u32; STACK_WORDS]);
+
+static mut STACKS: [AlignedStack; NP] = {
+    const ZERO: AlignedStack = AlignedStack([0; STACK_WORDS]);
+    [ZERO; NP]
+};
 
 // These #[no_mangle] statics are required by the PendSV assembly handler
 // (define_pendsv_dynamic!) which references them by symbol name. They cannot
@@ -77,7 +86,6 @@ fn SysTick() {
     static mut SW: u32 = 0;
     static mut LAST_PID: Option<u8> = None;
     static mut FAIL: bool = false;
-
     // SAFETY: sole MPU accessor at this priority; steal() yields a
     // reference to the memory-mapped MPU registers.
     let p = unsafe { cortex_m::Peripherals::steal() };
@@ -143,9 +151,13 @@ fn SysTick() {
     cortex_m::interrupt::free(|cs| {
         let mut ks_ref = KS.borrow(cs).borrow_mut();
         let state = ks_ref.as_mut().expect("KS");
-        if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) =
-            kernel::tick::on_systick_dynamic(state, &p.MPU, &STRATEGY)
-        {
+        let event = kernel::tick::on_systick(state);
+        if let ScheduleEvent::PartitionSwitch(pid) = event {
+            if let Some(pcb) = state.partitions().get(pid as usize) {
+                if let Some(regions) = mpu::partition_dynamic_regions(pcb) {
+                    let _ = STRATEGY.configure_partition(pid, &regions);
+                }
+            }
             // SAFETY: single-core exclusive write; PendSV reads this after
             // SysTick returns but cannot preempt us (lower priority).
             unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
@@ -175,7 +187,7 @@ fn main() -> ! {
         // array), not the data regions. mpu_region carries the data-region
         // descriptor that DynamicStrategy programs into MPU R4.
         let cfgs: [PartitionConfig; NP] = core::array::from_fn(|i| {
-            let stk_base = STACKS[i].as_ptr() as u32;
+            let stk_base = STACKS[i].0.as_ptr() as u32;
             PartitionConfig {
                 id: i as u8,
                 entry_point: 0,
@@ -191,7 +203,7 @@ fn main() -> ! {
         });
 
         for i in 0..NP {
-            let stk = &mut STACKS[i];
+            let stk = &mut STACKS[i].0;
             let ix = kernel::context::init_stack_frame(
                 stk,
                 partition_main as *const () as u32,

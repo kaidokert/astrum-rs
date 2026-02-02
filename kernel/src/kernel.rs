@@ -11,6 +11,8 @@ use crate::tick::TickCounter;
 pub trait YieldResult {
     /// Extract the partition id when the result represents a switch.
     fn partition_id(&self) -> Option<u8>;
+    /// Return `true` when the result represents a system window.
+    fn is_system_window(&self) -> bool;
 }
 
 #[cfg(not(feature = "dynamic-mpu"))]
@@ -18,6 +20,10 @@ impl YieldResult for Option<u8> {
     #[inline]
     fn partition_id(&self) -> Option<u8> {
         *self
+    }
+    #[inline]
+    fn is_system_window(&self) -> bool {
+        false
     }
 }
 
@@ -29,6 +35,10 @@ impl YieldResult for ScheduleEvent {
             ScheduleEvent::PartitionSwitch(pid) => Some(*pid),
             _ => None,
         }
+    }
+    #[inline]
+    fn is_system_window(&self) -> bool {
+        matches!(self, ScheduleEvent::SystemWindow)
     }
 }
 
