@@ -32,6 +32,9 @@ pub enum SvcError {
     /// A user-supplied pointer (and length) does not lie within the calling
     /// partition's MPU data region or the arithmetic overflows `u32`.
     InvalidPointer,
+    /// The syscall number is recognised but the handler is not yet
+    /// implemented.
+    NotImplemented,
 }
 
 impl SvcError {
@@ -60,6 +63,7 @@ impl SvcError {
             Self::InvalidPartition => 0xFFFF_FFFB,
             Self::OperationFailed => 0xFFFF_FFFA,
             Self::InvalidPointer => 0xFFFF_FFF9,
+            Self::NotImplemented => 0xFFFF_FFF8,
         }
     }
 }
@@ -829,6 +833,10 @@ where
             Some(SyscallId::DevIoctl) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
                 dev.ioctl(pid, frame.r2, frame.r3)
             }),
+            // TODO: wire up timed queuing send/recv dispatch
+            Some(SyscallId::QueuingSendTimed) | Some(SyscallId::QueuingRecvTimed) => {
+                SvcError::NotImplemented.to_u32()
+            }
             None => SvcError::InvalidSyscall.to_u32(),
         };
     }
@@ -1469,6 +1477,7 @@ mod tests {
         SvcError::InvalidPartition,
         SvcError::OperationFailed,
         SvcError::InvalidPointer,
+        SvcError::NotImplemented,
     ];
 
     #[test]

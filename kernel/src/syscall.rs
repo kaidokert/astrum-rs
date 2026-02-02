@@ -19,6 +19,10 @@ pub const SYS_QUEUING_STATUS: u32 = 16;
 pub const SYS_BB_DISPLAY: u32 = 17;
 pub const SYS_BB_READ: u32 = 18;
 pub const SYS_BB_CLEAR: u32 = 19;
+/// Timed queuing send: r1=port_id, r2=(timeout_ticks_hi16 << 16 | data_len_lo16), r3=data_ptr
+pub const SYS_QUEUING_SEND_TIMED: u32 = 27;
+/// Timed queuing recv: r1=port_id, r2=timeout_ticks (u32), r3=buf_ptr
+pub const SYS_QUEUING_RECV_TIMED: u32 = 28;
 
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_ALLOC: u32 = 20;
@@ -57,6 +61,8 @@ pub enum SyscallId {
     BbDisplay,
     BbRead,
     BbClear,
+    QueuingSendTimed,
+    QueuingRecvTimed,
     #[cfg(feature = "dynamic-mpu")]
     BufferAlloc,
     #[cfg(feature = "dynamic-mpu")]
@@ -99,6 +105,8 @@ impl SyscallId {
             SYS_BB_DISPLAY => Some(Self::BbDisplay),
             SYS_BB_READ => Some(Self::BbRead),
             SYS_BB_CLEAR => Some(Self::BbClear),
+            SYS_QUEUING_SEND_TIMED => Some(Self::QueuingSendTimed),
+            SYS_QUEUING_RECV_TIMED => Some(Self::QueuingRecvTimed),
             #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_ALLOC => Some(Self::BufferAlloc),
             #[cfg(feature = "dynamic-mpu")]
@@ -139,6 +147,8 @@ impl SyscallId {
             Self::BbDisplay => SYS_BB_DISPLAY,
             Self::BbRead => SYS_BB_READ,
             Self::BbClear => SYS_BB_CLEAR,
+            Self::QueuingSendTimed => SYS_QUEUING_SEND_TIMED,
+            Self::QueuingRecvTimed => SYS_QUEUING_RECV_TIMED,
             #[cfg(feature = "dynamic-mpu")]
             Self::BufferAlloc => SYS_BUF_ALLOC,
             #[cfg(feature = "dynamic-mpu")]
@@ -182,6 +192,8 @@ mod tests {
         (SYS_BB_DISPLAY, SyscallId::BbDisplay),
         (SYS_BB_READ, SyscallId::BbRead),
         (SYS_BB_CLEAR, SyscallId::BbClear),
+        (SYS_QUEUING_SEND_TIMED, SyscallId::QueuingSendTimed),
+        (SYS_QUEUING_RECV_TIMED, SyscallId::QueuingRecvTimed),
         #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_ALLOC, SyscallId::BufferAlloc),
         #[cfg(feature = "dynamic-mpu")]
@@ -225,7 +237,7 @@ mod tests {
         #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(SyscallId::from_u32(20), None);
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(SyscallId::from_u32(27), None);
+        assert_eq!(SyscallId::from_u32(29), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -235,12 +247,14 @@ mod tests {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
         #[cfg(not(feature = "dynamic-mpu"))]
-        assert_eq!(ALL_VARIANTS.len(), 19);
+        assert_eq!(ALL_VARIANTS.len(), 21);
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(ALL_VARIANTS.len(), 26);
+        assert_eq!(ALL_VARIANTS.len(), 28);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);
+        assert_eq!(SYS_QUEUING_SEND_TIMED, 27);
+        assert_eq!(SYS_QUEUING_RECV_TIMED, 28);
     }
 
     #[test]
