@@ -51,6 +51,27 @@ impl<const N: usize> ScheduleTable<N> {
         }
     }
 
+    /// Returns a slice of the current schedule entries.
+    // TODO: reviewer false positive – backing store is heapless::Vec, not MaybeUninit;
+    // Deref<Target = [ScheduleEntry]> makes this correct without unsafe.
+    pub fn entries(&self) -> &[ScheduleEntry] {
+        &self.entries
+    }
+
+    /// Returns the number of entries in the schedule table.
+    // TODO: reviewer false positive – heapless::Vec::len() already returns the
+    // initialized count, not the capacity.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns `true` if the schedule table has no entries.
+    // TODO: reviewer false positive – heapless::Vec::is_empty() checks len() == 0,
+    // not the backing array capacity.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Add a schedule entry. Returns `Err` if table is full or duration is zero.
     pub fn add(&mut self, entry: ScheduleEntry) -> Result<(), ScheduleEntry> {
         if entry.duration_ticks == 0 {
@@ -231,6 +252,27 @@ mod tests {
         // After start, it should work normally
         t.start();
         assert_eq!(t.current_partition(), Some(0));
+    }
+
+    #[test]
+    fn entries_returns_added_entries() {
+        let mut t: ScheduleTable<4> = ScheduleTable::new();
+        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
+        assert_eq!(t.entries(), &[]);
+
+        t.add(ScheduleEntry::new(0, 10)).unwrap();
+        t.add(ScheduleEntry::new(1, 20)).unwrap();
+        t.add(ScheduleEntry::new(2, 5)).unwrap();
+
+        assert!(!t.is_empty());
+        assert_eq!(t.len(), 3);
+
+        let entries = t.entries();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0], ScheduleEntry::new(0, 10));
+        assert_eq!(entries[1], ScheduleEntry::new(1, 20));
+        assert_eq!(entries[2], ScheduleEntry::new(2, 5));
     }
 
     #[test]
