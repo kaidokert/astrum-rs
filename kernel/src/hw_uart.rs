@@ -6,8 +6,12 @@
 
 use heapless::Deque;
 
+use crate::split_isr::IsrRingBuffer;
 use crate::uart_hal::UartRegs;
 use crate::virtual_device::{DeviceError, VirtualDevice};
+
+/// UART1 interrupt number on the LM3S6965 (NVIC IRQ 6).
+pub const UART1_IRQ: u8 = 6;
 
 /// IOCTL command: drain all bytes from the TX ring buffer.
 pub const IOCTL_FLUSH: u32 = 0x01;
@@ -141,6 +145,76 @@ impl HwUartBackend {
         }
         count
     }
+}
+
+/// UART1 ISR top-half: check interrupt source, drain RX FIFO, clear
+/// interrupt, and push a notification into the ISR ring buffer.
+///
+/// Returns `true` if an RX interrupt was pending and handled, `false`
+/// if no RX interrupt was active (nothing done).
+///
+/// This is a free function so examples can call it directly from their
+/// interrupt vector table entry.
+pub fn uart1_isr_top_half<const D: usize, const M: usize>(
+    backend: &mut HwUartBackend,
+    isr_ring: &mut IsrRingBuffer<D, M>,
+) -> bool {
+    let ris = backend.regs.read_ris();
+    let rx_mask = UartRegs::rx_ris_mask();
+
+    // No RX-related interrupt pending — nothing to do.
+    if ris & rx_mask == 0 {
+        return false;
+    }
+
+    // Drain hardware RX FIFO into the software ring buffer.
+    backend.isr_rx_to_ring();
+
+    // Clear the RX interrupt sources at the UART level.
+    backend.regs.clear_rx_interrupt();
+
+    // Notify the bottom-half via the ISR ring buffer.
+    // Tag = device_id so the bottom-half can route the notification.
+    // Payload is the actual RX-related interrupt sources that fired.
+    let actual_sources = (ris & rx_mask) as u8;
+    let _ = isr_ring.push_from_isr(backend.device_id, &[actual_sources]);
+
+    true
+}
+
+/// Newtype wrapper implementing `InterruptNumber` for UART1 IRQ.
+#[cfg(not(test))]
+#[derive(Copy, Clone)]
+struct Uart1Irq;
+
+#[cfg(not(test))]
+// SAFETY: UART1_IRQ (6) is a valid interrupt number for LM3S6965.
+unsafe impl cortex_m::interrupt::InterruptNumber for Uart1Irq {
+    fn number(self) -> u16 {
+        UART1_IRQ as u16
+    }
+}
+
+/// Enable UART1 interrupt in the NVIC.
+///
+/// # Safety
+///
+/// The caller must ensure this is called with interrupts properly
+/// configured and the NVIC peripheral is valid.
+#[cfg(not(test))]
+pub fn enable_uart1_irq(nvic: &mut cortex_m::peripheral::NVIC) {
+    // SAFETY: UART1 IRQ number is correct for LM3S6965 and the caller
+    // provides a valid NVIC reference.
+    unsafe {
+        nvic.set_priority(Uart1Irq, 0x40);
+        cortex_m::peripheral::NVIC::unmask(Uart1Irq);
+    }
+}
+
+/// Disable UART1 interrupt in the NVIC.
+#[cfg(not(test))]
+pub fn disable_uart1_irq() {
+    cortex_m::peripheral::NVIC::mask(Uart1Irq);
 }
 
 impl VirtualDevice for HwUartBackend {
@@ -454,5 +528,104 @@ mod tests {
         let read = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
         assert_eq!(read, 3);
         assert_eq!(&buf[..3], &[0xA, 0xB, 0xC]);
+    }
+
+    // ---- UART1 IRQ constant ----
+
+    #[test]
+    fn uart1_irq_is_six() {
+        assert_eq!(UART1_IRQ, 6);
+    }
+
+    // ---- uart1_isr_top_half tests ----
+
+    #[test]
+    fn isr_top_half_no_rx_interrupt_returns_false() {
+        let mut hw = make_backend(2);
+        let mut ring = IsrRingBuffer::<4, 8>::new();
+        // RIS = 0 → no RX interrupt pending.
+        hw.regs().write(crate::uart_hal::RIS, 0);
+        let handled = uart1_isr_top_half(&mut hw, &mut ring);
+        assert!(!handled);
+        assert!(ring.is_empty());
+        assert_eq!(hw.rx_len(), 0);
+    }
+
+    #[test]
+    fn isr_top_half_rxris_drains_and_clears() {
+        let mut hw = make_backend(2);
+        let mut ring = IsrRingBuffer::<4, 8>::new();
+        // Set RXRIS in RIS → RX interrupt pending.
+        hw.regs()
+            .write(crate::uart_hal::RIS, crate::uart_hal::RIS_RXRIS);
+        // Put data in the hardware FIFO (DR=0x42, FR=0 means RXFE clear).
+        hw.regs().write(crate::uart_hal::DR, 0x42);
+        let handled = uart1_isr_top_half(&mut hw, &mut ring);
+        assert!(handled);
+        // RX ring should have data (CAPACITY bytes, since mock RXFE stays 0).
+        assert_eq!(hw.rx_len(), CAPACITY);
+        // ICR should have the clear bits written.
+        let icr = hw.regs().read(crate::uart_hal::ICR);
+        assert_ne!(icr & crate::uart_hal::ICR_RXIC, 0);
+        assert_ne!(icr & crate::uart_hal::ICR_RTIC, 0);
+        // ISR ring should have one notification with the device ID tag
+        // and the actual interrupt source as payload.
+        assert_eq!(ring.len(), 1);
+        ring.pop_with(|tag, payload| {
+            assert_eq!(tag, 2); // device_id = 2
+            assert_eq!(payload, &[crate::uart_hal::RIS_RXRIS as u8]);
+        });
+    }
+
+    #[test]
+    fn isr_top_half_rtris_also_handled() {
+        let mut hw = make_backend(3);
+        let mut ring = IsrRingBuffer::<4, 8>::new();
+        // Only RTRIS set (receive timeout, no RXRIS).
+        hw.regs()
+            .write(crate::uart_hal::RIS, crate::uart_hal::RIS_RTRIS);
+        // RXFE set → no data to drain, but interrupt still handled.
+        hw.regs()
+            .write(crate::uart_hal::FR, crate::uart_hal::FR_RXFE);
+        let handled = uart1_isr_top_half(&mut hw, &mut ring);
+        assert!(handled);
+        // No data drained (RXFE), but interrupt cleared and notification pushed.
+        assert_eq!(hw.rx_len(), 0);
+        assert_eq!(ring.len(), 1);
+        ring.pop_with(|tag, payload| {
+            assert_eq!(tag, 3); // device_id = 3
+                                // Payload should reflect RTRIS, not the hardcoded RXRIS.
+            assert_eq!(payload, &[crate::uart_hal::RIS_RTRIS as u8]);
+        });
+    }
+
+    #[test]
+    fn isr_top_half_unrelated_interrupt_ignored() {
+        let mut hw = make_backend(1);
+        let mut ring = IsrRingBuffer::<4, 8>::new();
+        // Set a non-RX bit in RIS (e.g. bit 0 — not RXRIS or RTRIS).
+        hw.regs().write(crate::uart_hal::RIS, 1 << 0);
+        let handled = uart1_isr_top_half(&mut hw, &mut ring);
+        assert!(!handled);
+        assert!(ring.is_empty());
+    }
+
+    #[test]
+    fn isr_top_half_full_ring_still_clears_interrupt() {
+        let mut hw = make_backend(1);
+        let mut ring = IsrRingBuffer::<1, 8>::new();
+        // Fill the ISR ring so the notification push will fail.
+        ring.push_from_isr(0, &[0]).unwrap();
+        assert!(ring.is_full());
+        // Set RX interrupt and RXFE (no data to drain).
+        hw.regs()
+            .write(crate::uart_hal::RIS, crate::uart_hal::RIS_RXRIS);
+        hw.regs()
+            .write(crate::uart_hal::FR, crate::uart_hal::FR_RXFE);
+        let handled = uart1_isr_top_half(&mut hw, &mut ring);
+        assert!(handled);
+        // Interrupt is still cleared even though ring push failed.
+        let icr = hw.regs().read(crate::uart_hal::ICR);
+        assert_ne!(icr & crate::uart_hal::ICR_RXIC, 0);
     }
 }

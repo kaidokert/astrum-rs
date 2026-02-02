@@ -58,7 +58,7 @@ pub const CTL_RXE: u32 = 1 << 9;
 /// UART enabled with TX and RX.
 pub const CTL_ENABLE_TXRX: u32 = CTL_UARTEN | CTL_TXE | CTL_RXE;
 
-// IM / ICR bit masks
+// IM / ICR / RIS bit masks
 /// Receive interrupt mask bit (bit 4).
 pub const IM_RXIM: u32 = 1 << 4;
 /// Receive timeout interrupt mask bit (bit 6).
@@ -67,6 +67,10 @@ pub const IM_RTIM: u32 = 1 << 6;
 pub const ICR_RXIC: u32 = 1 << 4;
 /// Receive timeout interrupt clear bit (bit 6).
 pub const ICR_RTIC: u32 = 1 << 6;
+/// Receive raw interrupt status bit (bit 4).
+pub const RIS_RXRIS: u32 = 1 << 4;
+/// Receive timeout raw interrupt status bit (bit 6).
+pub const RIS_RTRIS: u32 = 1 << 6;
 
 // ---------------------------------------------------------------------------
 // UartRegs — volatile register accessor
@@ -270,6 +274,16 @@ impl UartRegs {
         let clear_bits = ICR_RXIC | ICR_RTIC;
         // ICR is write-1-to-clear, so writing these bits clears them.
         self.write_reg(ICR, clear_bits);
+    }
+
+    /// Read the Raw Interrupt Status register.
+    pub fn read_ris(&self) -> u32 {
+        self.read_reg(RIS)
+    }
+
+    /// Bit mask for RX-related raw interrupt status (RXRIS | RTRIS).
+    pub fn rx_ris_mask() -> u32 {
+        RIS_RXRIS | RIS_RTRIS
     }
 }
 
@@ -487,6 +501,13 @@ mod tests {
         assert_eq!(ICR_RXIC | ICR_RTIC, 0x50);
     }
 
+    #[test]
+    fn ris_bits_correct() {
+        assert_eq!(RIS_RXRIS, 1 << 4); // bit 4
+        assert_eq!(RIS_RTRIS, 1 << 6); // bit 6
+        assert_eq!(UartRegs::rx_ris_mask(), RIS_RXRIS | RIS_RTRIS);
+    }
+
     // -- Mock-backed method tests ---------------------------------------------
 
     #[test]
@@ -579,5 +600,13 @@ mod tests {
         let icr = uart.read(ICR);
         assert_ne!(icr & ICR_RXIC, 0);
         assert_ne!(icr & ICR_RTIC, 0);
+    }
+
+    #[test]
+    fn read_ris_returns_register_value() {
+        let uart = UartRegs::new(0x4000_C000);
+        assert_eq!(uart.read_ris(), 0);
+        uart.write(RIS, RIS_RXRIS);
+        assert_eq!(uart.read_ris(), RIS_RXRIS);
     }
 }
