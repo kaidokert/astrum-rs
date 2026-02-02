@@ -150,8 +150,8 @@ fn main() -> ! {
         KS = Some(KernelState::new(sched, &cfgs).unwrap());
     }
 
-    // TODO: bit-packing port IDs into u32 is brittle; replace with a
-    // typed partition-config / init-args mechanism when the kernel supports one.
+    // Pack port IDs into a single u32 passed to each partition via r0.
+    // See queuing_demo and blackboard_demo for the same convention.
     let h: [u32; NUM_PARTITIONS] = [
         (s0 as u32) << 16,
         ((s1 as u32) << 16) | d0 as u32,
