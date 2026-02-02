@@ -1,11 +1,5 @@
 # IPC Reference
 
-<!-- TODO: The sections on event flags, semaphores, mutexes, and message
-     queues (syscall table entries 2-10, register convention rows, error
-     codes) were added for completeness but have not been fully verified
-     against the implementation in svc.rs. Verify before relying on
-     them. -->
-
 Consolidated reference for all IPC primitives: event flags, semaphores,
 mutexes, message queues, sampling ports, queuing ports, and blackboards.
 For context on the SVC dispatch mechanism, PendSV context switching, and
@@ -28,33 +22,41 @@ the static scheduler that drives partition execution, see
 
 Defined in `kernel/src/syscall.rs`. Number 1 is reserved (gap).
 
-| Number | Constant             | SyscallId variant | Purpose                      |
-|--------|----------------------|-------------------|------------------------------|
-| 0      | `SYS_YIELD`          | `Yield`           | Yield time slice (PendSV)    |
-| 1      | *(reserved)*         | —                 | —                            |
-| 2      | `SYS_EVT_WAIT`       | `EventWait`       | Wait on event flags          |
-| 3      | `SYS_EVT_SET`        | `EventSet`        | Set event flags              |
-| 4      | `SYS_EVT_CLEAR`      | `EventClear`      | Clear event flags            |
-| 5      | `SYS_SEM_WAIT`       | `SemWait`         | Decrement semaphore          |
-| 6      | `SYS_SEM_SIGNAL`     | `SemSignal`       | Increment semaphore          |
-| 7      | `SYS_MTX_LOCK`       | `MutexLock`       | Lock mutex                   |
-| 8      | `SYS_MTX_UNLOCK`     | `MutexUnlock`     | Unlock mutex                 |
-| 9      | `SYS_MSG_SEND`       | `MsgSend`         | Send to message queue        |
-| 10     | `SYS_MSG_RECV`       | `MsgRecv`         | Receive from message queue   |
-| 11     | `SYS_GET_TIME`       | `GetTime`         | Get monotonic tick count     |
-| 12     | `SYS_SAMPLING_WRITE` | `SamplingWrite`   | Write to sampling port       |
-| 13     | `SYS_SAMPLING_READ`  | `SamplingRead`    | Read from sampling port      |
-| 14     | `SYS_QUEUING_SEND`   | `QueuingSend`     | Send queuing port message    |
-| 15     | `SYS_QUEUING_RECV`   | `QueuingRecv`     | Receive queuing port message |
-| 16     | `SYS_QUEUING_STATUS` | `QueuingStatus`   | Get queuing port status      |
-| 17     | `SYS_BB_DISPLAY`     | `BbDisplay`       | Display blackboard message   |
-| 18     | `SYS_BB_READ`        | `BbRead`          | Read blackboard message      |
-| 19     | `SYS_BB_CLEAR`       | `BbClear`         | Clear blackboard             |
-| 20     | —                    | —                 | *(invalid — first unused)*   |
+| Number | Constant             | SyscallId variant | Purpose                      | Feature       |
+|--------|----------------------|-------------------|------------------------------|---------------|
+| 0      | `SYS_YIELD`          | `Yield`           | Yield time slice (PendSV)    |               |
+| 1      | *(reserved)*         | —                 | —                            |               |
+| 2      | `SYS_EVT_WAIT`       | `EventWait`       | Wait on event flags          |               |
+| 3      | `SYS_EVT_SET`        | `EventSet`        | Set event flags              |               |
+| 4      | `SYS_EVT_CLEAR`      | `EventClear`      | Clear event flags            |               |
+| 5      | `SYS_SEM_WAIT`       | `SemWait`         | Decrement semaphore          |               |
+| 6      | `SYS_SEM_SIGNAL`     | `SemSignal`       | Increment semaphore          |               |
+| 7      | `SYS_MTX_LOCK`       | `MutexLock`       | Lock mutex                   |               |
+| 8      | `SYS_MTX_UNLOCK`     | `MutexUnlock`     | Unlock mutex                 |               |
+| 9      | `SYS_MSG_SEND`       | `MsgSend`         | Send to message queue        |               |
+| 10     | `SYS_MSG_RECV`       | `MsgRecv`         | Receive from message queue   |               |
+| 11     | `SYS_GET_TIME`       | `GetTime`         | Get monotonic tick count     |               |
+| 12     | `SYS_SAMPLING_WRITE` | `SamplingWrite`   | Write to sampling port       |               |
+| 13     | `SYS_SAMPLING_READ`  | `SamplingRead`    | Read from sampling port      |               |
+| 14     | `SYS_QUEUING_SEND`   | `QueuingSend`     | Send queuing port message    |               |
+| 15     | `SYS_QUEUING_RECV`   | `QueuingRecv`     | Receive queuing port message |               |
+| 16     | `SYS_QUEUING_STATUS` | `QueuingStatus`   | Get queuing port status      |               |
+| 17     | `SYS_BB_DISPLAY`     | `BbDisplay`       | Display blackboard message   |               |
+| 18     | `SYS_BB_READ`        | `BbRead`          | Read blackboard message      |               |
+| 19     | `SYS_BB_CLEAR`       | `BbClear`         | Clear blackboard             |               |
+| 20     | `SYS_BUF_ALLOC`     | `BufferAlloc`     | Allocate buffer pool slot    | `dynamic-mpu` |
+| 21     | `SYS_BUF_RELEASE`   | `BufferRelease`   | Release buffer pool slot     | `dynamic-mpu` |
+| 22     | `SYS_DEV_OPEN`      | `DevOpen`         | Open virtual device          | `dynamic-mpu` |
+| 23     | `SYS_DEV_READ`      | `DevRead`         | Read from virtual device     | `dynamic-mpu` |
+| 24     | `SYS_DEV_WRITE`     | `DevWrite`        | Write to virtual device      | `dynamic-mpu` |
+| 25     | `SYS_DEV_IOCTL`     | `DevIoctl`        | Device I/O control           | `dynamic-mpu` |
+| 26     | `SYS_BUF_WRITE`     | `BufferWrite`     | Write data to buffer slot    | `dynamic-mpu` |
 
-Total: 20 defined syscall numbers (0-19), with a gap at 1 (reserved for
-`SYS_GET_ID`). Number 20 is the first value that returns
-`SvcError::InvalidSyscall`, as do all values > 20.
+Total: 20 base syscall numbers (0-19), with a gap at 1 (reserved for
+`SYS_GET_ID`). When the `dynamic-mpu` feature is enabled, 7 additional
+syscalls (20-26) are available. The first invalid number is 20 (without
+`dynamic-mpu`) or 27 (with it); all invalid numbers return
+`SvcError::InvalidSyscall`.
 
 ## 2. Register Calling Convention
 
@@ -116,10 +118,27 @@ values.
 | `TransitionFailed` | `0xFFFF_FFFC`  | Partition state transition not permitted   |
 | `InvalidPartition` | `0xFFFF_FFFB`  | Partition index out of range               |
 | `OperationFailed`  | `0xFFFF_FFFA`  | Direction violation, message too large, etc |
+| `InvalidPointer`   | `0xFFFF_FFF9`  | User pointer outside caller's MPU region   |
 
 Module-level error enums (`SamplingError`, `QueuingError`,
 `BlackboardError`) are mapped to `SvcError` variants by the dispatch
 layer.
+
+### Pointer validation
+
+Syscalls that dereference a user-space data buffer pointer (r3 for data
+buffers, r2 for `QueuingStatus`) are validated before the kernel
+dereferences them. The `validate_user_ptr(partitions, pid, ptr, len)`
+function in `kernel/src/svc.rs` checks that the byte range
+`[ptr, ptr+len)` lies entirely within the calling partition's MPU data
+region and that `ptr + len` does not overflow `u32`. If validation
+fails, the syscall returns `SvcError::InvalidPointer` (`0xFFFF_FFF9`)
+without performing any operation. The validated syscalls are: MsgSend,
+MsgRecv, SamplingWrite, SamplingRead, QueuingSend, QueuingRecv,
+QueuingStatus, BbDisplay, BbRead, and (with `dynamic-mpu`) BufferWrite,
+DevRead, and DevWrite. Syscalls that pass integer arguments rather than
+pointers (e.g., DevOpen passes a device ID, DevIoctl passes opaque
+command/argument values) do not require pointer validation.
 
 ## 4. Sampling Ports
 
