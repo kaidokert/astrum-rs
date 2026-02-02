@@ -54,11 +54,11 @@ Defined in `kernel/src/syscall.rs`. Number 1 is reserved (gap).
 | 25     | `SYS_DEV_IOCTL`     | `DevIoctl`        | Device I/O control           | `dynamic-mpu` |
 | 26     | `SYS_BUF_WRITE`     | `BufferWrite`     | Write data to buffer slot    | `dynamic-mpu` |
 
-Total: 20 base syscall numbers (0-19), with a gap at 1 (reserved for
-`SYS_GET_ID`). When the `dynamic-mpu` feature is enabled, 7 additional
-syscalls (20-26) are available. The first invalid number is 20 (without
-`dynamic-mpu`) or 27 (with it); all invalid numbers return
-`SvcError::InvalidSyscall`.
+Total: 19 base syscalls spanning numbers 0-19 (number 1 is reserved and
+returns `InvalidSyscall`). When the `dynamic-mpu` feature is enabled, 7
+additional syscalls (20-26) bring the total to 26. The first invalid
+number is 20 (without `dynamic-mpu`) or 27 (with it); all invalid
+numbers return `SvcError::InvalidSyscall`.
 
 ## 2. Register Calling Convention
 
@@ -491,6 +491,10 @@ in their next time slot.
 ## 10. Buffer Pool
 
 Source: `kernel/src/buffer_pool.rs`. Requires `dynamic-mpu` feature.
+For the MPU region strategy (DynamicStrategy, R4-R7 slot tracking) and
+context-switch integration, see
+[architecture.md §11.1](architecture.md#111-mpustrategy-trait-and-dynamicstrategy)
+and [§11.2](architecture.md#112-buffer-pool-memory-model).
 
 ### Data structures
 
@@ -587,7 +591,10 @@ simultaneously lent across the system.
 ## 11. Virtual Devices
 
 Source: `kernel/src/virtual_device.rs` and `kernel/src/virtual_uart.rs`.
-Requires `dynamic-mpu` feature.
+Requires `dynamic-mpu` feature. For the system-window schedule entries
+that drive bottom-half processing (UART transfer, ISR drain), see
+[architecture.md §11.3](architecture.md#113-system-window-schedule-entries-and-bottom-half-processing)
+and [§11.5](architecture.md#115-virtual-device-abstraction-layer).
 
 ### VirtualDevice trait
 
@@ -674,10 +681,6 @@ endpoints.
 
 ### Syscall semantics
 
-<!-- TODO: reviewer suggested lookup should use DeviceRegistry instead
-     of VirtualUartPair; current kernel code (svc.rs dev_dispatch) uses
-     self.uart_pair.get_mut(device_id) directly. Revisit if/when the
-     dispatch is refactored to use DeviceRegistry. -->
 **SYS_DEV_OPEN (22)** — `r1` = device ID. Looks up the device via
 `dev_dispatch`, which calls `self.uart_pair.get_mut(device_id)` on the
 kernel's `VirtualUartPair`, and then calls `open(current_partition)`.

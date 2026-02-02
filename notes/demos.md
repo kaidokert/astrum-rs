@@ -359,6 +359,11 @@ cargo run -p kernel --target thumbv7m-none-eabi --example <name> --features qemu
 These examples require the `dynamic-mpu` feature gate. They exercise
 the Phase 3 subsystems: dynamic MPU region allocation (R4-R7), buffer
 pool zero-copy lending, and the virtual device abstraction layer.
+For the architecture behind these subsystems, see
+[architecture.md §11](architecture.md#11-phase-3--dynamic-mpu-and-virtual-devices-dynamic-mpu-feature).
+For syscall details, see
+[ipc-reference.md §10 (Buffer Pool)](ipc-reference.md#10-buffer-pool) and
+[§11 (Virtual Devices)](ipc-reference.md#11-virtual-devices).
 
 All Phase 3 examples run with:
 
