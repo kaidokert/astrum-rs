@@ -15,10 +15,13 @@
 #![no_std]
 #![no_main]
 #![allow(clippy::empty_loop)]
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
 use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
+    config::KernelConfig,
     context::init_stack_frame,
     kernel::KernelState,
     partition::PartitionConfig,
@@ -33,41 +36,29 @@ use kernel::{
 use panic_semihosting as _;
 
 // ---------------------------------------------------------------------------
-// Kernel sizing constants (tuned to this example's resource needs)
+// Kernel sizing constants and config (tuned to this example's resource needs)
 // ---------------------------------------------------------------------------
-const MAX_PARTITIONS: usize = 3;
-const MAX_SEMAPHORES: usize = 1;
-const SEM_WAIT_DEPTH: usize = 3;
-const MAX_MUTEXES: usize = 1;
-const MUTEX_WAIT_DEPTH: usize = 1;
-const MAX_QUEUES: usize = 1;
-const QUEUE_DEPTH: usize = 1;
-const QUEUE_MSG_SIZE: usize = 1;
-const QUEUE_WAIT_DEPTH: usize = 1;
-const MAX_SAMPLING_PORTS: usize = 1;
-const SAMPLING_MSG_SIZE: usize = 1;
-const MAX_BLACKBOARDS: usize = 1;
-const BLACKBOARD_MSG_SIZE: usize = 4;
-const BLACKBOARD_WAIT_DEPTH: usize = 3;
 const MAX_SCHEDULE_ENTRIES: usize = 4;
 const NUM_PARTITIONS: usize = 3;
 
-type K = Kernel<
-    MAX_PARTITIONS,
-    MAX_SEMAPHORES,
-    SEM_WAIT_DEPTH,
-    MAX_MUTEXES,
-    MUTEX_WAIT_DEPTH,
-    MAX_QUEUES,
-    QUEUE_DEPTH,
-    QUEUE_MSG_SIZE,
-    QUEUE_WAIT_DEPTH,
-    MAX_SAMPLING_PORTS,
-    SAMPLING_MSG_SIZE,
-    MAX_BLACKBOARDS,
-    BLACKBOARD_MSG_SIZE,
-    BLACKBOARD_WAIT_DEPTH,
->;
+struct Cfg;
+impl kernel::config::KernelConfig for Cfg {
+    const N: usize = 3;
+    const S: usize = 1;
+    const SW: usize = 3;
+    const MS: usize = 1;
+    const MW: usize = 1;
+    const QS: usize = 1;
+    const QD: usize = 1;
+    const QM: usize = 1;
+    const QW: usize = 1;
+    const SP: usize = 1;
+    const SM: usize = 1;
+    const BS: usize = 1;
+    const BM: usize = 4;
+    const BW: usize = 3;
+}
+type K = Kernel<Cfg>;
 
 // ---------------------------------------------------------------------------
 // R0 packing helpers
@@ -89,7 +80,7 @@ static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
 static mut KERN: Option<K> = None;
-static mut KS: Option<KernelState<MAX_PARTITIONS, MAX_SCHEDULE_ENTRIES>> = None;
+static mut KS: Option<KernelState<{ Cfg::N }, MAX_SCHEDULE_ENTRIES>> = None;
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();

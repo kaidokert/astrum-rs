@@ -1,4 +1,5 @@
 use crate::blackboard::BlackboardPool;
+use crate::config::KernelConfig;
 use crate::context::ExceptionFrame;
 
 /// Typed SVC error codes returned to user-space via r0.
@@ -142,53 +143,54 @@ pub fn dispatch_syscall<const N: usize>(
 }
 
 /// Encapsulates all kernel service pools alongside the partition table,
-/// reducing const-generic parameter explosion in `dispatch_all`.
-pub struct Kernel<
-    const N: usize,
-    const S: usize,
-    const SW: usize,
-    const MS: usize,
-    const MW: usize,
-    const QS: usize,
-    const QD: usize,
-    const QM: usize,
-    const QW: usize,
-    const SP: usize,
-    const SM: usize,
-    const BS: usize,
-    const BM: usize,
-    const BW: usize,
-> {
-    pub partitions: PartitionTable<N>,
-    pub semaphores: SemaphorePool<S, SW>,
-    pub mutexes: MutexPool<MS, MW>,
-    pub messages: MessagePool<QS, QD, QM, QW>,
+/// with pool sizes derived from a single [`KernelConfig`] implementer.
+pub struct Kernel<C: KernelConfig>
+where
+    [(); C::N]:,
+    [(); C::S]:,
+    [(); C::SW]:,
+    [(); C::MS]:,
+    [(); C::MW]:,
+    [(); C::QS]:,
+    [(); C::QD]:,
+    [(); C::QM]:,
+    [(); C::QW]:,
+    [(); C::SP]:,
+    [(); C::SM]:,
+    [(); C::BS]:,
+    [(); C::BM]:,
+    [(); C::BW]:,
+{
+    pub partitions: PartitionTable<{ C::N }>,
+    pub semaphores: SemaphorePool<{ C::S }, { C::SW }>,
+    pub mutexes: MutexPool<{ C::MS }, { C::MW }>,
+    pub messages: MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
     pub tick: TickCounter,
-    pub sampling: SamplingPortPool<SP, SM>,
-    pub queuing: QueuingPortPool<QS, QD, QM, QW>,
-    pub blackboards: BlackboardPool<BS, BM, BW>,
+    pub sampling: SamplingPortPool<{ C::SP }, { C::SM }>,
+    pub queuing: QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    pub blackboards: BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     /// The partition index of the currently executing partition, set by the
     /// scheduler before entering user code. Used as the trusted caller identity
     /// for syscalls, rather than reading from a user-controlled register.
     pub current_partition: u8,
 }
 
-impl<
-        const N: usize,
-        const S: usize,
-        const SW: usize,
-        const MS: usize,
-        const MW: usize,
-        const QS: usize,
-        const QD: usize,
-        const QM: usize,
-        const QW: usize,
-        const SP: usize,
-        const SM: usize,
-        const BS: usize,
-        const BM: usize,
-        const BW: usize,
-    > Kernel<N, S, SW, MS, MW, QS, QD, QM, QW, SP, SM, BS, BM, BW>
+impl<C: KernelConfig> Kernel<C>
+where
+    [(); C::N]:,
+    [(); C::S]:,
+    [(); C::SW]:,
+    [(); C::MS]:,
+    [(); C::MW]:,
+    [(); C::QS]:,
+    [(); C::QD]:,
+    [(); C::QM]:,
+    [(); C::QW]:,
+    [(); C::SP]:,
+    [(); C::SM]:,
+    [(); C::BS]:,
+    [(); C::BM]:,
+    [(); C::BW]:,
 {
     /// Full syscall dispatch including semaphore, mutex, message, sampling,
     /// and queuing operations.
@@ -265,7 +267,7 @@ impl<
             }
             Some(SyscallId::MsgSend) => {
                 let data_ptr = frame.r3 as *const u8;
-                let data = unsafe { core::slice::from_raw_parts(data_ptr, QM) };
+                let data = unsafe { core::slice::from_raw_parts(data_ptr, C::QM) };
                 match self
                     .messages
                     .send(frame.r1 as usize, frame.r2 as usize, data)
@@ -276,7 +278,7 @@ impl<
             }
             Some(SyscallId::MsgRecv) => {
                 let buf_ptr = frame.r3 as *mut u8;
-                let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, QM) };
+                let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, C::QM) };
                 match self
                     .messages
                     .recv(frame.r1 as usize, frame.r2 as usize, buf)
@@ -298,7 +300,7 @@ impl<
                 }
             }
             Some(SyscallId::SamplingRead) => {
-                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, SM) };
+                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::SM) };
                 match self
                     .sampling
                     .read_sampling_message(frame.r1 as usize, b, self.tick.get())
@@ -329,7 +331,7 @@ impl<
                 }
             }
             Some(SyscallId::QueuingRecv) => {
-                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, QM) };
+                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
                 match self.queuing.receive_queuing_message(
                     frame.r1 as usize,
                     self.current_partition,
@@ -375,7 +377,7 @@ impl<
                 }
             }
             Some(SyscallId::BbRead) => {
-                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, BM) };
+                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
                 match self.blackboards.read_blackboard_timed(
                     frame.r1 as usize,
                     self.current_partition,
@@ -484,10 +486,30 @@ fn handle_yield() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::KernelConfig;
     use crate::message::MessageQueue;
     use crate::partition::{MpuRegion, PartitionControlBlock};
     use crate::semaphore::Semaphore;
     use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_YIELD};
+
+    /// Test kernel configuration with small, fixed pool sizes.
+    struct TestConfig;
+    impl KernelConfig for TestConfig {
+        const N: usize = 4;
+        const S: usize = 4;
+        const SW: usize = 4;
+        const MS: usize = 4;
+        const MW: usize = 4;
+        const QS: usize = 4;
+        const QD: usize = 4;
+        const QM: usize = 4;
+        const QW: usize = 4;
+        const SP: usize = 4;
+        const SM: usize = 64;
+        const BS: usize = 4;
+        const BM: usize = 64;
+        const BW: usize = 4;
+    }
 
     fn frame(r0: u32, r1: u32, r2: u32) -> ExceptionFrame {
         ExceptionFrame {
@@ -528,11 +550,7 @@ mod tests {
 
     /// Build a Kernel with 2 running partitions, the given semaphore count,
     /// mutex count, and message queue count.
-    fn kernel(
-        sem_count: usize,
-        mtx_count: usize,
-        msg_queue_count: usize,
-    ) -> Kernel<4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 64, 4, 64, 4> {
+    fn kernel(sem_count: usize, mtx_count: usize, msg_queue_count: usize) -> Kernel<TestConfig> {
         let t = tbl();
         let s = SemaphorePool::<4, 4>::new();
         let m = MutexPool::<4, 4>::new(mtx_count);

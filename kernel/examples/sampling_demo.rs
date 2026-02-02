@@ -1,10 +1,13 @@
 //! 3-partition sensor telemetry pipeline via sampling ports.
 #![no_std]
 #![no_main]
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
 use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
+    config::KernelConfig,
     context::init_stack_frame,
     kernel::KernelState,
     partition::PartitionConfig,
@@ -15,39 +18,27 @@ use kernel::{
 };
 use panic_semihosting as _;
 
-const MAX_PARTITIONS: usize = 4;
-const MAX_SEMAPHORES: usize = 4;
-const SEM_WAIT_DEPTH: usize = 4;
-const MAX_MUTEXES: usize = 4;
-const MUTEX_WAIT_DEPTH: usize = 4;
-const MAX_QUEUES: usize = 4;
-const QUEUE_DEPTH: usize = 4;
-const QUEUE_MSG_SIZE: usize = 4;
-const QUEUE_WAIT_DEPTH: usize = 4;
-const MAX_SAMPLING_PORTS: usize = 8;
-const SAMPLING_MSG_SIZE: usize = 4;
-const MAX_BLACKBOARDS: usize = 4;
-const BLACKBOARD_MSG_SIZE: usize = 4;
-const BLACKBOARD_WAIT_DEPTH: usize = 4;
 const MAX_SCHEDULE_ENTRIES: usize = 8;
 const NUM_PARTITIONS: usize = 3;
 
-type K = Kernel<
-    MAX_PARTITIONS,
-    MAX_SEMAPHORES,
-    SEM_WAIT_DEPTH,
-    MAX_MUTEXES,
-    MUTEX_WAIT_DEPTH,
-    MAX_QUEUES,
-    QUEUE_DEPTH,
-    QUEUE_MSG_SIZE,
-    QUEUE_WAIT_DEPTH,
-    MAX_SAMPLING_PORTS,
-    SAMPLING_MSG_SIZE,
-    MAX_BLACKBOARDS,
-    BLACKBOARD_MSG_SIZE,
-    BLACKBOARD_WAIT_DEPTH,
->;
+struct Cfg;
+impl kernel::config::KernelConfig for Cfg {
+    const N: usize = 4;
+    const S: usize = 4;
+    const SW: usize = 4;
+    const MS: usize = 4;
+    const MW: usize = 4;
+    const QS: usize = 4;
+    const QD: usize = 4;
+    const QM: usize = 4;
+    const QW: usize = 4;
+    const SP: usize = 8;
+    const SM: usize = 4;
+    const BS: usize = 4;
+    const BM: usize = 4;
+    const BW: usize = 4;
+}
+type K = Kernel<Cfg>;
 static mut STACKS: [[u32; 256]; NUM_PARTITIONS] = [[0; 256]; NUM_PARTITIONS];
 #[no_mangle]
 static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
@@ -56,7 +47,7 @@ static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
 static mut KERN: Option<K> = None;
-static mut KS: Option<KernelState<MAX_PARTITIONS, MAX_SCHEDULE_ENTRIES>> = None;
+static mut KS: Option<KernelState<{ Cfg::N }, MAX_SCHEDULE_ENTRIES>> = None;
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();
