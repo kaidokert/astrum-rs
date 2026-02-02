@@ -412,4 +412,96 @@ mod tests {
         let ks = ks.unwrap();
         assert_eq!(ks.partitions().len(), 2);
     }
+
+    // ------------------------------------------------------------------
+    // Additional schedule validation tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn new_rejects_empty_schedule_with_multiple_partitions() {
+        // An empty schedule must be rejected even when partitions are provided.
+        let s: ScheduleTable<4> = ScheduleTable::new();
+        let cfgs = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 1024)];
+        match KernelState::<4, 4>::new(s, &cfgs) {
+            Err(e) => assert_eq!(e, ConfigError::ScheduleEmpty),
+            Ok(_) => panic!("expected ScheduleEmpty"),
+        }
+    }
+
+    #[test]
+    fn new_rejects_large_out_of_bounds_index() {
+        // Schedule references partition_index=5, but only 2 partitions exist.
+        let mut s: ScheduleTable<4> = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 50)).unwrap();
+        s.add(ScheduleEntry::new(5, 50)).unwrap();
+        let cfgs = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 1024)];
+        match KernelState::<4, 4>::new(s, &cfgs) {
+            Err(e) => assert_eq!(
+                e,
+                ConfigError::ScheduleIndexOutOfBounds {
+                    entry_index: 1,
+                    partition_index: 5,
+                    num_partitions: 2,
+                }
+            ),
+            Ok(_) => panic!("expected ScheduleIndexOutOfBounds"),
+        }
+    }
+
+    #[test]
+    fn new_valid_schedule_with_four_partitions() {
+        // All four partition indices (0..4) appear in the schedule.
+        let mut s: ScheduleTable<8> = ScheduleTable::new();
+        for i in 0..4u8 {
+            s.add(ScheduleEntry::new(i, 25)).unwrap();
+        }
+        let cfgs = [
+            pcfg(0, 0x2000_0000, 1024),
+            pcfg(1, 0x2000_1000, 1024),
+            pcfg(2, 0x2000_2000, 1024),
+            pcfg(3, 0x2000_3000, 1024),
+        ];
+        let ks = KernelState::<8, 8>::new(s, &cfgs);
+        assert!(ks.is_ok());
+        let ks = ks.unwrap();
+        assert_eq!(ks.partitions().len(), 4);
+        assert_eq!(ks.schedule().major_frame_ticks, 100);
+    }
+
+    #[test]
+    fn new_single_entry_valid_schedule() {
+        // A schedule with exactly one entry referencing partition 0.
+        let cfgs = [pcfg(0, 0x2000_0000, 1024)];
+        let ks = KernelState::<4, 4>::new(sched1(), &cfgs);
+        assert!(ks.is_ok());
+        let ks = ks.unwrap();
+        assert_eq!(ks.partitions().len(), 1);
+        assert_eq!(ks.schedule().major_frame_ticks, 100);
+    }
+
+    #[test]
+    fn new_partition_with_no_schedule_slot_accepted() {
+        // Partition 1 exists but has no schedule entry — should still succeed.
+        // The schedule only references partition 0.
+        let cfgs = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 1024)];
+        let ks = KernelState::<4, 4>::new(sched1(), &cfgs);
+        assert!(ks.is_ok());
+        let ks = ks.unwrap();
+        assert_eq!(ks.partitions().len(), 2);
+        // Partition 1 is present but never scheduled.
+        assert!(ks.partitions().get(1).is_some());
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn new_system_window_skips_partition_index_validation() {
+        // A system window entry with partition_index=255 should be accepted
+        // because system windows are not validated for partition_index.
+        let mut s: ScheduleTable<4> = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 50)).unwrap();
+        s.add_system_window(50).unwrap();
+        let cfgs = [pcfg(0, 0x2000_0000, 1024)];
+        let ks = KernelState::<4, 4>::new(s, &cfgs);
+        assert!(ks.is_ok());
+    }
 }
