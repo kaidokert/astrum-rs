@@ -804,15 +804,16 @@ where
                                 }) =>
                         {
                             let buf = slot.data_mut();
-                            if len > buf.len() {
-                                SvcError::OperationFailed.to_u32()
-                            } else {
-                                // SAFETY: validated_ptr confirmed [r3, r3+r2)
-                                // lies within the calling partition's MPU data
-                                // region.
-                                let src = unsafe { core::slice::from_raw_parts(data_ptr, len) };
-                                buf[..len].copy_from_slice(src);
-                                len as u32
+                            match buf.get_mut(..len) {
+                                Some(dst) => {
+                                    // SAFETY: validated_ptr confirmed [r3, r3+r2)
+                                    // lies within the calling partition's MPU data
+                                    // region.
+                                    let src = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+                                    dst.copy_from_slice(src);
+                                    len as u32
+                                }
+                                None => SvcError::OperationFailed.to_u32(),
                             }
                         }
                         _ => SvcError::InvalidResource.to_u32(),
