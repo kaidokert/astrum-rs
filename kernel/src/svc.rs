@@ -276,6 +276,9 @@ where
     pub buffers: crate::buffer_pool::BufferPool<{ C::BP }, { C::BZ }>,
     #[cfg(feature = "dynamic-mpu")]
     pub uart_pair: crate::virtual_uart::VirtualUartPair,
+    /// ISR top-half to bottom-half ring buffer (8 records, 16-byte payload).
+    #[cfg(feature = "dynamic-mpu")]
+    pub isr_ring: crate::split_isr::IsrRingBuffer<8, 16>,
 }
 
 impl<C: KernelConfig> Default for Kernel<C>
@@ -341,6 +344,8 @@ where
             buffers: crate::buffer_pool::BufferPool::new(),
             #[cfg(feature = "dynamic-mpu")]
             uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
+            #[cfg(feature = "dynamic-mpu")]
+            isr_ring: crate::split_isr::IsrRingBuffer::new(),
         }
     }
 
@@ -801,6 +806,8 @@ mod tests {
             buffers: crate::buffer_pool::BufferPool::new(),
             #[cfg(feature = "dynamic-mpu")]
             uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
+            #[cfg(feature = "dynamic-mpu")]
+            isr_ring: crate::split_isr::IsrRingBuffer::new(),
         };
         // Add semaphores
         for _ in 0..sem_count {

@@ -89,14 +89,38 @@ macro_rules! _harness_handle_tick {
 }
 
 /// Internal helper (dynamic-mpu variant).
+///
+/// On `PartitionSwitch` this behaves identically to the non-dynamic
+/// variant.  On `SystemWindow` it borrows `KERN` (the
+/// `Mutex<RefCell<Option<Kernel<…>>>>` emitted by
+/// [`define_dispatch_hook!`]) and calls
+/// [`run_bottom_half`](crate::tick::run_bottom_half) to perform
+/// deferred kernel work (UART transfer, ISR drain).
 #[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _harness_handle_tick {
     ($event:expr, $next:ident) => {
-        if let $crate::scheduler::ScheduleEvent::PartitionSwitch(pid) = $event {
-            unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
-            cortex_m::peripheral::SCB::set_pendsv();
+        match $event {
+            $crate::scheduler::ScheduleEvent::PartitionSwitch(pid) => {
+                // SAFETY: single-core Cortex-M — SysTick has exclusive
+                // access to NEXT_PARTITION; PendSV (lower priority)
+                // cannot preempt us.
+                unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+                cortex_m::peripheral::SCB::set_pendsv();
+            }
+            $crate::scheduler::ScheduleEvent::SystemWindow => {
+                ::cortex_m::interrupt::free(|cs| {
+                    if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+                        $crate::tick::run_bottom_half(
+                            &mut k.uart_pair,
+                            &mut k.isr_ring,
+                            &mut k.buffers,
+                        );
+                    }
+                });
+            }
+            $crate::scheduler::ScheduleEvent::None => {}
         }
     };
 }
