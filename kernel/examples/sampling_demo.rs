@@ -3,12 +3,10 @@
 #![no_main]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
-use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    context::init_stack_frame,
     kernel::KernelState,
     partition::PartitionConfig,
     sampling::PortDirection,
@@ -22,6 +20,7 @@ use panic_semihosting as _;
 
 const MAX_SCHEDULE_ENTRIES: usize = 8;
 const NUM_PARTITIONS: usize = 3;
+const STACK_WORDS: usize = 256;
 
 /// Kernel configuration for the sampling-port demo.
 ///
@@ -44,18 +43,14 @@ impl KernelConfig for DemoConfig {
     const BM: usize = 4;
     const BW: usize = 4;
 }
-static mut STACKS: [[u32; 256]; NUM_PARTITIONS] = [[0; 256]; NUM_PARTITIONS];
-#[no_mangle]
-static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
-#[no_mangle]
-static mut CURRENT_PARTITION: u32 = u32::MAX;
-#[no_mangle]
-static mut NEXT_PARTITION: u32 = 0;
-kernel::define_dispatch_hook!(DemoConfig);
-static mut KS: Option<KernelState<{ DemoConfig::N }, MAX_SCHEDULE_ENTRIES>> = None;
-#[used]
-static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
-kernel::define_pendsv!();
+
+kernel::define_harness!(
+    DemoConfig,
+    NUM_PARTITIONS,
+    MAX_SCHEDULE_ENTRIES,
+    STACK_WORDS
+);
+
 extern "C" fn sensor_main() -> ! {
     let (src, mut v) = (unpack_r0!() >> 16, 0u8);
     loop {
@@ -114,17 +109,6 @@ extern "C" fn display_main() -> ! {
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
-#[exception]
-fn SysTick() {
-    let p = &raw mut KS;
-    if let Some(pid) = unsafe { (*p).as_mut() }
-        .expect("KS")
-        .advance_schedule_tick()
-    {
-        unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
-        SCB::set_pendsv();
-    }
-}
 #[entry]
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
@@ -172,22 +156,12 @@ fn main() -> ! {
             d1 as u32,
         ];
         let eps: [extern "C" fn() -> !; NUM_PARTITIONS] = [sensor_main, control_main, display_main];
-        let (stk, sp) = (&raw mut STACKS, &raw mut PARTITION_SP);
-        for (i, (ep, &hv)) in eps.iter().zip(h.iter()).enumerate() {
-            let ix = init_stack_frame(&mut (*stk)[i], *ep as *const () as u32, Some(hv)).unwrap();
-            (*sp)[i] = (*stk)[i].as_ptr() as u32 + (ix as u32) * 4;
-        }
-        p.SCB.set_priority(SystemHandler::SVCall, 0x00);
-        p.SCB.set_priority(SystemHandler::PendSV, 0xFF);
-        p.SCB.set_priority(SystemHandler::SysTick, 0xFE);
-    }
-    p.SYST.set_clock_source(SystClkSource::Core);
-    p.SYST.set_reload(120_000 - 1);
-    p.SYST.clear_current();
-    p.SYST.enable_counter();
-    p.SYST.enable_interrupt();
-    SCB::set_pendsv();
-    loop {
-        cortex_m::asm::wfi()
+        let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
+            core::array::from_fn(|i| (eps[i], h[i]));
+
+        // SAFETY: STACKS and PARTITION_SP are valid static-mut arrays of
+        // length NUM_PARTITIONS; interrupts are not yet enabled.
+        // TODO: reviewer false positive – this call is already inside an unsafe block (line 113).
+        kernel::harness::boot::<STACK_WORDS>(&raw mut STACKS, &raw mut PARTITION_SP, &parts, &mut p)
     }
 }

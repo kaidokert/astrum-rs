@@ -4,6 +4,8 @@
 
 pub mod macros;
 
+pub mod harness;
+
 pub mod blackboard;
 pub mod config;
 pub mod context;
