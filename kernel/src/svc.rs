@@ -1,5 +1,47 @@
 use crate::blackboard::BlackboardPool;
 use crate::context::ExceptionFrame;
+
+/// Typed SVC error codes returned to user-space via r0.
+///
+/// Each variant maps to a unique `u32` with the high bit set (>= 0x8000_0000),
+/// making them distinguishable from success values (which are small non-negative
+/// integers such as byte counts or zero).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SvcError {
+    /// The syscall number in r0 was not a recognized `SyscallId`.
+    InvalidSyscall,
+    /// The resource ID (semaphore, mutex, queue, port, blackboard) was out of
+    /// range or does not refer to an allocated resource.
+    InvalidResource,
+    /// A wait queue on the target resource is full and cannot accept another
+    /// blocked partition.
+    WaitQueueFull,
+    /// A partition state transition (e.g. Running → Waiting) failed because the
+    /// current state does not permit it.
+    TransitionFailed,
+    /// The partition index supplied as caller or target is out of range.
+    InvalidPartition,
+    /// A catch-all for operation-specific failures (e.g. direction violation,
+    /// message too large, board empty on non-blocking read).
+    OperationFailed,
+}
+
+impl SvcError {
+    /// Map this error to a unique `u32` value with the high bit set.
+    ///
+    /// The values count down from `0xFFFF_FFFF` so they are easy to inspect in
+    /// a debugger and leave room for future variants without renumbering.
+    pub const fn to_u32(self) -> u32 {
+        match self {
+            Self::InvalidSyscall => 0xFFFF_FFFF,
+            Self::InvalidResource => 0xFFFF_FFFE,
+            Self::WaitQueueFull => 0xFFFF_FFFD,
+            Self::TransitionFailed => 0xFFFF_FFFC,
+            Self::InvalidPartition => 0xFFFF_FFFB,
+            Self::OperationFailed => 0xFFFF_FFFA,
+        }
+    }
+}
 use crate::events;
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
 use crate::mutex::MutexPool;
@@ -880,5 +922,32 @@ mod tests {
         let mut ef = frame(SYS_BB_CLEAR, 99, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, u32::MAX);
+    }
+
+    // ---- SvcError tests ----
+
+    /// All SvcError variants for exhaustive testing.
+    const ALL_SVC_ERRORS: &[SvcError] = &[
+        SvcError::InvalidSyscall,
+        SvcError::InvalidResource,
+        SvcError::WaitQueueFull,
+        SvcError::TransitionFailed,
+        SvcError::InvalidPartition,
+        SvcError::OperationFailed,
+    ];
+
+    #[test]
+    fn svc_error_codes_are_unique_nonzero_and_high_bit_set() {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for &e in ALL_SVC_ERRORS {
+            let code = e.to_u32();
+            assert_ne!(code, 0, "{e:?} maps to zero");
+            assert!(
+                code >= 0x8000_0000,
+                "{e:?} code {code:#010X} does not have the high bit set"
+            );
+            assert!(seen.insert(code), "{e:?} has duplicate code {code:#010X}");
+        }
     }
 }
