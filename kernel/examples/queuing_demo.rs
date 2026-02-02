@@ -71,8 +71,11 @@ const RSP_STOP_ACK: u8 = 0x30;
 const RSP_EXTRA_1_ACK: u8 = 0x40;
 const RSP_UNKNOWN: u8 = 0xFF;
 
-/// The syscall returns `u32::MAX` on error (queue empty, queue full, invalid port).
-const SVC_ERROR: u32 = u32::MAX;
+/// The syscall returns an error code with the high bit set on failure
+/// (queue empty, queue full, invalid port).  All `SvcError` variants live
+/// in the range 0xFFFF_FFFA ..= 0xFFFF_FFFF, so testing the MSB is the
+/// portable way to detect any kernel error.
+const SVC_ERROR_BIT: u32 = 0x8000_0000;
 
 /// Total commands we attempt to send, including those that should overflow.
 const TOTAL_CMDS: usize = 5;
@@ -138,12 +141,12 @@ extern "C" fn commander_main() -> ! {
     let (cmd_port, rsp_port) = (packed >> 16, packed & 0xFFFF);
 
     // Phase 1: Flood the command queue to demonstrate queue-full detection.
-    // QUEUE_DEPTH is 4, so the 5th send must fail with SVC_ERROR.
+    // QUEUE_DEPTH is 4, so the 5th send must fail with a kernel error.
     let mut queue_full_seen = false;
     let mut delivered: usize = 0;
     for &cmd in &CMDS {
         let rc = svc!(SYS_QUEUING_SEND, cmd_port, 1u32, [cmd].as_ptr() as u32);
-        if rc == SVC_ERROR {
+        if rc & SVC_ERROR_BIT != 0 {
             hprintln!("[commander] send cmd={} -> QUEUE FULL (expected)", cmd);
             queue_full_seen = true;
         } else {
@@ -173,7 +176,7 @@ extern "C" fn commander_main() -> ! {
             QUEUE_MSG_SIZE as u32,
             buf.as_mut_ptr() as u32
         );
-        if sz == SVC_ERROR {
+        if sz & SVC_ERROR_BIT != 0 {
             svc!(SYS_YIELD, 0u32, 0u32, 0u32);
             continue;
         }
@@ -214,7 +217,7 @@ extern "C" fn worker_main() -> ! {
             QUEUE_MSG_SIZE as u32,
             buf.as_mut_ptr() as u32
         );
-        if sz == SVC_ERROR {
+        if sz & SVC_ERROR_BIT != 0 {
             svc!(SYS_YIELD, 0u32, 0u32, 0u32);
             continue;
         }
