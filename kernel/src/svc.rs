@@ -103,6 +103,20 @@ pub fn validate_user_ptr<const N: usize>(
     ptr >= base && end <= region_end
 }
 
+/// Validate a user pointer and, on success, execute the body expression.
+///
+/// Returns `SvcError::InvalidPointer` when `validate_user_ptr` fails;
+/// otherwise evaluates `$body` (which must produce `u32`).
+macro_rules! validated_ptr {
+    ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
+        if !validate_user_ptr(&$self.partitions, $self.current_partition, $ptr, $len) {
+            SvcError::InvalidPointer.to_u32()
+        } else {
+            $body
+        }
+    };
+}
+
 use crate::events;
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
 use crate::mutex::MutexPool;
@@ -496,9 +510,10 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
-            Some(SyscallId::MsgSend) => {
-                let data_ptr = frame.r3 as *const u8;
-                let data = unsafe { core::slice::from_raw_parts(data_ptr, C::QM) };
+            Some(SyscallId::MsgSend) => validated_ptr!(self, frame.r3, C::QM, {
+                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
+                // the calling partition's MPU data region.
+                let data = unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, C::QM) };
                 match self
                     .messages
                     .send(frame.r1 as usize, frame.r2 as usize, data)
@@ -506,10 +521,11 @@ where
                     Ok(outcome) => apply_send_outcome(&mut self.partitions, outcome),
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
-            }
-            Some(SyscallId::MsgRecv) => {
-                let buf_ptr = frame.r3 as *mut u8;
-                let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, C::QM) };
+            }),
+            Some(SyscallId::MsgRecv) => validated_ptr!(self, frame.r3, C::QM, {
+                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
+                // the calling partition's MPU data region.
+                let buf = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
                 match self
                     .messages
                     .recv(frame.r1 as usize, frame.r2 as usize, buf)
@@ -517,8 +533,10 @@ where
                     Ok(outcome) => apply_recv_outcome(&mut self.partitions, outcome),
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
-            }
-            Some(SyscallId::SamplingWrite) => {
+            }),
+            Some(SyscallId::SamplingWrite) => validated_ptr!(self, frame.r3, frame.r2 as usize, {
+                // SAFETY: validated_ptr confirmed [r3, r3+r2) lies within
+                // the calling partition's MPU data region.
                 let d = unsafe {
                     core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                 };
@@ -529,8 +547,10 @@ where
                     Ok(()) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
-            }
-            Some(SyscallId::SamplingRead) => {
+            }),
+            Some(SyscallId::SamplingRead) => validated_ptr!(self, frame.r3, C::SM, {
+                // SAFETY: validated_ptr confirmed [r3, r3+SM) lies within
+                // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::SM) };
                 match self
                     .sampling
@@ -539,7 +559,7 @@ where
                     Ok((sz, _)) => sz as u32,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
-            }
+            }),
             Some(SyscallId::QueuingSend) => {
                 let d = unsafe {
                     core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
@@ -1166,13 +1186,13 @@ mod tests {
             .unwrap();
         assert_eq!((n, &buf[..n]), (2, &[0xAA, 0xBB][..]));
         // Invalid port → InvalidResource error for both write and read.
+        // Use an address inside partition 0's MPU region so pointer
+        // validation passes and the invalid port ID (99) is reached.
         let inv = SvcError::InvalidResource.to_u32();
-        let d: [u8; 1] = [1];
-        let mut ef = frame4(SYS_SAMPLING_WRITE, 99, 1, d.as_ptr() as u32);
+        let mut ef = frame4(SYS_SAMPLING_WRITE, 99, 1, 0x2000_0000);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
-        let mut rb = [0u8; 64];
-        let mut ef = frame4(SYS_SAMPLING_READ, 99, 0, rb.as_mut_ptr() as u32);
+        let mut ef = frame4(SYS_SAMPLING_READ, 99, 0, 0x2000_0000);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
     }
@@ -1576,5 +1596,52 @@ mod tests {
         let t = ptr_table(0x2000_0000, 4096);
         // Starts inside but extends 1 byte past the region.
         assert!(!validate_user_ptr(&t, 0, 0x2000_0FF0, 17));
+    }
+
+    // ---- Pointer validation rejection via Kernel::dispatch ----
+
+    /// Data-driven test: every syscall that validates a user pointer must
+    /// return `InvalidPointer` when r3 points outside the caller's MPU region.
+    #[test]
+    fn validated_syscalls_reject_out_of_bounds_pointer() {
+        use crate::sampling::PortDirection;
+
+        // (syscall_id, r1, r2, msg_queues, setup_sampling)
+        let cases: &[(u32, u32, u32, usize, Option<PortDirection>)] = &[
+            // MsgSend: queue 0 exists, r3 out-of-bounds
+            (crate::syscall::SYS_MSG_SEND, 0, 0, 1, None),
+            // MsgRecv: queue 0 exists, r3 out-of-bounds
+            (crate::syscall::SYS_MSG_RECV, 0, 0, 1, None),
+            // SamplingWrite: port 0 (Source), r2=4 (length), r3 out-of-bounds
+            (
+                crate::syscall::SYS_SAMPLING_WRITE,
+                0,
+                4,
+                0,
+                Some(PortDirection::Source),
+            ),
+            // SamplingRead: port 0 (Destination), r3 out-of-bounds
+            (
+                crate::syscall::SYS_SAMPLING_READ,
+                0,
+                0,
+                0,
+                Some(PortDirection::Destination),
+            ),
+        ];
+
+        for &(sys_id, r1, r2, msg_queues, ref sampling_dir) in cases {
+            let mut k = kernel(0, 0, msg_queues);
+            if let Some(dir) = sampling_dir {
+                k.sampling.create_port(*dir, 1000).unwrap();
+            }
+            let mut ef = frame4(sys_id, r1, r2, 0xDEAD_0000);
+            unsafe { k.dispatch(&mut ef) };
+            assert_eq!(
+                ef.r0,
+                SvcError::InvalidPointer.to_u32(),
+                "syscall {sys_id:#X} should reject out-of-bounds pointer"
+            );
+        }
     }
 }
