@@ -833,10 +833,39 @@ where
             Some(SyscallId::DevIoctl) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
                 dev.ioctl(pid, frame.r2, frame.r3)
             }),
-            // TODO: wire up timed queuing send/recv dispatch
-            Some(SyscallId::QueuingSendTimed) | Some(SyscallId::QueuingRecvTimed) => {
-                SvcError::NotImplemented.to_u32()
-            }
+            Some(SyscallId::QueuingRecvTimed) => validated_ptr!(self, frame.r3, C::QM, {
+                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
+                // the calling partition's MPU data region.
+                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
+                match self.queuing.receive_queuing_message(
+                    frame.r1 as usize,
+                    self.current_partition,
+                    b,
+                    frame.r2 as u64,
+                    self.tick.get(),
+                ) {
+                    Ok(crate::queuing::RecvQueuingOutcome::Received {
+                        msg_len,
+                        wake_sender: w,
+                    }) => {
+                        if let Some(pid) = w {
+                            try_transition(&mut self.partitions, pid, PartitionState::Ready);
+                        }
+                        msg_len as u32
+                    }
+                    Ok(crate::queuing::RecvQueuingOutcome::ReceiverBlocked { .. }) => {
+                        try_transition(
+                            &mut self.partitions,
+                            self.current_partition,
+                            PartitionState::Waiting,
+                        );
+                        0
+                    }
+                    Err(_) => SvcError::InvalidResource.to_u32(),
+                }
+            }),
+            // TODO: wire up timed queuing send dispatch
+            Some(SyscallId::QueuingSendTimed) => SvcError::NotImplemented.to_u32(),
             None => SvcError::InvalidSyscall.to_u32(),
         };
     }
@@ -1841,6 +1870,131 @@ mod tests {
             ef.r0,
             SvcError::InvalidPointer.to_u32(),
             "BbRead should reject out-of-bounds pointer"
+        );
+    }
+
+    // ---- QueuingRecvTimed dispatch tests ----
+
+    /// Allocate a page at a fixed low address via `mmap` so that
+    /// `ptr as u32` round-trips correctly on 64-bit test hosts.
+    /// Each call site must use a distinct `page` offset. Leaked.
+    #[cfg(not(feature = "dynamic-mpu"))]
+    fn low32_buf(page: usize) -> *mut u8 {
+        extern "C" {
+            fn mmap(a: *mut u8, l: usize, p: i32, f: i32, d: i32, o: i64) -> *mut u8;
+        }
+        let addr = 0x2000_0000 + page * 4096;
+        // SAFETY: MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED at a known-free
+        // low address. The mapping is intentionally leaked (test-only).
+        let ptr = unsafe { mmap(addr as *mut u8, 4096, 0x3, 0x32, -1, 0) };
+        assert_eq!(ptr as usize, addr, "mmap MAP_FIXED failed");
+        ptr
+    }
+
+    #[test]
+    fn queuing_recv_timed_delivers_message_and_wakes_sender() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        k.queuing
+            .get_mut(dst)
+            .unwrap()
+            .inject_message(2, &[0xAA, 0xBB]);
+        k.queuing
+            .get_mut(dst)
+            .unwrap()
+            .enqueue_blocked_sender(1, u64::MAX);
+        let ptr = low32_buf(0);
+        let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 100, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 2);
+        // Blocked sender (partition 1) should be woken to Ready
+        assert_eq!(k.partitions.get(1).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn queuing_recv_timed_blocks_on_empty_queue() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let ptr = low32_buf(0);
+        let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 50, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(k.queuing.get(dst).unwrap().pending_receivers(), 1);
+    }
+
+    #[test]
+    fn queuing_recv_timed_zero_timeout_returns_error() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let ptr = low32_buf(0);
+        let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 0, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+    }
+
+    #[test]
+    fn queuing_recv_timed_invalid_port_returns_error() {
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let ptr = low32_buf(0);
+        let mut ef = frame4(SYS_QUEUING_RECV_TIMED, 99, 50, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+    }
+
+    #[test]
+    fn queuing_recv_timed_rejects_out_of_bounds_pointer() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+        let mut k = kernel(0, 0, 0);
+        k.queuing.create_port(PortDirection::Destination).unwrap();
+        let mut ef = frame4(SYS_QUEUING_RECV_TIMED, 0, 50, 0xDEAD_0000);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
+    }
+
+    #[test]
+    fn queuing_recv_timed_received_no_sender_to_wake() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        k.queuing.get_mut(dst).unwrap().inject_message(1, &[42]);
+        let ptr = low32_buf(0);
+        let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 100, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 1);
+        assert_eq!(
+            k.partitions.get(1).unwrap().state(),
+            PartitionState::Running
+        );
+    }
+
+    #[test]
+    fn queuing_recv_original_unchanged_still_uses_zero_timeout() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_RECV;
+        let mut k = kernel(0, 0, 0);
+        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let ptr = low32_buf(0);
+        // Empty queue with original QueuingRecv (timeout=0) → QueueEmpty → InvalidResource
+        let mut ef = frame4(SYS_QUEUING_RECV, dst as u32, 0, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+        // Partition should NOT be in Waiting (no blocking happened)
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Running
         );
     }
 
