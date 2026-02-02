@@ -85,6 +85,29 @@ impl<const N: usize> ScheduleTable<N> {
             .map(|e| e.partition_index)
     }
 
+    /// Move to the next slot (with wraparound) and reload `ticks_remaining`.
+    /// Returns the index into `self.entries` of the new slot.
+    fn step_to_next_slot(&mut self) -> usize {
+        self.current_slot += 1;
+        if self.current_slot >= self.entries.len() {
+            self.current_slot = 0;
+        }
+        self.ticks_remaining = self.entries[self.current_slot].duration_ticks;
+        self.current_slot
+    }
+
+    /// Immediately advance to the next schedule slot, forfeiting any
+    /// remaining ticks in the current slot.  Returns the new partition
+    /// index, or `None` if the table is not started or empty.
+    #[cfg(not(feature = "dynamic-mpu"))]
+    pub fn force_advance(&mut self) -> Option<u8> {
+        if !self.started || self.entries.is_empty() {
+            return None;
+        }
+        let idx = self.step_to_next_slot();
+        Some(self.entries[idx].partition_index)
+    }
+
     /// Advance by one tick. Returns `Some(partition_index)` on slot change.
     #[cfg(not(feature = "dynamic-mpu"))]
     pub fn advance_tick(&mut self) -> Option<u8> {
@@ -93,14 +116,27 @@ impl<const N: usize> ScheduleTable<N> {
         }
         self.ticks_remaining = self.ticks_remaining.saturating_sub(1);
         if self.ticks_remaining == 0 {
-            self.current_slot += 1;
-            if self.current_slot >= self.entries.len() {
-                self.current_slot = 0;
-            }
-            self.ticks_remaining = self.entries[self.current_slot].duration_ticks;
-            return Some(self.entries[self.current_slot].partition_index);
+            let idx = self.step_to_next_slot();
+            return Some(self.entries[idx].partition_index);
         }
         None
+    }
+
+    /// Immediately advance to the next schedule slot, forfeiting any
+    /// remaining ticks in the current slot.  Returns a [`ScheduleEvent`]
+    /// describing the new slot, or [`ScheduleEvent::None`] if not started
+    /// or empty.
+    #[cfg(feature = "dynamic-mpu")]
+    pub fn force_advance(&mut self) -> ScheduleEvent {
+        if !self.started || self.entries.is_empty() {
+            return ScheduleEvent::None;
+        }
+        let idx = self.step_to_next_slot();
+        let entry = &self.entries[idx];
+        if entry.is_system_window {
+            return ScheduleEvent::SystemWindow;
+        }
+        ScheduleEvent::PartitionSwitch(entry.partition_index)
     }
 
     /// Advance by one tick. Returns a [`ScheduleEvent`] that distinguishes
@@ -112,12 +148,8 @@ impl<const N: usize> ScheduleTable<N> {
         }
         self.ticks_remaining = self.ticks_remaining.saturating_sub(1);
         if self.ticks_remaining == 0 {
-            self.current_slot += 1;
-            if self.current_slot >= self.entries.len() {
-                self.current_slot = 0;
-            }
-            let entry = &self.entries[self.current_slot];
-            self.ticks_remaining = entry.duration_ticks;
+            let idx = self.step_to_next_slot();
+            let entry = &self.entries[idx];
             if entry.is_system_window {
                 return ScheduleEvent::SystemWindow;
             }
@@ -209,9 +241,88 @@ mod tests {
         assert!(t.entries.is_empty());
     }
 
+    #[test]
+    #[cfg(not(feature = "dynamic-mpu"))]
+    fn force_advance_mid_slot() {
+        let mut t = table(&[(0, 5), (1, 3)]);
+        // Consume 2 of 5 ticks in slot 0
+        assert_eq!(t.advance_tick(), None);
+        assert_eq!(t.advance_tick(), None);
+        // Force advance skips remaining 3 ticks
+        assert_eq!(t.force_advance(), Some(1));
+        // ticks_remaining should be reset to slot 1's duration (3)
+        assert_eq!(t.advance_tick(), None);
+        assert_eq!(t.advance_tick(), None);
+        assert_eq!(t.advance_tick(), Some(0)); // wraps back
+    }
+
+    #[test]
+    #[cfg(not(feature = "dynamic-mpu"))]
+    fn force_advance_at_slot_boundary() {
+        let mut t = table(&[(0, 2), (1, 2)]);
+        // Exhaust slot 0 via advance_tick (switches to slot 1)
+        assert_eq!(t.advance_tick(), None);
+        assert_eq!(t.advance_tick(), Some(1));
+        // Now at slot 1 with full ticks_remaining; force advance to slot 0
+        assert_eq!(t.force_advance(), Some(0));
+        assert_eq!(t.advance_tick(), None);
+        assert_eq!(t.advance_tick(), Some(1));
+    }
+
+    #[test]
+    #[cfg(not(feature = "dynamic-mpu"))]
+    fn force_advance_single_entry_wraps() {
+        let mut t = table(&[(7, 4)]);
+        // Single entry: force advance wraps to same slot
+        assert_eq!(t.force_advance(), Some(7));
+        // ticks_remaining should be fully reloaded
+        assert_eq!(t.advance_tick(), None);
+        assert_eq!(t.advance_tick(), None);
+        assert_eq!(t.advance_tick(), None);
+        assert_eq!(t.advance_tick(), Some(7));
+    }
+
+    #[test]
+    #[cfg(not(feature = "dynamic-mpu"))]
+    fn force_advance_unstarted_returns_none() {
+        let mut t: ScheduleTable<4> = ScheduleTable::new();
+        t.add(ScheduleEntry::new(0, 5)).unwrap();
+        // Not started
+        assert_eq!(t.force_advance(), None);
+        // Empty table
+        let mut t2: ScheduleTable<4> = ScheduleTable::new();
+        t2.start();
+        assert_eq!(t2.force_advance(), None);
+    }
+
     #[cfg(feature = "dynamic-mpu")]
     mod dynamic_mpu_tests {
         use super::*;
+
+        /// Build a started schedule table from `(partition_index, duration)` pairs.
+        fn table(slots: &[(u8, u32)]) -> ScheduleTable<8> {
+            let mut t = ScheduleTable::new();
+            for &(p, d) in slots {
+                t.add(ScheduleEntry::new(p, d)).unwrap();
+            }
+            t.start();
+            t
+        }
+
+        /// Build a started schedule table that can include system-window slots.
+        /// Pass `None` for a system window or `Some(partition_index)` for a
+        /// normal partition slot; the second element is the duration.
+        fn table_with_windows(slots: &[(Option<u8>, u32)]) -> ScheduleTable<8> {
+            let mut t = ScheduleTable::new();
+            for &(p, d) in slots {
+                match p {
+                    Some(idx) => t.add(ScheduleEntry::new(idx, d)).unwrap(),
+                    None => t.add_system_window(d).unwrap(),
+                }
+            }
+            t.start();
+            t
+        }
 
         #[test]
         fn system_window_entry_defaults() {
@@ -245,10 +356,7 @@ mod tests {
 
         #[test]
         fn advance_tick_partition_only() {
-            let mut t: ScheduleTable<4> = ScheduleTable::new();
-            t.add(ScheduleEntry::new(0, 2)).unwrap();
-            t.add(ScheduleEntry::new(1, 2)).unwrap();
-            t.start();
+            let mut t = table(&[(0, 2), (1, 2)]);
             assert_eq!(t.advance_tick(), ScheduleEvent::None);
             assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(1));
             assert_eq!(t.advance_tick(), ScheduleEvent::None);
@@ -257,11 +365,7 @@ mod tests {
 
         #[test]
         fn mixed_partition_and_system_window() {
-            let mut t: ScheduleTable<8> = ScheduleTable::new();
-            t.add(ScheduleEntry::new(0, 2)).unwrap();
-            t.add_system_window(1).unwrap();
-            t.add(ScheduleEntry::new(1, 2)).unwrap();
-            t.start();
+            let mut t = table_with_windows(&[(Some(0), 2), (None, 1), (Some(1), 2)]);
             assert_eq!(t.major_frame_ticks, 5);
             assert_eq!(t.advance_tick(), ScheduleEvent::None);
             assert_eq!(t.advance_tick(), ScheduleEvent::SystemWindow);
@@ -276,12 +380,7 @@ mod tests {
 
         #[test]
         fn consecutive_system_windows() {
-            let mut t: ScheduleTable<8> = ScheduleTable::new();
-            t.add(ScheduleEntry::new(0, 1)).unwrap();
-            t.add_system_window(1).unwrap();
-            t.add_system_window(1).unwrap();
-            t.add(ScheduleEntry::new(1, 1)).unwrap();
-            t.start();
+            let mut t = table_with_windows(&[(Some(0), 1), (None, 1), (None, 1), (Some(1), 1)]);
             assert_eq!(t.advance_tick(), ScheduleEvent::SystemWindow);
             assert_eq!(t.advance_tick(), ScheduleEvent::SystemWindow);
             assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(1));
@@ -290,13 +389,67 @@ mod tests {
 
         #[test]
         fn current_partition_during_system_window() {
-            let mut t: ScheduleTable<4> = ScheduleTable::new();
-            t.add(ScheduleEntry::new(0, 1)).unwrap();
-            t.add_system_window(1).unwrap();
-            t.start();
+            let mut t = table_with_windows(&[(Some(0), 1), (None, 1)]);
             assert_eq!(t.current_partition(), Some(0));
             t.advance_tick(); // into system window
             assert_eq!(t.current_partition(), Some(0));
+        }
+
+        #[test]
+        fn force_advance_mid_slot() {
+            let mut t = table(&[(0, 5), (1, 3)]);
+            // Consume 2 of 5 ticks in slot 0
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            // Force advance skips remaining 3 ticks
+            assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(1));
+            // ticks_remaining reset to 3
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
+        }
+
+        #[test]
+        fn force_advance_at_slot_boundary() {
+            let mut t = table(&[(0, 2), (1, 2)]);
+            // Exhaust slot 0 via advance_tick
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(1));
+            // Force advance from fresh slot 1 to slot 0
+            assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(0));
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(1));
+        }
+
+        #[test]
+        fn force_advance_single_entry_wraps() {
+            let mut t = table(&[(7, 4)]);
+            assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(7));
+            // ticks_remaining fully reloaded
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(7));
+        }
+
+        #[test]
+        fn force_advance_unstarted_returns_none() {
+            let mut t: ScheduleTable<4> = ScheduleTable::new();
+            t.add(ScheduleEntry::new(0, 5)).unwrap();
+            assert_eq!(t.force_advance(), ScheduleEvent::None);
+            let mut t2: ScheduleTable<4> = ScheduleTable::new();
+            t2.start();
+            assert_eq!(t2.force_advance(), ScheduleEvent::None);
+        }
+
+        #[test]
+        fn force_advance_into_system_window() {
+            let mut t = table_with_windows(&[(Some(0), 3), (None, 2)]);
+            // Force advance from partition slot into system window
+            assert_eq!(t.force_advance(), ScheduleEvent::SystemWindow);
+            // ticks_remaining should be 2
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
         }
     }
 }
