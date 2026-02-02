@@ -158,6 +158,11 @@ impl<const S: usize, const M: usize> SamplingPortPool<S, M> {
     }
 
     fn write_port_buffer(&mut self, id: usize, data: &[u8], ts: u64) -> Result<(), SamplingError> {
+        // TODO: defense-in-depth guard; unreachable via public API because
+        // write_sampling_message already validates data length before calling here.
+        if data.len() > M {
+            return Err(SamplingError::MessageTooLarge);
+        }
         let port = self.get_mut(id).ok_or(SamplingError::InvalidPort)?;
         port.data[..data.len()].copy_from_slice(data);
         port.current_size = data.len();
@@ -174,9 +179,12 @@ impl<const S: usize, const M: usize> SamplingPortPool<S, M> {
         {
             return Err(SamplingError::DirectionViolation);
         }
-        // SAFETY: get(src) succeeded at line above (returned Some via ok_or),
-        // so get_mut(src) on the same pool with the same index cannot fail.
-        self.get_mut(src).unwrap().connected_port = Some(dst);
+        // TODO: defense-in-depth guard; unreachable via public API because
+        // self.get(src) above already validates the index. Kept to avoid
+        // unsafe unwrap if internal logic ever changes.
+        self.get_mut(src)
+            .ok_or(SamplingError::InvalidPort)?
+            .connected_port = Some(dst);
         Ok(())
     }
 
