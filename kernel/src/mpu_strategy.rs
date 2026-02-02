@@ -52,9 +52,10 @@ pub trait MpuStrategy {
     /// Dynamically add a temporary memory window.
     ///
     /// `owner` identifies the partition that owns the window.
-    /// Returns the MPU region ID on success, or `None` if no free
-    /// region slot is available.
-    fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8) -> Option<u8>;
+    /// Returns the MPU region ID on success, or an [`MpuError`] describing
+    /// the failure (e.g. `SlotExhausted` when no free region is available).
+    fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8)
+        -> Result<u8, MpuError>;
 
     /// Remove a previously added window by its region ID.
     fn remove_window(&self, region_id: u8);
@@ -66,6 +67,29 @@ pub enum MpuError {
     /// The caller supplied a region count that does not match the expected
     /// fixed layout (e.g. 4 regions for the static strategy).
     RegionCountMismatch,
+    /// Requested region size is smaller than the 32-byte MPU minimum.
+    SizeTooSmall,
+    /// Requested region size is not a power of two.
+    SizeNotPowerOfTwo,
+    /// Base address is not aligned to the region size.
+    BaseNotAligned,
+    /// `base + size` overflows the 32-bit address space.
+    AddressOverflow,
+    /// All available MPU region slots are in use.
+    SlotExhausted,
+}
+
+impl core::fmt::Display for MpuError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::RegionCountMismatch => write!(f, "region count mismatch"),
+            Self::SizeTooSmall => write!(f, "size too small (minimum 32 bytes)"),
+            Self::SizeNotPowerOfTwo => write!(f, "size is not a power of two"),
+            Self::BaseNotAligned => write!(f, "base address not aligned to size"),
+            Self::AddressOverflow => write!(f, "base + size overflows u32"),
+            Self::SlotExhausted => write!(f, "no free MPU region slots"),
+        }
+    }
 }
 
 /// Descriptor for a dynamically-assigned MPU window: base, size,
@@ -218,7 +242,13 @@ impl MpuStrategy for DynamicStrategy {
         Ok(())
     }
 
-    fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8) -> Option<u8> {
+    fn add_window(
+        &self,
+        base: u32,
+        size: u32,
+        permissions: u32,
+        owner: u8,
+    ) -> Result<u8, MpuError> {
         with_cs(|cs| {
             let mut slots = self.slots.borrow(cs).borrow_mut();
             // Scan slots 1..3 (R5-R7) for a free entry.
@@ -230,10 +260,10 @@ impl MpuStrategy for DynamicStrategy {
                         permissions,
                         owner,
                     });
-                    return Some(DYNAMIC_REGION_BASE + idx as u8);
+                    return Ok(DYNAMIC_REGION_BASE + idx as u8);
                 }
             }
-            None // All dynamic slots occupied.
+            Err(MpuError::SlotExhausted)
         })
     }
 
@@ -273,9 +303,15 @@ impl MpuStrategy for StaticStrategy {
         Ok(())
     }
 
-    fn add_window(&self, _base: u32, _size: u32, _permissions: u32, _owner: u8) -> Option<u8> {
+    fn add_window(
+        &self,
+        _base: u32,
+        _size: u32,
+        _permissions: u32,
+        _owner: u8,
+    ) -> Result<u8, MpuError> {
         // Static strategy does not support dynamic windows.
-        None
+        Err(MpuError::SlotExhausted)
     }
 
     fn remove_window(&self, _region_id: u8) {
@@ -457,9 +493,12 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn static_strategy_add_window_returns_none() {
+    fn static_strategy_add_window_returns_slot_exhausted() {
         let strategy = StaticStrategy;
-        assert_eq!(strategy.add_window(0x2000_0000, 256, 0, 0), None);
+        assert_eq!(
+            strategy.add_window(0x2000_0000, 256, 0, 0),
+            Err(MpuError::SlotExhausted),
+        );
     }
 
     #[test]
@@ -477,7 +516,10 @@ mod tests {
     #[test]
     fn static_strategy_satisfies_trait_object() {
         let strategy: &dyn MpuStrategy = &StaticStrategy;
-        assert_eq!(strategy.add_window(0, 0, 0, 0), None);
+        assert_eq!(
+            strategy.add_window(0, 0, 0, 0),
+            Err(MpuError::SlotExhausted)
+        );
         assert_eq!(
             strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0), (0, 0)]),
             Ok(()),
@@ -537,13 +579,13 @@ mod tests {
     fn dynamic_add_window_allocates_r5_r6_r7() {
         let ds = DynamicStrategy::new();
         let r5 = ds.add_window(0x2001_0000, 256, 0xAA, 1);
-        assert_eq!(r5, Some(5));
+        assert_eq!(r5, Ok(5));
 
         let r6 = ds.add_window(0x2002_0000, 512, 0xBB, 2);
-        assert_eq!(r6, Some(6));
+        assert_eq!(r6, Ok(6));
 
         let r7 = ds.add_window(0x2003_0000, 1024, 0xCC, 3);
-        assert_eq!(r7, Some(7));
+        assert_eq!(r7, Ok(7));
 
         // Verify stored descriptors.
         let d5 = ds.slot(5).unwrap();
@@ -566,12 +608,15 @@ mod tests {
     #[test]
     fn dynamic_add_window_exhaustion() {
         let ds = DynamicStrategy::new();
-        assert!(ds.add_window(0x2001_0000, 256, 0, 1).is_some()); // R5
-        assert!(ds.add_window(0x2002_0000, 256, 0, 1).is_some()); // R6
-        assert!(ds.add_window(0x2003_0000, 256, 0, 1).is_some()); // R7
+        assert!(ds.add_window(0x2001_0000, 256, 0, 1).is_ok()); // R5
+        assert!(ds.add_window(0x2002_0000, 256, 0, 1).is_ok()); // R6
+        assert!(ds.add_window(0x2003_0000, 256, 0, 1).is_ok()); // R7
 
         // Fourth dynamic window should fail — only 3 dynamic slots.
-        assert_eq!(ds.add_window(0x2004_0000, 256, 0, 1), None);
+        assert_eq!(
+            ds.add_window(0x2004_0000, 256, 0, 1),
+            Err(MpuError::SlotExhausted)
+        );
     }
 
     #[test]
@@ -661,9 +706,9 @@ mod tests {
     fn dynamic_satisfies_trait_object() {
         let ds = DynamicStrategy::new();
         let strategy: &dyn MpuStrategy = &ds;
-        assert_eq!(strategy.add_window(0x2001_0000, 256, 0, 1), Some(5));
+        assert_eq!(strategy.add_window(0x2001_0000, 256, 0, 1), Ok(5));
         strategy.remove_window(5);
-        assert_eq!(strategy.add_window(0x2001_0000, 256, 0, 1), Some(5));
+        assert_eq!(strategy.add_window(0x2001_0000, 256, 0, 1), Ok(5));
     }
 
     // ------------------------------------------------------------------
@@ -780,5 +825,46 @@ mod tests {
         assert_eq!(vals[1].0, build_rbar(0x2001_0000, 5).unwrap());
         assert_eq!(vals[2].0, build_rbar(0x2002_0000, 6).unwrap());
         assert_eq!(vals[3].0, build_rbar(0x2003_0000, 7).unwrap());
+    }
+
+    // ------------------------------------------------------------------
+    // MpuError variants: Display, Debug, PartialEq
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn mpu_error_display_messages() {
+        assert_eq!(
+            format!("{}", MpuError::RegionCountMismatch),
+            "region count mismatch"
+        );
+        assert_eq!(
+            format!("{}", MpuError::SizeTooSmall),
+            "size too small (minimum 32 bytes)"
+        );
+        assert_eq!(
+            format!("{}", MpuError::SizeNotPowerOfTwo),
+            "size is not a power of two"
+        );
+        assert_eq!(
+            format!("{}", MpuError::BaseNotAligned),
+            "base address not aligned to size"
+        );
+        assert_eq!(
+            format!("{}", MpuError::AddressOverflow),
+            "base + size overflows u32"
+        );
+        assert_eq!(
+            format!("{}", MpuError::SlotExhausted),
+            "no free MPU region slots"
+        );
+    }
+
+    #[test]
+    fn mpu_error_debug_contains_variant_name() {
+        assert!(format!("{:?}", MpuError::SizeTooSmall).contains("SizeTooSmall"));
+        assert!(format!("{:?}", MpuError::SizeNotPowerOfTwo).contains("SizeNotPowerOfTwo"));
+        assert!(format!("{:?}", MpuError::BaseNotAligned).contains("BaseNotAligned"));
+        assert!(format!("{:?}", MpuError::AddressOverflow).contains("AddressOverflow"));
+        assert!(format!("{:?}", MpuError::SlotExhausted).contains("SlotExhausted"));
     }
 }

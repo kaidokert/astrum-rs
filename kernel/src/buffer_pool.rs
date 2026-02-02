@@ -5,7 +5,7 @@
 //! with [`crate::mpu_strategy::DynamicStrategy`] to map buffer slots
 //! as MPU windows for zero-copy cross-partition lending.
 
-use crate::mpu_strategy::MpuStrategy;
+use crate::mpu_strategy::{MpuError, MpuStrategy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowState {
@@ -28,7 +28,8 @@ pub enum BufferError {
     InvalidSlot,
     SlotNotFree,
     SlotNotBorrowed,
-    MpuWindowExhausted,
+    /// An MPU operation failed — wraps the underlying [`MpuError`].
+    Mpu(MpuError),
 }
 
 /// The access mode requested when borrowing a buffer slot.
@@ -211,7 +212,7 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
 
         let region_id = strategy
             .add_window(base, SIZE as u32, rasr, partition_id)
-            .ok_or(BufferError::MpuWindowExhausted)?;
+            .map_err(BufferError::Mpu)?;
 
         s.state = if writable {
             BorrowState::BorrowedWrite {
@@ -413,7 +414,7 @@ mod tests {
         // Fourth lend should fail — no MPU windows left.
         assert_eq!(
             pool.lend_to_partition(3, 4, true, &ds),
-            Err(BufferError::MpuWindowExhausted),
+            Err(BufferError::Mpu(MpuError::SlotExhausted)),
         );
         // Slot 3 should remain free.
         assert_eq!(pool.get(3).unwrap().state(), BorrowState::Free);
