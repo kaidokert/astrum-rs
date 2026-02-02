@@ -255,11 +255,20 @@ extern "C" fn worker_main() -> ! {
     }
 
     // Phase 3: Use timed receive to block waiting for the next command.
-    // The queue is empty; SYS_QUEUING_RECV_TIMED with timeout > 0 blocks
-    // the partition until the commander sends CMD_TIMED (which wakes us).
-    // This is a single blocking call – no polling loop needed.
+    // The queue is empty; SYS_QUEUING_RECV_TIMED with timeout > 0
+    // registers this partition in the receiver wait queue and transitions
+    // us to Waiting.  When the commander later enqueues CMD_TIMED, the
+    // kernel wakes us (Ready) and we yield to trigger PendSV.
+    //
+    // The kernel's two-phase handoff:
+    //   1. The timed recv returns 0 (ReceiverBlocked, now Waiting).
+    //   2. We yield so PendSV context-switches away.
+    //   3. The commander sends; the kernel transitions us to Ready.
+    //   4. The scheduler gives us a slot; we retry the recv to dequeue.
     hprintln!("[worker]    phase 3: timed recv (blocking)");
     let mut buf = [0u8; QUEUE_MSG_SIZE];
+
+    // Step 1: register in the receiver wait queue with a timeout.
     let sz = svc!(
         SYS_QUEUING_RECV_TIMED,
         cmd_port,
@@ -267,8 +276,25 @@ extern "C" fn worker_main() -> ! {
         buf.as_mut_ptr() as u32
     );
 
-    // The kernel suspends this task until a message arrives or the timeout
-    // expires.  When we resume, check the result directly.
+    // Step 2: if blocked (sz == 0), yield to let the scheduler switch to
+    // the commander, then poll until the message arrives.
+    let sz = if sz == 0 {
+        loop {
+            svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+            let rc = svc!(
+                SYS_QUEUING_RECV,
+                cmd_port,
+                QUEUE_MSG_SIZE as u32,
+                buf.as_mut_ptr() as u32
+            );
+            if rc & SVC_ERROR_BIT == 0 {
+                break rc;
+            }
+        }
+    } else {
+        sz
+    };
+
     if sz & SVC_ERROR_BIT != 0 {
         hprintln!("queuing_demo: FAIL – timed receive failed or timed out");
         debug::exit(debug::EXIT_FAILURE);

@@ -120,10 +120,15 @@ extern "C" fn partition_p1_entry() -> ! {
         }
         P1_ALLOC_SLOT.store(slot, Ordering::Release);
 
+        // Copy MAGIC into a stack-local buffer so the pointer lies within
+        // the partition's MPU data region (validated_ptr rejects flash/rodata
+        // pointers that fall outside the partition's RAM region).
+        let magic_local: [u8; 4] = MAGIC;
+
         // Write magic data into the allocated buffer via the SYS_BUF_WRITE
         // syscall. The kernel validates that P1 owns the slot in
-        // BorrowedWrite state and copies from the partition-local MAGIC
-        // array into the buffer, preserving isolation.
+        // BorrowedWrite state and copies from the partition-local buffer
+        // into the pool buffer, preserving isolation.
         // SAFETY: `SYS_BUF_WRITE` (26) is a valid syscall ID handled by
         // `Kernel::dispatch`. r1=slot index, r2=data length, r3=pointer to
         // source data in partition memory. The returned r0 holds the number
@@ -132,8 +137,8 @@ extern "C" fn partition_p1_entry() -> ! {
             core::arch::asm!("svc #0",
                 inout("r0") SYS_BUF_WRITE => _,
                 in("r1") slot,
-                in("r2") MAGIC.len() as u32,
-                in("r3") MAGIC.as_ptr() as u32,
+                in("r2") magic_local.len() as u32,
+                in("r3") magic_local.as_ptr() as u32,
                 out("r12") _);
         }
 
