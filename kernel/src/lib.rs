@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 
+pub mod blackboard;
 pub mod context;
 pub mod events;
 pub mod kernel;
