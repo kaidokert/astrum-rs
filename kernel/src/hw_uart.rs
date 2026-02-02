@@ -35,6 +35,9 @@ pub struct HwUartBackend {
     rx: Deque<u8, CAPACITY>,
     /// Bitmask of partitions that have opened this device (max 8).
     open_partitions: u8,
+    /// When true, `drain_tx_to_hw` copies TX bytes directly into the
+    /// RX ring buffer instead of writing to hardware registers.
+    loopback: bool,
 }
 
 impl HwUartBackend {
@@ -46,12 +49,27 @@ impl HwUartBackend {
             tx: Deque::new(),
             rx: Deque::new(),
             open_partitions: 0,
+            loopback: false,
         }
     }
 
     /// Return a reference to the underlying UART registers.
     pub fn regs(&self) -> &UartRegs {
         &self.regs
+    }
+
+    /// Enable or disable software loopback mode.
+    ///
+    /// When enabled, [`drain_tx_to_hw`](Self::drain_tx_to_hw) copies TX
+    /// bytes directly into the RX ring buffer instead of writing to
+    /// hardware registers.
+    pub fn set_loopback(&mut self, enable: bool) {
+        self.loopback = enable;
+    }
+
+    /// Return whether software loopback mode is enabled.
+    pub fn loopback(&self) -> bool {
+        self.loopback
     }
 
     /// Number of bytes currently in the TX ring buffer.
@@ -131,18 +149,37 @@ impl HwUartBackend {
         count
     }
 
-    /// Bottom-half drain: pop bytes from the TX ring buffer and write
-    /// them to UART DR.
+    /// Bottom-half drain: pop bytes from the TX ring buffer and either
+    /// write them to UART DR or copy them into the RX ring buffer when
+    /// software loopback is enabled.
     ///
-    /// Writes via [`UartRegs::is_tx_full`] + DR write until the
-    /// hardware transmit FIFO is full (TXFF set) or the TX ring buffer
-    /// is empty. Returns the number of bytes transferred.
+    /// **Normal mode** — writes via [`UartRegs::is_tx_full`] + DR write
+    /// until the hardware FIFO is full or the TX ring is empty.
+    ///
+    /// **Loopback mode** — pops TX bytes directly into the RX ring
+    /// buffer until the RX ring is full or the TX ring is empty.
+    ///
+    /// Returns the number of bytes transferred.
     pub fn drain_tx_to_hw(&mut self) -> usize {
         let mut count = 0;
-        while !self.regs.is_tx_full() {
+        loop {
+            // Check whether the destination can accept another byte.
+            let sink_full = if self.loopback {
+                self.rx.is_full()
+            } else {
+                self.regs.is_tx_full()
+            };
+            if sink_full {
+                break;
+            }
             match self.tx.pop_front() {
                 Some(b) => {
-                    self.regs.write_byte(b);
+                    if self.loopback {
+                        // RX not full (checked above), push cannot fail.
+                        let _ = self.rx.push_back(b);
+                    } else {
+                        self.regs.write_byte(b);
+                    }
                     count += 1;
                 }
                 None => break, // TX ring empty
@@ -548,6 +585,90 @@ mod tests {
         let read = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
         assert_eq!(read, 3);
         assert_eq!(&buf[..3], &[0xA, 0xB, 0xC]);
+    }
+
+    // ---- Loopback mode tests ----
+
+    #[test]
+    fn loopback_default_off() {
+        let hw = make_backend(1);
+        assert!(!hw.loopback());
+    }
+
+    #[test]
+    fn set_loopback_toggle() {
+        let mut hw = make_backend(1);
+        hw.set_loopback(true);
+        assert!(hw.loopback());
+        hw.set_loopback(false);
+        assert!(!hw.loopback());
+    }
+
+    #[test]
+    fn drain_tx_to_hw_loopback_copies_tx_to_rx() {
+        let mut hw = make_backend(1);
+        hw.set_loopback(true);
+        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::write(&mut hw, 0, &[0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
+        assert_eq!(hw.tx_len(), 4);
+        assert_eq!(hw.rx_len(), 0);
+
+        let n = hw.drain_tx_to_hw();
+        assert_eq!(n, 4);
+        assert_eq!(hw.tx_len(), 0);
+        assert_eq!(hw.rx_len(), 4);
+
+        // Verify byte order is preserved (FIFO).
+        let mut buf = [0u8; 4];
+        let read = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        assert_eq!(read, 4);
+        assert_eq!(buf, [0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn drain_tx_to_hw_loopback_stops_when_rx_full() {
+        let mut hw = make_backend(1);
+        hw.set_loopback(true);
+        VirtualDevice::open(&mut hw, 0).unwrap();
+
+        // Fill RX to capacity - 2, leaving room for only 2 bytes.
+        hw.push_rx(&[0xFF; CAPACITY - 2]);
+        assert_eq!(hw.rx_len(), CAPACITY - 2);
+
+        // Write 5 bytes to TX.
+        VirtualDevice::write(&mut hw, 0, &[1, 2, 3, 4, 5]).unwrap();
+        let n = hw.drain_tx_to_hw();
+        // Only 2 bytes should fit in RX.
+        assert_eq!(n, 2);
+        assert_eq!(hw.rx_len(), CAPACITY);
+        // 3 bytes remain in TX.
+        assert_eq!(hw.tx_len(), 3);
+    }
+
+    #[test]
+    fn drain_tx_to_hw_loopback_empty_tx() {
+        let mut hw = make_backend(1);
+        hw.set_loopback(true);
+        let n = hw.drain_tx_to_hw();
+        assert_eq!(n, 0);
+        assert_eq!(hw.rx_len(), 0);
+    }
+
+    #[test]
+    fn drain_tx_to_hw_normal_mode_writes_hardware() {
+        // Verify that when loopback is off, bytes go to hardware, not RX.
+        let mut hw = make_backend(1);
+        assert!(!hw.loopback());
+        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::write(&mut hw, 0, &[0xAA, 0xBB]).unwrap();
+
+        let n = hw.drain_tx_to_hw();
+        assert_eq!(n, 2);
+        assert_eq!(hw.tx_len(), 0);
+        // RX should remain empty (bytes went to hardware DR).
+        assert_eq!(hw.rx_len(), 0);
+        // Last byte written to DR.
+        assert_eq!(hw.regs().read(crate::uart_hal::DR), 0xBB);
     }
 
     // ---- UART1 IRQ constant ----

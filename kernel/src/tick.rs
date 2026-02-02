@@ -565,6 +565,31 @@ mod tests {
         }
 
         #[test]
+        fn run_bottom_half_hw_uart_loopback_copies_tx_to_rx() {
+            let mut pair = VirtualUartPair::new(0, 1);
+            let mut ring = IsrRingBuffer::<4, 8>::new();
+            let mut buffers = BufferPool::<4, 32>::new();
+            let mut hw = HwUartBackend::new(5, UartRegs::new(0x4000_C000));
+            hw.set_loopback(true);
+            hw.open(0).unwrap();
+            hw.write(0, &[0xCA, 0xFE]).unwrap();
+            assert_eq!(hw.tx_len(), 2);
+            assert_eq!(hw.rx_len(), 0);
+
+            let mut hw_uart = Some(hw);
+            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+
+            let hw = hw_uart.as_mut().unwrap();
+            // TX drained, bytes looped back into RX.
+            assert_eq!(hw.tx_len(), 0);
+            assert_eq!(hw.rx_len(), 2);
+            let mut buf = [0u8; 4];
+            let n = hw.read(0, &mut buf).unwrap();
+            assert_eq!(n, 2);
+            assert_eq!(&buf[..2], &[0xCA, 0xFE]);
+        }
+
+        #[test]
         fn run_bottom_half_hw_uart_none_is_noop() {
             // When hw_uart is None, ISR entries for unknown tags are
             // silently dropped and no drain occurs.

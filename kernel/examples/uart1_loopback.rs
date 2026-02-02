@@ -64,27 +64,16 @@ static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
 
-/// Software loopback: drain TX ring into a local buffer and inject
-/// that data back into RX, then run the normal bottom-half for
-/// virtual-UART and ISR-ring processing.
-fn do_loopback(k: &mut Kernel<DemoConfig>) {
-    // Capture TX bytes before run_bottom_half drains them to hardware.
-    let mut buf = [0u8; 64];
-    let n = k.hw_uart.as_mut().map_or(0, |hw| hw.drain_tx(&mut buf));
-
+/// Run the bottom-half processing for virtual-UART, ISR-ring, and
+/// HwUartBackend.  Software loopback is handled internally by
+/// `HwUartBackend::drain_tx_to_hw` when loopback mode is enabled.
+fn do_bottom_half(k: &mut Kernel<DemoConfig>) {
     kernel::tick::run_bottom_half(
         &mut k.uart_pair,
         &mut k.isr_ring,
         &mut k.buffers,
         &mut k.hw_uart,
     );
-
-    // Inject the captured TX data into RX (software loopback).
-    if n > 0 {
-        if let Some(hw) = k.hw_uart.as_mut() {
-            hw.push_rx_from_isr(&buf[..n]);
-        }
-    }
 }
 
 kernel::define_dispatch_hook!(DemoConfig, |k| {
@@ -103,7 +92,7 @@ kernel::define_dispatch_hook!(DemoConfig, |k| {
                 break;
             }
             // System window or None — run software loopback and advance.
-            do_loopback(k);
+            do_bottom_half(k);
         }
     }
 });
@@ -132,7 +121,7 @@ fn SysTick() {
         ScheduleEvent::SystemWindow => {
             cortex_m::interrupt::free(|cs| {
                 if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-                    do_loopback(k);
+                    do_bottom_half(k);
                 }
             });
         }
@@ -248,10 +237,13 @@ fn main() -> ! {
     // SAFETY: called once before the scheduler starts (interrupts disabled,
     // single-core). STACKS, KS are only written here; no concurrent access.
     // UartRegs::new and init use a valid MMIO base for UART1 on LM3S6965.
+    // HwUartBackend::new is safe given a valid UartRegs; set_loopback is a
+    // plain field write with no unsafe invariants.
     unsafe {
         let regs = UartRegs::new(0x4000_D000);
         regs.init(115_200, 12_000_000);
-        let hw_backend = HwUartBackend::new(HW_UART_DEV as u8, regs);
+        let mut hw_backend = HwUartBackend::new(HW_UART_DEV as u8, regs);
+        hw_backend.set_loopback(true);
 
         let stacks_ref = &STACKS;
         let bases: [u32; NUM_PARTITIONS] =
