@@ -76,3 +76,4 @@ required-features = ["qemu"]
 
 [features]
 qemu = []
+dynamic-mpu = []

@@ -9,6 +9,8 @@ pub mod events;
 pub mod kernel;
 pub mod message;
 pub mod mpu;
+#[cfg(feature = "dynamic-mpu")]
+pub mod mpu_strategy;
 pub mod mutex;
 pub mod partition;
 pub mod pendsv;
