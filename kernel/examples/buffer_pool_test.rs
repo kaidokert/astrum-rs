@@ -321,6 +321,28 @@ fn main() -> ! {
             mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SIZES[i], 0),
         });
         store_kernel(Kernel::<TestConfig>::new());
+        // Register partitions in the Kernel struct so that
+        // validate_user_ptr can verify SVC pointer arguments.
+        // TODO: DRY – PCB construction from PartitionConfig is duplicated here
+        // and in KernelState::new (kernel.rs). Add a PartitionTable::init_from_configs
+        // helper to share the logic (also affects harness.rs and uart1_loopback.rs).
+        cortex_m::interrupt::free(|cs| {
+            if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+                for c in &cfgs {
+                    let sp = c.stack_base.wrapping_add(c.stack_size);
+                    let pcb = kernel::partition::PartitionControlBlock::new(
+                        c.id,
+                        c.entry_point,
+                        c.stack_base,
+                        sp,
+                        c.mpu_region,
+                    );
+                    k.partitions
+                        .add(pcb)
+                        .expect("failed to add partition during test setup");
+                }
+            }
+        });
         cortex_m::interrupt::free(|cs| {
             KS.borrow(cs).replace(Some(
                 KernelState::new(sched, &cfgs).expect("invalid kernel config"),
