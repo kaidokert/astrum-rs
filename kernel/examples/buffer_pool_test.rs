@@ -43,7 +43,13 @@ const DATA_SIZES: [u32; NP] = [4096, 4096];
 const P2: u8 = 1;
 const MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 
-static mut STACKS: [[u32; STACK_WORDS]; NP] = [[0; STACK_WORDS]; NP];
+#[repr(C, align(1024))]
+struct AlignedStack([u32; STACK_WORDS]);
+
+static mut STACKS: [AlignedStack; NP] = {
+    const ZERO: AlignedStack = AlignedStack([0; STACK_WORDS]);
+    [ZERO; NP]
+};
 #[no_mangle]
 static mut PARTITION_SP: [u32; NP] = [0; NP];
 #[no_mangle]
@@ -251,12 +257,12 @@ fn SysTick() {
                 }
             }
         }),
-        8 => check(
+        10 => check(
             "step3: p2-read",
             P2_READ_RESULT.load(Ordering::Acquire) == 1,
             FAIL,
         ),
-        9 => cortex_m::interrupt::free(|cs| {
+        11 => cortex_m::interrupt::free(|cs| {
             // Step 4: revoke access, verify MPU region disabled.
             if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
                 match k.buffers.revoke_from_partition(*SLOT, &STRATEGY) {
@@ -275,7 +281,7 @@ fn SysTick() {
                 }
             }
         }),
-        10 => {
+        12 => {
             if *FAIL {
                 hprintln!("buffer_pool_test: FAIL");
                 debug::exit(debug::EXIT_FAILURE);
@@ -305,7 +311,7 @@ fn main() -> ! {
         let cfgs: [PartitionConfig; NP] = core::array::from_fn(|i| PartitionConfig {
             id: i as u8,
             entry_point: 0,
-            stack_base: STACKS[i].as_ptr() as u32,
+            stack_base: STACKS[i].0.as_ptr() as u32,
             stack_size: STACK_SIZE,
             mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SIZES[i], 0),
         });
@@ -316,7 +322,7 @@ fn main() -> ! {
             ));
         });
         for i in 0..NP {
-            let stk = &mut STACKS[i];
+            let stk = &mut STACKS[i].0;
             let ix = kernel::context::init_stack_frame(stk, entries[i], Some(i as u32))
                 .expect("init_stack_frame");
             PARTITION_SP[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
