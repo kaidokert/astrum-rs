@@ -26,9 +26,9 @@ fn main() -> ! {
 
     mpu::configure_region(&p.MPU, rbar_val, rasr_val);
 
-    // Enable MPU with PRIVDEFENA so privileged code keeps default memory map
+    // Enable MPU with PRIVDEFENA — privileged default memory map remains active
     // SAFETY: enabling the MPU with privileged default map.
-    unsafe { p.MPU.ctrl.write((1 << 2) | 1) };
+    unsafe { p.MPU.ctrl.write(mpu::MPU_CTRL_ENABLE_PRIVDEFENA) };
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
 

@@ -27,8 +27,9 @@ fn main() -> ! {
     let rasr1 = mpu::build_rasr(size_field, mpu::AP_FULL_ACCESS, true, (true, true, false));
     mpu::configure_region(&p.MPU, rbar1, rasr1);
 
-    // Enable MPU with PRIVDEFENA
-    unsafe { p.MPU.ctrl.write((1 << 2) | 1) };
+    // Enable MPU with PRIVDEFENA — privileged default memory map remains active
+    // SAFETY: enabling the MPU after region configuration is complete.
+    unsafe { p.MPU.ctrl.write(mpu::MPU_CTRL_ENABLE_PRIVDEFENA) };
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
 

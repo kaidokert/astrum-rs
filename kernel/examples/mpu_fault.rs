@@ -75,8 +75,9 @@ fn main() -> ! {
     let rasr = mpu::build_rasr(size_field, mpu::AP_NO_ACCESS, true, (false, false, false));
     mpu::configure_region(&p.MPU, rbar, rasr);
 
-    // Enable MPU with PRIVDEFENA (bit 2) so default memory map still works
-    unsafe { p.MPU.ctrl.write((1 << 2) | 1) };
+    // Enable MPU with PRIVDEFENA — privileged default memory map remains active
+    // SAFETY: enabling the MPU after region configuration is complete.
+    unsafe { p.MPU.ctrl.write(mpu::MPU_CTRL_ENABLE_PRIVDEFENA) };
     asm::dsb();
     asm::isb();
 

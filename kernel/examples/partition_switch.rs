@@ -54,8 +54,9 @@ fn apply_partition(mpu_periph: &cortex_m::peripheral::MPU, partition: u32) {
     let rasr1 = mpu::build_rasr(size_field, mpu::AP_FULL_ACCESS, true, (true, true, false));
     mpu::configure_region(mpu_periph, rbar1, rasr1);
 
-    // Re-enable MPU with PRIVDEFENA
-    unsafe { mpu_periph.ctrl.write((1 << 2) | 1) };
+    // Re-enable MPU with PRIVDEFENA — privileged default memory map remains active
+    // SAFETY: re-enabling the MPU after region configuration is complete.
+    unsafe { mpu_periph.ctrl.write(mpu::MPU_CTRL_ENABLE_PRIVDEFENA) };
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
 }
