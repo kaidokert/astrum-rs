@@ -114,7 +114,9 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
             return Err(QueuingError::MessageTooLarge);
         }
         let mut msg = [0u8; M];
-        msg[..data.len()].copy_from_slice(data);
+        msg.get_mut(..data.len())
+            .ok_or(QueuingError::MessageTooLarge)?
+            .copy_from_slice(data);
         if self.buf.push_back((data.len(), msg)).is_err() {
             // u64::MAX = no timeout; kernel wakes this sender unconditionally on next recv.
             self.sender_wq
@@ -151,7 +153,9 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
             });
         }
         let mut msg = [0u8; M];
-        msg[..data.len()].copy_from_slice(data);
+        msg.get_mut(..data.len())
+            .ok_or(QueuingError::MessageTooLarge)?
+            .copy_from_slice(data);
         // push_back cannot fail: we just confirmed the buffer is not full.
         let _ = self.buf.push_back((data.len(), msg));
         Ok(SendQueuingOutcome::Delivered {
@@ -175,7 +179,8 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
             return Err(QueuingError::DirectionViolation);
         }
         if let Some((len, msg)) = self.buf.pop_front() {
-            let copy_len = len.min(buf.len());
+            // Clamp to M in case stored len is corrupted beyond buffer size.
+            let copy_len = len.min(M).min(buf.len());
             buf[..copy_len].copy_from_slice(&msg[..copy_len]);
             return Ok((len, self.sender_wq.pop_front_pid()));
         }
@@ -196,7 +201,8 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
             return Err(QueuingError::DirectionViolation);
         }
         if let Some((len, msg)) = self.buf.pop_front() {
-            let copy_len = len.min(buf.len());
+            // Clamp to M in case stored len is corrupted beyond buffer size.
+            let copy_len = len.min(M).min(buf.len());
             buf[..copy_len].copy_from_slice(&msg[..copy_len]);
             return Ok(RecvQueuingOutcome::Received {
                 msg_len: len,
@@ -410,7 +416,9 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
             });
         }
         let mut msg = [0u8; M];
-        msg[..data.len()].copy_from_slice(data);
+        msg.get_mut(..data.len())
+            .ok_or(QueuingError::MessageTooLarge)?
+            .copy_from_slice(data);
         let _ = dst.buf.push_back((data.len(), msg));
         Ok(SendQueuingOutcome::Delivered {
             wake_receiver: dst.receiver_wq.pop_front_pid(),
@@ -932,5 +940,98 @@ mod tests {
         assert!(p2.send_routed(s3, 0, &[0; 9], 0, 0).is_err());
         p2.send_routed(s3, 0, &[1], 0, 0).unwrap();
         assert!(p2.send_routed(s3, 1, &[2], 0, 0).is_err());
+    }
+
+    // --- Defense-in-depth bounds guard tests ---
+
+    /// Verify that recv does not panic when the stored `len` exceeds M
+    /// (simulating a corrupted internal value).
+    #[test]
+    fn recv_corrupted_len_exceeding_m_does_not_panic() {
+        let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
+        // Inject a message with len > M to simulate corruption.
+        // inject_message clamps its own copy, but we reach into the raw
+        // buffer to set len = M+5 directly.
+        let mut msg = [0xABu8; 4];
+        msg[0] = 1;
+        msg[1] = 2;
+        msg[2] = 3;
+        msg[3] = 4;
+        dst.buf.push_back((9, msg)).unwrap(); // len=9 > M=4
+
+        let mut buf = [0u8; 8];
+        let (reported_len, _) = dst.recv(0, &mut buf).unwrap();
+        // reported_len is the raw stored value (9) so caller can detect corruption,
+        // but only M bytes (4) were actually copied — no out-of-bounds panic.
+        assert_eq!(reported_len, 9);
+        assert_eq!(&buf[..4], &[1, 2, 3, 4]);
+    }
+
+    /// Verify that receive_queuing_message does not panic with corrupted len.
+    #[test]
+    fn receive_queuing_corrupted_len_does_not_panic() {
+        let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
+        let msg = [10u8; 4];
+        dst.buf.push_back((100, msg)).unwrap(); // len=100 >> M=4
+
+        let mut buf = [0u8; 4];
+        let o = dst.receive_queuing_message(0, &mut buf, 0, 0).unwrap();
+        assert_eq!(
+            o,
+            RecvQueuingOutcome::Received {
+                msg_len: 100,
+                wake_sender: None,
+            }
+        );
+        // Only M=4 bytes copied despite stored len=100.
+        assert_eq!(&buf, &[10, 10, 10, 10]);
+    }
+
+    /// Verify that recv with corrupted len AND small buffer clamps to
+    /// the minimum of all three: len, M, buf.len().
+    #[test]
+    fn recv_corrupted_len_small_buffer_clamps_correctly() {
+        let mut dst = QueuingPort::<4, 8, 4>::new(PortDirection::Destination);
+        let msg = [0xFFu8; 8];
+        dst.buf.push_back((20, msg)).unwrap(); // len=20 > M=8
+
+        let mut small = [0u8; 3]; // buf.len()=3 < M=8 < len=20
+        let (reported_len, _) = dst.recv(0, &mut small).unwrap();
+        assert_eq!(reported_len, 20);
+        // copy_len = min(20, 8, 3) = 3
+        assert_eq!(&small, &[0xFF, 0xFF, 0xFF]);
+    }
+
+    /// Verify that the send get_mut guard catches data.len() > M even if
+    /// the prior explicit check were somehow bypassed.
+    #[test]
+    fn send_get_mut_guard_returns_message_too_large() {
+        let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
+        // data.len() = 5 > M = 4; the explicit check catches this first,
+        // but the get_mut guard would also catch it.
+        assert_eq!(src.send(0, &[1; 5]), Err(QueuingError::MessageTooLarge));
+    }
+
+    /// Verify send_queuing_message get_mut guard for oversized data.
+    #[test]
+    fn send_queuing_get_mut_guard_returns_message_too_large() {
+        let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
+        assert_eq!(
+            src.send_queuing_message(0, &[1; 5], 0, 0),
+            Err(QueuingError::MessageTooLarge)
+        );
+    }
+
+    /// Verify send_routed get_mut guard for oversized data.
+    #[test]
+    fn send_routed_get_mut_guard_returns_message_too_large() {
+        let mut pool = QueuingPortPool::<4, 4, 4, 4>::new();
+        let s = pool.create_port(PortDirection::Source).unwrap();
+        let d = pool.create_port(PortDirection::Destination).unwrap();
+        pool.connect_ports(s, d).unwrap();
+        assert_eq!(
+            pool.send_routed(s, 0, &[1; 5], 0, 0),
+            Err(QueuingError::MessageTooLarge)
+        );
     }
 }
