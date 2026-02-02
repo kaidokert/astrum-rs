@@ -64,7 +64,7 @@ pub trait MpuStrategy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MpuError {
     /// The caller supplied a region count that does not match the expected
-    /// fixed layout (e.g. 3 regions for the static strategy).
+    /// fixed layout (e.g. 4 regions for the static strategy).
     RegionCountMismatch,
 }
 
@@ -174,7 +174,7 @@ impl DynamicStrategy {
     /// ensure the new configuration takes effect before any subsequent
     /// memory access.
     ///
-    /// Regions R0-R3 (static background/code/data) are left unchanged.
+    /// Regions R0-R3 (static background/code/data/guard) are left unchanged.
     ///
     /// The caller must pass an `&MPU` reference obtained from the
     /// peripheral singleton to make the hardware dependency explicit.
@@ -196,9 +196,9 @@ impl MpuStrategy for DynamicStrategy {
         partition_id: u8,
         regions: &[(u32, u32)],
     ) -> Result<(), MpuError> {
-        // The static regions (R0-R2) are handled elsewhere; we only
+        // The static regions (R0-R3) are handled elsewhere; we only
         // care about the single private-RAM region destined for R4.
-        if regions.is_empty() {
+        if regions.len() != 1 {
             return Err(MpuError::RegionCountMismatch);
         }
 
@@ -519,10 +519,16 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_configure_partition_rejects_empty() {
+    fn dynamic_configure_partition_rejects_wrong_count() {
         let ds = DynamicStrategy::new();
+        // Empty.
         assert_eq!(
             ds.configure_partition(0, &[]),
+            Err(MpuError::RegionCountMismatch),
+        );
+        // Multiple regions — only exactly one is accepted.
+        assert_eq!(
+            ds.configure_partition(0, &[(0, 0), (0, 0)]),
             Err(MpuError::RegionCountMismatch),
         );
     }

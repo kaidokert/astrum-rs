@@ -188,15 +188,15 @@ fn SysTick() {
     static mut RID: u8 = 0;
     *TICK += 1;
 
-    // Drive scheduler, configure R4 via DynamicStrategy (skip R0-R2).
+    // Drive scheduler, configure R4 via DynamicStrategy (skip R0-R3).
     cortex_m::interrupt::free(|cs| {
         let mut ks = KS.borrow(cs).borrow_mut();
         let state = ks.as_mut().expect("KS");
         let event = kernel::tick::on_systick(state);
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             if let Some(pcb) = state.partitions().get(pid as usize) {
-                if let Some(regions) = mpu::partition_mpu_regions(pcb) {
-                    let _ = STRATEGY.configure_partition(pid, &regions[2..]);
+                if let Some(regions) = mpu::partition_dynamic_regions(pcb) {
+                    let _ = STRATEGY.configure_partition(pid, &regions);
                 }
             }
             if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {

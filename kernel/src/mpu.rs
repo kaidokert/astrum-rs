@@ -116,6 +116,31 @@ pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32);
     ])
 }
 
+/// Index of the first dynamic region within the array returned by
+/// [`partition_mpu_regions`].  Regions before this index (background,
+/// code, stack guard) are static; the region at this index (data RW)
+/// is the one forwarded to [`DynamicStrategy::configure_partition`].
+const DYNAMIC_REGION_START: usize = 2;
+
+/// Number of dynamic regions extracted from [`partition_mpu_regions`].
+const DYNAMIC_REGION_COUNT: usize = 1;
+
+/// Return the slice of dynamic (RBAR, RASR) pairs for a partition.
+///
+/// This encapsulates the knowledge of which entries in the 4-region
+/// static layout are forwarded to the dynamic MPU strategy (currently
+/// only the data region at index 2, destined for hardware region R4).
+pub fn partition_dynamic_regions(
+    pcb: &PartitionControlBlock,
+) -> Option<[(u32, u32); DYNAMIC_REGION_COUNT]> {
+    let regions = partition_mpu_regions(pcb)?;
+    let mut out = [(0u32, 0u32); DYNAMIC_REGION_COUNT];
+    out.copy_from_slice(
+        &regions[DYNAMIC_REGION_START..DYNAMIC_REGION_START + DYNAMIC_REGION_COUNT],
+    );
+    Some(out)
+}
+
 /// Configure MPU regions for a partition: disable MPU, program four
 /// regions (background no-access, code RX, data RW/XN, stack guard),
 /// re-enable with PRIVDEFENA, and execute DSB/ISB barriers.
@@ -287,6 +312,25 @@ mod tests {
         assert_ne!(r0[3].0, r1[3].0);
         // Stack guard RASR identical (same 32-byte no-access)
         assert_eq!(r0[3].1, r1[3].1);
+    }
+
+    #[test]
+    fn partition_dynamic_regions_returns_data_region() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        let full = partition_mpu_regions(&pcb).unwrap();
+        let dynamic = partition_dynamic_regions(&pcb).unwrap();
+        // Should return exactly the data region (index 2).
+        assert_eq!(dynamic.len(), 1);
+        assert_eq!(dynamic[0], full[2]);
+        // Verify it is the RW data region, not the guard.
+        let ap = (dynamic[0].1 >> RASR_AP_SHIFT) & RASR_AP_MASK;
+        assert_eq!(ap, AP_FULL_ACCESS);
+    }
+
+    #[test]
+    fn partition_dynamic_regions_invalid_pcb() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 100); // not power of 2
+        assert!(partition_dynamic_regions(&pcb).is_none());
     }
 
     #[test]

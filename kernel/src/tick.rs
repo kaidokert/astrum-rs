@@ -95,7 +95,7 @@ pub fn on_systick_mpu<const P: usize, const S: usize>(
 /// via a [`DynamicStrategy`](crate::mpu_strategy::DynamicStrategy).
 ///
 /// On each partition switch this function:
-/// 1. Applies the static MPU regions (R0-R2) via `apply_partition_mpu`.
+/// 1. Applies the static MPU regions (R0-R3) via `apply_partition_mpu`.
 /// 2. Calls `DynamicStrategy::configure_partition` with the new partition's
 ///    data region so R4 tracks its private RAM.
 ///
@@ -114,14 +114,12 @@ pub fn on_systick_dynamic<const P: usize, const S: usize>(
     let event = on_systick(state);
     if let ScheduleEvent::PartitionSwitch(pid) = event {
         if let Some(pcb) = state.partitions().get(pid as usize) {
-            // Program static regions R0-R2.
+            // Program static regions R0-R3.
             crate::mpu::apply_partition_mpu(mpu, pcb);
 
             // Prepare dynamic R4 from the partition's data region.
-            // partition_mpu_regions returns [bg(R0), code(R1), data(R2)];
-            // the data region at index 2 is the one destined for R4.
-            if let Some(regions) = crate::mpu::partition_mpu_regions(pcb) {
-                let _ = strategy.configure_partition(pid, &regions[2..]);
+            if let Some(regions) = crate::mpu::partition_dynamic_regions(pcb) {
+                let _ = strategy.configure_partition(pid, &regions);
             }
             // NOTE: program_regions() is NOT called here — the actual
             // hardware write happens in PendSV (define_pendsv_dynamic!).
@@ -178,10 +176,8 @@ pub fn on_systick_dynamic_test<const P: usize, const S: usize>(
     let event = on_systick(state);
     if let ScheduleEvent::PartitionSwitch(pid) = event {
         if let Some(pcb) = state.partitions().get(pid as usize) {
-            if let Some(regions) = crate::mpu::partition_mpu_regions(pcb) {
-                // partition_mpu_regions returns [bg(R0), code(R1), data(R2)];
-                // the data region at index 2 is the one destined for R4.
-                let _ = strategy.configure_partition(pid, &regions[2..]);
+            if let Some(regions) = crate::mpu::partition_dynamic_regions(pcb) {
+                let _ = strategy.configure_partition(pid, &regions);
             }
         }
     }
@@ -349,6 +345,26 @@ mod tests {
                 }
             }
             assert_eq!(owners.as_slice(), &[1, 0, 1, 0]);
+        }
+
+        #[test]
+        fn r4_holds_data_region_not_guard() {
+            // After a partition switch, R4 should hold the partition's
+            // data region (RW, full-access) — not the 32-byte no-access
+            // stack guard that occupies Region 3.
+            let (mut st, ds) = (dyn_state(), DynamicStrategy::new());
+            tick(&mut st, &ds); // tick 0: None
+            tick(&mut st, &ds); // tick 1: switch to P1
+
+            let desc = ds.slot(4).expect("R4 should be occupied");
+            // P1's data region is 4096 bytes at 0x2000_8000.
+            assert_eq!(desc.base, 0x2000_8000);
+            assert_eq!(desc.size, 4096);
+            // The guard is only 32 bytes — verify R4 is not the guard.
+            assert_ne!(desc.size, 32);
+            // RASR should have AP = FULL_ACCESS (bits [26:24] = 0b011).
+            let ap = (desc.permissions >> 24) & 0x7;
+            assert_eq!(ap, crate::mpu::AP_FULL_ACCESS);
         }
 
         // ---- Bottom-half processing tests ----
