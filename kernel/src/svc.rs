@@ -131,6 +131,60 @@ pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
     });
 }
 
+/// Declare a `Mutex<RefCell<Option<Kernel<$Config>>>>` static, an SVC
+/// dispatch hook that forwards to [`Kernel::dispatch`], and a helper to
+/// store the kernel instance.
+///
+/// This is the companion to [`define_pendsv!`](crate::define_pendsv): it
+/// eliminates the boilerplate that every QEMU example otherwise duplicates
+/// for the safe `Mutex`-based kernel storage and dispatch pattern.
+///
+/// # Generated items
+///
+/// | Item | Description |
+/// |------|-------------|
+/// | `static KERN: Mutex<RefCell<Option<Kernel<$Config>>>>` | Thread-safe kernel storage |
+/// | `unsafe extern "C" fn dispatch_hook(f: &mut ExceptionFrame)` | SVC hook that dispatches via `KERN` |
+/// | `fn store_kernel(k: Kernel<$Config>)` | Store the kernel and install the hook |
+///
+/// # Usage
+///
+/// ```ignore
+/// kernel::define_dispatch_hook!(DemoConfig);
+/// ```
+#[macro_export]
+macro_rules! define_dispatch_hook {
+    ($Config:ty) => {
+        static KERN: ::cortex_m::interrupt::Mutex<
+            ::core::cell::RefCell<Option<$crate::svc::Kernel<$Config>>>,
+        > = ::cortex_m::interrupt::Mutex::new(::core::cell::RefCell::new(None));
+
+        unsafe extern "C" fn dispatch_hook(f: &mut $crate::context::ExceptionFrame) {
+            // SAFETY: called from SVC exception context on single-core Cortex-M;
+            // `cortex_m::interrupt::free` masks interrupts, ensuring exclusive access.
+            ::cortex_m::interrupt::free(|cs| {
+                if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+                    // SAFETY: `dispatch_hook` is only installed via `set_dispatch_hook`
+                    // which stores it in SVC_DISPATCH_HOOK; it is only ever called from
+                    // `SVC_HANDLER` with a valid `ExceptionFrame` pointer derived from
+                    // the hardware-stacked exception frame. Interrupts are masked by
+                    // `interrupt::free`, so `k` has exclusive access and no data races
+                    // are possible on single-core Cortex-M.
+                    unsafe { k.dispatch(f) }
+                }
+            });
+        }
+
+        /// Store the kernel instance and install the SVC dispatch hook.
+        fn store_kernel(k: $crate::svc::Kernel<$Config>) {
+            ::cortex_m::interrupt::free(|cs| {
+                KERN.borrow(cs).replace(Some(k));
+            });
+            $crate::svc::set_dispatch_hook(dispatch_hook);
+        }
+    };
+}
+
 /// Dispatch an SVC call based on the syscall number in `frame.r0`.
 ///
 /// If a dispatch hook has been installed via [`set_dispatch_hook`], the

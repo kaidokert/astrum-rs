@@ -49,17 +49,11 @@ static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
 static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
-static mut KERN: Option<Kernel<DemoConfig>> = None;
+kernel::define_dispatch_hook!(DemoConfig);
 static mut KS: Option<KernelState<{ DemoConfig::N }, MAX_SCHEDULE_ENTRIES>> = None;
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();
-unsafe extern "C" fn hook(f: &mut kernel::context::ExceptionFrame) {
-    let p = &raw mut KERN;
-    if let Some(k) = unsafe { (*p).as_mut() } {
-        unsafe { k.dispatch(f) }
-    }
-}
 macro_rules! svc {
     ($id:expr, $a:expr, $b:expr, $c:expr) => {{ let r: u32; #[cfg(target_arch = "arm")]
         unsafe { core::arch::asm!("svc #0", inout("r0") $id => r,
@@ -160,7 +154,7 @@ fn main() -> ! {
             .create_port(PortDirection::Destination, 10)
             .unwrap();
         k.sampling.connect_ports(s1, d1).unwrap();
-        KERN = Some(k);
+        store_kernel(k);
 
         let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
         for i in 0..NUM_PARTITIONS as u8 {
@@ -195,7 +189,6 @@ fn main() -> ! {
         p.SCB.set_priority(SystemHandler::PendSV, 0xFF);
         p.SCB.set_priority(SystemHandler::SysTick, 0xFE);
     }
-    kernel::svc::set_dispatch_hook(hook);
     p.SYST.set_clock_source(SystClkSource::Core);
     p.SYST.set_reload(120_000 - 1);
     p.SYST.clear_current();
