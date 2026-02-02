@@ -334,11 +334,12 @@ impl<
             }
             Some(SyscallId::BbRead) => {
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, BM) };
-                match self.blackboards.read_blackboard(
+                match self.blackboards.read_blackboard_timed(
                     frame.r1 as usize,
                     self.current_partition,
                     b,
                     frame.r2,
+                    self.tick.get(),
                 ) {
                     Ok(crate::blackboard::ReadBlackboardOutcome::Read { msg_len }) => {
                         msg_len as u32

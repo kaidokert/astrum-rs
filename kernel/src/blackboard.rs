@@ -24,7 +24,7 @@ pub struct Blackboard<const M: usize, const W: usize> {
     data: [u8; M],
     current_size: usize,
     is_empty: bool,
-    wait_queue: heapless::Deque<u8, W>,
+    wait_queue: heapless::Deque<(u8, u64), W>,
 }
 
 #[allow(clippy::new_without_default)]
@@ -66,7 +66,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
         self.current_size = data.len();
         self.is_empty = false;
         let mut woken = heapless::Vec::new();
-        while let Some(pid) = self.wait_queue.pop_front() {
+        while let Some((pid, _)) = self.wait_queue.pop_front() {
             // Safety: woken has capacity W, same as the wait queue,
             // so this cannot fail.
             woken.push(pid).unwrap();
@@ -80,6 +80,8 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
     ///   if the board is empty, without enqueuing the caller.
     /// - `timeout > 0` (blocking): if empty, enqueues the caller and returns
     ///   `Ok(ReaderBlocked)`.
+    // Dead from the SVC layer (which uses read_timed exclusively); kept for tests.
+    #[cfg(test)]
     pub fn read(
         &mut self,
         caller: u8,
@@ -91,7 +93,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
                 return Err(BlackboardError::BoardEmpty);
             }
             self.wait_queue
-                .push_back(caller)
+                .push_back((caller, u64::MAX))
                 .map_err(|_| BlackboardError::WaitQueueFull)?;
             return Ok(ReadBlackboardOutcome::ReaderBlocked);
         }
@@ -100,6 +102,50 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
         Ok(ReadBlackboardOutcome::Read {
             msg_len: self.current_size,
         })
+    }
+
+    /// Like `read`, but computes expiry from `current_tick + timeout`.
+    pub fn read_timed(
+        &mut self,
+        caller: u8,
+        buf: &mut [u8],
+        timeout: u32,
+        current_tick: u64,
+    ) -> Result<ReadBlackboardOutcome, BlackboardError> {
+        if self.is_empty {
+            if timeout == 0 {
+                return Err(BlackboardError::BoardEmpty);
+            }
+            let expiry = current_tick + timeout as u64;
+            self.wait_queue
+                .push_back((caller, expiry))
+                .map_err(|_| BlackboardError::WaitQueueFull)?;
+            return Ok(ReadBlackboardOutcome::ReaderBlocked);
+        }
+        let n = self.current_size.min(buf.len());
+        buf[..n].copy_from_slice(&self.data[..n]);
+        Ok(ReadBlackboardOutcome::Read {
+            msg_len: self.current_size,
+        })
+    }
+
+    pub fn drain_expired_readers<const E: usize>(
+        &mut self,
+        current_tick: u64,
+        out: &mut heapless::Vec<u8, E>,
+    ) {
+        // Rebuild the wait queue in-place, preserving FIFO order of
+        // non-expired entries. We drain the old queue completely, then
+        // re-push only the unexpired waiters in their original order.
+        let mut keep: heapless::Deque<(u8, u64), W> = heapless::Deque::new();
+        while let Some((pid, expiry)) = self.wait_queue.pop_front() {
+            if current_tick >= expiry {
+                let _ = out.push(pid);
+            } else {
+                let _ = keep.push_back((pid, expiry));
+            }
+        }
+        self.wait_queue = keep;
     }
 
     pub fn clear(&mut self) {
@@ -152,6 +198,8 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
             .display(data)
     }
 
+    // Dead from the SVC layer (which uses read_blackboard_timed exclusively); kept for tests.
+    #[cfg(test)]
     pub fn read_blackboard(
         &mut self,
         id: usize,
@@ -163,6 +211,28 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
             .get_mut(id)
             .ok_or(BlackboardError::InvalidBoard)?
             .read(caller, buf, timeout)
+    }
+
+    pub fn read_blackboard_timed(
+        &mut self,
+        id: usize,
+        caller: u8,
+        buf: &mut [u8],
+        timeout: u32,
+        current_tick: u64,
+    ) -> Result<ReadBlackboardOutcome, BlackboardError> {
+        self.boards
+            .get_mut(id)
+            .ok_or(BlackboardError::InvalidBoard)?
+            .read_timed(caller, buf, timeout, current_tick)
+    }
+
+    pub fn tick_timeouts<const E: usize>(&mut self, current_tick: u64) -> heapless::Vec<u8, E> {
+        let mut unblocked = heapless::Vec::new();
+        for board in self.boards.iter_mut() {
+            board.drain_expired_readers(current_tick, &mut unblocked);
+        }
+        unblocked
     }
 
     pub fn clear_blackboard(&mut self, id: usize) -> Result<(), BlackboardError> {
@@ -373,5 +443,86 @@ mod tests {
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 1);
+    }
+
+    #[test]
+    fn tick_timeouts_expires_reader_on_empty_board() {
+        let mut pool = BlackboardPool::<4, 16, 4>::new();
+        let id = pool.create().unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(
+            pool.read_blackboard_timed(id, 1, &mut buf, 50, 100),
+            Ok(ReadBlackboardOutcome::ReaderBlocked)
+        );
+        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(149);
+        assert!(u.is_empty());
+        assert_eq!(pool.get(id).unwrap().waiting_readers(), 1);
+        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(150);
+        assert_eq!(u.as_slice(), &[1]);
+        assert_eq!(pool.get(id).unwrap().waiting_readers(), 0);
+    }
+
+    #[test]
+    fn tick_timeouts_display_before_timeout_cancels_wait() {
+        let mut pool = BlackboardPool::<4, 16, 4>::new();
+        let id = pool.create().unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(
+            pool.read_blackboard_timed(id, 1, &mut buf, 100, 0),
+            Ok(ReadBlackboardOutcome::ReaderBlocked)
+        );
+        let woken: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[0xAB]).unwrap();
+        assert_eq!(woken.as_slice(), &[1]);
+        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(100);
+        assert!(u.is_empty());
+    }
+
+    #[test]
+    fn tick_timeouts_multiple_readers_different_expiries() {
+        let mut pool = BlackboardPool::<4, 16, 4>::new();
+        let id = pool.create().unwrap();
+        let mut buf = [0u8; 16];
+        pool.read_blackboard_timed(id, 1, &mut buf, 50, 0).unwrap();
+        pool.read_blackboard_timed(id, 2, &mut buf, 100, 0).unwrap();
+        pool.read_blackboard_timed(id, 3, &mut buf, 200, 0).unwrap();
+        assert_eq!(pool.get(id).unwrap().waiting_readers(), 3);
+        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(50);
+        assert_eq!(u.as_slice(), &[1]);
+        assert_eq!(pool.get(id).unwrap().waiting_readers(), 2);
+        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(100);
+        assert_eq!(u.as_slice(), &[2]);
+        assert_eq!(pool.get(id).unwrap().waiting_readers(), 1);
+        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(200);
+        assert_eq!(u.as_slice(), &[3]);
+        assert_eq!(pool.get(id).unwrap().waiting_readers(), 0);
+    }
+
+    /// Verify that draining expired readers preserves FIFO order of the
+    /// remaining (non-expired) waiters. Enqueue PIDs [A, B, C, D] where
+    /// B and D expire; after the tick the queue must contain [A, C] in
+    /// that order, not [C, A].
+    #[test]
+    fn drain_expired_preserves_fifo_order() {
+        let mut bb = Blackboard::<16, 8>::new(0);
+        let mut buf = [0u8; 16];
+        // PID 10, expiry 200 (survives)
+        bb.read_timed(10, &mut buf, 200, 0).unwrap();
+        // PID 20, expiry 50  (expires)
+        bb.read_timed(20, &mut buf, 50, 0).unwrap();
+        // PID 30, expiry 300 (survives)
+        bb.read_timed(30, &mut buf, 300, 0).unwrap();
+        // PID 40, expiry 50  (expires)
+        bb.read_timed(40, &mut buf, 50, 0).unwrap();
+        assert_eq!(bb.waiting_readers(), 4);
+
+        let mut expired: heapless::Vec<u8, 8> = heapless::Vec::new();
+        bb.drain_expired_readers(50, &mut expired);
+
+        // PIDs 20 and 40 expired
+        assert_eq!(expired.as_slice(), &[20, 40]);
+        // Remaining waiters: PIDs 10, 30 in original FIFO order
+        assert_eq!(bb.waiting_readers(), 2);
+        let remaining: Vec<u8> = bb.wait_queue.iter().map(|&(pid, _)| pid).collect();
+        assert_eq!(remaining, vec![10, 30]);
     }
 }
