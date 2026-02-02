@@ -16,9 +16,15 @@ MCP_SERVER="${GDB_MCP_SERVER:-$REPO_ROOT/../gdb-mcp-server/dist/index.js}"
 MCP_STDERR_LOG="$(mktemp "${TMPDIR:-/tmp}/mcp-stderr-XXXXXX.log")"
 
 # ---------------------------------------------------------------------------
-# Cleanup: kill MCP coprocess on exit
+# Cleanup: call gdb_quit and kill MCP coprocess on exit
 # ---------------------------------------------------------------------------
+QUIT_SENT=0
 cleanup() {
+    # Try to end GDB session cleanly to prevent zombie QEMU processes.
+    if [[ "$QUIT_SENT" -eq 0 && -n "${COPROC[1]:-}" ]]; then
+        QUIT_SENT=1
+        mcp_tool_call "gdb_quit" '{}' 5 >/dev/null 2>&1 || true
+    fi
     if [[ -n "${MCP_PID:-}" ]] && kill -0 "$MCP_PID" 2>/dev/null; then
         kill "$MCP_PID" 2>/dev/null || true
         wait "$MCP_PID" 2>/dev/null || true
@@ -239,6 +245,100 @@ start_mcp() {
 }
 
 # ---------------------------------------------------------------------------
+# 5. Debug session: assertions with PASS/FAIL
+# ---------------------------------------------------------------------------
+FAILURES=0
+
+# Assert that a string contains an expected substring.
+# Args: step_name response expected_substring
+assert_contains() {
+    local step="$1"
+    local response="$2"
+    local expected="$3"
+    if echo "$response" | grep -qF "$expected"; then
+        echo "  PASS: $step (found '$expected')"
+    else
+        echo "  FAIL: $step (expected '$expected')"
+        echo "        got: $response"
+        FAILURES=$((FAILURES + 1))
+    fi
+}
+
+run_debug_session() {
+    echo ""
+    echo "--- Debug session ---"
+
+    # Step 1: gdb_launch
+    echo "[1/7] gdb_launch"
+    local launch_resp
+    launch_resp="$(mcp_tool_call "gdb_launch" "$(printf '{"elf":"%s"}' "$ELF")" 30)"
+    local launch_text
+    launch_text="$(mcp_tool_text "$launch_resp")"
+    assert_contains "gdb_launch starts session" "$launch_text" "Session started"
+
+    # Step 2: gdb_continue to main
+    echo "[2/7] gdb_continue (breakpoint at main)"
+    local cont_main_resp
+    cont_main_resp="$(mcp_tool_call "gdb_continue" '{"breakpoint":"main"}' 15)"
+    local cont_main_text
+    cont_main_text="$(mcp_tool_text "$cont_main_resp")"
+    assert_contains "gdb_continue stops at main" "$cont_main_text" 'reason="breakpoint-hit"'
+
+    # Step 3: gdb_breakpoint at dispatch_svc
+    echo "[3/7] gdb_breakpoint (set at dispatch_svc)"
+    local bp_resp
+    bp_resp="$(mcp_tool_call "gdb_breakpoint" '{"action":"set","location":"dispatch_svc"}' 10)"
+    local bp_text
+    bp_text="$(mcp_tool_text "$bp_resp")"
+    assert_contains "gdb_breakpoint set" "$bp_text" "Breakpoint"
+
+    # Step 4: gdb_continue and verify breakpoint hit
+    echo "[4/7] gdb_continue (to dispatch_svc breakpoint)"
+    local cont_bp_resp
+    cont_bp_resp="$(mcp_tool_call "gdb_continue" '{}' 15)"
+    local cont_bp_text
+    cont_bp_text="$(mcp_tool_text "$cont_bp_resp")"
+    assert_contains "gdb_continue hits breakpoint" "$cont_bp_text" 'reason="breakpoint-hit"'
+
+    # Step 5: gdb_read_registers
+    echo "[5/7] gdb_read_registers"
+    local reg_resp
+    reg_resp="$(mcp_tool_call "gdb_read_registers" '{"registers":["r0","sp","pc","lr"]}' 10)"
+    local reg_text
+    reg_text="$(mcp_tool_text "$reg_resp")"
+    assert_contains "registers contain r0" "$reg_text" "r0"
+    assert_contains "registers contain sp" "$reg_text" "sp"
+    assert_contains "registers contain pc" "$reg_text" "pc"
+    assert_contains "registers contain lr" "$reg_text" "lr"
+
+    # Step 6: gdb_backtrace
+    echo "[6/7] gdb_backtrace"
+    local bt_resp
+    bt_resp="$(mcp_tool_call "gdb_backtrace" '{}' 10)"
+    local bt_text
+    bt_text="$(mcp_tool_text "$bt_resp")"
+    assert_contains "backtrace contains dispatch_svc frame" "$bt_text" 'func="dispatch_svc"'
+
+    # Step 7: gdb_quit
+    echo "[7/7] gdb_quit"
+    local quit_resp
+    quit_resp="$(mcp_tool_call "gdb_quit" '{}' 10)"
+    QUIT_SENT=1
+    local quit_text
+    quit_text="$(mcp_tool_text "$quit_resp")"
+    assert_contains "gdb_quit terminates session" "$quit_text" "Session terminated"
+
+    echo ""
+    if [[ "$FAILURES" -eq 0 ]]; then
+        echo "=== ALL CHECKS PASSED ==="
+        return 0
+    else
+        echo "=== $FAILURES CHECK(S) FAILED ==="
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 echo "=== GDB MCP Validation ==="
@@ -248,3 +348,6 @@ start_mcp
 echo ""
 echo "Setup complete. MCP server ready (PID $MCP_PID)."
 echo "ELF: $ELF"
+
+run_debug_session
+exit $?
