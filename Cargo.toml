@@ -1,3 +1,11 @@
 [workspace]
 members = ["kernel"]
 resolver = "2"
+
+# Dev profile: full debug symbols and no optimisation for GDB debugging.
+# These are Cargo defaults, but we state them explicitly so that
+# `cargo build` always produces DWARF info suitable for step-debugging
+# with GDB / OpenOCD / QEMU.
+[profile.dev]
+debug = true
+opt-level = 0
