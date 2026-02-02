@@ -138,7 +138,12 @@ pub fn on_systick_dynamic<const P: usize, const S: usize>(
 ///    [`VirtualUartPair::transfer`].
 /// 2. Drains pending ISR ring-buffer entries, routing each record's
 ///    payload to the UART backend identified by `tag` (device ID).
-/// 3. Revokes expired buffer pool borrows (placeholder — see TODO).
+///    Entries tagged with the hardware UART's device ID are routed to
+///    its RX buffer via [`HwUartBackend::push_rx_from_isr`].
+/// 3. If `hw_uart` is `Some`, calls
+///    [`HwUartBackend::drain_tx_to_hw`] to flush the TX ring buffer
+///    to hardware.
+/// 4. Revokes expired buffer pool borrows (placeholder — see TODO).
 ///
 /// Returns the number of bytes transferred by the UART pair as
 /// `(a_to_b, b_to_a)`.
@@ -147,7 +152,9 @@ pub fn run_bottom_half<const D: usize, const M: usize, const BP: usize, const BZ
     uart_pair: &mut crate::virtual_uart::VirtualUartPair,
     isr_ring: &mut crate::split_isr::IsrRingBuffer<D, M>,
     buffers: &mut crate::buffer_pool::BufferPool<BP, BZ>,
+    hw_uart: &mut Option<crate::hw_uart::HwUartBackend>,
 ) -> (usize, usize) {
+    use crate::virtual_device::VirtualDevice;
     let counts = uart_pair.transfer();
     let a_id = uart_pair.a.device_id();
     let b_id = uart_pair.b.device_id();
@@ -156,8 +163,15 @@ pub fn run_bottom_half<const D: usize, const M: usize, const BP: usize, const BZ
             uart_pair.a.push_rx(data);
         } else if tag == b_id {
             uart_pair.b.push_rx(data);
+        } else if let Some(hw) = hw_uart.as_mut() {
+            if hw.device_id() == tag {
+                hw.push_rx_from_isr(data);
+            }
         }
     }) {}
+    if let Some(hw) = hw_uart.as_mut() {
+        hw.drain_tx_to_hw();
+    }
     // TODO: revoke expired buffer pool borrows — BufferPool lacks a
     // time-based sweep method; add BufferPool::revoke_expired(tick,
     // &mut dyn MpuStrategy) when timed-lending is implemented.
@@ -370,7 +384,10 @@ mod tests {
         // ---- Bottom-half processing tests ----
 
         use crate::buffer_pool::BufferPool;
+        use crate::hw_uart::HwUartBackend;
         use crate::split_isr::IsrRingBuffer;
+        use crate::uart_hal::UartRegs;
+        use crate::virtual_device::VirtualDevice;
         use crate::virtual_uart::VirtualUartPair;
 
         /// Helper: build a schedule with a system window between two
@@ -396,9 +413,11 @@ mod tests {
             let mut pair = VirtualUartPair::new(0, 1);
             let mut ring = IsrRingBuffer::<4, 8>::new();
             let mut buffers = BufferPool::<4, 32>::new();
+            let mut hw_uart = None;
 
             pair.a.push_tx(&[0xAA, 0xBB]);
-            let (a_to_b, b_to_a) = crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers);
+            let (a_to_b, b_to_a) =
+                crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
             assert_eq!(a_to_b, 2);
             assert_eq!(b_to_a, 0);
 
@@ -413,11 +432,12 @@ mod tests {
             let mut pair = VirtualUartPair::new(0, 1);
             let mut ring = IsrRingBuffer::<4, 8>::new();
             let mut buffers = BufferPool::<4, 32>::new();
+            let mut hw_uart = None;
             // Push ISR records tagged with device IDs 0 and 1.
             ring.push_from_isr(1, &[10]).unwrap();
             ring.push_from_isr(0, &[20, 30]).unwrap();
 
-            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers);
+            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
             assert!(ring.is_empty());
             // Tag 1 → UART-B RX, tag 0 → UART-A RX.
             let mut buf = [0u8; 4];
@@ -432,7 +452,9 @@ mod tests {
             let mut pair = VirtualUartPair::new(0, 1);
             let mut ring = IsrRingBuffer::<4, 8>::new();
             let mut buffers = BufferPool::<4, 32>::new();
-            let (a, b) = crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers);
+            let mut hw_uart = None;
+            let (a, b) =
+                crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
             assert_eq!((a, b), (0, 0));
         }
 
@@ -456,7 +478,7 @@ mod tests {
             for _ in 0..5 {
                 let event = on_systick_dynamic_test(&mut st, &ds);
                 if matches!(event, ScheduleEvent::SystemWindow) {
-                    crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers);
+                    crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut None);
                     saw_system_window = true;
                 }
             }
@@ -491,6 +513,73 @@ mod tests {
             // Two frames = 10 ticks, 2 partition switches + 1 syswin per frame
             assert_eq!(partition_events, 4); // P0, P1 per frame x2
             assert_eq!(system_events, 2);
+        }
+
+        // ---- hw_uart bottom-half tests ----
+
+        #[test]
+        fn run_bottom_half_drains_hw_uart_tx() {
+            let mut pair = VirtualUartPair::new(0, 1);
+            let mut ring = IsrRingBuffer::<4, 8>::new();
+            let mut buffers = BufferPool::<4, 32>::new();
+            let mut hw = HwUartBackend::new(5, UartRegs::new(0x4000_C000));
+            // Manually push into TX via VirtualDevice::write after opening.
+            hw.open(0).unwrap();
+            hw.write(0, &[0xAA, 0xBB, 0xCC]).unwrap();
+            assert_eq!(hw.tx_len(), 3);
+
+            let mut hw_uart = Some(hw);
+            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+
+            // TX ring should be drained to hardware.
+            assert_eq!(hw_uart.as_ref().unwrap().tx_len(), 0);
+        }
+
+        #[test]
+        fn run_bottom_half_routes_isr_to_hw_uart_rx() {
+            let mut pair = VirtualUartPair::new(0, 1);
+            let mut ring = IsrRingBuffer::<4, 8>::new();
+            let mut buffers = BufferPool::<4, 32>::new();
+            let hw = HwUartBackend::new(5, UartRegs::new(0x4000_C000));
+            let mut hw_uart = Some(hw);
+
+            // Push ISR records: one for virtual UART-A (id=0), one for
+            // hw_uart (id=5).
+            ring.push_from_isr(0, &[0x10]).unwrap();
+            ring.push_from_isr(5, &[0x20, 0x30]).unwrap();
+
+            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+
+            assert!(ring.is_empty());
+            // Virtual UART-A should have received tag-0 data.
+            let mut buf = [0u8; 4];
+            assert_eq!(pair.a.pop_rx(&mut buf), 1);
+            assert_eq!(buf[0], 0x10);
+            // hw_uart should have received tag-5 data via push_rx_from_isr.
+            assert_eq!(hw_uart.as_ref().unwrap().rx_len(), 2);
+            hw_uart.as_mut().unwrap().open(0).unwrap();
+            let mut hw_buf = [0u8; 4];
+            let n = hw_uart.as_mut().unwrap().read(0, &mut hw_buf).unwrap();
+            assert_eq!(n, 2);
+            assert_eq!(&hw_buf[..2], &[0x20, 0x30]);
+        }
+
+        #[test]
+        fn run_bottom_half_hw_uart_none_is_noop() {
+            // When hw_uart is None, ISR entries for unknown tags are
+            // silently dropped and no drain occurs.
+            let mut pair = VirtualUartPair::new(0, 1);
+            let mut ring = IsrRingBuffer::<4, 8>::new();
+            let mut buffers = BufferPool::<4, 32>::new();
+            let mut hw_uart: Option<HwUartBackend> = None;
+
+            ring.push_from_isr(99, &[0xFF]).unwrap();
+            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+            // Ring should be drained (record consumed but tag unmatched).
+            assert!(ring.is_empty());
+            // No crash, no data routed.
+            assert_eq!(pair.a.rx_len(), 0);
+            assert_eq!(pair.b.rx_len(), 0);
         }
     }
 }

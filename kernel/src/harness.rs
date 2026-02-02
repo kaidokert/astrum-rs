@@ -133,6 +133,7 @@ macro_rules! _harness_handle_tick {
                             &mut k.uart_pair,
                             &mut k.isr_ring,
                             &mut k.buffers,
+                            &mut k.hw_uart,
                         );
                     }
                 });
