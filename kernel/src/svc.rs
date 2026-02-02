@@ -1,3 +1,7 @@
+use core::cell::RefCell;
+
+use cortex_m::interrupt::Mutex;
+
 use crate::blackboard::BlackboardPool;
 use crate::config::KernelConfig;
 use crate::context::ExceptionFrame;
@@ -83,22 +87,56 @@ pub static SVC_HANDLER: unsafe extern "C" fn(&mut ExceptionFrame) = dispatch_svc
 /// minimal dispatch. Applications set this to route syscalls through a
 /// full `Kernel::dispatch` that has access to all kernel service pools.
 ///
+/// Protected by a `cortex_m::interrupt::Mutex` so that reads and writes
+/// are performed inside critical sections on single-core Cortex-M.
+static SVC_DISPATCH_HOOK: Mutex<RefCell<Option<unsafe extern "C" fn(&mut ExceptionFrame)>>> =
+    Mutex::new(RefCell::new(None));
+
+/// Execute `f` inside a critical section.
+///
+/// On the target this disables interrupts via `cortex_m::interrupt::free`.
+/// In host-mode unit tests the closure runs directly with a synthetic
+/// `CriticalSection` token (single-threaded test runner, no real interrupts).
+#[cfg(not(test))]
+fn with_cs<F, R>(f: F) -> R
+where
+    F: FnOnce(&cortex_m::interrupt::CriticalSection) -> R,
+{
+    cortex_m::interrupt::free(f)
+}
+
+#[cfg(test)]
+fn with_cs<F, R>(f: F) -> R
+where
+    F: FnOnce(&cortex_m::interrupt::CriticalSection) -> R,
+{
+    // SAFETY: Tests run single-threaded on the host — there are no real
+    // interrupts to mask, so a synthetic CriticalSection token is sound.
+    f(unsafe { &cortex_m::interrupt::CriticalSection::new() })
+}
+
+/// Safely install an application-provided SVC dispatch hook.
+///
+/// The hook function will be called by `dispatch_svc` for every SVC
+/// exception instead of the built-in minimal handler.
+///
 /// # Safety
 ///
-/// The pointer must refer to a function with the same signature and safety
-/// requirements as `dispatch_svc`. It must remain valid for the lifetime
+/// The caller must ensure `hook` points to a function with the same safety
+/// requirements as `dispatch_svc` and that it remains valid for the lifetime
 /// of the program (typically a `static` function).
-// TODO: Replace global mutable state with a more robust design that passes
-// the execution context (including current partition ID) through the dispatch
-// chain, e.g. by storing a &mut Kernel in a critical-section-guarded cell or
-// by extending the assembly trampoline to pass additional context.
-pub static mut SVC_DISPATCH_HOOK: Option<unsafe extern "C" fn(&mut ExceptionFrame)> = None;
+pub unsafe fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
+    with_cs(|cs| {
+        SVC_DISPATCH_HOOK.borrow(cs).replace(Some(hook));
+    });
+}
 
 /// Dispatch an SVC call based on the syscall number in `frame.r0`.
 ///
-/// If [`SVC_DISPATCH_HOOK`] is set, the call is forwarded to the
-/// application-provided handler. Otherwise a minimal built-in handler
-/// processes `Yield` and returns error codes for all other syscalls.
+/// If a dispatch hook has been installed via [`set_dispatch_hook`], the
+/// call is forwarded to the application-provided handler. Otherwise a
+/// minimal built-in handler processes `Yield` and returns error codes
+/// for all other syscalls.
 ///
 /// # Safety
 ///
@@ -107,7 +145,8 @@ pub static mut SVC_DISPATCH_HOOK: Option<unsafe extern "C" fn(&mut ExceptionFram
 /// when called from the SVCall assembly trampoline above.
 #[no_mangle]
 pub unsafe extern "C" fn dispatch_svc(frame: &mut ExceptionFrame) {
-    if let Some(hook) = SVC_DISPATCH_HOOK {
+    let hook = with_cs(|cs| *SVC_DISPATCH_HOOK.borrow(cs).borrow());
+    if let Some(hook) = hook {
         return hook(frame);
     }
     frame.r0 = match SyscallId::from_u32(frame.r0) {
@@ -979,6 +1018,62 @@ mod tests {
         let mut ef = frame(SYS_BB_CLEAR, 99, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+    }
+
+    // ---- set_dispatch_hook / Mutex-based hook tests ----
+
+    /// Reset the hook to `None` inside a critical section (test helper).
+    fn clear_dispatch_hook() {
+        with_cs(|cs| {
+            SVC_DISPATCH_HOOK.borrow(cs).replace(None);
+        });
+    }
+
+    /// Read the current hook value inside a critical section (test helper).
+    fn read_dispatch_hook() -> Option<unsafe extern "C" fn(&mut ExceptionFrame)> {
+        with_cs(|cs| *SVC_DISPATCH_HOOK.borrow(cs).borrow())
+    }
+
+    #[test]
+    fn dispatch_hook_initially_none() {
+        clear_dispatch_hook();
+        assert!(read_dispatch_hook().is_none());
+    }
+
+    #[test]
+    fn set_dispatch_hook_installs_hook() {
+        unsafe extern "C" fn my_hook(_: &mut ExceptionFrame) {}
+        clear_dispatch_hook();
+        // SAFETY: my_hook is a valid static function.
+        unsafe { set_dispatch_hook(my_hook) };
+        assert!(read_dispatch_hook().is_some());
+        clear_dispatch_hook();
+    }
+
+    #[test]
+    fn dispatch_svc_uses_hook_when_set() {
+        /// A hook that sets r0 to a sentinel value (0xCAFE).
+        unsafe extern "C" fn sentinel_hook(frame: &mut ExceptionFrame) {
+            frame.r0 = 0xCAFE;
+        }
+        clear_dispatch_hook();
+        // SAFETY: sentinel_hook is a valid static function.
+        unsafe { set_dispatch_hook(sentinel_hook) };
+        let mut ef = frame(SYS_YIELD, 0, 0);
+        // SAFETY: ef is a valid ExceptionFrame on the stack.
+        unsafe { dispatch_svc(&mut ef) };
+        assert_eq!(ef.r0, 0xCAFE);
+        clear_dispatch_hook();
+    }
+
+    #[test]
+    fn dispatch_svc_falls_through_without_hook() {
+        clear_dispatch_hook();
+        let mut ef = frame(SYS_YIELD, 0, 0);
+        // SAFETY: ef is a valid ExceptionFrame on the stack.
+        unsafe { dispatch_svc(&mut ef) };
+        // Without a hook, Yield returns 0.
+        assert_eq!(ef.r0, 0);
     }
 
     // ---- SvcError tests ----

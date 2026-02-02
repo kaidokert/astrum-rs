@@ -219,7 +219,7 @@ fn main() -> ! {
         let sem: u32 = 0; // first (and only) semaphore in the pool
 
         KERN = Some(k);
-        kernel::svc::SVC_DISPATCH_HOOK = Some(hook);
+        kernel::svc::set_dispatch_hook(hook);
 
         let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
         for i in 0..NUM_PARTITIONS as u8 {

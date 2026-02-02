@@ -158,7 +158,7 @@ fn main() -> ! {
             .unwrap();
         k.sampling.connect_ports(s1, d1).unwrap();
         KERN = Some(k);
-        kernel::svc::SVC_DISPATCH_HOOK = Some(hook);
+        kernel::svc::set_dispatch_hook(hook);
         let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
         for i in 0..NUM_PARTITIONS as u8 {
             sched.add(ScheduleEntry::new(i, 2)).unwrap();
