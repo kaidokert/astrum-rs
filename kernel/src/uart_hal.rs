@@ -609,4 +609,42 @@ mod tests {
         uart.write(RIS, RIS_RXRIS);
         assert_eq!(uart.read_ris(), RIS_RXRIS);
     }
+
+    // -- Additional baud-rate edge cases ------------------------------------
+
+    /// Trigger the fbrd >= 64 carry path: clock=127, baud=8.
+    /// brd_times_128 = (127*8)/8 = 127, frac_128=127, fbrd=64 → carry.
+    #[test]
+    fn baud_fbrd_carry_when_rounding_overflows() {
+        let (ibrd, fbrd) = compute_baud_divisors(127, 8);
+        assert_eq!(ibrd, 1);
+        assert_eq!(fbrd, 0);
+    }
+
+    /// Max baud: u32::MAX with small clock — results in very small BRD.
+    #[test]
+    fn baud_max_u32_no_panic() {
+        let (ibrd, fbrd) = compute_baud_divisors(12_000_000, u32::MAX);
+        // BRD = 12e6 / (16 * 4294967295) ≈ 0.000174, essentially zero.
+        assert_eq!(ibrd, 0);
+        assert!(fbrd <= 63);
+    }
+
+    /// Non-standard baud rate: 31250 (MIDI standard) at 12 MHz.
+    /// BRD = 12e6 / (16 * 31250) = 24.0 exactly.
+    #[test]
+    fn baud_31250_midi_at_12mhz() {
+        let (ibrd, fbrd) = compute_baud_divisors(12_000_000, 31_250);
+        assert_eq!(ibrd, 24);
+        assert_eq!(fbrd, 0);
+    }
+
+    /// Non-standard baud rate: 250000 at 16 MHz.
+    /// BRD = 16e6 / (16 * 250000) = 4.0 exactly.
+    #[test]
+    fn baud_250000_at_16mhz() {
+        let (ibrd, fbrd) = compute_baud_divisors(16_000_000, 250_000);
+        assert_eq!(ibrd, 4);
+        assert_eq!(fbrd, 0);
+    }
 }

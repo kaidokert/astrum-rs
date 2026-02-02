@@ -11,6 +11,7 @@ pub enum DeviceError {
     NotFound,
     PermissionDenied,
     NotOpen,
+    AlreadyOpen,
     BufferFull,
     BufferEmpty,
     InvalidPartition,

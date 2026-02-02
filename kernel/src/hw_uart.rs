@@ -281,12 +281,15 @@ impl VirtualDevice for HwUartBackend {
 
     fn open(&mut self, partition_id: u8) -> Result<(), DeviceError> {
         Self::validate_partition(partition_id)?;
+        if self.open_partitions & (1 << partition_id) != 0 {
+            return Err(DeviceError::AlreadyOpen);
+        }
         self.open_partitions |= 1 << partition_id;
         Ok(())
     }
 
     fn close(&mut self, partition_id: u8) -> Result<(), DeviceError> {
-        Self::validate_partition(partition_id)?;
+        self.require_open(partition_id)?;
         self.open_partitions &= !(1 << partition_id);
         Ok(())
     }
@@ -768,5 +771,208 @@ mod tests {
         // Interrupt is still cleared even though ring push failed.
         let icr = hw.regs().read(crate::uart_hal::ICR);
         assert_ne!(icr & crate::uart_hal::ICR_RXIC, 0);
+    }
+
+    // ---- drain_tx tests (covers lines 138-150) ----
+
+    #[test]
+    fn drain_tx_extracts_bytes_in_order() {
+        let mut hw = make_backend(1);
+        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::write(&mut hw, 0, &[0xAA, 0xBB, 0xCC]).unwrap();
+        let mut buf = [0u8; 4];
+        let n = hw.drain_tx(&mut buf);
+        assert_eq!(n, 3);
+        assert_eq!(&buf[..3], &[0xAA, 0xBB, 0xCC]);
+        assert_eq!(hw.tx_len(), 0);
+    }
+
+    #[test]
+    fn drain_tx_partial_when_buf_smaller() {
+        let mut hw = make_backend(1);
+        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::write(&mut hw, 0, &[1, 2, 3, 4, 5]).unwrap();
+        let mut buf = [0u8; 2];
+        let n = hw.drain_tx(&mut buf);
+        assert_eq!(n, 2);
+        assert_eq!(buf, [1, 2]);
+        assert_eq!(hw.tx_len(), 3);
+    }
+
+    #[test]
+    fn drain_tx_empty_ring_returns_zero() {
+        let mut hw = make_backend(1);
+        let mut buf = [0u8; 8];
+        let n = hw.drain_tx(&mut buf);
+        assert_eq!(n, 0);
+    }
+
+    // ---- push_rx mid-data buffer-full (covers line 90) ----
+
+    #[test]
+    fn push_rx_stops_mid_data_when_full() {
+        let mut hw = make_backend(1);
+        // Fill RX to capacity - 2.
+        hw.push_rx(&[0xFFu8; CAPACITY - 2]);
+        assert_eq!(hw.rx_len(), CAPACITY - 2);
+        // Push 5 bytes; only 2 should fit.
+        let n = hw.push_rx(&[1, 2, 3, 4, 5]);
+        assert_eq!(n, 2);
+        assert_eq!(hw.rx_len(), CAPACITY);
+    }
+
+    // ---- VirtualDevice: double-open, close-not-open, ioctl edge cases ----
+
+    #[test]
+    fn double_open_same_partition_returns_already_open() {
+        let mut hw = make_backend(1);
+        VirtualDevice::open(&mut hw, 2).unwrap();
+        // Opening same partition again must return AlreadyOpen.
+        assert_eq!(
+            VirtualDevice::open(&mut hw, 2),
+            Err(DeviceError::AlreadyOpen)
+        );
+        assert_eq!(hw.open_partitions, 1 << 2);
+    }
+
+    #[test]
+    fn close_not_open_partition_returns_not_open() {
+        let mut hw = make_backend(1);
+        // Closing a partition that was never opened must return NotOpen.
+        assert_eq!(VirtualDevice::close(&mut hw, 3), Err(DeviceError::NotOpen));
+        assert_eq!(hw.open_partitions, 0);
+    }
+
+    #[test]
+    fn ioctl_unknown_command_returns_not_found() {
+        let mut hw = make_backend(1);
+        VirtualDevice::open(&mut hw, 0).unwrap();
+        assert_eq!(
+            VirtualDevice::ioctl(&mut hw, 0, 0xDEAD, 0),
+            Err(DeviceError::NotFound)
+        );
+    }
+
+    #[test]
+    fn read_when_closed_returns_not_open() {
+        let mut hw = make_backend(1);
+        let mut buf = [0u8; 4];
+        assert_eq!(
+            VirtualDevice::read(&mut hw, 0, &mut buf),
+            Err(DeviceError::NotOpen)
+        );
+    }
+
+    #[test]
+    fn write_when_closed_returns_not_open() {
+        let mut hw = make_backend(1);
+        assert_eq!(
+            VirtualDevice::write(&mut hw, 0, &[1]),
+            Err(DeviceError::NotOpen)
+        );
+    }
+
+    #[test]
+    fn ioctl_when_closed_returns_not_open() {
+        let mut hw = make_backend(1);
+        assert_eq!(
+            VirtualDevice::ioctl(&mut hw, 0, IOCTL_FLUSH, 0),
+            Err(DeviceError::NotOpen)
+        );
+    }
+
+    #[test]
+    fn ioctl_available_reflects_rx_changes() {
+        let mut hw = make_backend(1);
+        VirtualDevice::open(&mut hw, 0).unwrap();
+        assert_eq!(
+            VirtualDevice::ioctl(&mut hw, 0, IOCTL_AVAILABLE, 0).unwrap(),
+            0
+        );
+        hw.push_rx(&[1, 2, 3]);
+        assert_eq!(
+            VirtualDevice::ioctl(&mut hw, 0, IOCTL_AVAILABLE, 0).unwrap(),
+            3
+        );
+        // Read one byte, count decreases.
+        let mut buf = [0u8; 1];
+        VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        assert_eq!(
+            VirtualDevice::ioctl(&mut hw, 0, IOCTL_AVAILABLE, 0).unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn ioctl_flush_clears_tx_verified_by_drain() {
+        let mut hw = make_backend(1);
+        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::write(&mut hw, 0, &[0xAA, 0xBB, 0xCC]).unwrap();
+        assert_eq!(hw.tx_len(), 3);
+        // Flush via ioctl.
+        VirtualDevice::ioctl(&mut hw, 0, IOCTL_FLUSH, 0).unwrap();
+        // Verify TX buffer is empty via drain_tx.
+        let mut buf = [0u8; 4];
+        let n = hw.drain_tx(&mut buf);
+        assert_eq!(n, 0);
+    }
+
+    // ---- Loopback mode: write → read via VirtualDevice API ----
+
+    #[test]
+    fn loopback_write_then_read_via_public_api() {
+        let mut hw = make_backend(1);
+        hw.set_loopback(true);
+        VirtualDevice::open(&mut hw, 0).unwrap();
+
+        // Write data via VirtualDevice, simulate bottom-half drain,
+        // then verify the looped-back data is readable via VirtualDevice.
+        VirtualDevice::write(&mut hw, 0, &[0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
+        hw.drain_tx_to_hw();
+
+        let mut buf = [0u8; 4];
+        let n = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(buf, [0xDE, 0xAD, 0xBE, 0xEF]);
+
+        // Second round: verify continued loopback operation.
+        VirtualDevice::write(&mut hw, 0, &[0xCA, 0xFE]).unwrap();
+        hw.drain_tx_to_hw();
+
+        let mut buf2 = [0u8; 2];
+        let n = VirtualDevice::read(&mut hw, 0, &mut buf2).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(buf2, [0xCA, 0xFE]);
+    }
+
+    // ---- Ring buffer boundary conditions ----
+
+    #[test]
+    fn tx_full_then_drain_then_refill() {
+        let mut hw = make_backend(1);
+        VirtualDevice::open(&mut hw, 0).unwrap();
+        // Fill TX to capacity.
+        let n = VirtualDevice::write(&mut hw, 0, &[0xABu8; CAPACITY]).unwrap();
+        assert_eq!(n, CAPACITY);
+        assert_eq!(VirtualDevice::write(&mut hw, 0, &[0x01]).unwrap(), 0);
+        // Drain all via drain_tx.
+        let mut buf = [0u8; CAPACITY];
+        let drained = hw.drain_tx(&mut buf);
+        assert_eq!(drained, CAPACITY);
+        assert_eq!(hw.tx_len(), 0);
+        // Refill should work.
+        let n = VirtualDevice::write(&mut hw, 0, &[0xCD; 10]).unwrap();
+        assert_eq!(n, 10);
+    }
+
+    #[test]
+    fn rx_empty_read_returns_zero_bytes() {
+        let mut hw = make_backend(1);
+        VirtualDevice::open(&mut hw, 0).unwrap();
+        let mut buf = [0xFFu8; 4];
+        let n = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        assert_eq!(n, 0);
+        // Buffer should be unchanged.
+        assert_eq!(buf, [0xFF; 4]);
     }
 }
