@@ -1,4 +1,4 @@
-use crate::partition::{PartitionConfig, PartitionControlBlock, PartitionTable};
+use crate::partition::{ConfigError, PartitionConfig, PartitionControlBlock, PartitionTable};
 #[cfg(feature = "dynamic-mpu")]
 use crate::scheduler::ScheduleEvent;
 use crate::scheduler::ScheduleTable;
@@ -54,17 +54,40 @@ const fn align_down_8(addr: u32) -> u32 {
 }
 
 impl<const P: usize, const S: usize> KernelState<P, S> {
-    pub fn new(schedule: ScheduleTable<S>, configs: &[PartitionConfig]) -> Option<Self> {
+    pub fn new(
+        schedule: ScheduleTable<S>,
+        configs: &[PartitionConfig],
+    ) -> Result<Self, ConfigError> {
+        // Validate: schedule must not be empty.
+        if schedule.is_empty() {
+            return Err(ConfigError::ScheduleEmpty);
+        }
+
+        // Validate: every non-system-window entry must reference a valid partition.
+        for (i, entry) in schedule.entries().iter().enumerate() {
+            #[cfg(feature = "dynamic-mpu")]
+            if entry.is_system_window {
+                continue;
+            }
+            if entry.partition_index as usize >= configs.len() {
+                return Err(ConfigError::ScheduleIndexOutOfBounds {
+                    entry_index: i,
+                    partition_index: entry.partition_index,
+                    num_partitions: configs.len(),
+                });
+            }
+        }
+
         let mut partitions = PartitionTable::new();
         for c in configs {
             let sp = align_down_8(c.stack_base.wrapping_add(c.stack_size));
             let pcb =
                 PartitionControlBlock::new(c.id, c.entry_point, c.stack_base, sp, c.mpu_region);
             if partitions.add(pcb).is_err() {
-                return None;
+                return Err(ConfigError::PartitionTableFull);
             }
         }
-        Some(Self {
+        Ok(Self {
             partitions,
             schedule,
             active_partition: None,
@@ -145,6 +168,12 @@ mod tests {
         }
     }
 
+    fn sched1() -> ScheduleTable<4> {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        s
+    }
+
     fn sched2() -> ScheduleTable<4> {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
@@ -207,10 +236,10 @@ mod tests {
     #[test]
     fn unaligned_stack_and_capacity() {
         let ks: KernelState<4, 4> =
-            KernelState::new(sched2(), &[pcfg(0, 0x2000_0000, 1023)]).unwrap();
+            KernelState::new(sched1(), &[pcfg(0, 0x2000_0000, 1023)]).unwrap();
         assert_eq!(ks.partitions().get(0).unwrap().stack_pointer(), 0x2000_03F8);
         let two = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 1024)];
-        assert!(KernelState::<1, 4>::new(sched2(), &two).is_none());
+        assert!(KernelState::<1, 4>::new(sched2(), &two).is_err());
     }
 
     /// Build a started 2-slot schedule: P0 for 5 ticks, P1 for 3 ticks.
@@ -279,9 +308,65 @@ mod tests {
     #[test]
     fn yield_unstarted_returns_none() {
         let cfgs = [pcfg(0, 0x2000_0000, 1024)];
-        let mut ks: KernelState<4, 4> = KernelState::new(sched2(), &cfgs).unwrap();
+        let mut ks: KernelState<4, 4> = KernelState::new(sched1(), &cfgs).unwrap();
         // Schedule not started
         assert_eq!(ks.yield_current_slot().partition_id(), None);
         assert_eq!(ks.active_partition(), None);
+    }
+
+    // ------------------------------------------------------------------
+    // KernelState::new validation tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn new_rejects_empty_schedule() {
+        let s: ScheduleTable<4> = ScheduleTable::new();
+        let cfgs = [pcfg(0, 0x2000_0000, 1024)];
+        match KernelState::<4, 4>::new(s, &cfgs) {
+            Err(e) => assert_eq!(e, ConfigError::ScheduleEmpty),
+            Ok(_) => panic!("expected ScheduleEmpty error"),
+        }
+    }
+
+    #[test]
+    fn new_rejects_schedule_index_out_of_bounds() {
+        // Schedule references partition 2, but only 2 configs (indices 0..2)
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        s.add(ScheduleEntry::new(2, 100)).unwrap(); // out of bounds
+        let cfgs = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 1024)];
+        match KernelState::<4, 4>::new(s, &cfgs) {
+            Err(e) => assert_eq!(
+                e,
+                ConfigError::ScheduleIndexOutOfBounds {
+                    entry_index: 1,
+                    partition_index: 2,
+                    num_partitions: 2,
+                }
+            ),
+            Ok(_) => panic!("expected ScheduleIndexOutOfBounds error"),
+        }
+    }
+
+    #[test]
+    fn new_rejects_partition_table_full() {
+        let cfgs = [
+            pcfg(0, 0x2000_0000, 1024),
+            pcfg(1, 0x2000_1000, 1024),
+            pcfg(2, 0x2000_2000, 1024),
+        ];
+        match KernelState::<2, 4>::new(sched2(), &cfgs) {
+            Err(e) => assert_eq!(e, ConfigError::PartitionTableFull),
+            Ok(_) => panic!("expected PartitionTableFull error"),
+        }
+    }
+
+    #[test]
+    fn new_accepts_boundary_partition_index() {
+        // partition_index == configs.len() - 1 should be accepted
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(1, 100)).unwrap();
+        let cfgs = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 1024)];
+        assert!(KernelState::<4, 4>::new(s, &cfgs).is_ok());
     }
 }
