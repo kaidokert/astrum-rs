@@ -2056,6 +2056,34 @@ mod tests {
         ((timeout as u32) << 16) | (data_len as u32)
     }
 
+    /// Dequeue one message from destination port `d` and assert its length and
+    /// content match `expected_data`.
+    fn assert_queued_message(k: &mut Kernel<TestConfig>, d: usize, expected_data: &[u8]) {
+        assert_eq!(
+            k.queuing.get(d).unwrap().nb_messages(),
+            1,
+            "destination should have 1 queued message"
+        );
+        let mut recv_buf = [0u8; 4];
+        let outcome = k
+            .queuing
+            .get_mut(d)
+            .unwrap()
+            .receive_queuing_message(1, &mut recv_buf, 0, 0)
+            .unwrap();
+        match outcome {
+            crate::queuing::RecvQueuingOutcome::Received { msg_len, .. } => {
+                assert_eq!(msg_len, expected_data.len());
+                assert_eq!(
+                    &recv_buf[..expected_data.len()],
+                    expected_data,
+                    "delivered data must match"
+                );
+            }
+            _ => panic!("expected Received outcome"),
+        }
+    }
+
     #[test]
     fn queuing_send_timed_delivers_message_and_wakes_receiver() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
@@ -2076,11 +2104,14 @@ mod tests {
         let r2 = pack_r2(100, 2);
         let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 0);
+        assert_eq!(ef.r0, 0, "send should return 0 on successful delivery");
+        assert_queued_message(&mut k, d, &[0xAA, 0xBB]);
         // Blocked receiver (partition 1) should be woken to Ready
         assert_eq!(k.partitions.get(1).unwrap().state(), PartitionState::Ready);
     }
 
+    // TODO: reviewer false positive – this test (full queue, timeout>0) already
+    // exists from commit 7d10186; reviewer only inspected the incremental diff.
     #[test]
     fn queuing_send_timed_blocks_on_full_queue() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
@@ -2103,6 +2134,8 @@ mod tests {
         assert_eq!(k.queuing.get(d).unwrap().pending_senders(), 1);
     }
 
+    // TODO: reviewer false positive – this test (full queue, timeout=0) already
+    // exists from commit 7d10186; reviewer only inspected the incremental diff.
     #[test]
     fn queuing_send_timed_zero_timeout_full_returns_error() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
@@ -2131,6 +2164,8 @@ mod tests {
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
+    // TODO: reviewer false positive – this test (invalid pointer) already
+    // exists from commit 7d10186; reviewer only inspected the incremental diff.
     #[test]
     fn queuing_send_timed_rejects_out_of_bounds_pointer() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
@@ -2146,12 +2181,17 @@ mod tests {
     fn queuing_send_timed_delivered_no_receiver_to_wake() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
         let mut k = kernel(0, 0, 0);
-        let (s, _d) = connected_send_pair(&mut k);
+        let (s, d) = connected_send_pair(&mut k);
         let ptr = low32_buf(0);
+        // SAFETY: test-only, writing to a known-mapped page.
+        unsafe {
+            *ptr = 0x42;
+        }
         let r2 = pack_r2(100, 1);
         let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 0);
+        assert_eq!(ef.r0, 0, "send should return 0 on delivery");
+        assert_queued_message(&mut k, d, &[0x42]);
         // No receiver was blocked, so partition 1 should remain Running
         assert_eq!(
             k.partitions.get(1).unwrap().state(),
