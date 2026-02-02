@@ -384,6 +384,10 @@ where
     /// ISR top-half to bottom-half ring buffer (8 records, 16-byte payload).
     #[cfg(feature = "dynamic-mpu")]
     pub isr_ring: crate::split_isr::IsrRingBuffer<8, 16>,
+    /// Optional hardware UART backend, checked after `uart_pair` in
+    /// `dev_dispatch`. Set via [`set_hw_uart`](Self::set_hw_uart).
+    #[cfg(feature = "dynamic-mpu")]
+    pub hw_uart: Option<crate::hw_uart::HwUartBackend>,
 }
 
 impl<C: KernelConfig> Default for Kernel<C>
@@ -452,11 +456,24 @@ where
             uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
             #[cfg(feature = "dynamic-mpu")]
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            hw_uart: None,
         }
+    }
+
+    /// Install an optional hardware UART backend.
+    ///
+    /// Once set, `dev_dispatch` will check this backend when the requested
+    /// `device_id` does not match either virtual UART in `uart_pair`.
+    #[cfg(feature = "dynamic-mpu")]
+    pub fn set_hw_uart(&mut self, backend: crate::hw_uart::HwUartBackend) {
+        self.hw_uart = Some(backend);
     }
 
     /// Look up a virtual device by `device_id` and invoke `f` with a mutable
     /// reference to the device (as a trait object) and the current partition.
+    ///
+    /// Checks `uart_pair` first, then falls through to `hw_uart`.
     /// Returns `InvalidResource` when the ID is unknown or `OperationFailed`
     /// when the closure returns a `DeviceError`.
     #[cfg(feature = "dynamic-mpu")]
@@ -464,8 +481,20 @@ where
     where
         F: FnOnce(&mut dyn VirtualDevice, u8) -> Result<u32, crate::virtual_device::DeviceError>,
     {
-        match self.uart_pair.get_mut(device_id) {
-            Some(dev) => match f(dev, self.current_partition) {
+        let pid = self.current_partition;
+        // Resolve the target device: virtual UART pair first, then hw_uart.
+        let dev: Option<&mut dyn VirtualDevice> = self
+            .uart_pair
+            .get_mut(device_id)
+            .map(|d| d as _)
+            .or_else(|| {
+                self.hw_uart
+                    .as_mut()
+                    .filter(|hw| hw.device_id() == device_id)
+                    .map(|hw| hw as _)
+            });
+        match dev {
+            Some(d) => match f(d, pid) {
                 Ok(val) => val,
                 Err(_) => SvcError::OperationFailed.to_u32(),
             },
@@ -973,6 +1002,8 @@ mod tests {
             uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
             #[cfg(feature = "dynamic-mpu")]
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            hw_uart: None,
         };
         // Add semaphores
         for _ in 0..sem_count {
@@ -1802,5 +1833,92 @@ mod tests {
             SvcError::InvalidPointer.to_u32(),
             "BbRead should reject out-of-bounds pointer"
         );
+    }
+
+    // ---- hw_uart integration tests ----
+
+    /// hw_uart starts as None; virtual UARTs still work.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn hw_uart_none_virtual_uarts_still_dispatch() {
+        use crate::syscall::SYS_DEV_OPEN;
+        let mut k = kernel(0, 0, 0);
+        assert!(k.hw_uart.is_none());
+        // Virtual UART-A (device 0) opens successfully.
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Virtual UART-B (device 1) opens successfully.
+        let mut ef = frame(SYS_DEV_OPEN, 1, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+    }
+
+    /// Unknown device ID returns InvalidResource when hw_uart is None.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn hw_uart_none_unknown_id_returns_invalid_resource() {
+        use crate::syscall::SYS_DEV_OPEN;
+        let mut k = kernel(0, 0, 0);
+        let mut ef = frame(SYS_DEV_OPEN, 5, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+    }
+
+    /// After set_hw_uart, dev_dispatch routes to the hw backend.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn hw_uart_set_and_dispatch_open_write_read() {
+        use crate::hw_uart::HwUartBackend;
+        use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE};
+        use crate::uart_hal::UartRegs;
+        let mut k = kernel(0, 0, 0);
+        k.set_hw_uart(HwUartBackend::new(5, UartRegs::new(0x4000_C000)));
+        assert!(k.hw_uart.is_some());
+        // Open hw_uart device 5.
+        let mut ef = frame(SYS_DEV_OPEN, 5, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Write 3 bytes via device 5 (ptr within partition 0 MPU region).
+        let ptr = low32_buf(0);
+        // SAFETY: ptr points to a valid mmap'd page within MPU region.
+        unsafe { core::ptr::copy_nonoverlapping([0x11, 0x22, 0x33].as_ptr(), ptr, 3) };
+        let mut ef = frame4(SYS_DEV_WRITE, 5, 3, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 3);
+        // Inject bytes into hw_uart RX and read them back.
+        k.hw_uart.as_mut().unwrap().push_rx(&[0xAA, 0xBB]);
+        let mut ef = frame4(SYS_DEV_READ, 5, 4, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 2);
+        // SAFETY: ptr is valid for 4096 bytes via low32_buf.
+        let out = unsafe { core::slice::from_raw_parts(ptr, 2) };
+        assert_eq!(out, &[0xAA, 0xBB]);
+    }
+
+    /// Virtual UARTs take priority over hw_uart when IDs overlap.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn hw_uart_does_not_shadow_virtual_uart() {
+        use crate::hw_uart::HwUartBackend;
+        use crate::syscall::SYS_DEV_OPEN;
+        use crate::uart_hal::UartRegs;
+        let mut k = kernel(0, 0, 0);
+        // Install hw_uart with device_id = 0 (same as virtual UART-A).
+        k.set_hw_uart(HwUartBackend::new(0, UartRegs::new(0x4000_C000)));
+        // Open device 0 — should route to virtual UART-A, not hw_uart.
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Write via device 0 goes to virtual UART-A TX.
+        let ptr = low32_buf(0);
+        // SAFETY: ptr points to a valid mmap'd page within MPU region.
+        unsafe { core::ptr::copy_nonoverlapping([0xFF].as_ptr(), ptr, 1) };
+        let mut ef = frame4(crate::syscall::SYS_DEV_WRITE, 0, 1, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 1);
+        // Byte should be in virtual UART-A's TX, not hw_uart's TX.
+        assert_eq!(k.uart_pair.a.pop_tx(), Some(0xFF));
+        assert_eq!(k.hw_uart.as_ref().unwrap().tx_len(), 0);
     }
 }
