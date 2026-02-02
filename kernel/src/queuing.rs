@@ -71,6 +71,10 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         self.direction
     }
 
+    pub fn connected_port(&self) -> Option<usize> {
+        self.connected_port
+    }
+
     pub const fn max_msg_size(&self) -> usize {
         M
     }
@@ -742,7 +746,7 @@ mod tests {
         let s = pool.create_port(PortDirection::Source).unwrap();
         let d = pool.create_port(PortDirection::Destination).unwrap();
         pool.connect_ports(s, d).unwrap();
-        assert_eq!(pool.get(s).unwrap().connected_port, Some(d));
+        assert_eq!(pool.get(s).unwrap().connected_port(), Some(d));
     }
 
     #[test]

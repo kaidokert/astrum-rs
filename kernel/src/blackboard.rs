@@ -59,6 +59,12 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
         self.wait_queue.len()
     }
 
+    /// Returns the PIDs of currently waiting readers in FIFO order.
+    #[cfg(test)]
+    pub fn waiting_reader_pids(&self) -> std::vec::Vec<u8> {
+        self.wait_queue.waiting_pids()
+    }
+
     /// Overwrite content and wake all blocked readers.
     pub fn display(&mut self, data: &[u8]) -> Result<heapless::Vec<u8, W>, BlackboardError> {
         if data.len() > M {
@@ -482,9 +488,6 @@ mod tests {
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 0);
     }
 
-    // TODO: This test accesses bb.wait_queue directly to verify FIFO order.
-    // Add a public test-helper (e.g. Blackboard::waiting_reader_pids()) to
-    // decouple the test from the internal wait-queue representation.
     /// Verify that draining expired readers preserves FIFO order of the
     /// remaining (non-expired) waiters. Enqueue PIDs [A, B, C, D] where
     /// B and D expire; after the tick the queue must contain [A, C] in
@@ -510,7 +513,7 @@ mod tests {
         assert_eq!(expired.as_slice(), &[20, 40]);
         // Remaining waiters: PIDs 10, 30 in original FIFO order
         assert_eq!(bb.waiting_readers(), 2);
-        let remaining: Vec<u8> = bb.wait_queue.waiting_pids();
+        let remaining = bb.waiting_reader_pids();
         assert_eq!(remaining, vec![10, 30]);
     }
 }
