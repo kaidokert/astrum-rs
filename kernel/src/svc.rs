@@ -506,6 +506,27 @@ where
         }
     }
 
+    /// Expire timed waits whose deadlines have passed.
+    ///
+    /// Calls `queuing.tick_timeouts()` and `blackboards.tick_timeouts()` with
+    /// the given tick, collecting all expired partition IDs into a single
+    /// `heapless::Vec<u8, E>`, then transitions each from
+    /// [`Waiting`](PartitionState::Waiting) to [`Ready`](PartitionState::Ready).
+    ///
+    /// The tick handler should call this once per tick so that blocked
+    /// senders/receivers are woken when their timeout elapses.
+    ///
+    /// `E` must be large enough to hold the total number of expired partition
+    /// IDs across both subsystems in a single tick.
+    pub fn expire_timed_waits<const E: usize>(&mut self, current_tick: u64) {
+        let mut expired: heapless::Vec<u8, E> = heapless::Vec::new();
+        self.queuing.tick_timeouts(current_tick, &mut expired);
+        self.blackboards.tick_timeouts(current_tick, &mut expired);
+        for &pid in expired.iter() {
+            try_transition(&mut self.partitions, pid, PartitionState::Ready);
+        }
+    }
+
     /// Full syscall dispatch including semaphore, mutex, message, sampling,
     /// and queuing operations.
     ///
@@ -2309,5 +2330,125 @@ mod tests {
         // Byte should be in virtual UART-A's TX, not hw_uart's TX.
         assert_eq!(k.uart_pair.a.pop_tx(), Some(0xFF));
         assert_eq!(k.hw_uart.as_ref().unwrap().tx_len(), 0);
+    }
+
+    // --- expire_timed_waits tests ---
+
+    #[test]
+    fn expire_timed_waits_wakes_blocked_receiver() {
+        use crate::queuing::RecvQueuingOutcome;
+        use crate::sampling::PortDirection;
+
+        let mut k = kernel(0, 0, 0);
+        // Create a destination queuing port (empty queue → recv blocks).
+        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+
+        // Partition 0 attempts a timed receive with timeout=50 at tick=100.
+        // Queue is empty so the receiver gets blocked with expiry=150.
+        let mut buf = [0u8; 4];
+        let outcome = k
+            .queuing
+            .receive_queuing_message(dst, 0, &mut buf, 50, 100)
+            .unwrap();
+        assert_eq!(
+            outcome,
+            RecvQueuingOutcome::ReceiverBlocked { expiry_tick: 150 }
+        );
+
+        // Simulate the SVC handler: transition partition 0 from Running→Waiting.
+        k.partitions
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+
+        // Tick 150: expiry fires, partition should move Waiting→Ready.
+        k.expire_timed_waits::<8>(150);
+        assert_eq!(k.partitions.get(0).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn expire_timed_waits_wakes_blocked_sender() {
+        use crate::queuing::SendQueuingOutcome;
+        use crate::sampling::PortDirection;
+
+        let mut k = kernel(0, 0, 0);
+        // Create a source port and a connected destination port.
+        let src = k.queuing.create_port(PortDirection::Source).unwrap();
+        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        k.queuing.connect_ports(src, dst).unwrap();
+
+        // Fill the destination queue (depth=4).
+        for i in 0..4u8 {
+            let outcome = k.queuing.send_routed(src, 0, &[i; 4], 0, 0).unwrap();
+            assert!(matches!(outcome, SendQueuingOutcome::Delivered { .. }));
+        }
+
+        // Partition 1 attempts a timed send with timeout=100 at tick=50.
+        // Queue is full so the sender blocks with expiry=150.
+        let outcome = k.queuing.send_routed(src, 1, &[0xFF; 4], 100, 50).unwrap();
+        assert_eq!(
+            outcome,
+            SendQueuingOutcome::SenderBlocked { expiry_tick: 150 }
+        );
+
+        // Simulate the SVC handler: transition partition 1 Running→Waiting.
+        k.partitions
+            .get_mut(1)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        assert_eq!(
+            k.partitions.get(1).unwrap().state(),
+            PartitionState::Waiting
+        );
+
+        // Tick 150: expiry fires, partition should move Waiting→Ready.
+        k.expire_timed_waits::<8>(150);
+        assert_eq!(k.partitions.get(1).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn expire_timed_waits_non_expired_stays_waiting() {
+        use crate::queuing::RecvQueuingOutcome;
+        use crate::sampling::PortDirection;
+
+        let mut k = kernel(0, 0, 0);
+        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+
+        // Block partition 0 as receiver with expiry at tick 200.
+        let mut buf = [0u8; 4];
+        let outcome = k
+            .queuing
+            .receive_queuing_message(dst, 0, &mut buf, 100, 100)
+            .unwrap();
+        assert_eq!(
+            outcome,
+            RecvQueuingOutcome::ReceiverBlocked { expiry_tick: 200 }
+        );
+
+        k.partitions
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+
+        // Tick 150: before expiry — partition must remain Waiting.
+        k.expire_timed_waits::<8>(150);
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+
+        // Tick 199: still before expiry.
+        k.expire_timed_waits::<8>(199);
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
     }
 }

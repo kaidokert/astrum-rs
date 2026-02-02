@@ -357,7 +357,7 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
     }
 
     /// Check all queuing port wait queues for expired timeouts.
-    /// Returns the partition IDs that were unblocked (up to `E` entries).
+    /// Appends the partition IDs that were unblocked to `out`.
     /// The kernel should transition each returned partition to Ready.
     ///
     /// # Panics
@@ -365,13 +365,15 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
     /// Panics (debug) if more than `E` waiters expire in a single tick.
     /// The caller must size `E` to cover the worst case (sum of all wait-queue
     /// capacities across every port).
-    pub fn tick_timeouts<const E: usize>(&mut self, current_tick: u64) -> heapless::Vec<u8, E> {
-        let mut unblocked = heapless::Vec::new();
+    pub fn tick_timeouts<const E: usize>(
+        &mut self,
+        current_tick: u64,
+        out: &mut heapless::Vec<u8, E>,
+    ) {
         for port in self.ports.iter_mut() {
-            port.drain_expired_senders(current_tick, &mut unblocked);
-            port.drain_expired_receivers(current_tick, &mut unblocked);
+            port.drain_expired_senders(current_tick, out);
+            port.drain_expired_receivers(current_tick, out);
         }
-        unblocked
     }
 
     /// Route a message from a Source port to its connected Destination port.
@@ -809,12 +811,14 @@ mod tests {
         assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
 
         // Tick 99: not yet expired
-        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(99);
+        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(99, &mut unblocked);
         assert!(unblocked.is_empty());
         assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
 
         // Tick 100: expired
-        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(100);
+        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(100, &mut unblocked);
         assert_eq!(unblocked.as_slice(), &[1]);
         assert_eq!(pool.get(s).unwrap().pending_senders(), 0);
     }
@@ -832,12 +836,14 @@ mod tests {
         assert_eq!(pool.get(d).unwrap().pending_receivers(), 1);
 
         // Tick 199: not yet expired
-        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(199);
+        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(199, &mut unblocked);
         assert!(unblocked.is_empty());
         assert_eq!(pool.get(d).unwrap().pending_receivers(), 1);
 
         // Tick 200: expired
-        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(200);
+        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(200, &mut unblocked);
         assert_eq!(unblocked.as_slice(), &[2]);
         assert_eq!(pool.get(d).unwrap().pending_receivers(), 0);
     }
@@ -851,7 +857,8 @@ mod tests {
         pool.send_queuing_message(s, 1, &[2; 4], 400, 100).unwrap();
 
         // Tick 200: well before expiry
-        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(200);
+        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(200, &mut unblocked);
         assert!(unblocked.is_empty());
         assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
     }
@@ -873,7 +880,8 @@ mod tests {
             .unwrap(); // expiry 100
 
         // Tick 100: sender 1 and receiver 3 expire; sender 2 stays
-        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(100);
+        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(100, &mut unblocked);
         assert_eq!(unblocked.len(), 2);
         assert!(unblocked.contains(&1));
         assert!(unblocked.contains(&3));
@@ -881,7 +889,8 @@ mod tests {
         assert_eq!(pool.get(d).unwrap().pending_receivers(), 0);
 
         // Tick 150: sender 2 expires
-        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(150);
+        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(150, &mut unblocked);
         assert_eq!(unblocked.as_slice(), &[2]);
         assert_eq!(pool.get(s).unwrap().pending_senders(), 0);
     }
@@ -890,7 +899,8 @@ mod tests {
     fn tick_timeouts_empty_pool_returns_empty() {
         let mut pool = QueuingPortPool::<4, 4, 4, 4>::new();
         pool.create_port(PortDirection::Source).unwrap();
-        let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(1000);
+        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(1000, &mut unblocked);
         assert!(unblocked.is_empty());
     }
 

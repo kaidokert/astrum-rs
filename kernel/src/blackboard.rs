@@ -218,12 +218,14 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
             .read_timed(caller, buf, timeout, current_tick)
     }
 
-    pub fn tick_timeouts<const E: usize>(&mut self, current_tick: u64) -> heapless::Vec<u8, E> {
-        let mut unblocked = heapless::Vec::new();
+    pub fn tick_timeouts<const E: usize>(
+        &mut self,
+        current_tick: u64,
+        out: &mut heapless::Vec<u8, E>,
+    ) {
         for board in self.boards.iter_mut() {
-            board.drain_expired_readers(current_tick, &mut unblocked);
+            board.drain_expired_readers(current_tick, out);
         }
-        unblocked
     }
 
     pub fn clear_blackboard(&mut self, id: usize) -> Result<(), BlackboardError> {
@@ -445,10 +447,12 @@ mod tests {
             pool.read_blackboard_timed(id, 1, &mut buf, 50, 100),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
-        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(149);
+        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(149, &mut u);
         assert!(u.is_empty());
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 1);
-        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(150);
+        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(150, &mut u);
         assert_eq!(u.as_slice(), &[1]);
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 0);
     }
@@ -464,7 +468,8 @@ mod tests {
         );
         let woken: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[0xAB]).unwrap();
         assert_eq!(woken.as_slice(), &[1]);
-        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(100);
+        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(100, &mut u);
         assert!(u.is_empty());
     }
 
@@ -477,13 +482,16 @@ mod tests {
         pool.read_blackboard_timed(id, 2, &mut buf, 100, 0).unwrap();
         pool.read_blackboard_timed(id, 3, &mut buf, 200, 0).unwrap();
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 3);
-        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(50);
+        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(50, &mut u);
         assert_eq!(u.as_slice(), &[1]);
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 2);
-        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(100);
+        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(100, &mut u);
         assert_eq!(u.as_slice(), &[2]);
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 1);
-        let u: heapless::Vec<u8, 8> = pool.tick_timeouts(200);
+        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        pool.tick_timeouts(200, &mut u);
         assert_eq!(u.as_slice(), &[3]);
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 0);
     }
