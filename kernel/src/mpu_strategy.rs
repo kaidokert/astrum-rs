@@ -170,25 +170,34 @@ impl DynamicStrategy {
             let mut out = [(0u32, 0u32); DYNAMIC_SLOT_COUNT];
             for (idx, slot) in slots.iter().enumerate() {
                 let region = DYNAMIC_REGION_BASE as u32 + idx as u32;
-                match slot {
-                    Some(desc) => {
-                        // build_rbar cannot fail: region 4-7 ≤ 7 and
-                        // bases stored in WindowDescriptor are always
-                        // 32-byte aligned (sourced from RBAR_ADDR_MASK).
-                        let rbar = crate::mpu::build_rbar(desc.base, region)
-                            .expect("invalid RBAR for dynamic slot");
-                        out[idx] = (rbar, desc.permissions);
-                    }
-                    None => {
-                        // Select the region via RBAR and disable via RASR=0.
-                        let rbar =
-                            crate::mpu::build_rbar(0, region).expect("invalid region number");
-                        out[idx] = (rbar, 0);
-                    }
-                }
+                // Defense-in-depth: add_window validates alignment before
+                // storing descriptors, so build_rbar should always succeed
+                // for occupied slots.  If a descriptor is somehow invalid
+                // (e.g. corrupted base address), fall back to a disabled
+                // region (RBAR = region select only, RASR = 0) rather than
+                // panicking — this code runs in PendSV and must never fault.
+                out[idx] = match slot {
+                    Some(desc) => crate::mpu::build_rbar(desc.base, region)
+                        .map(|rbar| (rbar, desc.permissions))
+                        .unwrap_or((region, 0)),
+                    None => (crate::mpu::build_rbar(0, region).unwrap_or(region), 0),
+                };
             }
             out
         })
+    }
+
+    /// Directly overwrite a slot with an arbitrary descriptor.
+    ///
+    /// This bypasses `add_window` validation and is intended **only** for
+    /// testing the `compute_region_values` fallback path (defense-in-depth).
+    #[cfg(test)]
+    pub fn inject_slot(&self, region_id: u8, desc: Option<WindowDescriptor>) {
+        if let Some(idx) = Self::region_to_slot_index(region_id) {
+            with_cs(|cs| {
+                self.slots.borrow(cs).borrow_mut()[idx] = desc;
+            });
+        }
     }
 
     /// Program regions R4-R7 into the MPU hardware.
@@ -852,6 +861,90 @@ mod tests {
         assert_eq!(vals[1].0, build_rbar(0x2001_0000, 5).unwrap());
         assert_eq!(vals[2].0, build_rbar(0x2002_0000, 6).unwrap());
         assert_eq!(vals[3].0, build_rbar(0x2003_0000, 7).unwrap());
+    }
+
+    // ------------------------------------------------------------------
+    // compute_region_values: defense-in-depth fallback
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn compute_region_values_fallback_on_bad_descriptor() {
+        let ds = DynamicStrategy::new();
+
+        // Inject a descriptor with a misaligned base address into R5.
+        // build_rbar will return None for base 0x03 (not 32-byte aligned),
+        // so compute_region_values must fall back to a disabled region.
+        ds.inject_slot(
+            5,
+            Some(WindowDescriptor {
+                base: 0x03, // misaligned — build_rbar returns None
+                size: 256,
+                permissions: 0xDEAD,
+                owner: 1,
+            }),
+        );
+
+        let vals = ds.compute_region_values();
+
+        // R4 (slot 0) — empty, normal disabled region.
+        assert_eq!(vals[0].0, build_rbar(0, 4).unwrap());
+        assert_eq!(vals[0].1, 0);
+
+        // R5 (slot 1) — bad descriptor, fallback: disabled region.
+        // RBAR is the bare region number (no VALID bit, no base),
+        // RASR is 0 (region fully disabled).
+        assert_eq!(vals[1].0, 5); // region number only, no VALID bit
+        assert_eq!(vals[1].1, 0); // disabled — RASR must be 0
+
+        // R6, R7 — empty, normal disabled regions.
+        assert_eq!(vals[2].0, build_rbar(0, 6).unwrap());
+        assert_eq!(vals[2].1, 0);
+        assert_eq!(vals[3].0, build_rbar(0, 7).unwrap());
+        assert_eq!(vals[3].1, 0);
+    }
+
+    #[test]
+    fn compute_region_values_fallback_preserves_other_valid_slots() {
+        let ds = DynamicStrategy::new();
+
+        // Configure R4 with a valid partition region.
+        let (rbar_r4, rasr_r4) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rbar_r4, rasr_r4)]).unwrap();
+
+        // Add valid windows in R5 and R6.
+        let sf = encode_size(256).unwrap();
+        let rasr_win = build_rasr(sf, AP_FULL_ACCESS, true, (false, false, false));
+        ds.add_window(0x2001_0000, 256, rasr_win, 0).unwrap(); // R5
+        ds.add_window(0x2002_0000, 256, rasr_win, 0).unwrap(); // R6
+
+        // Inject a bad descriptor into R7 (misaligned base).
+        ds.inject_slot(
+            7,
+            Some(WindowDescriptor {
+                base: 0x07,
+                size: 64,
+                permissions: 0xBEEF,
+                owner: 2,
+            }),
+        );
+
+        let vals = ds.compute_region_values();
+
+        // R4 — valid, should be unaffected.
+        assert_eq!(vals[0].0, build_rbar(0x2000_0000, 4).unwrap());
+        assert_eq!(vals[0].1, rasr_r4);
+
+        // R5 — valid window, unaffected.
+        assert_eq!(vals[1].0, build_rbar(0x2001_0000, 5).unwrap());
+        assert_eq!(vals[1].1, rasr_win);
+
+        // R6 — valid window, unaffected.
+        assert_eq!(vals[2].0, build_rbar(0x2002_0000, 6).unwrap());
+        assert_eq!(vals[2].1, rasr_win);
+
+        // R7 — bad descriptor, fallback: disabled region.
+        assert_eq!(vals[3].0, 7);
+        assert_eq!(vals[3].1, 0); // disabled — RASR must be 0
     }
 
     // ------------------------------------------------------------------
