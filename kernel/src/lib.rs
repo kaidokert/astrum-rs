@@ -7,6 +7,8 @@ pub mod macros;
 pub mod harness;
 
 pub mod blackboard;
+#[cfg(feature = "dynamic-mpu")]
+pub mod buffer_pool;
 pub mod config;
 pub mod context;
 pub mod events;
