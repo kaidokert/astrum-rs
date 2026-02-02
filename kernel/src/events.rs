@@ -1,11 +1,12 @@
 use crate::partition::{PartitionState, PartitionTable};
+use crate::svc::SvcError;
 
 /// If any `mask` bits are set in caller's flags, clear and return them; else set Waiting.
 /// Returns `u32::MAX` on invalid partition ID, `0` when entering Waiting state.
 pub fn event_wait<const N: usize>(t: &mut PartitionTable<N>, caller: usize, mask: u32) -> u32 {
     let pcb = match t.get_mut(caller) {
         Some(p) => p,
-        None => return u32::MAX,
+        None => return SvcError::InvalidPartition.to_u32(),
     };
     let matched = pcb.event_flags() & mask;
     if matched != 0 {
@@ -23,7 +24,7 @@ pub fn event_wait<const N: usize>(t: &mut PartitionTable<N>, caller: usize, mask
 pub fn event_set<const N: usize>(t: &mut PartitionTable<N>, target: usize, mask: u32) -> u32 {
     let pcb = match t.get_mut(target) {
         Some(p) => p,
-        None => return u32::MAX,
+        None => return SvcError::InvalidPartition.to_u32(),
     };
     pcb.set_event_flags(mask);
     if pcb.state() == PartitionState::Waiting && (pcb.event_flags() & pcb.event_wait_mask()) != 0 {
@@ -39,7 +40,7 @@ pub fn event_clear<const N: usize>(t: &mut PartitionTable<N>, caller: usize, mas
             p.clear_event_flags(mask);
             0
         }
-        None => u32::MAX,
+        None => SvcError::InvalidPartition.to_u32(),
     }
 }
 
@@ -119,8 +120,9 @@ mod tests {
         event_set(&mut t, 1, 0b1000);
         assert_eq!(t.get(1).unwrap().event_flags(), 0b1000);
         assert_eq!(event_wait(&mut t, 0, 0b1010), 0b1010);
-        assert_eq!(event_set(&mut t, 99, 1), u32::MAX);
-        assert_eq!(event_clear(&mut t, 99, 1), u32::MAX);
-        assert_eq!(event_wait(&mut t, 99, 1), u32::MAX);
+        let inv = SvcError::InvalidPartition.to_u32();
+        assert_eq!(event_set(&mut t, 99, 1), inv);
+        assert_eq!(event_clear(&mut t, 99, 1), inv);
+        assert_eq!(event_wait(&mut t, 99, 1), inv);
     }
 }

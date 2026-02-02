@@ -117,7 +117,7 @@ pub unsafe extern "C" fn dispatch_svc(frame: &mut ExceptionFrame) {
             1
         }
         Some(_) => 1,
-        None => u32::MAX,
+        None => SvcError::InvalidSyscall.to_u32(),
     };
 }
 
@@ -137,7 +137,7 @@ pub fn dispatch_syscall<const N: usize>(
         Some(SyscallId::EventSet) => events::event_set(partitions, frame.r1 as usize, frame.r2),
         Some(SyscallId::EventClear) => events::event_clear(partitions, frame.r1 as usize, frame.r2),
         Some(_) => 1,
-        None => u32::MAX,
+        None => SvcError::InvalidSyscall.to_u32(),
     };
 }
 
@@ -232,7 +232,7 @@ impl<
                     frame.r2 as usize,
                 ) {
                     Ok(()) => 0,
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::SemSignal) => {
@@ -241,7 +241,7 @@ impl<
                     .signal(&mut self.partitions, frame.r1 as usize)
                 {
                     Ok(()) => 0,
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::MutexLock) => {
@@ -250,7 +250,7 @@ impl<
                     .lock(&mut self.partitions, frame.r1 as usize, frame.r2 as usize)
                 {
                     Ok(()) => 0,
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::MutexUnlock) => {
@@ -260,7 +260,7 @@ impl<
                     frame.r2 as usize,
                 ) {
                     Ok(()) => 0,
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::MsgSend) => {
@@ -271,7 +271,7 @@ impl<
                     .send(frame.r1 as usize, frame.r2 as usize, data)
                 {
                     Ok(outcome) => apply_send_outcome(&mut self.partitions, outcome),
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::MsgRecv) => {
@@ -282,7 +282,7 @@ impl<
                     .recv(frame.r1 as usize, frame.r2 as usize, buf)
                 {
                     Ok(outcome) => apply_recv_outcome(&mut self.partitions, outcome),
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::SamplingWrite) => {
@@ -294,7 +294,7 @@ impl<
                     .write_sampling_message(frame.r1 as usize, d, self.tick.get())
                 {
                     Ok(()) => 0,
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::SamplingRead) => {
@@ -304,7 +304,7 @@ impl<
                     .read_sampling_message(frame.r1 as usize, b, self.tick.get())
                 {
                     Ok((sz, _)) => sz as u32,
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::QueuingSend) => {
@@ -325,7 +325,7 @@ impl<
                         0
                     }
                     Ok(SendQueuingOutcome::SenderBlocked { .. }) => 0,
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::QueuingRecv) => {
@@ -347,7 +347,7 @@ impl<
                         msg_len as u32
                     }
                     Ok(_) => 0,
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::QueuingStatus) => {
@@ -357,7 +357,7 @@ impl<
                         unsafe { core::ptr::write(status_ptr, status) };
                         0
                     }
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::BbDisplay) => {
@@ -371,7 +371,7 @@ impl<
                         }
                         0
                     }
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::BbRead) => {
@@ -394,17 +394,17 @@ impl<
                         );
                         0
                     }
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::BbClear) => {
                 match self.blackboards.clear_blackboard(frame.r1 as usize) {
                     Ok(()) => 0,
-                    Err(_) => u32::MAX,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::GetTime) => self.tick.get() as u32,
-            None => u32::MAX,
+            None => SvcError::InvalidSyscall.to_u32(),
         };
     }
 }
@@ -432,7 +432,7 @@ fn apply_send_outcome<const N: usize>(
             wake_receiver: Some(pid),
         } => {
             if !try_transition(partitions, pid, PartitionState::Ready) {
-                return u32::MAX;
+                return SvcError::TransitionFailed.to_u32();
             }
             0
         }
@@ -441,7 +441,7 @@ fn apply_send_outcome<const N: usize>(
         } => 0,
         SendOutcome::SenderBlocked { blocked } => {
             if !try_transition(partitions, blocked, PartitionState::Waiting) {
-                return u32::MAX;
+                return SvcError::TransitionFailed.to_u32();
             }
             0
         }
@@ -459,14 +459,14 @@ fn apply_recv_outcome<const N: usize>(
             wake_sender: Some(pid),
         } => {
             if !try_transition(partitions, pid, PartitionState::Ready) {
-                return u32::MAX;
+                return SvcError::TransitionFailed.to_u32();
             }
             0
         }
         RecvOutcome::Received { wake_sender: None } => 0,
         RecvOutcome::ReceiverBlocked { blocked } => {
             if !try_transition(partitions, blocked, PartitionState::Waiting) {
-                return u32::MAX;
+                return SvcError::TransitionFailed.to_u32();
             }
             0
         }
@@ -567,11 +567,11 @@ mod tests {
     }
 
     #[test]
-    fn invalid_syscall_returns_max() {
+    fn invalid_syscall_returns_error_code() {
         let mut ef = frame(0xFFFF, 0, 0);
         let mut t = tbl();
         dispatch_syscall(&mut ef, &mut t);
-        assert_eq!(ef.r0, u32::MAX);
+        assert_eq!(ef.r0, SvcError::InvalidSyscall.to_u32());
     }
 
     #[test]
@@ -604,17 +604,18 @@ mod tests {
     }
 
     #[test]
-    fn event_invalid_partition_returns_max() {
+    fn event_invalid_partition_returns_error_code() {
+        let inv = SvcError::InvalidPartition.to_u32();
         let mut t = tbl();
         let mut ef = frame(SYS_EVT_WAIT, 99, 0b0001);
         dispatch_syscall(&mut ef, &mut t);
-        assert_eq!(ef.r0, u32::MAX);
+        assert_eq!(ef.r0, inv);
         let mut ef = frame(SYS_EVT_SET, 99, 0b0001);
         dispatch_syscall(&mut ef, &mut t);
-        assert_eq!(ef.r0, u32::MAX);
+        assert_eq!(ef.r0, inv);
         let mut ef = frame(SYS_EVT_CLEAR, 99, 0b0001);
         dispatch_syscall(&mut ef, &mut t);
-        assert_eq!(ef.r0, u32::MAX);
+        assert_eq!(ef.r0, inv);
     }
 
     #[test]
@@ -821,15 +822,16 @@ mod tests {
             .read_sampling_message(dst, &mut buf, k.tick.get())
             .unwrap();
         assert_eq!((n, &buf[..n]), (2, &[0xAA, 0xBB][..]));
-        // Invalid port → u32::MAX for both write and read.
+        // Invalid port → InvalidResource error for both write and read.
+        let inv = SvcError::InvalidResource.to_u32();
         let d: [u8; 1] = [1];
         let mut ef = frame4(SYS_SAMPLING_WRITE, 99, 1, d.as_ptr() as u32);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, u32::MAX);
+        assert_eq!(ef.r0, inv);
         let mut rb = [0u8; 64];
         let mut ef = frame4(SYS_SAMPLING_READ, 99, 0, rb.as_mut_ptr() as u32);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, u32::MAX);
+        assert_eq!(ef.r0, inv);
     }
 
     #[test]
@@ -921,7 +923,7 @@ mod tests {
         // Invalid board via SVC
         let mut ef = frame(SYS_BB_CLEAR, 99, 0);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, u32::MAX);
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
     // ---- SvcError tests ----
