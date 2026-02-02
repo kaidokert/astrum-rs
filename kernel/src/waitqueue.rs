@@ -154,6 +154,14 @@ impl<const W: usize> TimedWaitQueue<W> {
     pub fn len(&self) -> usize {
         self.inner.len()
     }
+
+    /// Non-destructive snapshot of the partition IDs currently in the queue,
+    /// in FIFO order. Intended for test assertions that need to observe queue
+    /// contents without mutating the queue.
+    #[cfg(test)]
+    pub fn waiting_pids(&self) -> std::vec::Vec<u8> {
+        self.inner.iter().map(|&(pid, _)| pid).collect()
+    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 use crate::sampling::PortDirection;
+use crate::waitqueue::TimedWaitQueue;
 
 /// Status information for a queuing port, returned by the `QueuingStatus` syscall.
 /// `#[repr(C)]` ensures a stable layout for writing directly to user-provided pointers.
@@ -49,8 +50,8 @@ pub enum RecvQueuingOutcome {
 pub struct QueuingPort<const D: usize, const M: usize, const W: usize> {
     direction: PortDirection,
     buf: heapless::Deque<(usize, [u8; M]), D>,
-    sender_wq: heapless::Deque<(u8, u64), W>,
-    receiver_wq: heapless::Deque<(u8, u64), W>,
+    sender_wq: TimedWaitQueue<W>,
+    receiver_wq: TimedWaitQueue<W>,
     connected_port: Option<usize>,
 }
 
@@ -60,8 +61,8 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         Self {
             direction,
             buf: heapless::Deque::new(),
-            sender_wq: heapless::Deque::new(),
-            receiver_wq: heapless::Deque::new(),
+            sender_wq: TimedWaitQueue::new(),
+            receiver_wq: TimedWaitQueue::new(),
             connected_port: None,
         }
     }
@@ -113,11 +114,11 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         if self.buf.push_back((data.len(), msg)).is_err() {
             // u64::MAX = no timeout; kernel wakes this sender unconditionally on next recv.
             self.sender_wq
-                .push_back((caller, u64::MAX))
+                .push(caller, u64::MAX)
                 .map_err(|_| QueuingError::WaitQueueFull)?;
             return Err(QueuingError::QueueFull);
         }
-        Ok(self.receiver_wq.pop_front().map(|(pid, _)| pid))
+        Ok(self.receiver_wq.pop_front_pid())
     }
 
     pub fn send_queuing_message(
@@ -139,7 +140,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
             }
             let expiry = current_tick + timeout_ticks;
             self.sender_wq
-                .push_back((caller, expiry))
+                .push(caller, expiry)
                 .map_err(|_| QueuingError::WaitQueueFull)?;
             return Ok(SendQueuingOutcome::SenderBlocked {
                 expiry_tick: expiry,
@@ -150,7 +151,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         // push_back cannot fail: we just confirmed the buffer is not full.
         let _ = self.buf.push_back((data.len(), msg));
         Ok(SendQueuingOutcome::Delivered {
-            wake_receiver: self.receiver_wq.pop_front().map(|(pid, _)| pid),
+            wake_receiver: self.receiver_wq.pop_front_pid(),
         })
     }
 
@@ -172,10 +173,10 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         if let Some((len, msg)) = self.buf.pop_front() {
             let copy_len = len.min(buf.len());
             buf[..copy_len].copy_from_slice(&msg[..copy_len]);
-            return Ok((len, self.sender_wq.pop_front().map(|(pid, _)| pid)));
+            return Ok((len, self.sender_wq.pop_front_pid()));
         }
         self.receiver_wq
-            .push_back((caller, u64::MAX))
+            .push(caller, u64::MAX)
             .map_err(|_| QueuingError::WaitQueueFull)?;
         Err(QueuingError::QueueEmpty)
     }
@@ -195,7 +196,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
             buf[..copy_len].copy_from_slice(&msg[..copy_len]);
             return Ok(RecvQueuingOutcome::Received {
                 msg_len: len,
-                wake_sender: self.sender_wq.pop_front().map(|(pid, _)| pid),
+                wake_sender: self.sender_wq.pop_front_pid(),
             });
         }
         if timeout_ticks == 0 {
@@ -203,43 +204,11 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         }
         let expiry = current_tick + timeout_ticks;
         self.receiver_wq
-            .push_back((caller, expiry))
+            .push(caller, expiry)
             .map_err(|_| QueuingError::WaitQueueFull)?;
         Ok(RecvQueuingOutcome::ReceiverBlocked {
             expiry_tick: expiry,
         })
-    }
-
-    /// Remove expired waiters from `wq`, appending their partition IDs to `out`.
-    /// Skips the destructive pop/push cycle when no entries have expired.
-    ///
-    /// The caller must ensure `out` has enough remaining capacity for all
-    /// expired entries. In debug builds this is asserted; in release the
-    /// excess entries are silently dropped (the waiter is still removed from
-    /// the queue, so it will not block forever).
-    fn drain_expired<const E: usize>(
-        wq: &mut heapless::Deque<(u8, u64), W>,
-        current_tick: u64,
-        out: &mut heapless::Vec<u8, E>,
-    ) {
-        if !wq.iter().any(|&(_, expiry)| current_tick >= expiry) {
-            return;
-        }
-        let n = wq.len();
-        for _ in 0..n {
-            if let Some((pid, expiry)) = wq.pop_front() {
-                if current_tick >= expiry {
-                    debug_assert!(
-                        !out.is_full(),
-                        "tick_timeouts: output vec capacity E={} is too small",
-                        E
-                    );
-                    let _ = out.push(pid);
-                } else {
-                    let _ = wq.push_back((pid, expiry));
-                }
-            }
-        }
     }
 
     /// Remove senders whose timeout has expired, appending their partition IDs
@@ -250,7 +219,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         current_tick: u64,
         out: &mut heapless::Vec<u8, E>,
     ) {
-        Self::drain_expired(&mut self.sender_wq, current_tick, out);
+        self.sender_wq.drain_expired(current_tick, out);
     }
 
     /// Remove receivers whose timeout has expired, appending their partition
@@ -260,7 +229,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         current_tick: u64,
         out: &mut heapless::Vec<u8, E>,
     ) {
-        Self::drain_expired(&mut self.receiver_wq, current_tick, out);
+        self.receiver_wq.drain_expired(current_tick, out);
     }
 
     /// Returns the full status of this queuing port as a C-compatible struct.
@@ -400,7 +369,7 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
             }
             let expiry = current_tick + timeout_ticks;
             dst.sender_wq
-                .push_back((caller, expiry))
+                .push(caller, expiry)
                 .map_err(|_| QueuingError::WaitQueueFull)?;
             return Ok(SendQueuingOutcome::SenderBlocked {
                 expiry_tick: expiry,
@@ -410,7 +379,7 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
         msg[..data.len()].copy_from_slice(data);
         let _ = dst.buf.push_back((data.len(), msg));
         Ok(SendQueuingOutcome::Delivered {
-            wake_receiver: dst.receiver_wq.pop_front().map(|(pid, _)| pid),
+            wake_receiver: dst.receiver_wq.pop_front_pid(),
         })
     }
 
@@ -429,6 +398,10 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
     }
 }
 
+// TODO: tests below reach into internal fields (buf, sender_wq, receiver_wq)
+// to set up preconditions. Introduce public test-helper methods on QueuingPort
+// (e.g. inject_message, enqueue_blocked_sender/receiver) to decouple tests
+// from representation details.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,11 +473,11 @@ mod tests {
     #[test]
     fn wake_blocked_receiver_and_sender() {
         let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
-        src.receiver_wq.push_back((2, u64::MAX)).unwrap();
+        src.receiver_wq.push(2, u64::MAX).unwrap();
         assert_eq!(src.send(0, &[1; 4]).unwrap(), Some(2));
         let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         dst.buf.push_back((4, [1; 4])).unwrap();
-        dst.sender_wq.push_back((3, u64::MAX)).unwrap();
+        dst.sender_wq.push(3, u64::MAX).unwrap();
         let mut buf = [0u8; 4];
         let (sz, wake) = dst.recv(1, &mut buf).unwrap();
         assert_eq!((sz, wake), (4, Some(3)));
@@ -576,7 +549,7 @@ mod tests {
     #[test]
     fn send_queuing_wakes_blocked_receiver() {
         let mut p = QueuingPort::<2, 8, 4>::new(PortDirection::Source);
-        p.receiver_wq.push_back((5, u64::MAX)).unwrap();
+        p.receiver_wq.push(5, u64::MAX).unwrap();
         let o = p.send_queuing_message(1, &[4; 4], 0, 0).unwrap();
         assert_eq!(
             o,
@@ -650,7 +623,7 @@ mod tests {
     fn receive_queuing_delivers_and_wakes_sender() {
         let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         p.buf.push_back((2, [1, 2, 0, 0])).unwrap();
-        p.sender_wq.push_back((3, 999)).unwrap();
+        p.sender_wq.push(3, 999).unwrap();
         let mut buf = [0u8; 4];
         let o = p.receive_queuing_message(0, &mut buf, 0, 0).unwrap();
         assert_eq!(

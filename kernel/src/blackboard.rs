@@ -1,3 +1,5 @@
+use crate::waitqueue::TimedWaitQueue;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum BlackboardError {
     PoolFull,
@@ -24,7 +26,7 @@ pub struct Blackboard<const M: usize, const W: usize> {
     data: [u8; M],
     current_size: usize,
     is_empty: bool,
-    wait_queue: heapless::Deque<(u8, u64), W>,
+    wait_queue: TimedWaitQueue<W>,
 }
 
 #[allow(clippy::new_without_default)]
@@ -35,7 +37,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
             data: [0u8; M],
             current_size: 0,
             is_empty: true,
-            wait_queue: heapless::Deque::new(),
+            wait_queue: TimedWaitQueue::new(),
         }
     }
     pub fn id(&self) -> usize {
@@ -65,13 +67,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
         self.data[..data.len()].copy_from_slice(data);
         self.current_size = data.len();
         self.is_empty = false;
-        let mut woken = heapless::Vec::new();
-        while let Some((pid, _)) = self.wait_queue.pop_front() {
-            // Safety: woken has capacity W, same as the wait queue,
-            // so this cannot fail.
-            woken.push(pid).unwrap();
-        }
-        Ok(woken)
+        Ok(self.wait_queue.drain_all())
     }
 
     /// Read current content.
@@ -93,7 +89,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
                 return Err(BlackboardError::BoardEmpty);
             }
             self.wait_queue
-                .push_back((caller, u64::MAX))
+                .push(caller, u64::MAX)
                 .map_err(|_| BlackboardError::WaitQueueFull)?;
             return Ok(ReadBlackboardOutcome::ReaderBlocked);
         }
@@ -118,7 +114,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
             }
             let expiry = current_tick + timeout as u64;
             self.wait_queue
-                .push_back((caller, expiry))
+                .push(caller, expiry)
                 .map_err(|_| BlackboardError::WaitQueueFull)?;
             return Ok(ReadBlackboardOutcome::ReaderBlocked);
         }
@@ -134,18 +130,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
         current_tick: u64,
         out: &mut heapless::Vec<u8, E>,
     ) {
-        // Rebuild the wait queue in-place, preserving FIFO order of
-        // non-expired entries. We drain the old queue completely, then
-        // re-push only the unexpired waiters in their original order.
-        let mut keep: heapless::Deque<(u8, u64), W> = heapless::Deque::new();
-        while let Some((pid, expiry)) = self.wait_queue.pop_front() {
-            if current_tick >= expiry {
-                let _ = out.push(pid);
-            } else {
-                let _ = keep.push_back((pid, expiry));
-            }
-        }
-        self.wait_queue = keep;
+        self.wait_queue.drain_expired(current_tick, out);
     }
 
     pub fn clear(&mut self) {
@@ -497,6 +482,9 @@ mod tests {
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 0);
     }
 
+    // TODO: This test accesses bb.wait_queue directly to verify FIFO order.
+    // Add a public test-helper (e.g. Blackboard::waiting_reader_pids()) to
+    // decouple the test from the internal wait-queue representation.
     /// Verify that draining expired readers preserves FIFO order of the
     /// remaining (non-expired) waiters. Enqueue PIDs [A, B, C, D] where
     /// B and D expire; after the tick the queue must contain [A, C] in
@@ -522,7 +510,7 @@ mod tests {
         assert_eq!(expired.as_slice(), &[20, 40]);
         // Remaining waiters: PIDs 10, 30 in original FIFO order
         assert_eq!(bb.waiting_readers(), 2);
-        let remaining: Vec<u8> = bb.wait_queue.iter().map(|&(pid, _)| pid).collect();
+        let remaining: Vec<u8> = bb.wait_queue.waiting_pids();
         assert_eq!(remaining, vec![10, 30]);
     }
 }
