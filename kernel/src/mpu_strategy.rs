@@ -110,6 +110,17 @@ impl DynamicStrategy {
         }
     }
 
+    /// Convert a hardware MPU region ID (4-7) to a `compute_region_values`
+    /// array index (0-3), or `None` if the ID is out of range.
+    pub fn region_to_slot_index(region_id: u8) -> Option<usize> {
+        let idx = region_id.checked_sub(DYNAMIC_REGION_BASE)? as usize;
+        if idx < DYNAMIC_SLOT_COUNT {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
     /// Return a copy of the descriptor for a given hardware region ID (4-7),
     /// or `None` if the slot is empty or the ID is out of range.
     pub fn slot(&self, region_id: u8) -> Option<WindowDescriptor> {

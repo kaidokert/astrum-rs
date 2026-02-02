@@ -605,6 +605,35 @@ where
                 }
             }
             #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::BufferWrite) => {
+                use crate::buffer_pool::BorrowState;
+                let slot_idx = frame.r1 as usize;
+                let len = frame.r2 as usize;
+                let data_ptr = frame.r3 as *const u8;
+                match self.buffers.get_mut(slot_idx) {
+                    Some(slot)
+                        if slot.state()
+                            == (BorrowState::BorrowedWrite {
+                                owner: self.current_partition,
+                            }) =>
+                    {
+                        let buf = slot.data_mut();
+                        if len > buf.len() {
+                            SvcError::OperationFailed.to_u32()
+                        } else {
+                            // SAFETY: The caller must provide a valid readable
+                            // buffer of at least `len` bytes within its memory
+                            // region. The MPU enforces partition isolation in
+                            // production.
+                            let src = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+                            buf[..len].copy_from_slice(src);
+                            len as u32
+                        }
+                    }
+                    _ => SvcError::InvalidResource.to_u32(),
+                }
+            }
+            #[cfg(feature = "dynamic-mpu")]
             Some(
                 sid @ (SyscallId::DevOpen
                 | SyscallId::DevRead
