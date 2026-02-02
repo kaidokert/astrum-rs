@@ -99,6 +99,14 @@ pub const MPU_CTRL_ENABLE_PRIVDEFENA: u32 = (1 << 2) | 1;
 /// Higher region number wins on overlap.
 pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
     let region_size = pcb.mpu_region().size();
+
+    // Validate code region (entry_point must be aligned to region_size).
+    validate_mpu_region(pcb.entry_point(), region_size).ok()?;
+    // Validate data region (base must be aligned to size).
+    validate_mpu_region(pcb.mpu_region().base(), region_size).ok()?;
+    // Validate stack guard region (stack_base must be 32-byte aligned).
+    validate_mpu_region(pcb.stack_base(), 32).ok()?;
+
     let size_field = encode_size(region_size)?;
     let bg_size_field = 31u32; // 4 GiB = 2^32 → SIZE field = 31
 
@@ -667,5 +675,48 @@ mod tests {
     fn mpu_error_debug_contains_variant_name() {
         assert!(format!("{:?}", MpuError::SizeTooSmall).contains("SizeTooSmall"));
         assert!(format!("{:?}", MpuError::SlotExhausted).contains("SlotExhausted"));
+    }
+
+    // ------------------------------------------------------------------
+    // partition_mpu_regions: validate_mpu_region integration
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn partition_regions_misaligned_entry_point_returns_none() {
+        // entry_point=0x100 is not aligned to 4096-byte region size
+        let pcb = make_pcb(0x0000_0100, 0x2000_0000, 4096);
+        assert!(partition_mpu_regions(&pcb).is_none());
+    }
+
+    #[test]
+    fn partition_regions_misaligned_data_base_returns_none() {
+        // data base=0x2000_0100 is not aligned to 4096-byte region size
+        let pcb = make_pcb(0x0000_0000, 0x2000_0100, 4096);
+        assert!(partition_mpu_regions(&pcb).is_none());
+    }
+
+    #[test]
+    fn partition_regions_misaligned_stack_base_returns_none() {
+        // stack_base must be 32-byte aligned; 0x2000_0010 + 4 = 0x2000_0014 is not
+        let entry = 0x0000_0000;
+        let data_base = 0x2000_0000;
+        let data_size = 4096u32;
+        // Use a stack_base that is NOT 32-byte aligned
+        let misaligned_stack_base = data_base + 4; // 0x2000_0004, not 32-byte aligned
+        let pcb = PartitionControlBlock::new(
+            0,
+            entry,
+            misaligned_stack_base,
+            misaligned_stack_base.wrapping_add(data_size),
+            MpuRegion::new(data_base, data_size, 0),
+        );
+        assert!(partition_mpu_regions(&pcb).is_none());
+    }
+
+    #[test]
+    fn partition_regions_entry_point_overflow_returns_none() {
+        // entry_point near end of address space + large region causes overflow
+        let pcb = make_pcb(0xFFFF_0000, 0x2000_0000, 0x0001_0000);
+        assert!(partition_mpu_regions(&pcb).is_none());
     }
 }
