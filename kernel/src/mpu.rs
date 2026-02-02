@@ -82,12 +82,15 @@ use crate::partition::PartitionControlBlock;
 /// MPU CTRL value: enable MPU (bit 0) + PRIVDEFENA (bit 2).
 pub const MPU_CTRL_ENABLE_PRIVDEFENA: u32 = (1 << 2) | 1;
 
-/// Compute three (RBAR, RASR) pairs for a partition's MPU layout.
+/// Compute four (RBAR, RASR) pairs for a partition's MPU layout.
 /// Returns `None` if region size/base is invalid for the MPU.
 ///
 /// Region 0 = background no-access (XN, 4 GiB),
-/// Region 1 = code RX (priv+unpriv RO), Region 2 = data RW/XN. Higher number wins on overlap.
-pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 3]> {
+/// Region 1 = code RX (priv+unpriv RO),
+/// Region 2 = data RW/XN,
+/// Region 3 = 32-byte no-access stack guard at stack_base.
+/// Higher region number wins on overlap.
+pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
     let region_size = pcb.mpu_region().size();
     let size_field = encode_size(region_size)?;
     let bg_size_field = 31u32; // 4 GiB = 2^32 → SIZE field = 31
@@ -101,16 +104,21 @@ pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32);
     let data_rbar = build_rbar(pcb.mpu_region().base(), 2)?;
     let data_rasr = build_rasr(size_field, AP_FULL_ACCESS, true, (true, true, false));
 
+    let guard_size_field = encode_size(32)?; // 32 bytes → SIZE field = 4
+    let guard_rbar = build_rbar(pcb.stack_base(), 3)?;
+    let guard_rasr = build_rasr(guard_size_field, AP_NO_ACCESS, true, (false, false, false));
+
     Some([
         (bg_rbar, bg_rasr),
         (code_rbar, code_rasr),
         (data_rbar, data_rasr),
+        (guard_rbar, guard_rasr),
     ])
 }
 
-/// Configure MPU regions for a partition: disable MPU, program three
-/// regions (code RX, data RW/XN, background no-access), re-enable with
-/// PRIVDEFENA, and execute DSB/ISB barriers.
+/// Configure MPU regions for a partition: disable MPU, program four
+/// regions (background no-access, code RX, data RW/XN, stack guard),
+/// re-enable with PRIVDEFENA, and execute DSB/ISB barriers.
 #[cfg(not(test))]
 pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
     let regions = partition_mpu_regions(pcb).expect("invalid MPU config");
@@ -195,7 +203,7 @@ mod tests {
     }
 
     /// Shared setup: default PCB (entry=0x0, data=0x2000_0000, 4 KiB) and its MPU regions.
-    fn default_regions() -> [(u32, u32); 3] {
+    fn default_regions() -> [(u32, u32); 4] {
         let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
         partition_mpu_regions(&pcb).unwrap()
     }
@@ -229,6 +237,39 @@ mod tests {
     }
 
     #[test]
+    fn partition_regions_stack_guard() {
+        let regions = default_regions();
+        // Stack guard = region 3: RBAR = stack_base | VALID | region 3
+        let (rbar, rasr) = regions[3];
+        assert_eq!(rbar, build_rbar(0x2000_0000, 3).unwrap());
+        // AP = no access
+        assert_eq!((rasr >> RASR_AP_SHIFT) & RASR_AP_MASK, AP_NO_ACCESS);
+        // XN = 1
+        assert_eq!((rasr >> 28) & 1, 1);
+        // SIZE field = 4 (32 bytes)
+        assert_eq!((rasr >> RASR_SIZE_SHIFT) & RASR_SIZE_MASK, 4);
+        // Enable bit set
+        assert_eq!(rasr & 1, 1);
+    }
+
+    #[test]
+    fn partition_regions_stack_guard_custom_base() {
+        let pcb = make_pcb(0x0800_0000, 0x2000_4000, 1024);
+        let regions = partition_mpu_regions(&pcb).unwrap();
+        let (rbar, rasr) = regions[3];
+        // Guard should be at stack_base = 0x2000_4000
+        assert_eq!(rbar, build_rbar(0x2000_4000, 3).unwrap());
+        // Same no-access, XN, 32-byte encoding
+        let expected_rasr = build_rasr(
+            encode_size(32).unwrap(),
+            AP_NO_ACCESS,
+            true,
+            (false, false, false),
+        );
+        assert_eq!(rasr, expected_rasr);
+    }
+
+    #[test]
     fn partition_regions_different_partitions() {
         let p0 = make_pcb(0x0000_0000, 0x2000_0000, 1024);
         let p1 = make_pcb(0x0000_0000, 0x2000_8000, 1024);
@@ -242,6 +283,10 @@ mod tests {
         assert_ne!(r0[2].0, r1[2].0);
         // Data RASR identical (same size/permissions)
         assert_eq!(r0[2].1, r1[2].1);
+        // Stack guard regions differ in RBAR (different stack_base)
+        assert_ne!(r0[3].0, r1[3].0);
+        // Stack guard RASR identical (same 32-byte no-access)
+        assert_eq!(r0[3].1, r1[3].1);
     }
 
     #[test]

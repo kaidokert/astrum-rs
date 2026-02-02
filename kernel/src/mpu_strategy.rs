@@ -44,7 +44,7 @@ pub trait MpuStrategy {
     ///
     /// `partition_id` identifies the partition; `regions` supplies
     /// (RBAR, RASR) pairs to programme into the MPU.  The static strategy
-    /// expects exactly 3 pairs; implementations may return `Err` if the
+    /// expects exactly 4 pairs; implementations may return `Err` if the
     /// slice length is incorrect.
     fn configure_partition(&self, partition_id: u8, regions: &[(u32, u32)])
         -> Result<(), MpuError>;
@@ -251,13 +251,13 @@ impl MpuStrategy for DynamicStrategy {
 
 /// Static MPU strategy — delegates to existing [`mpu`] helpers.
 ///
-/// This strategy applies exactly 3 pre-computed (RBAR, RASR) region pairs
-/// using the same disable-program-enable sequence as
-/// [`mpu::apply_partition_mpu`].
+/// This strategy applies exactly 4 pre-computed (RBAR, RASR) region pairs
+/// (background, code, data, stack guard) using the same disable-program-enable
+/// sequence as [`mpu::apply_partition_mpu`].
 pub struct StaticStrategy;
 
 /// The number of MPU regions the static layout requires.
-const STATIC_REGION_COUNT: usize = 3;
+const STATIC_REGION_COUNT: usize = 4;
 
 impl MpuStrategy for StaticStrategy {
     fn configure_partition(
@@ -360,12 +360,12 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn configure_partition_accepts_3_regions() {
+    fn configure_partition_accepts_4_regions() {
         let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
         let regions = partition_mpu_regions(&pcb).unwrap();
         let strategy = StaticStrategy;
 
-        // Passing the 3 computed regions should succeed.
+        // Passing the 4 computed regions should succeed.
         assert_eq!(strategy.configure_partition(0, &regions), Ok(()));
     }
 
@@ -379,9 +379,15 @@ mod tests {
             Err(MpuError::RegionCountMismatch),
         );
 
+        // 3 regions is now too few (was the old count).
+        assert_eq!(
+            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0)]),
+            Err(MpuError::RegionCountMismatch),
+        );
+
         // Too many regions.
         assert_eq!(
-            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0), (0, 0)]),
+            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0), (0, 0), (0, 0)]),
             Err(MpuError::RegionCountMismatch),
         );
 
@@ -419,6 +425,14 @@ mod tests {
         assert_eq!(
             data_rasr,
             build_rasr(size_field, AP_FULL_ACCESS, true, (true, true, false))
+        );
+
+        let (guard_rbar, guard_rasr) = regions[3];
+        assert_eq!(guard_rbar, build_rbar(0x2000_0000, 3).unwrap());
+        let guard_sf = encode_size(32).unwrap();
+        assert_eq!(
+            guard_rasr,
+            build_rasr(guard_sf, AP_NO_ACCESS, true, (false, false, false))
         );
 
         // And configure_partition accepts them.
@@ -465,7 +479,7 @@ mod tests {
         let strategy: &dyn MpuStrategy = &StaticStrategy;
         assert_eq!(strategy.add_window(0, 0, 0, 0), None);
         assert_eq!(
-            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0)]),
+            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0), (0, 0)]),
             Ok(()),
         );
     }
