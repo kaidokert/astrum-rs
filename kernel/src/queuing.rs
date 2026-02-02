@@ -246,6 +246,34 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
     }
 }
 
+#[cfg(test)]
+impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
+    /// Push a message directly into the buffer for test setup.
+    pub fn inject_message(&mut self, len: usize, data: &[u8]) {
+        assert!(len <= M, "message length exceeds M");
+        let mut msg = [0u8; M];
+        let copy_len = len.min(data.len());
+        msg[..copy_len].copy_from_slice(&data[..copy_len]);
+        self.buf
+            .push_back((len, msg))
+            .expect("inject_message: buffer full");
+    }
+
+    /// Add a blocked sender to the wait queue for test setup.
+    pub fn enqueue_blocked_sender(&mut self, pid: u8, expiry: u64) {
+        self.sender_wq
+            .push(pid, expiry)
+            .expect("enqueue_blocked_sender: wait queue full");
+    }
+
+    /// Add a blocked receiver to the wait queue for test setup.
+    pub fn enqueue_blocked_receiver(&mut self, pid: u8, expiry: u64) {
+        self.receiver_wq
+            .push(pid, expiry)
+            .expect("enqueue_blocked_receiver: wait queue full");
+    }
+}
+
 /// Fixed-capacity pool of queuing ports.
 /// `S` = max ports, `D` = depth, `M` = message size, `W` = wait-queue capacity.
 ///
@@ -398,10 +426,6 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
     }
 }
 
-// TODO: tests below reach into internal fields (buf, sender_wq, receiver_wq)
-// to set up preconditions. Introduce public test-helper methods on QueuingPort
-// (e.g. inject_message, enqueue_blocked_sender/receiver) to decouple tests
-// from representation details.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,11 +497,11 @@ mod tests {
     #[test]
     fn wake_blocked_receiver_and_sender() {
         let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
-        src.receiver_wq.push(2, u64::MAX).unwrap();
+        src.enqueue_blocked_receiver(2, u64::MAX);
         assert_eq!(src.send(0, &[1; 4]).unwrap(), Some(2));
         let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
-        dst.buf.push_back((4, [1; 4])).unwrap();
-        dst.sender_wq.push(3, u64::MAX).unwrap();
+        dst.inject_message(4, &[1; 4]);
+        dst.enqueue_blocked_sender(3, u64::MAX);
         let mut buf = [0u8; 4];
         let (sz, wake) = dst.recv(1, &mut buf).unwrap();
         assert_eq!((sz, wake), (4, Some(3)));
@@ -499,13 +523,9 @@ mod tests {
 
     #[test]
     fn fifo_ordering_and_message_length() {
-        let mut src = QueuingPort::<4, 8, 4>::new(PortDirection::Source);
-        src.send(0, &[10, 20, 30]).unwrap();
-        src.send(0, &[40, 50, 60, 70, 80]).unwrap();
         let mut dst = QueuingPort::<4, 8, 4>::new(PortDirection::Destination);
-        while let Some(entry) = src.buf.pop_front() {
-            dst.buf.push_back(entry).unwrap();
-        }
+        dst.inject_message(3, &[10, 20, 30]);
+        dst.inject_message(5, &[40, 50, 60, 70, 80]);
         // First message: 3 bytes
         let mut b1 = [0u8; 8];
         let (len1, _) = dst.recv(1, &mut b1).unwrap();
@@ -520,12 +540,8 @@ mod tests {
 
     #[test]
     fn recv_into_smaller_buffer_truncates() {
-        let mut src = QueuingPort::<4, 8, 4>::new(PortDirection::Source);
-        src.send(0, &[1, 2, 3, 4, 5]).unwrap();
         let mut dst = QueuingPort::<4, 8, 4>::new(PortDirection::Destination);
-        while let Some(entry) = src.buf.pop_front() {
-            dst.buf.push_back(entry).unwrap();
-        }
+        dst.inject_message(5, &[1, 2, 3, 4, 5]);
         let mut small = [0u8; 3];
         let (msg_len, _) = dst.recv(1, &mut small).unwrap();
         // msg_len is the original length; caller detects truncation
@@ -549,7 +565,7 @@ mod tests {
     #[test]
     fn send_queuing_wakes_blocked_receiver() {
         let mut p = QueuingPort::<2, 8, 4>::new(PortDirection::Source);
-        p.receiver_wq.push(5, u64::MAX).unwrap();
+        p.enqueue_blocked_receiver(5, u64::MAX);
         let o = p.send_queuing_message(1, &[4; 4], 0, 0).unwrap();
         assert_eq!(
             o,
@@ -622,8 +638,8 @@ mod tests {
     #[test]
     fn receive_queuing_delivers_and_wakes_sender() {
         let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
-        p.buf.push_back((2, [1, 2, 0, 0])).unwrap();
-        p.sender_wq.push(3, 999).unwrap();
+        p.inject_message(2, &[1, 2]);
+        p.enqueue_blocked_sender(3, 999);
         let mut buf = [0u8; 4];
         let o = p.receive_queuing_message(0, &mut buf, 0, 0).unwrap();
         assert_eq!(
@@ -669,7 +685,7 @@ mod tests {
     #[test]
     fn receive_queuing_no_sender_to_wake() {
         let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
-        p.buf.push_back((3, [10, 20, 30, 0])).unwrap();
+        p.inject_message(3, &[10, 20, 30]);
         let mut buf = [0u8; 4];
         let o = p.receive_queuing_message(0, &mut buf, 0, 0).unwrap();
         assert_eq!(
@@ -691,8 +707,8 @@ mod tests {
         assert_eq!(s.max_message_size, 16);
         assert_eq!(s.direction, 0); // Source = 0
 
-        p.buf.push_back((4, [0u8; 16])).unwrap();
-        p.buf.push_back((4, [0u8; 16])).unwrap();
+        p.inject_message(4, &[0u8; 16]);
+        p.inject_message(4, &[0u8; 16]);
         let s = p.status();
         assert_eq!(s.nb_messages, 2);
         assert_eq!(s.max_nb_messages, 8);
@@ -759,11 +775,7 @@ mod tests {
     fn receive_queuing_pool_delegates_and_rejects_invalid() {
         let mut pool = QueuingPortPool::<4, 4, 4, 4>::new();
         let d = pool.create_port(PortDirection::Destination).unwrap();
-        pool.get_mut(d)
-            .unwrap()
-            .buf
-            .push_back((1, [42, 0, 0, 0]))
-            .unwrap();
+        pool.get_mut(d).unwrap().inject_message(1, &[42]);
         let mut buf = [0u8; 4];
         let o = pool.receive_queuing_message(d, 0, &mut buf, 0, 0).unwrap();
         assert_eq!(
