@@ -174,6 +174,8 @@ impl<const S: usize, const M: usize> SamplingPortPool<S, M> {
         {
             return Err(SamplingError::DirectionViolation);
         }
+        // SAFETY: get(src) succeeded at line above (returned Some via ok_or),
+        // so get_mut(src) on the same pool with the same index cannot fail.
         self.get_mut(src).unwrap().connected_port = Some(dst);
         Ok(())
     }

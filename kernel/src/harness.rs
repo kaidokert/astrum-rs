@@ -225,6 +225,10 @@ macro_rules! define_harness {
             // SAFETY: single-core Cortex-M — the SysTick handler has exclusive
             // access to KS because higher-priority interrupts do not touch it,
             // and PendSV (lower priority) cannot preempt us.
+            // SAFETY: KS is initialised by boot() before SysTick is enabled,
+            // and is never set back to None.  The scheduler cannot run until
+            // boot() stores Some(…) into KS and starts SysTick, so this
+            // expect cannot fail at runtime.
             let event = unsafe { KS.as_mut() }.expect("KS").advance_schedule_tick();
             $crate::_harness_handle_tick!(event, NEXT_PARTITION);
         }

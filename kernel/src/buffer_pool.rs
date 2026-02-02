@@ -206,6 +206,10 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         } else {
             crate::mpu::AP_RO_RO
         };
+        // SAFETY: SIZE is a compile-time const generic parameter.
+        // BufferSlot requires SIZE to be a power-of-two >= 32 for valid
+        // MPU region encoding.  This is a static invariant of the type;
+        // encode_size cannot return None for any valid BufferSlot<SIZE>.
         let size_field = crate::mpu::encode_size(SIZE as u32)
             .expect("BufferSlot SIZE must be a power-of-two >= 32");
         let rasr = crate::mpu::build_rasr(size_field, ap, true, (false, false, false));

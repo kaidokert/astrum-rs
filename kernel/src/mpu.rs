@@ -122,7 +122,9 @@ pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32);
 /// ensuring the faulting partition gets no memory access instead of panicking.
 pub fn deny_all_regions() -> [(u32, u32); 4] {
     let bg_size_field = 31u32; // 4 GiB = 2^32 → SIZE field = 31
-                               // base=0x0 and region=0 are always valid for build_rbar.
+
+    // SAFETY: base=0x0 is 32-byte aligned and region=0 is in [0,7],
+    // so build_rbar cannot return None for these compile-time constants.
     let bg_rbar = build_rbar(0x0000_0000, 0).unwrap();
     let bg_rasr = build_rasr(bg_size_field, AP_NO_ACCESS, true, (false, false, false));
 
