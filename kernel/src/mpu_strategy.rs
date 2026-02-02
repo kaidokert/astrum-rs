@@ -120,6 +120,75 @@ impl DynamicStrategy {
             slots.get(idx).copied().flatten()
         })
     }
+
+    /// Compute the (RBAR, RASR) register values for regions R4-R7.
+    ///
+    /// For occupied slots the RBAR encodes the descriptor's base address and
+    /// region number, while RASR is the stored permissions word.  For empty
+    /// slots RBAR selects the region number and RASR is 0 (disabled).
+    ///
+    /// This is the testable, hardware-free counterpart of [`Self::program_regions`].
+    pub fn compute_region_values(&self) -> [(u32, u32); DYNAMIC_SLOT_COUNT] {
+        with_cs(|cs| {
+            let slots = self.slots.borrow(cs);
+            let slots = slots.borrow();
+            let mut out = [(0u32, 0u32); DYNAMIC_SLOT_COUNT];
+            for (idx, slot) in slots.iter().enumerate() {
+                let region = DYNAMIC_REGION_BASE as u32 + idx as u32;
+                match slot {
+                    Some(desc) => {
+                        // build_rbar cannot fail: region 4-7 ≤ 7 and
+                        // bases stored in WindowDescriptor are always
+                        // 32-byte aligned (sourced from RBAR_ADDR_MASK).
+                        let rbar = crate::mpu::build_rbar(desc.base, region)
+                            .expect("invalid RBAR for dynamic slot");
+                        out[idx] = (rbar, desc.permissions);
+                    }
+                    None => {
+                        // Select the region via RBAR and disable via RASR=0.
+                        let rbar =
+                            crate::mpu::build_rbar(0, region).expect("invalid region number");
+                        out[idx] = (rbar, 0);
+                    }
+                }
+            }
+            out
+        })
+    }
+
+    /// Program regions R4-R7 into the MPU hardware.
+    ///
+    /// Uses [`mpu::configure_region`] to write each of the four dynamic
+    /// slots' (RBAR, RASR) pairs, then issues DSB + ISB barriers to
+    /// ensure the new configuration takes effect before any subsequent
+    /// memory access.
+    ///
+    /// Regions R0-R3 (static background/code/data) are left unchanged.
+    #[cfg(not(test))]
+    pub fn program_regions(&self) {
+        let values = self.compute_region_values();
+
+        // SAFETY: `Peripherals::steal()` creates a second handle to the
+        // device peripherals without checking the singleton flag.  This is
+        // sound here because `program_regions` is called during context
+        // switches in PendSV (lowest-priority exception), so no other code
+        // can concurrently access the MPU registers.
+        //
+        // Each (RBAR, RASR) pair targets regions 4-7 (computed by
+        // `compute_region_values`) and does not overlap with the static
+        // regions (0-2) managed elsewhere.
+        //
+        // DSB ensures all region writes are committed before ISB forces
+        // the pipeline to refetch with the updated MPU configuration.
+        unsafe {
+            let p = cortex_m::Peripherals::steal();
+            for &(rbar, rasr) in &values {
+                mpu::configure_region(&p.MPU, rbar, rasr);
+            }
+            cortex_m::asm::dsb();
+            cortex_m::asm::isb();
+        }
+    }
 }
 
 impl MpuStrategy for DynamicStrategy {
@@ -576,5 +645,121 @@ mod tests {
         assert_eq!(strategy.add_window(0x2001_0000, 256, 0, 1), Some(5));
         strategy.remove_window(5);
         assert_eq!(strategy.add_window(0x2001_0000, 256, 0, 1), Some(5));
+    }
+
+    // ------------------------------------------------------------------
+    // compute_region_values
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn compute_region_values_all_empty() {
+        let ds = DynamicStrategy::new();
+        let vals = ds.compute_region_values();
+        // All four slots empty → RBAR selects region, RASR = 0 (disabled).
+        for (idx, &(rbar, rasr)) in vals.iter().enumerate() {
+            let region = 4 + idx as u32;
+            assert_eq!(rbar, build_rbar(0, region).unwrap());
+            assert_eq!(rasr, 0);
+        }
+    }
+
+    #[test]
+    fn compute_region_values_single_window() {
+        let ds = DynamicStrategy::new();
+        let (rbar_in, rasr_in) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rbar_in, rasr_in)]).unwrap();
+
+        let vals = ds.compute_region_values();
+
+        // Slot 0 (R4): partition RAM — RBAR has base 0x2000_0000, region 4.
+        assert_eq!(vals[0].0, build_rbar(0x2000_0000, 4).unwrap());
+        assert_eq!(vals[0].1, rasr_in);
+
+        // Slots 1-3 (R5-R7) still disabled.
+        for &(rbar, rasr) in &vals[1..] {
+            assert_eq!(rasr, 0);
+            // RBAR should still select the correct region.
+            assert_ne!(rbar, 0);
+        }
+    }
+
+    #[test]
+    fn compute_region_values_multiple_windows() {
+        let ds = DynamicStrategy::new();
+        let (rbar_r4, rasr_r4) = data_region(0x2000_0000, 1024, 4);
+        ds.configure_partition(1, &[(rbar_r4, rasr_r4)]).unwrap();
+
+        let sf_256 = encode_size(256).unwrap();
+        let rasr_r5 = build_rasr(sf_256, AP_FULL_ACCESS, true, (false, false, false));
+        ds.add_window(0x2001_0000, 256, rasr_r5, 1).unwrap(); // R5
+
+        let sf_512 = encode_size(512).unwrap();
+        let rasr_r6 = build_rasr(sf_512, AP_RO_RO, false, (false, false, false));
+        ds.add_window(0x2002_0000, 512, rasr_r6, 1).unwrap(); // R6
+
+        let vals = ds.compute_region_values();
+
+        // R4
+        assert_eq!(vals[0].0, build_rbar(0x2000_0000, 4).unwrap());
+        assert_eq!(vals[0].1, rasr_r4);
+        // R5
+        assert_eq!(vals[1].0, build_rbar(0x2001_0000, 5).unwrap());
+        assert_eq!(vals[1].1, rasr_r5);
+        // R6
+        assert_eq!(vals[2].0, build_rbar(0x2002_0000, 6).unwrap());
+        assert_eq!(vals[2].1, rasr_r6);
+        // R7 still disabled
+        assert_eq!(vals[3].0, build_rbar(0, 7).unwrap());
+        assert_eq!(vals[3].1, 0);
+    }
+
+    #[test]
+    fn compute_region_values_after_removal() {
+        let ds = DynamicStrategy::new();
+        let (rbar_r4, rasr_r4) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rbar_r4, rasr_r4)]).unwrap();
+
+        let sf = encode_size(256).unwrap();
+        let rasr_win = build_rasr(sf, AP_FULL_ACCESS, true, (false, false, false));
+        ds.add_window(0x2001_0000, 256, rasr_win, 0).unwrap(); // R5
+        ds.add_window(0x2002_0000, 256, rasr_win, 0).unwrap(); // R6
+
+        // Remove R5, keep R6.
+        ds.remove_window(5);
+
+        let vals = ds.compute_region_values();
+        // R4 still active
+        assert_eq!(vals[0].1, rasr_r4);
+        // R5 now disabled
+        assert_eq!(vals[1].1, 0);
+        // R6 still active
+        assert_eq!(vals[2].0, build_rbar(0x2002_0000, 6).unwrap());
+        assert_eq!(vals[2].1, rasr_win);
+        // R7 disabled
+        assert_eq!(vals[3].1, 0);
+    }
+
+    #[test]
+    fn compute_region_values_all_slots_occupied() {
+        let ds = DynamicStrategy::new();
+        let (rbar_r4, rasr_r4) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rbar_r4, rasr_r4)]).unwrap();
+
+        let sf = encode_size(256).unwrap();
+        let rasr_win = build_rasr(sf, AP_FULL_ACCESS, true, (false, false, false));
+        ds.add_window(0x2001_0000, 256, rasr_win, 0).unwrap(); // R5
+        ds.add_window(0x2002_0000, 256, rasr_win, 0).unwrap(); // R6
+        ds.add_window(0x2003_0000, 256, rasr_win, 0).unwrap(); // R7
+
+        let vals = ds.compute_region_values();
+        // All four regions should have non-zero RASR.
+        for &(_rbar, rasr) in &vals {
+            assert_ne!(rasr, 0);
+        }
+        // Verify specific RBAR base addresses.
+        assert_eq!(vals[0].0, build_rbar(0x2000_0000, 4).unwrap());
+        assert_eq!(vals[1].0, build_rbar(0x2001_0000, 5).unwrap());
+        assert_eq!(vals[2].0, build_rbar(0x2002_0000, 6).unwrap());
+        assert_eq!(vals[3].0, build_rbar(0x2003_0000, 7).unwrap());
     }
 }
