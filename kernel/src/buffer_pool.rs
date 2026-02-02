@@ -1,7 +1,10 @@
 /// Fixed-size buffer pool for shared-memory IPC between partitions.
 ///
 /// Each slot contains a byte buffer and ownership/borrow metadata.
-/// No MPU interaction — pure data structure for allocation tracking.
+/// When the `dynamic-mpu` feature is enabled, the pool can coordinate
+/// with [`crate::mpu_strategy::DynamicStrategy`] to map buffer slots
+/// as MPU windows for cross-partition lending.
+use crate::mpu_strategy::MpuStrategy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowState {
@@ -18,6 +21,15 @@ pub enum BufferPoolError {
     NotOwner,
 }
 
+/// Errors from MPU-aware buffer lending operations.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BufferError {
+    InvalidSlot,
+    SlotNotFree,
+    SlotNotBorrowed,
+    MpuWindowExhausted,
+}
+
 /// The access mode requested when borrowing a buffer slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowMode {
@@ -28,6 +40,8 @@ pub enum BorrowMode {
 pub struct BufferSlot<const SIZE: usize> {
     data: [u8; SIZE],
     state: BorrowState,
+    /// MPU region ID assigned by `lend_to_partition`, cleared on revoke.
+    mpu_region: Option<u8>,
 }
 
 impl<const SIZE: usize> Default for BufferSlot<SIZE> {
@@ -41,6 +55,7 @@ impl<const SIZE: usize> BufferSlot<SIZE> {
         Self {
             data: [0u8; SIZE],
             state: BorrowState::Free,
+            mpu_region: None,
         }
     }
 
@@ -50,6 +65,11 @@ impl<const SIZE: usize> BufferSlot<SIZE> {
 
     pub fn data(&self) -> &[u8; SIZE] {
         &self.data
+    }
+
+    /// Return the MPU region ID assigned by `lend_to_partition`, if any.
+    pub fn mpu_region(&self) -> Option<u8> {
+        self.mpu_region
     }
 }
 
@@ -144,6 +164,65 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
     pub fn get(&self, slot: usize) -> Option<&BufferSlot<SIZE>> {
         self.slots.get(slot)
     }
+
+    /// Lend a buffer slot to a partition, installing an MPU window via `strategy`.
+    ///
+    /// Uses `AP_RO_RO` when `writable` is false, `AP_FULL_ACCESS` when true.
+    /// Returns the MPU region ID (5-7) on success.
+    pub fn lend_to_partition(
+        &mut self,
+        slot: usize,
+        partition_id: u8,
+        writable: bool,
+        strategy: &mut dyn MpuStrategy,
+    ) -> Result<u8, BufferError> {
+        let s = self.slots.get_mut(slot).ok_or(BufferError::InvalidSlot)?;
+        if s.state != BorrowState::Free {
+            return Err(BufferError::SlotNotFree);
+        }
+
+        let base = s.data.as_ptr() as u32;
+        let ap = if writable {
+            crate::mpu::AP_FULL_ACCESS
+        } else {
+            crate::mpu::AP_RO_RO
+        };
+        let size_field = crate::mpu::encode_size(SIZE as u32)
+            .expect("BufferSlot SIZE must be a power-of-two >= 32");
+        let rasr = crate::mpu::build_rasr(size_field, ap, true, (false, false, false));
+
+        let region_id = strategy
+            .add_window(base, SIZE as u32, rasr, partition_id)
+            .ok_or(BufferError::MpuWindowExhausted)?;
+
+        s.state = if writable {
+            BorrowState::BorrowedWrite {
+                owner: partition_id,
+            }
+        } else {
+            BorrowState::BorrowedRead {
+                owner: partition_id,
+            }
+        };
+        s.mpu_region = Some(region_id);
+        Ok(region_id)
+    }
+
+    /// Revoke a previously lent buffer slot: remove its MPU window and
+    /// return the slot to the free state.
+    pub fn revoke_from_partition(
+        &mut self,
+        slot: usize,
+        strategy: &mut dyn MpuStrategy,
+    ) -> Result<(), BufferError> {
+        let s = self.slots.get_mut(slot).ok_or(BufferError::InvalidSlot)?;
+        let region_id = s.mpu_region.ok_or(BufferError::SlotNotBorrowed)?;
+
+        strategy.remove_window(region_id);
+        s.state = BorrowState::Free;
+        s.mpu_region = None;
+        Ok(())
+    }
 }
 
 #[rustfmt::skip]
@@ -228,5 +307,170 @@ mod tests {
         // Can borrow again with different mode and owner
         pool.borrow(0, 2, BorrowMode::Read).unwrap();
         assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedRead { owner: 2 });
+    }
+
+    // ------------------------------------------------------------------
+    // MPU window integration (lend / revoke via DynamicStrategy)
+    // ------------------------------------------------------------------
+
+    use crate::mpu_strategy::DynamicStrategy;
+    use crate::mpu::{AP_FULL_ACCESS, AP_RO_RO, RASR_AP_SHIFT, RASR_AP_MASK};
+
+    #[test] fn lend_read_only_sets_ap_ro_ro() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let mut ds = DynamicStrategy::new();
+        let rid = pool.lend_to_partition(0, 1, false, &mut ds).unwrap();
+        assert_eq!(rid, 5); // First dynamic window → R5
+
+        // Slot should be BorrowedRead with correct owner.
+        let s = pool.get(0).unwrap();
+        assert_eq!(s.state(), BorrowState::BorrowedRead { owner: 1 });
+        assert_eq!(s.mpu_region(), Some(5));
+
+        // Verify the MPU window has AP_RO_RO.
+        let desc = ds.slot(rid).expect("window should exist");
+        let ap = (desc.permissions >> RASR_AP_SHIFT) & RASR_AP_MASK;
+        assert_eq!(ap, AP_RO_RO);
+        assert_eq!(desc.owner, 1);
+        assert_eq!(desc.size, 32);
+    }
+
+    #[test] fn lend_writable_sets_ap_full_access() {
+        let mut pool = BufferPool::<2, 64>::new();
+        let mut ds = DynamicStrategy::new();
+        let rid = pool.lend_to_partition(0, 2, true, &mut ds).unwrap();
+        assert_eq!(rid, 5);
+
+        let s = pool.get(0).unwrap();
+        assert_eq!(s.state(), BorrowState::BorrowedWrite { owner: 2 });
+        assert_eq!(s.mpu_region(), Some(5));
+
+        let desc = ds.slot(rid).unwrap();
+        let ap = (desc.permissions >> RASR_AP_SHIFT) & RASR_AP_MASK;
+        assert_eq!(ap, AP_FULL_ACCESS);
+        assert_eq!(desc.owner, 2);
+        assert_eq!(desc.size, 64);
+    }
+
+    #[test] fn lend_revoke_lifecycle() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let mut ds = DynamicStrategy::new();
+
+        // Lend slot 0 read-only to partition 1.
+        let rid = pool.lend_to_partition(0, 1, false, &mut ds).unwrap();
+        assert_eq!(rid, 5);
+        assert!(ds.slot(5).is_some());
+
+        // Revoke removes MPU window and frees the slot.
+        pool.revoke_from_partition(0, &mut ds).unwrap();
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
+        assert_eq!(pool.get(0).unwrap().mpu_region(), None);
+        assert!(ds.slot(5).is_none());
+    }
+
+    #[test] fn lend_multiple_slots_allocates_sequential_regions() {
+        let mut pool = BufferPool::<3, 32>::new();
+        let mut ds = DynamicStrategy::new();
+
+        let r0 = pool.lend_to_partition(0, 1, false, &mut ds).unwrap();
+        let r1 = pool.lend_to_partition(1, 2, true, &mut ds).unwrap();
+        let r2 = pool.lend_to_partition(2, 3, false, &mut ds).unwrap();
+        assert_eq!((r0, r1, r2), (5, 6, 7));
+
+        // All three windows should be populated.
+        assert!(ds.slot(5).is_some());
+        assert!(ds.slot(6).is_some());
+        assert!(ds.slot(7).is_some());
+    }
+
+    #[test] fn lend_exhaustion_returns_mpu_window_exhausted() {
+        let mut pool = BufferPool::<4, 32>::new();
+        let mut ds = DynamicStrategy::new();
+
+        // Fill all 3 dynamic window slots (R5-R7).
+        pool.lend_to_partition(0, 1, false, &mut ds).unwrap();
+        pool.lend_to_partition(1, 2, true, &mut ds).unwrap();
+        pool.lend_to_partition(2, 3, false, &mut ds).unwrap();
+
+        // Fourth lend should fail — no MPU windows left.
+        assert_eq!(
+            pool.lend_to_partition(3, 4, true, &mut ds),
+            Err(BufferError::MpuWindowExhausted),
+        );
+        // Slot 3 should remain free.
+        assert_eq!(pool.get(3).unwrap().state(), BorrowState::Free);
+    }
+
+    #[test] fn lend_already_borrowed_slot_fails() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let mut ds = DynamicStrategy::new();
+
+        pool.lend_to_partition(0, 1, false, &mut ds).unwrap();
+        assert_eq!(
+            pool.lend_to_partition(0, 2, true, &mut ds),
+            Err(BufferError::SlotNotFree),
+        );
+    }
+
+    #[test] fn revoke_unborrowed_slot_fails() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let mut ds = DynamicStrategy::new();
+        assert_eq!(
+            pool.revoke_from_partition(0, &mut ds),
+            Err(BufferError::SlotNotBorrowed),
+        );
+    }
+
+    #[test] fn revoke_invalid_slot_fails() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let mut ds = DynamicStrategy::new();
+        assert_eq!(
+            pool.revoke_from_partition(5, &mut ds),
+            Err(BufferError::InvalidSlot),
+        );
+    }
+
+    #[test] fn lend_invalid_slot_fails() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let mut ds = DynamicStrategy::new();
+        assert_eq!(
+            pool.lend_to_partition(5, 1, false, &mut ds),
+            Err(BufferError::InvalidSlot),
+        );
+    }
+
+    #[test] fn lend_revoke_relend_reuses_region() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let mut ds = DynamicStrategy::new();
+
+        let r1 = pool.lend_to_partition(0, 1, false, &mut ds).unwrap();
+        assert_eq!(r1, 5);
+        pool.revoke_from_partition(0, &mut ds).unwrap();
+
+        // After revoke, slot is free and region is available again.
+        let r2 = pool.lend_to_partition(0, 2, true, &mut ds).unwrap();
+        assert_eq!(r2, 5); // Same region reused.
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedWrite { owner: 2 });
+    }
+
+    #[test] fn revoke_middle_slot_frees_region_for_reuse() {
+        let mut pool = BufferPool::<3, 32>::new();
+        let mut ds = DynamicStrategy::new();
+
+        pool.lend_to_partition(0, 1, false, &mut ds).unwrap(); // R5
+        pool.lend_to_partition(1, 2, true, &mut ds).unwrap();  // R6
+        pool.lend_to_partition(2, 3, false, &mut ds).unwrap(); // R7
+
+        // Revoke slot 1 (R6), freeing the middle region.
+        pool.revoke_from_partition(1, &mut ds).unwrap();
+        assert!(ds.slot(6).is_none());
+        assert!(ds.slot(5).is_some());
+        assert!(ds.slot(7).is_some());
+
+        // Re-lend slot 1 on the same pool — should reuse R6.
+        let r = pool.lend_to_partition(1, 4, true, &mut ds).unwrap();
+        assert_eq!(r, 6);
+        assert_eq!(pool.get(1).unwrap().state(), BorrowState::BorrowedWrite { owner: 4 });
+        assert_eq!(pool.get(1).unwrap().mpu_region(), Some(6));
     }
 }
