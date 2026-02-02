@@ -1,5 +1,7 @@
 use heapless::Vec;
 
+use crate::mpu::MpuError;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartitionState {
     Ready,
@@ -145,6 +147,63 @@ pub struct PartitionConfig {
     pub stack_base: u32,
     pub stack_size: u32,
     pub mpu_region: MpuRegion,
+}
+
+/// Errors detected during static configuration validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigError {
+    /// The schedule table has no entries.
+    ScheduleEmpty,
+    /// A schedule entry references a partition index that does not exist.
+    ScheduleIndexOutOfBounds {
+        entry_index: usize,
+        partition_index: u8,
+        num_partitions: usize,
+    },
+    /// A partition's MPU region failed validation.
+    MpuRegionInvalid { partition_id: u8, detail: MpuError },
+    /// A partition's stack size is not a power of two or is less than 32.
+    StackSizeInvalid { partition_id: u8 },
+    /// A partition's stack base is not aligned to its stack size.
+    StackBaseNotAligned { partition_id: u8 },
+    /// A partition's stack base + stack size overflows u32.
+    StackOverflow { partition_id: u8 },
+    /// The partition table is full; no room for another partition.
+    PartitionTableFull,
+}
+
+impl core::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ScheduleEmpty => write!(f, "schedule table is empty"),
+            Self::ScheduleIndexOutOfBounds {
+                entry_index,
+                partition_index,
+                num_partitions,
+            } => write!(
+                f,
+                "schedule entry {entry_index}: partition index {partition_index} \
+                 out of bounds (num_partitions={num_partitions})"
+            ),
+            Self::MpuRegionInvalid {
+                partition_id,
+                detail,
+            } => write!(f, "partition {partition_id}: MPU region invalid: {detail}"),
+            Self::StackSizeInvalid { partition_id } => write!(
+                f,
+                "partition {partition_id}: stack size must be a power of two and >= 32"
+            ),
+            Self::StackBaseNotAligned { partition_id } => write!(
+                f,
+                "partition {partition_id}: stack base not aligned to stack size"
+            ),
+            Self::StackOverflow { partition_id } => write!(
+                f,
+                "partition {partition_id}: stack base + stack size overflows u32"
+            ),
+            Self::PartitionTableFull => write!(f, "partition table is full"),
+        }
+    }
 }
 
 /// Fixed-capacity table of partition control blocks.
@@ -306,5 +365,165 @@ mod tests {
         let copy = pcb;
         // both are usable — proves Copy
         assert_eq!(pcb.id(), copy.id());
+    }
+
+    // ------------------------------------------------------------------
+    // ConfigError
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn config_error_is_copy() {
+        let e = ConfigError::ScheduleEmpty;
+        let e2 = e;
+        assert_eq!(e, e2);
+    }
+
+    #[test]
+    fn config_error_variants_are_distinct() {
+        let variants: &[ConfigError] = &[
+            ConfigError::ScheduleEmpty,
+            ConfigError::ScheduleIndexOutOfBounds {
+                entry_index: 0,
+                partition_index: 5,
+                num_partitions: 4,
+            },
+            ConfigError::MpuRegionInvalid {
+                partition_id: 1,
+                detail: MpuError::SizeTooSmall,
+            },
+            ConfigError::StackSizeInvalid { partition_id: 2 },
+            ConfigError::StackBaseNotAligned { partition_id: 3 },
+            ConfigError::StackOverflow { partition_id: 4 },
+            ConfigError::PartitionTableFull,
+        ];
+        for (i, a) in variants.iter().enumerate() {
+            for (j, b) in variants.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b, "variants {i} and {j} should differ");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn config_error_display_schedule_empty() {
+        let msg = format!("{}", ConfigError::ScheduleEmpty);
+        assert_eq!(msg, "schedule table is empty");
+    }
+
+    #[test]
+    fn config_error_display_schedule_index_out_of_bounds() {
+        let msg = format!(
+            "{}",
+            ConfigError::ScheduleIndexOutOfBounds {
+                entry_index: 2,
+                partition_index: 7,
+                num_partitions: 4,
+            }
+        );
+        assert!(msg.contains("entry 2"));
+        assert!(msg.contains("partition index 7"));
+        assert!(msg.contains("num_partitions=4"));
+    }
+
+    #[test]
+    fn config_error_display_mpu_region_invalid() {
+        let msg = format!(
+            "{}",
+            ConfigError::MpuRegionInvalid {
+                partition_id: 3,
+                detail: MpuError::BaseNotAligned,
+            }
+        );
+        assert!(msg.contains("partition 3"));
+        assert!(msg.contains("base address not aligned to size"));
+    }
+
+    #[test]
+    fn config_error_display_stack_size_invalid() {
+        let msg = format!("{}", ConfigError::StackSizeInvalid { partition_id: 1 });
+        assert!(msg.contains("partition 1"));
+        assert!(msg.contains("power of two"));
+    }
+
+    #[test]
+    fn config_error_display_stack_base_not_aligned() {
+        let msg = format!("{}", ConfigError::StackBaseNotAligned { partition_id: 2 });
+        assert!(msg.contains("partition 2"));
+        assert!(msg.contains("not aligned"));
+    }
+
+    #[test]
+    fn config_error_display_stack_overflow() {
+        let msg = format!("{}", ConfigError::StackOverflow { partition_id: 5 });
+        assert!(msg.contains("partition 5"));
+        assert!(msg.contains("overflows"));
+    }
+
+    #[test]
+    fn config_error_display_partition_table_full() {
+        let msg = format!("{}", ConfigError::PartitionTableFull);
+        assert_eq!(msg, "partition table is full");
+    }
+
+    #[test]
+    fn config_error_debug_contains_variant_names() {
+        assert!(format!("{:?}", ConfigError::ScheduleEmpty).contains("ScheduleEmpty"));
+        assert!(format!(
+            "{:?}",
+            ConfigError::ScheduleIndexOutOfBounds {
+                entry_index: 0,
+                partition_index: 1,
+                num_partitions: 2,
+            }
+        )
+        .contains("ScheduleIndexOutOfBounds"));
+        assert!(format!(
+            "{:?}",
+            ConfigError::MpuRegionInvalid {
+                partition_id: 0,
+                detail: MpuError::SizeTooSmall,
+            }
+        )
+        .contains("MpuRegionInvalid"));
+        assert!(
+            format!("{:?}", ConfigError::StackSizeInvalid { partition_id: 0 })
+                .contains("StackSizeInvalid")
+        );
+        assert!(
+            format!("{:?}", ConfigError::StackBaseNotAligned { partition_id: 0 })
+                .contains("StackBaseNotAligned")
+        );
+        assert!(
+            format!("{:?}", ConfigError::StackOverflow { partition_id: 0 })
+                .contains("StackOverflow")
+        );
+        assert!(format!("{:?}", ConfigError::PartitionTableFull).contains("PartitionTableFull"));
+    }
+
+    #[test]
+    fn config_error_mpu_wraps_all_mpu_error_variants() {
+        let mpu_variants = [
+            MpuError::RegionCountMismatch,
+            MpuError::SizeTooSmall,
+            MpuError::SizeNotPowerOfTwo,
+            MpuError::BaseNotAligned,
+            MpuError::AddressOverflow,
+            MpuError::SlotExhausted,
+        ];
+        for detail in mpu_variants {
+            let e = ConfigError::MpuRegionInvalid {
+                partition_id: 0,
+                detail,
+            };
+            let msg = format!("{e}");
+            let detail_msg = format!("{detail}");
+            assert!(
+                msg.contains(&detail_msg),
+                "ConfigError display should contain MpuError display: {msg}"
+            );
+        }
     }
 }
