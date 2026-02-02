@@ -73,6 +73,23 @@
 ///     boot(&parts, &mut p)
 /// }
 /// ```
+/// Internal helper: force-advance the schedule on yield and update
+/// `NEXT_PARTITION`.  Uses the [`YieldResult`] trait so a single
+/// implementation works for both feature gates.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _harness_handle_yield {
+    ($ks:expr, $next:ident) => {{
+        use $crate::kernel::YieldResult;
+        let result = $ks.yield_current_slot();
+        if let Some(pid) = result.partition_id() {
+            // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
+            // exclusive access; PendSV (priority 0xFF) cannot preempt.
+            unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+        }
+    }};
+}
+
 /// Internal helper: dispatch the result of `advance_schedule_tick` inside
 /// the SysTick handler.  Two implementations are provided so the harness
 /// compiles under both feature configurations.
@@ -139,7 +156,14 @@ macro_rules! define_harness {
         #[no_mangle]
         static mut NEXT_PARTITION: u32 = 0;
 
-        $crate::define_dispatch_hook!($Config);
+        $crate::define_dispatch_hook!($Config, |_k| {
+            // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
+            // exclusive access; PendSV cannot preempt us.  KS and
+            // NEXT_PARTITION are defined by define_harness!.
+            if let Some(ks) = unsafe { KS.as_mut() } {
+                $crate::_harness_handle_yield!(ks, NEXT_PARTITION);
+            }
+        });
 
         static mut KS: Option<
             $crate::kernel::KernelState<{ <$Config as $crate::config::KernelConfig>::N }, $MS>,
@@ -153,13 +177,10 @@ macro_rules! define_harness {
 
         #[exception]
         fn SysTick() {
-            let p = &raw mut KS;
             // SAFETY: single-core Cortex-M — the SysTick handler has exclusive
             // access to KS because higher-priority interrupts do not touch it,
             // and PendSV (lower priority) cannot preempt us.
-            let event = unsafe { (*p).as_mut() }
-                .expect("KS")
-                .advance_schedule_tick();
+            let event = unsafe { KS.as_mut() }.expect("KS").advance_schedule_tick();
             $crate::_harness_handle_tick!(event, NEXT_PARTITION);
         }
 

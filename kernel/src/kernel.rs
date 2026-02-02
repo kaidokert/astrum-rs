@@ -4,6 +4,34 @@ use crate::scheduler::ScheduleEvent;
 use crate::scheduler::ScheduleTable;
 use crate::tick::TickCounter;
 
+/// Abstracts over the return type of `ScheduleTable::force_advance` /
+/// `advance_tick`, which is `Option<u8>` without `dynamic-mpu` and
+/// `ScheduleEvent` with it.  This lets `yield_current_slot` (and the
+/// harness yield macro) be written once regardless of feature gate.
+pub trait YieldResult {
+    /// Extract the partition id when the result represents a switch.
+    fn partition_id(&self) -> Option<u8>;
+}
+
+#[cfg(not(feature = "dynamic-mpu"))]
+impl YieldResult for Option<u8> {
+    #[inline]
+    fn partition_id(&self) -> Option<u8> {
+        *self
+    }
+}
+
+#[cfg(feature = "dynamic-mpu")]
+impl YieldResult for ScheduleEvent {
+    #[inline]
+    fn partition_id(&self) -> Option<u8> {
+        match self {
+            ScheduleEvent::PartitionSwitch(pid) => Some(*pid),
+            _ => None,
+        }
+    }
+}
+
 pub struct KernelState<const P: usize, const S: usize> {
     partitions: PartitionTable<P>,
     schedule: ScheduleTable<S>,
@@ -48,6 +76,22 @@ impl<const P: usize, const S: usize> KernelState<P, S> {
     }
     pub fn tick(&self) -> &TickCounter {
         &self.tick
+    }
+
+    /// Force-advance the schedule to the next slot, forfeiting remaining
+    /// ticks.  Updates `active_partition` and returns the schedule result.
+    /// Called by the harness when a partition yields.
+    ///
+    /// The concrete return type depends on the feature gate
+    /// (`Option<u8>` or `ScheduleEvent`), but both implement
+    /// [`YieldResult`] so callers can extract the partition id
+    /// uniformly.
+    pub fn yield_current_slot(&mut self) -> impl YieldResult {
+        let result = self.schedule.force_advance();
+        if let Some(pid) = result.partition_id() {
+            self.active_partition = Some(pid);
+        }
+        result
     }
 
     /// Advance the schedule table by one tick. If a partition switch occurs,
@@ -157,5 +201,77 @@ mod tests {
         assert_eq!(ks.partitions().get(0).unwrap().stack_pointer(), 0x2000_03F8);
         let two = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 1024)];
         assert!(KernelState::<1, 4>::new(sched2(), &two).is_none());
+    }
+
+    /// Build a started 2-slot schedule: P0 for 5 ticks, P1 for 3 ticks.
+    #[cfg(not(feature = "dynamic-mpu"))]
+    fn started_sched() -> ScheduleTable<4> {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 5)).unwrap();
+        s.add(ScheduleEntry::new(1, 3)).unwrap();
+        s.start();
+        s
+    }
+
+    #[cfg(not(feature = "dynamic-mpu"))]
+    fn ks_started() -> KernelState<4, 4> {
+        let cfgs = [pcfg(0, 0x2000_0000, 1024), pcfg(1, 0x2000_1000, 1024)];
+        KernelState::new(started_sched(), &cfgs).unwrap()
+    }
+
+    #[cfg(not(feature = "dynamic-mpu"))]
+    #[test]
+    fn yield_current_slot_advances_partition() {
+        let mut ks = ks_started();
+        // Consume 2 ticks in slot 0 (P0, duration=5)
+        assert_eq!(ks.advance_schedule_tick(), None);
+        assert_eq!(ks.advance_schedule_tick(), None);
+        // Yield: skip remaining 3 ticks, advance to P1
+        assert_eq!(ks.yield_current_slot().partition_id(), Some(1));
+        assert_eq!(ks.active_partition(), Some(1));
+        // P1 slot now has 3 ticks
+        assert_eq!(ks.advance_schedule_tick(), None);
+        assert_eq!(ks.advance_schedule_tick(), None);
+        assert_eq!(ks.advance_schedule_tick(), Some(0)); // wraps to P0
+    }
+
+    #[cfg(not(feature = "dynamic-mpu"))]
+    #[test]
+    fn yield_current_slot_at_start() {
+        let mut ks = ks_started();
+        // Yield immediately without consuming any ticks
+        assert_eq!(ks.yield_current_slot().partition_id(), Some(1));
+        assert_eq!(ks.active_partition(), Some(1));
+    }
+
+    #[cfg(not(feature = "dynamic-mpu"))]
+    #[test]
+    fn yield_current_slot_wraps_around() {
+        let mut ks = ks_started();
+        // Advance to P1 first
+        assert_eq!(ks.yield_current_slot().partition_id(), Some(1));
+        // Yield again: wraps back to P0
+        assert_eq!(ks.yield_current_slot().partition_id(), Some(0));
+        assert_eq!(ks.active_partition(), Some(0));
+    }
+
+    #[cfg(not(feature = "dynamic-mpu"))]
+    #[test]
+    fn yield_does_not_increment_tick() {
+        let mut ks = ks_started();
+        let tick_before = ks.tick().get();
+        ks.yield_current_slot();
+        // yield_current_slot does NOT increment the tick counter
+        assert_eq!(ks.tick().get(), tick_before);
+    }
+
+    #[cfg(not(feature = "dynamic-mpu"))]
+    #[test]
+    fn yield_unstarted_returns_none() {
+        let cfgs = [pcfg(0, 0x2000_0000, 1024)];
+        let mut ks: KernelState<4, 4> = KernelState::new(sched2(), &cfgs).unwrap();
+        // Schedule not started
+        assert_eq!(ks.yield_current_slot().partition_id(), None);
+        assert_eq!(ks.active_partition(), None);
     }
 }

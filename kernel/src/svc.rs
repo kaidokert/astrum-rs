@@ -219,14 +219,25 @@ pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
 /// | `unsafe extern "C" fn dispatch_hook(f: &mut ExceptionFrame)` | SVC hook that dispatches via `KERN` |
 /// | `fn store_kernel(k: Kernel<$Config>)` | Store the kernel and install the hook |
 ///
+/// # Yield handler
+///
+/// An optional second argument is a block `{ |k| … }` that is called
+/// after `k.dispatch(f)` when `k.yield_requested` is set.  The harness
+/// uses this to force-advance the schedule without duplicating the
+/// entire macro body.
+///
 /// # Usage
 ///
 /// ```ignore
+/// // Standalone (no yield handling):
 /// kernel::define_dispatch_hook!(DemoConfig);
+///
+/// // With yield handler (used by define_harness!):
+/// kernel::define_dispatch_hook!(DemoConfig, |k| { … });
 /// ```
 #[macro_export]
 macro_rules! define_dispatch_hook {
-    ($Config:ty) => {
+    ($Config:ty $(, |$k:ident| $yield_body:block )? ) => {
         static KERN: ::cortex_m::interrupt::Mutex<
             ::core::cell::RefCell<Option<$crate::svc::Kernel<$Config>>>,
         > = ::cortex_m::interrupt::Mutex::new(::core::cell::RefCell::new(None));
@@ -243,6 +254,14 @@ macro_rules! define_dispatch_hook {
                     // `interrupt::free`, so `k` has exclusive access and no data races
                     // are possible on single-core Cortex-M.
                     unsafe { k.dispatch(f) }
+
+                    $(
+                        if k.yield_requested {
+                            k.yield_requested = false;
+                            let $k = k;
+                            $yield_body
+                        }
+                    )?
                 }
             });
         }
@@ -342,6 +361,10 @@ where
     /// scheduler before entering user code. Used as the trusted caller identity
     /// for syscalls, rather than reading from a user-controlled register.
     pub current_partition: u8,
+    /// Set to `true` by `SYS_YIELD` dispatch; checked and cleared by the
+    /// harness so it can force-advance the schedule and update
+    /// `NEXT_PARTITION` before PendSV fires.
+    pub yield_requested: bool,
     #[cfg(feature = "dynamic-mpu")]
     pub buffers: crate::buffer_pool::BufferPool<{ C::BP }, { C::BZ }>,
     #[cfg(feature = "dynamic-mpu")]
@@ -410,6 +433,7 @@ where
             queuing: QueuingPortPool::new(),
             blackboards: BlackboardPool::new(),
             current_partition: 0,
+            yield_requested: false,
             #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
             #[cfg(feature = "dynamic-mpu")]
@@ -462,7 +486,10 @@ where
     /// this; in production the MPU enforces partition isolation.
     pub unsafe fn dispatch(&mut self, frame: &mut ExceptionFrame) {
         frame.r0 = match SyscallId::from_u32(frame.r0) {
-            Some(SyscallId::Yield) => handle_yield(),
+            Some(SyscallId::Yield) => {
+                self.yield_requested = true;
+                handle_yield()
+            }
             Some(SyscallId::EventWait) => {
                 events::event_wait(&mut self.partitions, frame.r1 as usize, frame.r2)
             }
@@ -927,6 +954,7 @@ mod tests {
             queuing: QueuingPortPool::new(),
             blackboards: BlackboardPool::new(),
             current_partition: 0,
+            yield_requested: false,
             #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
             #[cfg(feature = "dynamic-mpu")]
@@ -947,6 +975,30 @@ mod tests {
         let mut t = tbl();
         dispatch_syscall(&mut ef, &mut t);
         assert_eq!((ef.r0, ef.r1, ef.r2, ef.r3), (0, 0xAA, 0xBB, 0xCC));
+    }
+
+    #[test]
+    fn yield_sets_yield_requested_flag() {
+        let mut k = kernel(0, 0, 0);
+        assert!(!k.yield_requested);
+        let mut ef = frame(SYS_YIELD, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert!(k.yield_requested);
+    }
+
+    #[test]
+    fn yield_requested_cleared_after_manual_reset() {
+        let mut k = kernel(0, 0, 0);
+        let mut ef = frame(SYS_YIELD, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert!(k.yield_requested);
+        k.yield_requested = false;
+        assert!(!k.yield_requested);
+        // Non-yield syscall does not set the flag
+        let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert!(!k.yield_requested);
     }
 
     #[test]
