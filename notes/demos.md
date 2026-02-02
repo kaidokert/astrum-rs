@@ -351,3 +351,277 @@ Run any of these with:
 ```bash
 cargo run -p kernel --target thumbv7m-none-eabi --example <name> --features qemu
 ```
+
+---
+
+## Phase 3 Examples (dynamic-mpu)
+
+These examples require the `dynamic-mpu` feature gate. They exercise
+the Phase 3 subsystems: dynamic MPU region allocation (R4-R7), buffer
+pool zero-copy lending, and the virtual device abstraction layer.
+
+All Phase 3 examples run with:
+
+```bash
+cargo run -p kernel --target thumbv7m-none-eabi --example <name> --features dynamic-mpu,qemu
+```
+
+---
+
+### mpu\_dynamic -- Dynamic MPU R4 Region Reprogramming
+
+**Source:** `kernel/examples/mpu_dynamic.rs`
+
+#### What It Demonstrates
+
+- **Dynamic MPU R4 reprogramming** across partition context switches
+- `DynamicStrategy` configuring partition-specific data regions into
+  MPU region R4 during PendSV via `define_pendsv_dynamic!`
+- Hardware register read-back verification (RBAR) after each switch
+- Software descriptor validation via `DynamicStrategy::slot()`
+
+#### Architecture
+
+```
+Partitions: 2             Schedule: round-robin, 2 ticks each
+Stacks:     1 KB each     SysTick reload: 120,000 cycles
+Target switches: 4
+
+Data regions (loaded into MPU R4 on each switch):
+  P0: base=0x2000_0000, size=4 KiB
+  P1: base=0x2000_8000, size=4 KiB
+
++---------+  SysTick configures   +---------+
+| P0      |  DynamicStrategy;     | P1      |
+| (nop    |  PendSV programs R4   | (nop    |
+|  loop)  |  <--- switch --->     |  loop)  |
++---------+                       +---------+
+     |                                 |
+     +-- SysTick verifies R4 RBAR ----+
+         matches expected base after
+         each PendSV execution
+```
+
+#### How to Run
+
+```bash
+cargo run -p kernel --target thumbv7m-none-eabi --example mpu_dynamic --features dynamic-mpu,qemu
+```
+
+#### Expected Output
+
+```
+mpu_dynamic: start
+switch 1: scheduled p1
+verify: p1 R4=0x20008000 exp=0x20008000 OK
+switch 2: scheduled p0
+verify: p0 R4=0x20000000 exp=0x20000000 OK
+switch 3: scheduled p1
+verify: p1 R4=0x20008000 exp=0x20008000 OK
+switch 4: scheduled p0
+verify: p0 R4=0x20000000 exp=0x20000000 OK
+mpu_dynamic: PASS
+```
+
+---
+
+### mpu\_dynamic\_test -- Dynamic MPU Register Verification Test
+
+**Source:** `kernel/examples/mpu_dynamic_test.rs`
+
+#### What It Demonstrates
+
+- **Full MPU R4 RBAR + RASR register verification** across context
+  switches (not just the base address)
+- Two partitions with **different data-region sizes** (4 KiB vs 8 KiB)
+  to exercise `encode_size` / `build_rasr` under varying configurations
+- `DynamicStrategy` software descriptor validation after the final
+  switch
+- Kernel state protected by `Mutex<RefCell>` (best practice pattern)
+
+#### Architecture
+
+```
+Partitions: 2             Schedule: round-robin, 2 ticks each
+Stacks:     1 KB each     SysTick reload: 120,000 cycles
+Target switches: 6 (3 full major frames)
+
+Data regions (loaded into MPU R4):
+  P0: base=0x2000_0000, size=4 KiB   (RASR encodes size=11)
+  P1: base=0x2000_8000, size=8 KiB   (RASR encodes size=12)
+
+SysTick verifies after each PendSV:
+  1. R4 RBAR base matches DATA_BASES[pid]
+  2. R4 RASR matches build_rasr(encode_size(DATA_SIZES[pid]), ...)
+  3. (final switch) DynamicStrategy::slot(4) descriptor check
+```
+
+#### How to Run
+
+```bash
+cargo run -p kernel --target thumbv7m-none-eabi --example mpu_dynamic_test --features dynamic-mpu,qemu
+```
+
+#### Expected Output
+
+```
+mpu_dynamic_test: start (6 switches over 3 major frames)
+sw1: p1 RBAR=0x20008000 exp=0x20008000 OK | RASR=0x1306001b exp=0x1306001b OK => PASS
+sw2: p0 RBAR=0x20000000 exp=0x20000000 OK | RASR=0x13060017 exp=0x13060017 OK => PASS
+sw3: p1 RBAR=0x20008000 exp=0x20008000 OK | RASR=0x1306001b exp=0x1306001b OK => PASS
+sw4: p0 RBAR=0x20000000 exp=0x20000000 OK | RASR=0x13060017 exp=0x13060017 OK => PASS
+sw5: p1 RBAR=0x20008000 exp=0x20008000 OK | RASR=0x1306001b exp=0x1306001b OK => PASS
+sw6: p0 RBAR=0x20000000 exp=0x20000000 OK | RASR=0x13060017 exp=0x13060017 OK => PASS
+desc: base=0x20000000 owner=0 => PASS
+mpu_dynamic_test: all checks passed — PASS
+```
+
+Note: the exact RASR hex values depend on the `build_rasr` encoding of
+AP\_FULL\_ACCESS, XN=true, S=true, C=true, B=false with the
+partition-specific size field. The key invariant is that P0 and P1 have
+different RASR values (due to different data-region sizes) and each is
+verified on every switch.
+
+---
+
+### buffer\_pool\_test -- Buffer Pool Zero-Copy Lending Lifecycle
+
+**Source:** `kernel/examples/buffer_pool_test.rs`
+
+#### What It Demonstrates
+
+- **Buffer pool alloc → write → release → lend → read → revoke** full
+  lifecycle
+- SVC-driven buffer allocation (`SYS_BUF_ALLOC`) and write
+  (`SYS_BUF_WRITE`) from partition P1
+- Kernel-privileged `lend_to_partition` with MPU window mapping
+- P2 reading lent buffer data through its MPU window
+- `revoke_from_partition` cleanup with MPU region teardown verification
+- `DynamicStrategy` slot allocation and deallocation
+
+#### Architecture
+
+```
+Partitions: 2             Schedule: round-robin, 2 ticks each
+Stacks:     1 KB each     Buffer pool: 2 slots × 32 bytes
+SysTick reload: 120,000   MAGIC payload: [0xDE, 0xAD, 0xBE, 0xEF]
+
+Lifecycle (driven by SysTick tick count):
+  tick 1-3:  P1 runs: SVC alloc → SVC write (MAGIC) → SVC release
+  tick 4:    Kernel verifies P1 completed; slot is Free
+  tick 5:    Kernel lends buffer read-only to P2 via MPU window
+  tick 6-7:  P2 reads buffer via MPU window, verifies MAGIC
+  tick 8:    Kernel checks P2 read result = match
+  tick 9:    Kernel revokes MPU window, verifies slot Free + region cleared
+  tick 10:   Final verdict: PASS / FAIL
+
++----------+  SVC alloc/write/release   +-----------+
+| P1       | ========================> | BufferPool |
+| (sender) |                           | (kernel)   |
++----------+                           +-----------+
+                                            |
+                  lend (MPU window)         |
+           +--------------------------------+
+           v
++----------+
+| P2       |  reads buffer via MPU R4-R7 window
+| (reader) |  verifies [0xDE, 0xAD, 0xBE, 0xEF]
++----------+
+```
+
+#### How to Run
+
+```bash
+cargo run -p kernel --target thumbv7m-none-eabi --example buffer_pool_test --features dynamic-mpu,qemu
+```
+
+#### Expected Output
+
+```
+buffer_pool_test: start
+step1: p1-alloc-write-release => PASS
+step2: lend => PASS
+step3: p2-read => PASS
+step4: revoke => PASS
+buffer_pool_test: all checks passed -- PASS
+```
+
+---
+
+### virtual\_uart\_demo -- Virtual UART End-to-End Round Trip
+
+**Source:** `kernel/examples/virtual_uart_demo.rs`
+
+#### What It Demonstrates
+
+- **Virtual UART** paired device communication between two partitions
+- `VirtualUartPair` loopback routing (UART-A TX → UART-B RX and vice
+  versa)
+- **System window** schedule entries for kernel bottom-half data
+  transfer
+- Full round-trip: P1 writes "Hi" → system window transfers → P2
+  reads "Hi" → P2 writes "Ok" → system window transfers → P1 reads
+  "Ok"
+- `SYS_DEV_OPEN` / `SYS_DEV_READ` / `SYS_DEV_WRITE` / `SYS_YIELD`
+  syscalls via the `define_harness!` macro
+
+#### Architecture
+
+```
+Partitions: 2             Schedule: P1(2) → sys(1) → P2(2) → sys(1)
+Stacks:     1 KB each     SysTick reload: 120,000 cycles
+UART-A: device 0          UART-B: device 1
+
+VirtualUartPair loopback:
+  UART-A TX → UART-B RX   (transferred during system window)
+  UART-B TX → UART-A RX   (transferred during system window)
+
+Round-trip flow:
+  1. P1 opens UART-A, writes "Hi"         [P1 time slot]
+  2. Kernel: UART-A TX → UART-B RX        [system window]
+  3. P2 opens UART-B, reads "Hi"           [P2 time slot]
+  4. P2 writes "Ok" to UART-B TX           [P2 time slot]
+  5. Kernel: UART-B TX → UART-A RX        [system window]
+  6. P1 reads "Ok" from UART-A, verifies   [P1 time slot]
+
++--------+  DEV_WRITE "Hi"   +---------+  transfer   +---------+
+| P1     | -----------------> | UART-A  | ---------> | UART-B  |
+|        |                    | TX ring |  (sys win) | RX ring |
+|        |  DEV_READ "Ok"    |         |            |         |
+|        | <----------------- | RX ring | <--------- | TX ring |
++--------+                    +---------+  (sys win) +---------+
+                                                          |
+                                          DEV_READ "Hi"   |
+                                          DEV_WRITE "Ok"  v
+                                                     +--------+
+                                                     | P2     |
+                                                     +--------+
+```
+
+#### How to Run
+
+```bash
+cargo run -p kernel --target thumbv7m-none-eabi --example virtual_uart_demo --features dynamic-mpu,qemu
+```
+
+#### Expected Output
+
+```
+virtual_uart_demo: start
+[P1] opening UART-A (dev 0)
+[P1] writing [72, 105] to UART-A
+[P1] wrote 2 bytes to UART-A TX
+[P2] opening UART-B (dev 1)
+[P2] read 2 bytes from UART-B RX: [72, 105]
+[P2] writing [79, 107] to UART-B
+[P2] wrote 2 bytes to UART-B TX
+[P1] read 2 bytes from UART-A RX
+[P1] round-trip verified: response matches
+virtual_uart_demo: all checks passed
+```
+
+Note: `[72, 105]` is the byte representation of `"Hi"` and
+`[79, 107]` is `"Ok"`. The output ordering depends on the schedule:
+P1 runs first, then after a system window P2 runs and reads the
+transferred data. P2's response is transferred back to P1 during the
+next system window.
