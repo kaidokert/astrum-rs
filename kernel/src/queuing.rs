@@ -373,6 +373,47 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
         unblocked
     }
 
+    /// Route a message from a Source port to its connected Destination port.
+    pub fn send_routed(
+        &mut self,
+        src_id: usize,
+        caller: u8,
+        data: &[u8],
+        timeout_ticks: u64,
+        current_tick: u64,
+    ) -> Result<SendQueuingOutcome, QueuingError> {
+        let src = self.ports.get(src_id).ok_or(QueuingError::InvalidPort)?;
+        if src.direction != PortDirection::Source {
+            return Err(QueuingError::DirectionViolation);
+        }
+        if data.len() > M {
+            return Err(QueuingError::MessageTooLarge);
+        }
+        let dst_id = src.connected_port.ok_or(QueuingError::InvalidPort)?;
+        let dst = self
+            .ports
+            .get_mut(dst_id)
+            .ok_or(QueuingError::InvalidPort)?;
+        if dst.buf.is_full() {
+            if timeout_ticks == 0 {
+                return Err(QueuingError::QueueFull);
+            }
+            let expiry = current_tick + timeout_ticks;
+            dst.sender_wq
+                .push_back((caller, expiry))
+                .map_err(|_| QueuingError::WaitQueueFull)?;
+            return Ok(SendQueuingOutcome::SenderBlocked {
+                expiry_tick: expiry,
+            });
+        }
+        let mut msg = [0u8; M];
+        msg[..data.len()].copy_from_slice(data);
+        let _ = dst.buf.push_back((data.len(), msg));
+        Ok(SendQueuingOutcome::Delivered {
+            wake_receiver: dst.receiver_wq.pop_front().map(|(pid, _)| pid),
+        })
+    }
+
     pub fn connect_ports(&mut self, src_id: usize, dst_id: usize) -> Result<(), QueuingError> {
         if src_id >= self.ports.len() || dst_id >= self.ports.len() {
             return Err(QueuingError::InvalidPort);
@@ -862,5 +903,35 @@ mod tests {
         pool.create_port(PortDirection::Source).unwrap();
         let unblocked: heapless::Vec<u8, 8> = pool.tick_timeouts(1000);
         assert!(unblocked.is_empty());
+    }
+
+    #[test]
+    fn send_routed_delivers_fifo_and_rejects() {
+        let mut pool = QueuingPortPool::<4, 4, 8, 4>::new();
+        let s = pool.create_port(PortDirection::Source).unwrap();
+        let d = pool.create_port(PortDirection::Destination).unwrap();
+        pool.connect_ports(s, d).unwrap();
+        for v in [10u8, 20, 30] {
+            pool.send_routed(s, 0, &[v], 0, 0).unwrap();
+        }
+        assert_eq!(pool.get(s).unwrap().nb_messages(), 0);
+        assert_eq!(pool.get(d).unwrap().nb_messages(), 3);
+        let mut buf = [0u8; 8];
+        for exp in [10u8, 20, 30] {
+            pool.receive_queuing_message(d, 1, &mut buf, 0, 0).unwrap();
+            assert_eq!(buf[0], exp);
+        }
+        // Error cases: direction, no connection, oversized
+        let mut p2 = QueuingPortPool::<4, 1, 8, 4>::new();
+        let dd = p2.create_port(PortDirection::Destination).unwrap();
+        assert!(p2.send_routed(dd, 0, &[1], 0, 0).is_err());
+        let ss = p2.create_port(PortDirection::Source).unwrap();
+        assert!(p2.send_routed(ss, 0, &[1], 0, 0).is_err()); // no connection
+        let s3 = p2.create_port(PortDirection::Source).unwrap();
+        let d3 = p2.create_port(PortDirection::Destination).unwrap();
+        p2.connect_ports(s3, d3).unwrap();
+        assert!(p2.send_routed(s3, 0, &[0; 9], 0, 0).is_err());
+        p2.send_routed(s3, 0, &[1], 0, 0).unwrap();
+        assert!(p2.send_routed(s3, 1, &[2], 0, 0).is_err());
     }
 }

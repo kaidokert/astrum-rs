@@ -261,7 +261,7 @@ impl<
                 let d = unsafe {
                     core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                 };
-                match self.queuing.send_queuing_message(
+                match self.queuing.send_routed(
                     frame.r1 as usize,
                     self.current_partition,
                     d,
