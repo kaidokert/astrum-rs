@@ -16,3 +16,4 @@ pub mod semaphore;
 pub mod svc;
 pub mod syscall;
 pub mod tick;
+pub mod waitqueue;
