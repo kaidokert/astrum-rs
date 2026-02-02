@@ -121,7 +121,7 @@ fn main() -> ! {
             stack_size: DATA_SZ,
             mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SZ, 0),
         });
-        KS = Some(KernelState::new(sched, &cfgs).unwrap());
+        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
 
         for i in 0..NP {
             let stk = &mut STACKS[i];

@@ -97,7 +97,7 @@ fn SysTick() {
         s.add(ScheduleEntry::new(1, 3)).unwrap();
         s.start();
         let cfgs = [pcfg(0, 0x2000_0000), pcfg(1, 0x2000_2000)];
-        *KS = Some(KernelState::new(s, &cfgs).unwrap());
+        *KS = Some(KernelState::new(s, &cfgs).expect("invalid kernel config"));
         *MQ = Some(MessageQueue::new());
     }
     let (ks, mq) = (KS.as_mut().unwrap(), MQ.as_mut().unwrap());

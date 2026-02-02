@@ -62,7 +62,7 @@ fn main() -> ! {
         },
     ];
 
-    let ks = KernelState::new(sched, &configs).unwrap();
+    let ks = KernelState::new(sched, &configs).expect("invalid kernel config");
     cortex_m::interrupt::free(|cs| {
         STATE.borrow(cs).replace(Some(ks));
     });

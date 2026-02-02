@@ -210,6 +210,9 @@ macro_rules! define_harness {
             }
         });
 
+        // NOTE: KernelState::new returns Result<KernelState, ConfigError>.
+        // Call sites (in each example's main()) must use .expect() or
+        // .unwrap() before wrapping in Some(...) when storing into KS.
         static mut KS: Option<
             $crate::kernel::KernelState<{ <$Config as $crate::config::KernelConfig>::N }, $MS>,
         > = None;

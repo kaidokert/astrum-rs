@@ -198,8 +198,9 @@ fn main() -> ! {
         });
 
         cortex_m::interrupt::free(|cs| {
-            KS.borrow(cs)
-                .replace(Some(KernelState::new(sched, &cfgs).unwrap()));
+            KS.borrow(cs).replace(Some(
+                KernelState::new(sched, &cfgs).expect("invalid kernel config"),
+            ));
         });
 
         for i in 0..NP {

@@ -243,7 +243,7 @@ fn main() -> ! {
                 mpu_region: kernel::partition::MpuRegion::new(b, sz, 0),
             }
         });
-        KS = Some(KernelState::new(sched, &cfgs).unwrap());
+        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
     }
 
     // Pack two port IDs into a single u32 passed to each partition via r0:

@@ -217,7 +217,7 @@ fn main() -> ! {
                 mpu_region: kernel::partition::MpuRegion::new(b, 1024, 0),
             }
         });
-        KS = Some(KernelState::new(sched, &cfgs).unwrap());
+        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
     }
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];

@@ -449,7 +449,7 @@ fn main() -> ! {
             stack_size: STACK_BYTES,
             mpu_region: MpuRegion::new(bases[i], STACK_BYTES, 0),
         });
-        KS = Some(KernelState::new(sched, &cfgs).unwrap());
+        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
     }
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];

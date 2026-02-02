@@ -171,7 +171,7 @@ fn main() -> ! {
                 mpu_region: kernel::partition::MpuRegion::new(b, 1024, 0),
             }
         });
-        KS = Some(KernelState::new(sched, &cfgs).unwrap());
+        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
     }
 
     // Pack per-partition R0 values:
