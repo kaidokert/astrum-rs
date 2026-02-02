@@ -37,6 +37,9 @@ const QUEUE_MSG_SIZE: usize = 4;
 const QUEUE_WAIT_DEPTH: usize = 4;
 const MAX_SAMPLING_PORTS: usize = 4;
 const SAMPLING_MSG_SIZE: usize = 4;
+const MAX_BLACKBOARDS: usize = 4;
+const BLACKBOARD_MSG_SIZE: usize = 4;
+const BLACKBOARD_WAIT_DEPTH: usize = 4;
 const MAX_SCHEDULE_ENTRIES: usize = 8;
 const NUM_PARTITIONS: usize = 2;
 
@@ -52,6 +55,9 @@ type K = Kernel<
     QUEUE_WAIT_DEPTH,
     MAX_SAMPLING_PORTS,
     SAMPLING_MSG_SIZE,
+    MAX_BLACKBOARDS,
+    BLACKBOARD_MSG_SIZE,
+    BLACKBOARD_WAIT_DEPTH,
 >;
 
 // ---------------------------------------------------------------------------
@@ -260,6 +266,7 @@ fn main() -> ! {
             tick: kernel::tick::TickCounter::new(),
             sampling: kernel::sampling::SamplingPortPool::new(),
             queuing: kernel::queuing::QueuingPortPool::new(),
+            blackboards: kernel::blackboard::BlackboardPool::new(),
             current_partition: 0,
         };
 

@@ -7,6 +7,15 @@ pub enum BlackboardError {
     WaitQueueFull,
 }
 
+/// Outcome of a blackboard read operation.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReadBlackboardOutcome {
+    /// Data was available and copied into the caller's buffer.
+    Read { msg_len: usize },
+    /// Board was empty and caller has been enqueued (timeout > 0).
+    ReaderBlocked,
+}
+
 /// Single-message buffer with wake-all semantics.
 /// `M` = max message size, `W` = wait-queue capacity.
 #[derive(Debug)]
@@ -65,17 +74,32 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
         Ok(woken)
     }
 
-    /// Read current content. If empty, caller is queued and `BoardEmpty` returned.
-    pub fn read(&mut self, caller: u8, buf: &mut [u8]) -> Result<usize, BlackboardError> {
+    /// Read current content.
+    ///
+    /// - `timeout == 0` (non-blocking): returns `Err(BoardEmpty)` immediately
+    ///   if the board is empty, without enqueuing the caller.
+    /// - `timeout > 0` (blocking): if empty, enqueues the caller and returns
+    ///   `Ok(ReaderBlocked)`.
+    pub fn read(
+        &mut self,
+        caller: u8,
+        buf: &mut [u8],
+        timeout: u32,
+    ) -> Result<ReadBlackboardOutcome, BlackboardError> {
         if self.is_empty {
+            if timeout == 0 {
+                return Err(BlackboardError::BoardEmpty);
+            }
             self.wait_queue
                 .push_back(caller)
                 .map_err(|_| BlackboardError::WaitQueueFull)?;
-            return Err(BlackboardError::BoardEmpty);
+            return Ok(ReadBlackboardOutcome::ReaderBlocked);
         }
         let n = self.current_size.min(buf.len());
         buf[..n].copy_from_slice(&self.data[..n]);
-        Ok(self.current_size)
+        Ok(ReadBlackboardOutcome::Read {
+            msg_len: self.current_size,
+        })
     }
 
     pub fn clear(&mut self) {
@@ -133,11 +157,12 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
         id: usize,
         caller: u8,
         buf: &mut [u8],
-    ) -> Result<usize, BlackboardError> {
+        timeout: u32,
+    ) -> Result<ReadBlackboardOutcome, BlackboardError> {
         self.boards
             .get_mut(id)
             .ok_or(BlackboardError::InvalidBoard)?
-            .read(caller, buf)
+            .read(caller, buf, timeout)
     }
 
     pub fn clear_blackboard(&mut self, id: usize) -> Result<(), BlackboardError> {
@@ -182,8 +207,12 @@ mod tests {
     fn display_wakes_all_waiters() {
         let mut bb = Blackboard::<16, 4>::new(0);
         let mut buf = [0u8; 16];
+        // Blocking reads (timeout > 0) enqueue callers
         for i in 1..=3u8 {
-            assert!(bb.read(i, &mut buf).is_err());
+            assert_eq!(
+                bb.read(i, &mut buf, 1),
+                Ok(ReadBlackboardOutcome::ReaderBlocked)
+            );
         }
         assert_eq!(bb.waiting_readers(), 3);
         let woken: heapless::Vec<u8, 4> = bb.display(&[10]).unwrap();
@@ -199,17 +228,43 @@ mod tests {
     }
 
     #[test]
-    fn read_blocks_when_empty_and_returns_data() {
+    fn read_nonblocking_empty_returns_error_without_enqueue() {
         let mut bb = Blackboard::<16, 4>::new(0);
         let mut buf = [0u8; 16];
-        assert_eq!(bb.read(5, &mut buf), Err(BlackboardError::BoardEmpty));
+        // Non-blocking read (timeout=0) on empty board returns error
+        assert_eq!(bb.read(5, &mut buf, 0), Err(BlackboardError::BoardEmpty));
+        // Caller was NOT enqueued
+        assert_eq!(bb.waiting_readers(), 0);
+    }
+
+    #[test]
+    fn read_blocking_empty_enqueues_caller() {
+        let mut bb = Blackboard::<16, 4>::new(0);
+        let mut buf = [0u8; 16];
+        // Blocking read (timeout>0) on empty board enqueues caller
+        assert_eq!(
+            bb.read(5, &mut buf, 1),
+            Ok(ReadBlackboardOutcome::ReaderBlocked)
+        );
         assert_eq!(bb.waiting_readers(), 1);
+    }
+
+    #[test]
+    fn read_returns_data_and_truncation() {
+        let mut bb = Blackboard::<16, 4>::new(0);
         let _: heapless::Vec<u8, 4> = bb.display(&[1, 2, 3, 4, 5]).unwrap();
-        let len = bb.read(1, &mut buf).unwrap();
-        assert_eq!(&buf[..len], &[1, 2, 3, 4, 5]);
+        let mut buf = [0u8; 16];
+        assert_eq!(
+            bb.read(1, &mut buf, 0),
+            Ok(ReadBlackboardOutcome::Read { msg_len: 5 })
+        );
+        assert_eq!(&buf[..5], &[1, 2, 3, 4, 5]);
         // Truncation: small buffer gets prefix, returns original length
         let mut small = [0u8; 3];
-        assert_eq!(bb.read(1, &mut small).unwrap(), 5);
+        assert_eq!(
+            bb.read(1, &mut small, 0),
+            Ok(ReadBlackboardOutcome::Read { msg_len: 5 })
+        );
         assert_eq!(small, [1, 2, 3]);
         // Clear resets to empty
         bb.clear();
@@ -217,16 +272,22 @@ mod tests {
     }
 
     #[test]
-    fn read_empty_wait_queue_full() {
+    fn read_blocking_wait_queue_full() {
         // W=2: wait queue can hold 2 readers
         let mut bb = Blackboard::<16, 2>::new(0);
         let mut buf = [0u8; 16];
-        // Fill the wait queue
-        assert_eq!(bb.read(1, &mut buf), Err(BlackboardError::BoardEmpty));
-        assert_eq!(bb.read(2, &mut buf), Err(BlackboardError::BoardEmpty));
+        // Fill the wait queue with blocking reads
+        assert_eq!(
+            bb.read(1, &mut buf, 1),
+            Ok(ReadBlackboardOutcome::ReaderBlocked)
+        );
+        assert_eq!(
+            bb.read(2, &mut buf, 1),
+            Ok(ReadBlackboardOutcome::ReaderBlocked)
+        );
         assert_eq!(bb.waiting_readers(), 2);
-        // Third reader should get WaitQueueFull, not BoardEmpty
-        assert_eq!(bb.read(3, &mut buf), Err(BlackboardError::WaitQueueFull));
+        // Third blocking reader should get WaitQueueFull
+        assert_eq!(bb.read(3, &mut buf, 1), Err(BlackboardError::WaitQueueFull));
         // Wait queue unchanged — the third reader was not enqueued
         assert_eq!(bb.waiting_readers(), 2);
     }
@@ -248,17 +309,25 @@ mod tests {
         let mut pool = BlackboardPool::<4, 16, 4>::new();
         let id = pool.create().unwrap();
         let mut buf = [0u8; 16];
-        // Block readers then display
-        assert!(pool.read_blackboard(id, 1, &mut buf).is_err());
-        assert!(pool.read_blackboard(id, 2, &mut buf).is_err());
+        // Block readers (timeout>0) then display
+        assert_eq!(
+            pool.read_blackboard(id, 1, &mut buf, 1),
+            Ok(ReadBlackboardOutcome::ReaderBlocked)
+        );
+        assert_eq!(
+            pool.read_blackboard(id, 2, &mut buf, 1),
+            Ok(ReadBlackboardOutcome::ReaderBlocked)
+        );
         let woken: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[42]).unwrap();
         assert_eq!(woken.as_slice(), &[1, 2]);
-        let len = pool.read_blackboard(id, 0, &mut buf).unwrap();
-        assert_eq!(&buf[..len], &[42]);
+        let outcome = pool.read_blackboard(id, 0, &mut buf, 0).unwrap();
+        assert_eq!(outcome, ReadBlackboardOutcome::Read { msg_len: 1 });
+        assert_eq!(&buf[..1], &[42]);
         // Overwrite
         let _: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[7, 8]).unwrap();
-        let len = pool.read_blackboard(id, 0, &mut buf).unwrap();
-        assert_eq!(&buf[..len], &[7, 8]);
+        let outcome = pool.read_blackboard(id, 0, &mut buf, 0).unwrap();
+        assert_eq!(outcome, ReadBlackboardOutcome::Read { msg_len: 2 });
+        assert_eq!(&buf[..2], &[7, 8]);
     }
 
     #[test]
@@ -268,7 +337,7 @@ mod tests {
         let r: Result<heapless::Vec<u8, 2>, _> = pool.display_blackboard(99, &[1]);
         assert_eq!(r, Err(BlackboardError::InvalidBoard));
         assert_eq!(
-            pool.read_blackboard(99, 0, &mut buf),
+            pool.read_blackboard(99, 0, &mut buf, 0),
             Err(BlackboardError::InvalidBoard)
         );
         assert_eq!(
@@ -278,15 +347,31 @@ mod tests {
     }
 
     #[test]
-    fn pool_clear_then_read_blocks() {
+    fn pool_clear_then_nonblocking_read_returns_empty() {
         let mut pool = BlackboardPool::<4, 16, 4>::new();
         let id = pool.create().unwrap();
         let _: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[1]).unwrap();
         pool.clear_blackboard(id).unwrap();
         let mut buf = [0u8; 16];
         assert_eq!(
-            pool.read_blackboard(id, 0, &mut buf),
+            pool.read_blackboard(id, 0, &mut buf, 0),
             Err(BlackboardError::BoardEmpty)
         );
+        // Caller was not enqueued
+        assert_eq!(pool.get(id).unwrap().waiting_readers(), 0);
+    }
+
+    #[test]
+    fn pool_clear_then_blocking_read_enqueues() {
+        let mut pool = BlackboardPool::<4, 16, 4>::new();
+        let id = pool.create().unwrap();
+        let _: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[1]).unwrap();
+        pool.clear_blackboard(id).unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(
+            pool.read_blackboard(id, 0, &mut buf, 1),
+            Ok(ReadBlackboardOutcome::ReaderBlocked)
+        );
+        assert_eq!(pool.get(id).unwrap().waiting_readers(), 1);
     }
 }

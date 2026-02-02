@@ -1,3 +1,4 @@
+use crate::blackboard::BlackboardPool;
 use crate::context::ExceptionFrame;
 use crate::events;
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
@@ -112,6 +113,9 @@ pub struct Kernel<
     const QW: usize,
     const SP: usize,
     const SM: usize,
+    const BS: usize,
+    const BM: usize,
+    const BW: usize,
 > {
     pub partitions: PartitionTable<N>,
     pub semaphores: SemaphorePool<S, SW>,
@@ -120,6 +124,7 @@ pub struct Kernel<
     pub tick: TickCounter,
     pub sampling: SamplingPortPool<SP, SM>,
     pub queuing: QueuingPortPool<QS, QD, QM, QW>,
+    pub blackboards: BlackboardPool<BS, BM, BW>,
     /// The partition index of the currently executing partition, set by the
     /// scheduler before entering user code. Used as the trusted caller identity
     /// for syscalls, rather than reading from a user-controlled register.
@@ -138,7 +143,10 @@ impl<
         const QW: usize,
         const SP: usize,
         const SM: usize,
-    > Kernel<N, S, SW, MS, MW, QS, QD, QM, QW, SP, SM>
+        const BS: usize,
+        const BM: usize,
+        const BW: usize,
+    > Kernel<N, S, SW, MS, MW, QS, QD, QM, QW, SP, SM, BS, BM, BW>
 {
     /// Full syscall dispatch including semaphore, mutex, message, sampling,
     /// and queuing operations.
@@ -310,6 +318,48 @@ impl<
                     Err(_) => u32::MAX,
                 }
             }
+            Some(SyscallId::BbDisplay) => {
+                let d = unsafe {
+                    core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
+                };
+                match self.blackboards.display_blackboard(frame.r1 as usize, d) {
+                    Ok(woken) => {
+                        for &pid in woken.iter() {
+                            try_transition(&mut self.partitions, pid, PartitionState::Ready);
+                        }
+                        0
+                    }
+                    Err(_) => u32::MAX,
+                }
+            }
+            Some(SyscallId::BbRead) => {
+                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, BM) };
+                match self.blackboards.read_blackboard(
+                    frame.r1 as usize,
+                    self.current_partition,
+                    b,
+                    frame.r2,
+                ) {
+                    Ok(crate::blackboard::ReadBlackboardOutcome::Read { msg_len }) => {
+                        msg_len as u32
+                    }
+                    Ok(crate::blackboard::ReadBlackboardOutcome::ReaderBlocked) => {
+                        try_transition(
+                            &mut self.partitions,
+                            self.current_partition,
+                            PartitionState::Waiting,
+                        );
+                        0
+                    }
+                    Err(_) => u32::MAX,
+                }
+            }
+            Some(SyscallId::BbClear) => {
+                match self.blackboards.clear_blackboard(frame.r1 as usize) {
+                    Ok(()) => 0,
+                    Err(_) => u32::MAX,
+                }
+            }
             Some(SyscallId::GetTime) => self.tick.get() as u32,
             None => u32::MAX,
         };
@@ -439,7 +489,7 @@ mod tests {
         sem_count: usize,
         mtx_count: usize,
         msg_queue_count: usize,
-    ) -> Kernel<4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 64> {
+    ) -> Kernel<4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 64, 4, 64, 4> {
         let t = tbl();
         let s = SemaphorePool::<4, 4>::new();
         let m = MutexPool::<4, 4>::new(mtx_count);
@@ -455,6 +505,7 @@ mod tests {
             tick: TickCounter::new(),
             sampling: SamplingPortPool::new(),
             queuing: QueuingPortPool::new(),
+            blackboards: BlackboardPool::new(),
             current_partition: 0,
         };
         // Add semaphores
@@ -734,6 +785,98 @@ mod tests {
         assert_eq!(ef.r0, u32::MAX);
         let mut rb = [0u8; 64];
         let mut ef = frame4(SYS_SAMPLING_READ, 99, 0, rb.as_mut_ptr() as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, u32::MAX);
+    }
+
+    #[test]
+    fn bb_nonblocking_read_empty_returns_error_without_enqueue() {
+        use crate::blackboard::BlackboardError;
+        let mut k = kernel(0, 0, 0);
+        let id = k.blackboards.create().unwrap();
+        let mut buf = [0u8; 64];
+        // Non-blocking read (timeout=0) on empty board returns error
+        assert_eq!(
+            k.blackboards.read_blackboard(id, 0, &mut buf, 0),
+            Err(BlackboardError::BoardEmpty)
+        );
+        // Caller was NOT enqueued
+        assert_eq!(k.blackboards.get(id).unwrap().waiting_readers(), 0);
+    }
+
+    #[test]
+    fn bb_blocking_read_and_display_wake() {
+        use crate::blackboard::ReadBlackboardOutcome;
+        let mut k = kernel(0, 0, 0);
+        let id = k.blackboards.create().unwrap();
+        let mut buf = [0u8; 64];
+        // Blocking read (timeout>0) enqueues the caller
+        assert_eq!(
+            k.blackboards.read_blackboard(id, 0, &mut buf, 1),
+            Ok(ReadBlackboardOutcome::ReaderBlocked)
+        );
+        assert_eq!(k.blackboards.get(id).unwrap().waiting_readers(), 1);
+        // Display wakes the blocked reader
+        let woken = k.blackboards.display_blackboard(id, &[0xAA, 0xBB]).unwrap();
+        assert_eq!(woken.as_slice(), &[0]);
+        // Non-blocking read now succeeds
+        let outcome = k.blackboards.read_blackboard(id, 0, &mut buf, 0).unwrap();
+        assert_eq!(outcome, ReadBlackboardOutcome::Read { msg_len: 2 });
+        assert_eq!(&buf[..2], &[0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn bb_blocking_read_wakes_partition() {
+        use crate::blackboard::ReadBlackboardOutcome;
+        let mut k = kernel(0, 0, 0);
+        let id = k.blackboards.create().unwrap();
+        let mut buf = [0u8; 64];
+        // Transition partition 1 to Waiting and block it on the blackboard
+        k.partitions
+            .get_mut(1)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        assert_eq!(
+            k.blackboards.read_blackboard(id, 1, &mut buf, 1),
+            Ok(ReadBlackboardOutcome::ReaderBlocked)
+        );
+        // Display wakes partition 1
+        let woken = k.blackboards.display_blackboard(id, &[0x01]).unwrap();
+        assert_eq!(woken.as_slice(), &[1]);
+        for &pid in woken.iter() {
+            try_transition(&mut k.partitions, pid, PartitionState::Ready);
+        }
+        assert_eq!(k.partitions.get(1).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn bb_invalid_board_errors() {
+        use crate::blackboard::BlackboardError;
+        let mut k = kernel(0, 0, 0);
+        let r: Result<heapless::Vec<u8, 4>, _> = k.blackboards.display_blackboard(99, &[1]);
+        assert_eq!(r, Err(BlackboardError::InvalidBoard));
+    }
+
+    #[test]
+    fn bb_clear_svc_dispatch() {
+        use crate::blackboard::BlackboardError;
+        use crate::syscall::SYS_BB_CLEAR;
+        let mut k = kernel(0, 0, 0);
+        let id = k.blackboards.create().unwrap();
+        let _ = k.blackboards.display_blackboard(id, &[42]).unwrap();
+        // Clear via SVC dispatch
+        let mut ef = frame(SYS_BB_CLEAR, id as u32, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Non-blocking read after clear should fail
+        let mut buf = [0u8; 64];
+        assert_eq!(
+            k.blackboards.read_blackboard(id, 0, &mut buf, 0),
+            Err(BlackboardError::BoardEmpty)
+        );
+        // Invalid board via SVC
+        let mut ef = frame(SYS_BB_CLEAR, 99, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, u32::MAX);
     }

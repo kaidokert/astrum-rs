@@ -16,6 +16,9 @@ pub const SYS_SAMPLING_READ: u32 = 13;
 pub const SYS_QUEUING_SEND: u32 = 14;
 pub const SYS_QUEUING_RECV: u32 = 15;
 pub const SYS_QUEUING_STATUS: u32 = 16;
+pub const SYS_BB_DISPLAY: u32 = 17;
+pub const SYS_BB_READ: u32 = 18;
+pub const SYS_BB_CLEAR: u32 = 19;
 
 /// Typed syscall identifier for use in the kernel dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +39,9 @@ pub enum SyscallId {
     QueuingSend,
     QueuingRecv,
     QueuingStatus,
+    BbDisplay,
+    BbRead,
+    BbClear,
 }
 
 impl SyscallId {
@@ -61,6 +67,9 @@ impl SyscallId {
             SYS_QUEUING_SEND => Some(Self::QueuingSend),
             SYS_QUEUING_RECV => Some(Self::QueuingRecv),
             SYS_QUEUING_STATUS => Some(Self::QueuingStatus),
+            SYS_BB_DISPLAY => Some(Self::BbDisplay),
+            SYS_BB_READ => Some(Self::BbRead),
+            SYS_BB_CLEAR => Some(Self::BbClear),
             _ => None,
         }
     }
@@ -84,6 +93,9 @@ impl SyscallId {
             Self::QueuingSend => SYS_QUEUING_SEND,
             Self::QueuingRecv => SYS_QUEUING_RECV,
             Self::QueuingStatus => SYS_QUEUING_STATUS,
+            Self::BbDisplay => SYS_BB_DISPLAY,
+            Self::BbRead => SYS_BB_READ,
+            Self::BbClear => SYS_BB_CLEAR,
         }
     }
 }
@@ -110,6 +122,9 @@ mod tests {
         (SYS_QUEUING_SEND, SyscallId::QueuingSend),
         (SYS_QUEUING_RECV, SyscallId::QueuingRecv),
         (SYS_QUEUING_STATUS, SyscallId::QueuingStatus),
+        (SYS_BB_DISPLAY, SyscallId::BbDisplay),
+        (SYS_BB_READ, SyscallId::BbRead),
+        (SYS_BB_CLEAR, SyscallId::BbClear),
     ];
 
     #[test]
@@ -136,7 +151,7 @@ mod tests {
         // Gap at 1 (reserved for SYS_GET_ID, not in this enum).
         assert_eq!(SyscallId::from_u32(1), None);
         // Just above the defined range.
-        assert_eq!(SyscallId::from_u32(17), None);
+        assert_eq!(SyscallId::from_u32(20), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -145,10 +160,10 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        assert_eq!(ALL_VARIANTS.len(), 16);
+        assert_eq!(ALL_VARIANTS.len(), 19);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
-        assert_eq!(SYS_QUEUING_STATUS, 16);
+        assert_eq!(SYS_BB_CLEAR, 19);
     }
 
     #[test]

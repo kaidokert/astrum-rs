@@ -26,6 +26,9 @@ const QUEUE_MSG_SIZE: usize = 4;
 const QUEUE_WAIT_DEPTH: usize = 4;
 const MAX_SAMPLING_PORTS: usize = 8;
 const SAMPLING_MSG_SIZE: usize = 4;
+const MAX_BLACKBOARDS: usize = 4;
+const BLACKBOARD_MSG_SIZE: usize = 4;
+const BLACKBOARD_WAIT_DEPTH: usize = 4;
 const MAX_SCHEDULE_ENTRIES: usize = 8;
 const NUM_PARTITIONS: usize = 3;
 
@@ -41,6 +44,9 @@ type K = Kernel<
     QUEUE_WAIT_DEPTH,
     MAX_SAMPLING_PORTS,
     SAMPLING_MSG_SIZE,
+    MAX_BLACKBOARDS,
+    BLACKBOARD_MSG_SIZE,
+    BLACKBOARD_WAIT_DEPTH,
 >;
 static mut STACKS: [[u32; 256]; NUM_PARTITIONS] = [[0; 256]; NUM_PARTITIONS];
 #[no_mangle]
@@ -152,6 +158,7 @@ fn main() -> ! {
             tick: kernel::tick::TickCounter::new(),
             sampling: kernel::sampling::SamplingPortPool::new(),
             queuing: kernel::queuing::QueuingPortPool::new(),
+            blackboards: kernel::blackboard::BlackboardPool::new(),
             current_partition: 0,
         };
         let s0 = k.sampling.create_port(PortDirection::Source, 10).unwrap();
