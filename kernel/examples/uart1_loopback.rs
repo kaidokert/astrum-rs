@@ -24,6 +24,7 @@ use kernel::{
     svc::{Kernel, SvcError},
     syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE, SYS_YIELD},
     uart_hal::UartRegs,
+    virtual_device::VirtualDevice,
 };
 use panic_semihosting as _;
 
@@ -59,6 +60,7 @@ impl KernelConfig for DemoConfig {
     const BW: usize = 1;
     const BP: usize = 1;
     const BZ: usize = 32;
+    const DR: usize = 4;
 }
 
 #[repr(C, align(1024))]
@@ -425,7 +427,6 @@ fn main() -> ! {
             core::array::from_fn(|i| stacks_ref[i].0.as_ptr() as u32);
 
         // Populate the Kernel's partition table for pointer validation.
-        // TODO: register uart_pair and hw_uart backends in the registry (backlog item 195).
         let mut kern = Kernel::<DemoConfig>::new(kernel::virtual_device::DeviceRegistry::new());
         for (i, &base) in bases.iter().enumerate() {
             let region = MpuRegion::new(base, STACK_BYTES, 0);
@@ -434,6 +435,29 @@ fn main() -> ! {
         }
         kern.set_hw_uart(hw_backend);
         store_kernel(kern);
+
+        // Register the uart_pair and hw_uart backends in the device
+        // registry so that dev_dispatch routes SYS_DEV_* syscalls to them.
+        cortex_m::interrupt::free(|cs| {
+            if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+                // SAFETY: KERN is a static that is never dropped. The
+                // backends live inside KERN (uart_pair and hw_uart
+                // fields). Interrupts are disabled (interrupt::free),
+                // guaranteeing exclusive access on single-core Cortex-M.
+                // The 'static lifetime is valid because KERN is 'static.
+                let a: &'static mut dyn VirtualDevice =
+                    &mut *(&mut k.uart_pair.a as *mut _);
+                let b: &'static mut dyn VirtualDevice =
+                    &mut *(&mut k.uart_pair.b as *mut _);
+                k.registry.add(a).expect("register UART-A");
+                k.registry.add(b).expect("register UART-B");
+                if let Some(hw) = k.hw_uart.as_mut() {
+                    let hw: &'static mut dyn VirtualDevice =
+                        &mut *(hw as *mut HwUartBackend as *mut _);
+                    k.registry.add(hw).expect("register HW UART");
+                }
+            }
+        });
 
         // Schedule: P1(3) → system window(1) → P2(3) → system window(1)
         let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();

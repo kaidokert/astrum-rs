@@ -100,6 +100,8 @@ mod tests {
         const BP: usize = 1;
         #[cfg(feature = "dynamic-mpu")]
         const BZ: usize = 32;
+        #[cfg(feature = "dynamic-mpu")]
+        const DR: usize = 4;
     }
 
     /// Config that overrides priorities but keeps valid ordering.
@@ -123,6 +125,8 @@ mod tests {
         const BP: usize = 1;
         #[cfg(feature = "dynamic-mpu")]
         const BZ: usize = 32;
+        #[cfg(feature = "dynamic-mpu")]
+        const DR: usize = 4;
 
         const SVCALL_PRIORITY: u8 = 0x00;
         const PENDSV_PRIORITY: u8 = 0xE0;

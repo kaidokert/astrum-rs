@@ -75,6 +75,7 @@ impl KernelConfig for TestConfig {
     const BW: usize = 1;
     const BP: usize = 2;
     const BZ: usize = 32;
+    const DR: usize = 4;
 }
 
 kernel::define_dispatch_hook!(TestConfig);

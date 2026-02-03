@@ -28,6 +28,7 @@ use kernel::{
     svc,
     svc::{Kernel, SvcError},
     syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE, SYS_YIELD},
+    virtual_device::VirtualDevice,
 };
 use panic_semihosting as _;
 
@@ -63,6 +64,7 @@ impl KernelConfig for DemoConfig {
     const BW: usize = 1;
     const BP: usize = 1;
     const BZ: usize = 32;
+    const DR: usize = 4;
 }
 
 kernel::define_harness!(
@@ -197,10 +199,27 @@ fn main() -> ! {
 
     // SAFETY: single-core, interrupts not yet enabled.
     unsafe {
-        // TODO: register uart_pair backends in the registry (backlog item 195).
         store_kernel(Kernel::<DemoConfig>::new(
             kernel::virtual_device::DeviceRegistry::new(),
         ));
+
+        // Register the uart_pair backends in the device registry so that
+        // dev_dispatch can route SYS_DEV_* syscalls to UART-A and UART-B.
+        cortex_m::interrupt::free(|cs| {
+            if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+                // SAFETY: KERN is a static that is never dropped. The
+                // backends live inside uart_pair which lives inside
+                // KERN. Interrupts are disabled (interrupt::free),
+                // guaranteeing exclusive access on single-core Cortex-M.
+                // The 'static lifetime is valid because KERN is 'static.
+                let a: &'static mut dyn VirtualDevice =
+                    &mut *(&mut k.uart_pair.a as *mut _);
+                let b: &'static mut dyn VirtualDevice =
+                    &mut *(&mut k.uart_pair.b as *mut _);
+                k.registry.add(a).expect("register UART-A");
+                k.registry.add(b).expect("register UART-B");
+            }
+        });
 
         // Schedule: P1(2) → system window(1) → P2(2) → system window(1)
         let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
