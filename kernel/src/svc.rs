@@ -233,15 +233,37 @@ pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
 /// # Usage
 ///
 /// ```ignore
-/// // Standalone (no yield handling):
+/// // Standalone (no yield handling, no partition swap):
 /// kernel::define_dispatch_hook!(DemoConfig);
 ///
-/// // With yield handler (used by define_harness!):
+/// // With yield handler only (standalone examples):
 /// kernel::define_dispatch_hook!(DemoConfig, |k| { … });
+///
+/// // With yield handler and partition swap (used by define_harness!):
+/// kernel::define_dispatch_hook!(DemoConfig, |k| { … }, |sk| { … });
 /// ```
 #[macro_export]
 macro_rules! define_dispatch_hook {
-    ($Config:ty $(, |$k:ident| $yield_body:block )? ) => {
+    // Standalone variant (no yield, no partition swap).
+    ($Config:ty) => {
+        $crate::define_dispatch_hook!(@impl $Config, |_k| {}, |_k| {});
+    };
+    // Yield-only variant (no partition swap — used by standalone examples
+    // like uart1_loopback that manage their own KS).
+    ($Config:ty, |$k:ident| $yield_body:block) => {
+        $crate::define_dispatch_hook!(@impl $Config, |$k| $yield_body, |_sk| {});
+    };
+    // Harness variant with yield handler and partition swap.
+    ($Config:ty, |$k:ident| $yield_body:block, |$sk:ident| $swap_body:block) => {
+        $crate::define_dispatch_hook!(@impl $Config,
+            |$k| $yield_body,
+            |$sk| $swap_body
+        );
+    };
+    // Internal implementation shared by both arms.
+    // TODO: reviewer false positive — the internal rule is named @impl, which is
+    // a conventional Rust macro pattern name; no nonsensical path exists here.
+    (@impl $Config:ty, |$k:ident| $yield_body:block, |$sk:ident| $swap_body:block) => {
         static KERN: ::cortex_m::interrupt::Mutex<
             ::core::cell::RefCell<Option<$crate::svc::Kernel<$Config>>>,
         > = ::cortex_m::interrupt::Mutex::new(::core::cell::RefCell::new(None));
@@ -263,6 +285,17 @@ macro_rules! define_dispatch_hook {
                     k.current_partition =
                         unsafe { core::ptr::read_volatile(&raw const CURRENT_PARTITION) } as u8;
 
+                    // TODO: dispatch() and expire_timed_waits() use self.partitions
+                    // internally. Ideally they would accept &mut PartitionTable as
+                    // an explicit argument, but that requires splitting the borrow
+                    // on Kernel (self.partitions vs &mut self) across ~30 call sites
+                    // inside dispatch(). Deferred to a dedicated refactor.
+                    //
+                    // Run the optional swap body (swaps KS partitions into
+                    // Kernel before dispatch, so dispatch uses the shared
+                    // partition table from KernelState).
+                    { let $sk = &mut *k; $swap_body }
+
                     // SAFETY: `dispatch_hook` is only installed via `set_dispatch_hook`
                     // which stores it in SVC_DISPATCH_HOOK; it is only ever called from
                     // `SVC_HANDLER` with a valid `ExceptionFrame` pointer derived from
@@ -271,13 +304,16 @@ macro_rules! define_dispatch_hook {
                     // are possible on single-core Cortex-M.
                     unsafe { k.dispatch(f) }
 
-                    $(
+                    // Run the optional swap body again to restore partitions.
+                    { let $sk = &mut *k; $swap_body }
+
+                    {
                         if k.yield_requested {
                             k.yield_requested = false;
                             let $k = k;
                             $yield_body
                         }
-                    )?
+                    }
                 }
             });
         }

@@ -94,7 +94,8 @@ macro_rules! _harness_handle_yield {
 /// Dynamic-mpu variant: if yield lands on a system window, run the
 /// bottom-half using the already-borrowed kernel reference and keep
 /// advancing until a partition slot is reached. When the bottom-half
-/// detects RX data, the oldest blocked device reader is woken.
+/// detects RX data, the oldest blocked device reader is woken using
+/// KernelState partitions.
 #[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 #[doc(hidden)]
@@ -121,7 +122,7 @@ macro_rules! _harness_handle_yield {
                 if bh.has_rx_data {
                     if let Some(woken) = $kern.dev_wait_queue.wake_one_reader() {
                         $crate::svc::try_transition(
-                            &mut $kern.partitions,
+                            $ks.partitions_mut(),
                             woken,
                             $crate::partition::PartitionState::Ready,
                         );
@@ -161,7 +162,7 @@ macro_rules! _harness_handle_tick {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _harness_handle_tick {
-    ($event:expr, $next:ident, $tick:expr, $strategy:expr) => {
+    ($event:expr, $next:ident, $tick:expr, $strategy:expr, $partitions:expr) => {
         match $event {
             $crate::scheduler::ScheduleEvent::PartitionSwitch(pid) => {
                 // SAFETY: single-core Cortex-M — SysTick has exclusive
@@ -184,7 +185,7 @@ macro_rules! _harness_handle_tick {
                         if bh.has_rx_data {
                             if let Some(woken) = k.dev_wait_queue.wake_one_reader() {
                                 $crate::svc::try_transition(
-                                    &mut k.partitions,
+                                    $partitions,
                                     woken,
                                     $crate::partition::PartitionState::Ready,
                                 );
@@ -224,23 +225,35 @@ macro_rules! define_harness {
         static HARNESS_STRATEGY: $crate::mpu_strategy::DynamicStrategy =
             $crate::mpu_strategy::DynamicStrategy::new();
 
-        $crate::define_dispatch_hook!($Config, |_k| {
-            // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
-            // exclusive access; PendSV cannot preempt us.  KS and
-            // NEXT_PARTITION are defined by define_harness!.
-            if let Some(ks) = unsafe { KS.as_mut() } {
-                #[cfg(not(feature = "dynamic-mpu"))]
-                $crate::_harness_handle_yield!(ks, NEXT_PARTITION);
-                #[cfg(feature = "dynamic-mpu")]
-                $crate::_harness_handle_yield!(
-                    ks,
-                    NEXT_PARTITION,
-                    _k,
-                    ks.tick().get(),
-                    &HARNESS_STRATEGY
-                );
+        $crate::define_dispatch_hook!(
+            $Config,
+            |_k| {
+                // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
+                // exclusive access; PendSV cannot preempt us.  KS and
+                // NEXT_PARTITION are defined by define_harness!.
+                if let Some(ks) = unsafe { KS.as_mut() } {
+                    #[cfg(not(feature = "dynamic-mpu"))]
+                    $crate::_harness_handle_yield!(ks, NEXT_PARTITION);
+                    #[cfg(feature = "dynamic-mpu")]
+                    $crate::_harness_handle_yield!(
+                        ks,
+                        NEXT_PARTITION,
+                        _k,
+                        ks.tick().get(),
+                        &HARNESS_STRATEGY
+                    );
+                }
+            },
+            |_sk| {
+                // SAFETY: KS is initialised before SysTick/SVC fire.
+                // TODO: see svc.rs define_dispatch_hook!(@impl) — mem::swap is
+                // an interim approach; a future refactor should pass partitions
+                // as an explicit argument to dispatch()/expire_timed_waits().
+                if let Some(ks) = (unsafe { KS.as_mut() }) {
+                    core::mem::swap(&mut _sk.partitions, ks.partitions_mut());
+                }
             }
-        });
+        );
 
         // NOTE: KernelState::new returns Result<KernelState, ConfigError>.
         // Call sites (in each example's main()) must use .expect() or
@@ -275,6 +288,8 @@ macro_rules! define_harness {
             };
 
             let event = ks.advance_schedule_tick();
+            let current_tick = ks.tick().get();
+            let ks_parts = ks.partitions_mut();
 
             #[cfg(not(feature = "dynamic-mpu"))]
             $crate::_harness_handle_tick!(event, NEXT_PARTITION);
@@ -282,23 +297,25 @@ macro_rules! define_harness {
             $crate::_harness_handle_tick!(
                 event,
                 NEXT_PARTITION,
-                ks.tick().get(),
-                &HARNESS_STRATEGY
+                current_tick,
+                &HARNESS_STRATEGY,
+                ks_parts
             );
 
             // Synchronize Kernel.tick with the authoritative KernelState.tick
             // and expire timed waits (queuing ports, blackboards) each tick.
-            // sync_tick ensures that subsequent SVC dispatches (which read
-            // Kernel.tick) see the correct monotonic value.  Both operations
-            // share a single interrupt::free / KERN borrow to keep tick
-            // processing atomic with respect to other interrupt-free sections.
-            let current_tick = ks.tick().get();
+            // TODO: mem::swap is used to temporarily give Kernel the KernelState
+            // partition table so expire_timed_waits() sees the shared state.
+            // A cleaner design would pass &mut PartitionTable as an argument,
+            // but that requires a broader refactor of Kernel methods. Deferred.
             ::cortex_m::interrupt::free(|cs| {
                 if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
                     k.sync_tick(current_tick);
+                    core::mem::swap(&mut k.partitions, ks_parts);
                     k.expire_timed_waits::<{ <$Config as $crate::config::KernelConfig>::N }>(
                         current_tick,
                     );
+                    core::mem::swap(&mut k.partitions, ks_parts);
                 }
             });
         }
