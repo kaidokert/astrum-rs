@@ -168,6 +168,68 @@ impl<const W: usize> TimedWaitQueue<W> {
     }
 }
 
+/// Fixed-capacity FIFO wait queue for partitions blocked on device reads.
+///
+/// Wraps [`TimedWaitQueue`] with device-oriented method names. Each entry
+/// records a partition ID and an optional expiry tick. `W` is the
+/// compile-time maximum number of blocked readers.
+#[cfg(feature = "dynamic-mpu")]
+#[derive(Debug)]
+pub struct DeviceWaitQueue<const W: usize> {
+    inner: TimedWaitQueue<W>,
+}
+
+#[cfg(feature = "dynamic-mpu")]
+impl<const W: usize> Default for DeviceWaitQueue<W> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "dynamic-mpu")]
+impl<const W: usize> DeviceWaitQueue<W> {
+    /// Create an empty device wait queue.
+    pub const fn new() -> Self {
+        Self {
+            inner: TimedWaitQueue::new(),
+        }
+    }
+
+    /// Block a partition on a device read with an optional expiry tick.
+    ///
+    /// Returns `Err(WaitQueueFull)` if the queue has reached capacity.
+    pub fn block_reader(&mut self, pid: u8, expiry: u64) -> Result<(), WaitQueueFull> {
+        self.inner.push(pid, expiry)
+    }
+
+    /// Wake the oldest blocked reader, returning its partition ID.
+    ///
+    /// Returns `None` if no readers are blocked.
+    pub fn wake_one_reader(&mut self) -> Option<u8> {
+        self.inner.pop_front_pid()
+    }
+
+    /// Remove all entries whose expiry tick has been reached, appending
+    /// their partition IDs to `out`.
+    pub fn drain_expired<const E: usize>(
+        &mut self,
+        current_tick: u64,
+        out: &mut heapless::Vec<u8, E>,
+    ) {
+        self.inner.drain_expired(current_tick, out);
+    }
+
+    /// Returns `true` if no readers are blocked.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the number of blocked readers.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,5 +614,46 @@ mod tests {
         q.drain_expired(100, &mut expired);
         assert_eq!(expired.as_slice(), &[1, 3]);
         assert_eq!(q.waiting_pids(), vec![2, 4]);
+    }
+
+    // ---- DeviceWaitQueue tests ----
+    // Only verify that the wrapper forwards to TimedWaitQueue correctly.
+    // FIFO ordering, expiry logic, and capacity semantics are covered by
+    // the TimedWaitQueue tests above.
+
+    #[cfg(feature = "dynamic-mpu")]
+    mod device_wait_queue {
+        use super::super::*;
+
+        #[test]
+        fn forwards_block_and_wake() {
+            let mut q = DeviceWaitQueue::<4>::new();
+            assert!(q.is_empty());
+            assert_eq!(q.len(), 0);
+            q.block_reader(3, 100).unwrap();
+            assert_eq!(q.len(), 1);
+            assert!(!q.is_empty());
+            assert_eq!(q.wake_one_reader(), Some(3));
+            assert!(q.is_empty());
+        }
+
+        #[test]
+        fn forwards_drain_expired() {
+            let mut q = DeviceWaitQueue::<4>::new();
+            q.block_reader(1, 50).unwrap();
+            q.block_reader(2, 200).unwrap();
+            let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+            q.drain_expired(100, &mut expired);
+            assert_eq!(expired.as_slice(), &[1]);
+            assert_eq!(q.len(), 1);
+        }
+
+        #[test]
+        fn forwards_capacity_error() {
+            let mut q = DeviceWaitQueue::<2>::new();
+            q.block_reader(0, 100).unwrap();
+            q.block_reader(1, 200).unwrap();
+            assert_eq!(q.block_reader(2, 300), Err(WaitQueueFull));
+        }
     }
 }
