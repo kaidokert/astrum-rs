@@ -567,8 +567,15 @@ buffer_pool_test: all checks passed -- PASS
 - Full round-trip: P1 writes "Hi" → system window transfers → P2
   reads "Hi" → P2 writes "Ok" → system window transfers → P1 reads
   "Ok"
-- `SYS_DEV_OPEN` / `SYS_DEV_READ` / `SYS_DEV_WRITE` / `SYS_YIELD`
-  syscalls via the `define_harness!` macro
+- **Blocking device reads** via `SYS_DEV_READ_TIMED` with timeout
+  (replaces earlier yield-poll loops)
+- `SYS_DEV_OPEN` / `SYS_DEV_READ_TIMED` / `SYS_DEV_WRITE` /
+  `SYS_YIELD` syscalls via the `define_harness!` macro
+
+<!-- TODO: reviewer asked about SYS_DEV_CLOSE and buffer revocation
+     coverage.  This demo does not use either — it exercises blocking
+     reads (SYS_DEV_READ_TIMED).  Add a dedicated demo for DEV_CLOSE
+     and timed buffer revocation in a future subtask. -->
 
 #### Architecture
 
@@ -630,3 +637,118 @@ Note: `[72, 105]` is the byte representation of `"Hi"` and
 P1 runs first, then after a system window P2 runs and reads the
 transferred data. P2's response is transferred back to P1 during the
 next system window.
+
+This demo uses `SYS_DEV_READ_TIMED` (blocking device read with
+timeout) instead of yield-poll loops. See
+[ipc-reference.md §11](ipc-reference.md#11-virtual-devices) for the
+`SYS_DEV_READ_TIMED` syscall semantics and
+[architecture.md §11.5](architecture.md#115-virtual-device-abstraction-layer)
+for the blocking-read wakeup protocol.
+
+---
+
+### uart1\_loopback -- Hardware UART Loopback Integration Test
+
+**Source:** `kernel/examples/uart1_loopback.rs`
+
+#### What It Demonstrates
+
+- **HwUartBackend** with software loopback mode (TX bytes routed
+  directly into the RX ring buffer, no real hardware I/O)
+- Multi-message transmit/receive verification across two partitions
+- Edge-case coverage: read-when-empty and write-when-TX-full
+- `SYS_DEV_OPEN` / `SYS_DEV_READ` / `SYS_DEV_WRITE` / `SYS_YIELD`
+  syscalls via the `define_dispatch_hook!` macro
+- `DeviceRegistry` integration (three backends registered: UART-A,
+  UART-B, and the HwUartBackend)
+- System window bottom-half processing with `run_bottom_half` for
+  software loopback drain
+
+For the device syscall semantics (`SYS_DEV_OPEN`, `SYS_DEV_READ`,
+`SYS_DEV_WRITE`), see
+[ipc-reference.md §11](ipc-reference.md#11-virtual-devices). For the
+`DeviceRegistry` and `DeviceError` types, see
+[architecture.md §11.5](architecture.md#115-virtual-device-abstraction-layer).
+
+#### Architecture
+
+```
+Partitions: 2             Schedule: P1(3) → sys(1) → P2(3) → sys(1)
+Stacks:     1 KB each     SysTick reload: 120,000 cycles
+HwUartBackend: device 2   Software loopback: TX → RX (no real UART)
+UART-A: device 0          UART-B: device 1 (registered but unused)
+
+HwUartBackend loopback mechanism (loopback flag bypasses real HW):
+  P1 DEV_WRITE → TX ring
+        ↓  (system window calls drain_tx_to_hw)
+       RX ring ← drain_tx_to_hw copies TX→RX directly
+        ↓
+  P2 DEV_READ  ← RX ring
+
++--------+  SYS_DEV_WRITE   +-------------+
+| P1     | ----------------> | HwUart      |
+| writer |                   | TX ring     |
++--------+                   +------+------+
+                                    |
+                        system window calls
+                        drain_tx_to_hw()
+                        (loopback: TX → RX)
+                                    |
+                                    v
+                             +------+------+
+                             | HwUart      |
+                             | RX ring     |
+                             +------+------+
+                                    |
+                          SYS_DEV_READ |
+                                    v
+                             +------+------+
+                             | P2          |
+                             | reader      |
+                             +-------------+
+```
+
+#### Test Assertions
+
+The demo runs 7 test assertions tracked by pass/fail counters:
+
+| # | Test | What it verifies |
+|---|------|------------------|
+| 1 | P1: read-when-empty | `SYS_DEV_READ` returns 0 bytes when RX buffer is empty |
+| 2 | P2: read-when-empty | Same check from the reader partition |
+| 3 | msg0: short (2B) | P1 writes `"Hi"` (2 bytes), P2 reads and verifies match |
+| 4 | msg1: medium (13B) | P1 writes `"Hello from P1"` (13 bytes), P2 verifies |
+| 5 | msg2: long (48B) | P1 writes a 48-byte test pattern, P2 verifies |
+| 6 | P1: write-when-TX-full | Fills TX ring (64 bytes of `0xAB`), then writes 1 more byte; verifies overflow returns 0 |
+| 7 | P2: TX-full data verified | P2 reads all 64 `0xAB` bytes and confirms content |
+
+#### How to Run
+
+```bash
+cargo run -p kernel --target thumbv7m-none-eabi --example uart1_loopback --features dynamic-mpu,qemu
+```
+
+#### Expected Output
+
+```
+uart1_loopback: start
+[P1] test: read-when-empty
+  [PASS] P1: read-when-empty returns 0
+[P2] test: read-when-empty
+  [PASS] P2: read-when-empty returns 0
+[P1] msg0: wrote 2/2 bytes
+[P2] msg0: short (2B) => PASS
+[P1] msg1: wrote 13/13 bytes
+[P2] msg1: medium (13B) => PASS
+[P1] msg2: wrote 48/48 bytes
+[P2] msg2: long (48B) => PASS
+[P1] test: write-when-TX-full
+  [PASS] P1: write-when-TX-full (partial write = 0)
+  [PASS] P2: TX-full data received and verified
+--- Results: 7 passed, 0 failed ---
+UART loopback test: PASS
+```
+
+Note: the exact interleaving of `[P1]` and `[P2]` lines depends on
+the schedule. The key invariant is that all 7 assertions pass and
+the final line reads `UART loopback test: PASS`.

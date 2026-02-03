@@ -595,6 +595,17 @@ windows for buffer lending. Static partition regions (R0-R3: code,
 data, background, stack guard) are never disturbed. At most 3 buffer
 slots can be simultaneously lent via the ad-hoc window slots.
 
+### Timed buffer revocation
+
+`BufferPool` maintains a per-slot `deadlines` array. When a buffer is
+lent with a deadline, `revoke_expired(current_tick, strategy)` iterates
+all slots and automatically revokes any whose deadline has passed —
+removing the MPU window and returning the slot to `Free`. This is
+called from `run_bottom_half()` during every system window. For the
+full timed revocation design and bottom-half integration, see
+[architecture.md §11.2](architecture.md#112-buffer-pool-memory-model)
+and [§11.3](architecture.md#113-system-window-schedule-entries-and-bottom-half-processing).
+
 ## 11. Virtual Devices
 
 Source: `kernel/src/virtual_device.rs` and `kernel/src/virtual_uart.rs`.
@@ -756,3 +767,14 @@ up the device by ID via `self.registry.get_mut(device_id)` (the
 `DeviceError` variants to `SvcError` codes. Returns
 `SvcError::InvalidResource` if the device ID is not found in the
 registry, or `SvcError::OperationFailed` on any `DeviceError`.
+
+### QEMU demos
+
+For end-to-end examples exercising the virtual device syscalls, see:
+
+- [demos.md — virtual\_uart\_demo](demos.md#virtual_uart_demo----virtual-uart-end-to-end-round-trip):
+  `VirtualUartPair` round-trip using `SYS_DEV_READ_TIMED` blocking
+  reads.
+- [demos.md — uart1\_loopback](demos.md#uart1_loopback----hardware-uart-loopback-integration-test):
+  `HwUartBackend` software loopback with multi-message verification
+  and edge-case tests (read-when-empty, write-when-TX-full).
