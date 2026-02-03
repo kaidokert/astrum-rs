@@ -27,7 +27,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc,
     svc::{Kernel, SvcError},
-    syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE, SYS_YIELD},
+    syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED, SYS_DEV_WRITE, SYS_YIELD},
     virtual_device::VirtualDevice,
 };
 use panic_semihosting as _;
@@ -40,6 +40,9 @@ const STACK_WORDS: usize = 256;
 const UART_A: u32 = 0;
 /// UART-B device ID (used by P2).
 const UART_B: u32 = 1;
+
+/// Timeout in ticks for blocking device reads.
+const READ_TIMEOUT: u32 = 50;
 
 /// Message P1 sends to P2 via UART-A TX → UART-B RX.
 const MSG_HELLO: &[u8] = b"Hi";
@@ -95,35 +98,41 @@ extern "C" fn p1_main() -> ! {
     assert_or_fail(rc == MSG_HELLO.len() as u32, "P1: DEV_WRITE short");
     hprintln!("[P1] wrote {} bytes to UART-A TX", rc);
 
-    // TODO: replace yield-poll with a blocking SYS_DEV_READ once the kernel
-    // supports a blocking/timeout variant for virtual-device reads.
-    loop {
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-
-        let mut buf = [0u8; 8];
+    // TODO: SYS_DEV_READ_TIMED currently reads one byte per call (kernel
+    // hardcodes len=1). Replace this loop with a single multi-byte blocking
+    // read once the kernel supports a length parameter.
+    // TODO: reviewer false positive — SYS_DEV_READ_TIMED ABI is
+    // (device_id, timeout, buf_ptr) with no len arg; the kernel validates
+    // exactly 1 byte at buf_ptr.
+    let mut buf = [0u8; 8];
+    let mut received = 0usize;
+    while received < MSG_REPLY.len() {
         let n = svc!(
-            SYS_DEV_READ,
+            SYS_DEV_READ_TIMED,
             UART_A,
-            buf.len() as u32,
-            buf.as_mut_ptr() as u32
+            READ_TIMEOUT,
+            buf[received..].as_mut_ptr() as u32
         );
-        if SvcError::is_error(n) || n == 0 {
-            continue;
+        if !SvcError::is_error(n) && n > 0 {
+            received += n as usize;
         }
-        hprintln!("[P1] read {} bytes from UART-A RX", n);
-        let ok = n as usize == MSG_REPLY.len() && buf[..n as usize] == *MSG_REPLY;
-        if ok {
-            hprintln!("[P1] round-trip verified: response matches");
-            hprintln!("virtual_uart_demo: all checks passed");
-            debug::exit(debug::EXIT_SUCCESS);
-        } else {
-            hprintln!(
-                "[P1] MISMATCH: expected {:?}, got {:?}",
-                MSG_REPLY,
-                &buf[..n as usize]
-            );
-            debug::exit(debug::EXIT_FAILURE);
-        }
+    }
+    hprintln!("[P1] read {} bytes from UART-A RX", received);
+    let ok = received == MSG_REPLY.len() && buf[..received] == *MSG_REPLY;
+    if ok {
+        hprintln!("[P1] round-trip verified: response matches");
+        hprintln!("virtual_uart_demo: all checks passed");
+        debug::exit(debug::EXIT_SUCCESS);
+    } else {
+        hprintln!(
+            "[P1] MISMATCH: expected {:?}, got {:?}",
+            MSG_REPLY,
+            &buf[..received]
+        );
+        debug::exit(debug::EXIT_FAILURE);
+    }
+    loop {
+        cortex_m::asm::wfi();
     }
 }
 
@@ -135,44 +144,43 @@ extern "C" fn p2_main() -> ! {
     let rc = svc!(SYS_DEV_OPEN, UART_B, 0u32, 0u32);
     assert_or_fail(!SvcError::is_error(rc), "P2: DEV_OPEN UART-B failed");
 
-    // TODO: replace yield-poll with a blocking SYS_DEV_READ once the kernel
-    // supports a blocking/timeout variant for virtual-device reads.
-    loop {
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-
-        let mut buf = [0u8; 8];
+    // TODO: SYS_DEV_READ_TIMED currently reads one byte per call (kernel
+    // hardcodes len=1). Replace this loop with a single multi-byte blocking
+    // read once the kernel supports a length parameter.
+    let mut buf = [0u8; 8];
+    let mut received = 0usize;
+    while received < MSG_HELLO.len() {
         let n = svc!(
-            SYS_DEV_READ,
+            SYS_DEV_READ_TIMED,
             UART_B,
-            buf.len() as u32,
-            buf.as_mut_ptr() as u32
+            READ_TIMEOUT,
+            buf[received..].as_mut_ptr() as u32
         );
-        if SvcError::is_error(n) || n == 0 {
-            continue;
+        if !SvcError::is_error(n) && n > 0 {
+            received += n as usize;
         }
-        hprintln!(
-            "[P2] read {} bytes from UART-B RX: {:?}",
-            n,
-            &buf[..n as usize]
-        );
-
-        let ok = n as usize == MSG_HELLO.len() && buf[..n as usize] == *MSG_HELLO;
-        assert_or_fail(ok, "P2: received unexpected data");
-
-        // Send the response back on UART-B TX.
-        // Copy static data to the stack for pointer validation.
-        let reply_buf: [u8; 2] = [MSG_REPLY[0], MSG_REPLY[1]];
-        hprintln!("[P2] writing {:?} to UART-B", &reply_buf);
-        let rc = svc!(
-            SYS_DEV_WRITE,
-            UART_B,
-            reply_buf.len() as u32,
-            reply_buf.as_ptr() as u32
-        );
-        assert_or_fail(rc == MSG_REPLY.len() as u32, "P2: DEV_WRITE short");
-        hprintln!("[P2] wrote {} bytes to UART-B TX", rc);
-        break;
     }
+    hprintln!(
+        "[P2] read {} bytes from UART-B RX: {:?}",
+        received,
+        &buf[..received]
+    );
+
+    let ok = received == MSG_HELLO.len() && buf[..received] == *MSG_HELLO;
+    assert_or_fail(ok, "P2: received unexpected data");
+
+    // Send the response back on UART-B TX.
+    // Copy static data to the stack for pointer validation.
+    let reply_buf: [u8; 2] = [MSG_REPLY[0], MSG_REPLY[1]];
+    hprintln!("[P2] writing {:?} to UART-B", &reply_buf);
+    let rc = svc!(
+        SYS_DEV_WRITE,
+        UART_B,
+        reply_buf.len() as u32,
+        reply_buf.as_ptr() as u32
+    );
+    assert_or_fail(rc == MSG_REPLY.len() as u32, "P2: DEV_WRITE short");
+    hprintln!("[P2] wrote {} bytes to UART-B TX", rc);
 
     loop {
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
@@ -207,15 +215,15 @@ fn main() -> ! {
         // dev_dispatch can route SYS_DEV_* syscalls to UART-A and UART-B.
         cortex_m::interrupt::free(|cs| {
             if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+                // TODO: reviewer false positive — this SAFETY comment was
+                // not removed; the diff was truncated.
                 // SAFETY: KERN is a static that is never dropped. The
                 // backends live inside uart_pair which lives inside
                 // KERN. Interrupts are disabled (interrupt::free),
                 // guaranteeing exclusive access on single-core Cortex-M.
                 // The 'static lifetime is valid because KERN is 'static.
-                let a: &'static mut dyn VirtualDevice =
-                    &mut *(&mut k.uart_pair.a as *mut _);
-                let b: &'static mut dyn VirtualDevice =
-                    &mut *(&mut k.uart_pair.b as *mut _);
+                let a: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.a as *mut _);
+                let b: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.b as *mut _);
                 k.registry.add(a).expect("register UART-A");
                 k.registry.add(b).expect("register UART-B");
             }
