@@ -40,6 +40,9 @@ pub const SYS_DEV_IOCTL: u32 = 25;
 pub const SYS_BUF_WRITE: u32 = 26;
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_CLOSE: u32 = 29;
+/// Timed device read: r1=device_id, r2=timeout_ticks (0=non-blocking), r3=buf_ptr
+#[cfg(feature = "dynamic-mpu")]
+pub const SYS_DEV_READ_TIMED: u32 = 30;
 
 /// Typed syscall identifier for use in the kernel dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +84,8 @@ pub enum SyscallId {
     BufferWrite,
     #[cfg(feature = "dynamic-mpu")]
     DevClose,
+    #[cfg(feature = "dynamic-mpu")]
+    DevReadTimed,
 }
 
 impl SyscallId {
@@ -127,6 +132,8 @@ impl SyscallId {
             SYS_BUF_WRITE => Some(Self::BufferWrite),
             #[cfg(feature = "dynamic-mpu")]
             SYS_DEV_CLOSE => Some(Self::DevClose),
+            #[cfg(feature = "dynamic-mpu")]
+            SYS_DEV_READ_TIMED => Some(Self::DevReadTimed),
             _ => None,
         }
     }
@@ -171,6 +178,8 @@ impl SyscallId {
             Self::BufferWrite => SYS_BUF_WRITE,
             #[cfg(feature = "dynamic-mpu")]
             Self::DevClose => SYS_DEV_CLOSE,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevReadTimed => SYS_DEV_READ_TIMED,
         }
     }
 }
@@ -218,6 +227,8 @@ mod tests {
         (SYS_BUF_WRITE, SyscallId::BufferWrite),
         #[cfg(feature = "dynamic-mpu")]
         (SYS_DEV_CLOSE, SyscallId::DevClose),
+        #[cfg(feature = "dynamic-mpu")]
+        (SYS_DEV_READ_TIMED, SyscallId::DevReadTimed),
     ];
 
     #[test]
@@ -247,7 +258,7 @@ mod tests {
         #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(SyscallId::from_u32(20), None);
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(SyscallId::from_u32(30), None);
+        assert_eq!(SyscallId::from_u32(31), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -259,7 +270,7 @@ mod tests {
         #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(ALL_VARIANTS.len(), 21);
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(ALL_VARIANTS.len(), 29);
+        assert_eq!(ALL_VARIANTS.len(), 30);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);

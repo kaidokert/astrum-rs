@@ -397,6 +397,9 @@ where
     /// Device registry for dynamic device dispatch.
     #[cfg(feature = "dynamic-mpu")]
     pub registry: crate::virtual_device::DeviceRegistry<'static, { C::DR }>,
+    /// Wait queue for partitions blocked on device reads.
+    #[cfg(feature = "dynamic-mpu")]
+    pub dev_wait_queue: crate::waitqueue::DeviceWaitQueue<{ C::N }>,
 }
 
 impl<C: KernelConfig> Default for Kernel<C>
@@ -485,6 +488,8 @@ where
             hw_uart: None,
             #[cfg(feature = "dynamic-mpu")]
             registry,
+            #[cfg(feature = "dynamic-mpu")]
+            dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
         }
     }
 
@@ -887,6 +892,45 @@ where
                 dev.close(pid)?;
                 Ok(0)
             }),
+            #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::DevReadTimed) => {
+                // r1 = device_id, r2 = timeout_ticks (0 = non-blocking), r3 = buf_ptr
+                // Reads a single byte; blocks caller if no data and timeout > 0.
+                validated_ptr!(self, frame.r3, 1, {
+                    let buf_ptr = frame.r3 as *mut u8;
+                    let timeout = frame.r2;
+                    let pid = self.current_partition;
+                    let device_id = frame.r1 as u8;
+                    match self.registry.get_mut(device_id) {
+                        Some(dev) => {
+                            // SAFETY: validated_ptr confirmed [r3, r3+1) lies
+                            // within the calling partition's MPU data region.
+                            let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, 1) };
+                            match dev.read(pid, buf) {
+                                Ok(n) if n > 0 => n as u32,
+                                Ok(_) if timeout > 0 => {
+                                    // No data available — block the caller.
+                                    let expiry = self.tick.get() + timeout as u64;
+                                    match self.dev_wait_queue.block_reader(pid, expiry) {
+                                        Ok(()) => {
+                                            try_transition(
+                                                &mut self.partitions,
+                                                pid,
+                                                PartitionState::Waiting,
+                                            );
+                                            0
+                                        }
+                                        Err(_) => SvcError::WaitQueueFull.to_u32(),
+                                    }
+                                }
+                                Ok(_) => 0, // non-blocking, no data
+                                Err(_) => SvcError::OperationFailed.to_u32(),
+                            }
+                        }
+                        None => SvcError::InvalidResource.to_u32(),
+                    }
+                })
+            }
             Some(SyscallId::QueuingRecvTimed) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
@@ -1153,6 +1197,7 @@ mod tests {
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
             hw_uart: None,
             registry,
+            dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
         };
         for _ in 0..sem_count {
             k.semaphores.add(Semaphore::new(1, 2)).unwrap();
@@ -1195,6 +1240,8 @@ mod tests {
             hw_uart: None,
             #[cfg(feature = "dynamic-mpu")]
             registry: default_registry().0,
+            #[cfg(feature = "dynamic-mpu")]
+            dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
         };
         // Add semaphores
         for _ in 0..sem_count {
@@ -1900,6 +1947,102 @@ mod tests {
         let mut ef = frame(SYS_DEV_CLOSE, 99, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+    }
+
+    // ---- DevReadTimed dispatch tests ----
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_read_timed_immediate_data_returns_byte_count() {
+        use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
+        let (registry, uart_a, _) = default_registry();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
+        // Open device 0
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Push a byte into the RX buffer so read succeeds immediately.
+        // SAFETY: uart_a points to a leaked VirtualUartBackend; no aliasing.
+        unsafe { &mut *uart_a }.push_rx(&[0x42]);
+        let ptr = low32_buf(0);
+        // timeout=10 but data is available, so should return immediately.
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 10, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 1, "should return 1 byte read");
+        // SAFETY: ptr was mmap'd by low32_buf and dispatch wrote 1 byte.
+        let out = unsafe { core::slice::from_raw_parts(ptr, 1) };
+        assert_eq!(out, &[0x42]);
+        // Partition should remain Running (not blocked).
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Running
+        );
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_read_timed_blocks_on_empty_with_timeout() {
+        use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
+        let (registry, _, _) = default_registry();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
+        // Open device 0
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        let ptr = low32_buf(0);
+        // No RX data; timeout=50 should block the caller.
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 50, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(k.dev_wait_queue.len(), 1);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_read_timed_nonblocking_empty_returns_zero() {
+        use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
+        let (registry, _, _) = default_registry();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
+        // Open device 0
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        let ptr = low32_buf(0);
+        // No RX data; timeout=0 (non-blocking) should return 0 immediately.
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 0, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Partition should remain Running (not blocked).
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(k.dev_wait_queue.len(), 0);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_read_timed_invalid_device_returns_error() {
+        use crate::syscall::SYS_DEV_READ_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let ptr = low32_buf(0);
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 99, 10, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_read_timed_rejects_out_of_bounds_pointer() {
+        use crate::syscall::SYS_DEV_READ_TIMED;
+        let mut k = kernel(0, 0, 0);
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 10, 0xDEAD_0000);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
     }
 
     // ---- InvalidPointer and validate_user_ptr tests ----
