@@ -87,6 +87,14 @@ use crate::partition::PartitionControlBlock;
 /// code, data, and peripheral access instead of dedicating scarce MPU regions
 /// to kernel memory.  Only unprivileged partition code is restricted to the
 /// explicitly configured regions (code RX, data RW, stack guard).
+///
+/// # Safety invariant
+///
+/// PRIVDEFENA is only safe because every partition runs with CONTROL.nPRIV=1
+/// (unprivileged Thread mode).  The PendSV handler sets nPRIV=1 before
+/// returning to the partition, ensuring that partition code cannot bypass the
+/// MPU by executing at privileged level.  If nPRIV were 0, PRIVDEFENA would
+/// grant partitions full access to the default memory map, defeating isolation.
 pub const MPU_CTRL_ENABLE_PRIVDEFENA: u32 = (1 << 2) | 1;
 
 /// Compute four (RBAR, RASR) pairs for a partition's MPU layout.
@@ -199,6 +207,11 @@ pub fn partition_dynamic_regions(
 /// function is called from the SysTick handler (handler mode), where a
 /// panic is unrecoverable — there is no unwinding, and a panic in an
 /// ISR typically results in a HardFault double-fault lockup.
+///
+/// PRIVDEFENA safety depends on partitions executing unprivileged
+/// (CONTROL.nPRIV=1).  This is enforced by the PendSV handler
+/// (`define_pendsv!` / `define_pendsv_dynamic!` in pendsv.rs), which
+/// writes CONTROL.nPRIV=1 before `bx lr` to the partition.
 #[cfg(not(test))]
 pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
     let regions = partition_mpu_regions_or_deny_all(pcb);
