@@ -29,9 +29,11 @@ impl TickCounter {
         self.ticks
     }
 
-    /// Set the tick count to an arbitrary value (crate-internal, for testing).
-    #[cfg(test)]
-    pub(crate) fn set(&mut self, value: u64) {
+    /// Synchronize the tick counter to the given value.
+    ///
+    /// Used by the SysTick handler to copy the authoritative tick from
+    /// `KernelState` into `Kernel` each tick.
+    pub fn sync(&mut self, value: u64) {
         self.ticks = value;
     }
 }
@@ -307,6 +309,17 @@ mod tests {
         let mut tc = TickCounter { ticks: u64::MAX };
         tc.increment();
         assert_eq!(tc.get(), 0);
+    }
+
+    #[test]
+    fn tick_counter_sync_sets_value() {
+        let mut tc = TickCounter::new();
+        tc.sync(100);
+        assert_eq!(tc.get(), 100);
+        tc.sync(0);
+        assert_eq!(tc.get(), 0);
+        tc.sync(u64::MAX);
+        assert_eq!(tc.get(), u64::MAX);
     }
 
     #[cfg(feature = "dynamic-mpu")]

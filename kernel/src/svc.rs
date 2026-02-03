@@ -555,6 +555,14 @@ where
         }
     }
 
+    /// Synchronize the kernel's tick counter to the given value.
+    ///
+    /// Called from the SysTick handler to copy the authoritative tick from
+    /// `KernelState` into `Kernel` each tick.
+    pub fn sync_tick(&mut self, current_tick: u64) {
+        self.tick.sync(current_tick);
+    }
+
     /// Full syscall dispatch including semaphore, mutex, message, sampling,
     /// and queuing operations.
     ///
@@ -1481,9 +1489,7 @@ mod tests {
     #[test]
     fn get_time_after_increments() {
         let mut k = kernel(0, 0, 0);
-        for _ in 0..5 {
-            k.tick.increment();
-        }
+        k.tick.sync(5);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 5);
@@ -1492,7 +1498,7 @@ mod tests {
     #[test]
     fn get_time_preserves_other_registers() {
         let mut k = kernel(0, 0, 0);
-        k.tick.increment();
+        k.tick.sync(1);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0xAA, 0xBB);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 1);
@@ -1503,10 +1509,20 @@ mod tests {
     #[test]
     fn get_time_truncates_to_u32() {
         let mut k = kernel(0, 0, 0);
-        k.tick.set((1u64 << 32) + 7);
+        k.tick.sync((1u64 << 32) + 7);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 7);
+    }
+
+    #[test]
+    fn sync_tick_updates_kernel_tick() {
+        let mut k = kernel(0, 0, 0);
+        assert_eq!(k.tick.get(), 0);
+        k.sync_tick(42);
+        assert_eq!(k.tick.get(), 42);
+        k.sync_tick(1000);
+        assert_eq!(k.tick.get(), 1000);
     }
 
     fn frame4(r0: u32, r1: u32, r2: u32, r3: u32) -> ExceptionFrame {
