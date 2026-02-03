@@ -3136,6 +3136,233 @@ sensor, all in the same image.
 
 ---
 
+### 3.5  Approach E — Shared Memory Ring Buffers (VirtIO Style)
+
+Approaches A, B, and C are fundamentally **RPC**: each peripheral
+operation requires one syscall (SVC trap → kernel dispatch → return).
+Even Approach B's batched `SpiOp` slice is a single RPC that the
+kernel executes synchronously.  Approach E inverts the model:
+partitions and the kernel (or a server partition) communicate through
+a **shared-memory descriptor ring** inspired by VirtIO virtqueues.
+The partition queues N operation descriptors into the ring, then
+issues a single "kick" syscall — or, if the consumer polls, zero
+syscalls.  This is **message passing**, not RPC.
+
+The key differentiator: **A/B/C are RPC (one syscall per operation),
+E is message passing (batch N operations per syscall or zero syscalls
+if consumer polls).**
+
+#### 3.5.1  Mechanism: Shared Memory Descriptor Rings
+
+A ring buffer of fixed-size operation descriptors resides in a memory
+region shared between the producing partition and the consuming kernel
+(or server partition).  The MPU window lending mechanism from
+`DynamicStrategy` (`kernel/src/mpu_strategy.rs`) grants the consumer
+read (or read-write) access to the ring's backing memory.
+
+The ring uses a single-producer / single-consumer (SPSC) design with
+separate head and tail indices.  No locks are needed: the producer
+only writes `tail`, the consumer only writes `head`, and both are
+naturally atomic on 32-bit Cortex-M (single-core, aligned word
+access).  An ISB/DSB pair after index updates ensures ordering across
+the SVC boundary.
+
+```rust
+/// A single operation descriptor in the ring.
+/// Fixed-size, repr(C) for stable ABI across partition/kernel boundary.
+#[repr(C)]
+pub struct RingDescriptor {
+    /// Discriminant: 0 = SpiOp, 1 = I2cOp, 2 = UartOp, ...
+    pub op_class: u8,
+    /// Device ID (matches VirtualDevice registry).
+    pub device_id: u8,
+    /// Status: 0 = pending, 1 = complete-ok, 2 = complete-err.
+    pub status: u8,
+    /// Flags (peripheral-class-specific).
+    pub flags: u8,
+    /// Inline payload — peripheral-class union.
+    pub payload: OpPayload,
+}
+
+/// Payload union — the largest variant determines descriptor size.
+/// Each variant is sized to keep RingDescriptor at 32 bytes total,
+/// matching the minimum MPU region granularity.
+#[repr(C)]
+pub union OpPayload {
+    pub spi: SpiRingOp,
+    pub i2c: I2cRingOp,
+    pub raw: [u8; 28],  // 32 - 4 header bytes
+}
+
+/// SPI operation packed into the ring descriptor payload.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SpiRingOp {
+    /// Offset into the shared buffer pool slot for TX data.
+    pub tx_offset: u16,
+    /// Offset into the shared buffer pool slot for RX data.
+    pub rx_offset: u16,
+    /// Transfer length in bytes.
+    pub len: u16,
+    /// CS hold flag, full-duplex vs half-duplex, etc.
+    pub spi_flags: u16,
+    /// Reserved for future use (DMA chain pointer, etc.).
+    pub _reserved: [u8; 20],
+}
+
+/// SPSC ring of operation descriptors.
+/// DEPTH must be a power of two for efficient modular indexing.
+#[repr(C)]
+pub struct DescriptorRing<const DEPTH: usize> {
+    /// Written by producer (partition), read by consumer (kernel).
+    pub tail: u32,
+    /// Written by consumer (kernel), read by producer (partition).
+    pub head: u32,
+    /// Fixed-size descriptor array.
+    pub descriptors: [RingDescriptor; DEPTH],
+}
+```
+
+The producer (partition) enqueues descriptors at `tail % DEPTH`,
+advances `tail`, and optionally issues a kick syscall
+(`SYS_RING_KICK`).  The consumer (kernel or server partition) drains
+from `head` to `tail`, processes each descriptor, writes the `status`
+field, and advances `head`.  The partition polls `head` or waits on
+an event flag to detect completion.
+
+#### 3.5.2  VirtIO Parallels and Batching Advantages
+
+The descriptor ring maps directly to VirtIO's split virtqueue model:
+
+| VirtIO Split Virtqueue | Approach E Ring |
+|---|---|
+| Descriptor table (fixed array of `virtq_desc`) | `descriptors: [RingDescriptor; DEPTH]` |
+| Available ring (producer → consumer) | `tail` index (partition writes, kernel reads) |
+| Used ring (consumer → producer) | `head` index + per-descriptor `status` field |
+| `virtqueue_kick()` (MMIO doorbell write) | `SYS_RING_KICK` syscall or event flag |
+| `virtqueue_notify()` (interrupt from device) | Kernel sets partition event flag on drain |
+
+VirtIO's packed virtqueue format (single descriptor + flags word
+instead of separate avail/used rings) is also representable: the
+`status` field in `RingDescriptor` serves the same role as the packed
+format's `USED` flag bit, allowing in-place completion signaling
+without a separate used ring.
+
+**Batching advantage:** If a partition needs to perform 8 SPI
+register reads, Approaches A/B/C require 8 SVCs (A) or 1 SVC with
+an 8-entry operation slice (B/C).  With Approach E the partition
+enqueues 8 `RingDescriptor` entries and issues **one** `SYS_RING_KICK`
+— or, if the kernel polls the ring during a system window, **zero**
+SVCs.  The amortized per-operation cost drops from one SVC to 1/N
+SVCs (or zero).
+
+For high-throughput peripherals (SPI flash streaming, I2C sensor
+polling at 1 kHz+, UART bulk transfers), this batching eliminates
+syscall overhead as the dominant cost.
+
+#### 3.5.3  Integration with Existing Buffer Pool
+
+The ring descriptors reference data through offsets into the existing
+`BufferPool<SLOTS, SIZE>` (`kernel/src/buffer_pool.rs`) rather than
+raw pointers.  This is critical for two reasons:
+
+1. **MPU safety.** `BufferSlot<SIZE>` is `#[repr(C, align(32))]` and
+   its backing memory is lent to partitions via
+   `DynamicStrategy::add_window`.  The ring descriptor itself lives
+   in one buffer slot; the TX/RX data lives in another.  Both are
+   valid MPU windows — no pointer validation needed beyond checking
+   that the slot index is within bounds.
+
+2. **Zero-copy path.** The producer writes TX data into a buffer pool
+   slot, enqueues a descriptor referencing that slot by index, and the
+   kernel reads the data directly from the same physical memory.
+   No `copy_from_slice` across the SVC boundary.
+
+Typical allocation pattern for an SPI transaction:
+
+```
+Partition P1:
+  slot_a = buf_pool.alloc(Write)    // TX data buffer
+  slot_b = buf_pool.alloc(Write)    // RX data buffer
+  slot_r = buf_pool.alloc(Write)    // ring descriptor buffer
+
+  // Write TX data into slot_a
+  // Enqueue RingDescriptor into slot_r's ring:
+  //   .payload.spi.tx_offset → byte offset within slot_a
+  //   .payload.spi.rx_offset → byte offset within slot_b
+
+  SYS_RING_KICK(ring_slot = slot_r)
+
+Kernel / System window:
+  // DynamicStrategy already mapped slot_r, slot_a, slot_b
+  // Drain ring: read descriptor, execute SPI, write status
+```
+
+`DynamicStrategy` provides the shared memory substrate.  The ring
+adds the structured protocol on top.
+
+#### 3.5.4  DMA Scatter-Gather Integration
+
+Ring descriptors map naturally to DMA scatter-gather lists.  Each
+`SpiRingOp` contains a buffer offset and length — the same
+(base + offset, length) pair that a DMA scatter-gather entry needs.
+When the kernel drains the ring, it can build a DMA scatter-gather
+list directly from the queued descriptors without intermediate
+copies:
+
+1. Walk descriptors from `head` to `tail`.
+2. For each SPI descriptor, compute the physical address:
+   `buffer_pool.slot_data_ptr(slot_index) + tx_offset`.
+3. Append a scatter-gather entry `(phys_addr, len)` to the DMA
+   channel's linked list.
+4. Start the DMA transfer — all N operations execute with one DMA
+   kick.
+
+This is a direct analog of how VirtIO network devices batch packet
+descriptors into a single DMA submission.  On Cortex-M chips with
+DMA scatter-gather (STM32 DMA2, nRF52 EasyDMA list mode), this
+eliminates per-descriptor CPU involvement during the transfer.
+
+For chips without hardware scatter-gather, the kernel falls back to
+sequential descriptor processing — still benefiting from the batched
+kick (one SVC for N operations) even without DMA chaining.
+
+#### 3.5.5  Summary: Approach E Trade-offs
+
+| Dimension | Rating | Notes |
+|---|---|---|
+| **Interface design cost** | High | New ring protocol ABI: descriptor format, ring layout, kick/notify semantics, completion signaling. More design surface than any single-SVC approach. |
+| **Implementation cost** | Medium-High | Ring management, buffer pool coordination, DMA scatter-gather builder. More code than B or C, but the ring is a reusable primitive across all peripheral classes. |
+| **Portability** | Low | Ring protocol is RTOS-specific. Partition code cannot use embedded-hal traits directly. However, a thin adapter wrapping ring enqueue behind `SpiDevice::transaction` is feasible. |
+| **Async support** | Natural fit | The ring is inherently asynchronous: enqueue returns immediately, completion is signaled later via status field or event flag. Maps directly to Rust `Future` / `Waker` patterns. |
+| **Syscall overhead** | Lowest | Amortized 1/N SVCs per operation (one kick per batch). Zero SVCs if the kernel polls during system windows. Best-in-class for high-throughput workloads. |
+| **Shared bus support** | Built-in | Multiple partitions can enqueue to the same ring (with per-partition tail tracking or separate rings per partition merged by the kernel). Natural fit for shared SPI/I2C buses. |
+| **DMA readiness** | Excellent | Descriptor-to-scatter-gather mapping is direct. Buffer pool slots are physically contiguous and MPU-aligned. No intermediate copies needed for DMA submission. |
+
+**When to choose Approach E:**
+
+- High-throughput peripherals where syscall overhead is measurable
+  (SPI flash streaming, bulk UART, high-frequency sensor polling).
+- Workloads that naturally batch (enqueue N reads, kick once, process
+  all completions).
+- Systems already using `BufferPool` and `DynamicStrategy` for
+  zero-copy IPC — the ring is a natural extension.
+- DMA scatter-gather hardware is available and the goal is zero-copy
+  from partition memory to peripheral with no kernel-side buffering.
+
+**When to avoid Approach E:**
+
+- Low-frequency, simple peripherals (GPIO, single-register reads)
+  where the ring protocol overhead exceeds the syscall savings.
+- Systems that need embedded-hal trait compatibility at the partition
+  surface without an adapter layer.
+- Prototyping or early development where Approach B or C's simpler
+  one-SVC model is sufficient and ring complexity is not justified.
+- MPU region pressure: the ring and data buffers each consume a
+  dynamic MPU slot (R4–R7), limiting other concurrent windows.
+
+---
+
 ## 4  Recommendation Matrix
 
 ### 4.1  Rating Scale
