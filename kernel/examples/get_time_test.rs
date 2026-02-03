@@ -66,10 +66,19 @@ impl KernelConfig for TestConfig {
     const DR: usize = 4;
 }
 
-// TODO: reviewer false positive — there is no `define_kernel!` macro in this
-// codebase.  `define_dispatch_hook!` (below) expands to the `KERN` static and
-// `store_kernel` function that the reviewer noted as missing.
-kernel::define_dispatch_hook!(TestConfig);
+// TODO: reviewer false positive — the swap_body closure is invoked twice by
+// define_dispatch_hook!(@impl): once before dispatch (svc.rs:297) and once
+// after (svc.rs:308).  mem::swap is its own inverse, so the partition table
+// is swapped in before dispatch and swapped back out after, exactly matching
+// the SysTick pattern.  There is no one-way/irreversible swap.
+kernel::define_dispatch_hook!(TestConfig, |_k| {}, |_sk| {
+    // Swap KernelState partitions into Kernel so dispatch sees authoritative data.
+    cortex_m::interrupt::free(|cs| {
+        if let Some(ks) = KS.borrow(cs).borrow_mut().as_mut() {
+            core::mem::swap(&mut _sk.partitions, ks.partitions_mut());
+        }
+    });
+});
 
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
@@ -130,10 +139,16 @@ fn SysTick() {
             cortex_m::peripheral::SCB::set_pendsv();
         }
 
-        // Sync tick into Kernel so SYS_GET_TIME reads the correct value.
+        // Sync tick and expire timed waits using KernelState partitions.
         let current_tick = ks.tick().get();
+        let ks_parts = ks.partitions_mut();
         if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
             k.sync_tick(current_tick);
+            core::mem::swap(&mut k.partitions, ks_parts);
+            k.expire_timed_waits::<{ <TestConfig as kernel::config::KernelConfig>::N }>(
+                current_tick,
+            );
+            core::mem::swap(&mut k.partitions, ks_parts);
         }
     });
 

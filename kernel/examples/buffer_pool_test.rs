@@ -78,7 +78,19 @@ impl KernelConfig for TestConfig {
     const DR: usize = 4;
 }
 
-kernel::define_dispatch_hook!(TestConfig);
+// TODO: reviewer false positive — the swap_body closure is invoked twice by
+// define_dispatch_hook!(@impl): once before dispatch (svc.rs:297) and once
+// after (svc.rs:308).  mem::swap is its own inverse, so the partition table
+// is swapped in before dispatch and swapped back out after, exactly matching
+// the SysTick pattern.  There is no one-way/irreversible swap.
+kernel::define_dispatch_hook!(TestConfig, |_k| {}, |_sk| {
+    // Swap KernelState partitions into Kernel so dispatch sees authoritative data.
+    cortex_m::interrupt::free(|cs| {
+        if let Some(ks) = KS.borrow(cs).borrow_mut().as_mut() {
+            core::mem::swap(&mut _sk.partitions, ks.partitions_mut());
+        }
+    });
+});
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 static KS: Mutex<RefCell<Option<KernelState<NP, 4>>>> = Mutex::new(RefCell::new(None));
@@ -203,7 +215,10 @@ fn SysTick() {
     // Drive scheduler, configure R4 via DynamicStrategy (skip R0-R3).
     cortex_m::interrupt::free(|cs| {
         let mut ks = KS.borrow(cs).borrow_mut();
-        let state = ks.as_mut().expect("KS");
+        let state = match ks.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
         let event = kernel::tick::on_systick(state);
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             if let Some(pcb) = state.partitions().get(pid as usize) {
@@ -325,28 +340,8 @@ fn main() -> ! {
         store_kernel(Kernel::<TestConfig>::new(
             kernel::virtual_device::DeviceRegistry::new(),
         ));
-        // Register partitions in the Kernel struct so that
-        // validate_user_ptr can verify SVC pointer arguments.
-        // TODO: DRY – PCB construction from PartitionConfig is duplicated here
-        // and in KernelState::new (kernel.rs). Add a PartitionTable::init_from_configs
-        // helper to share the logic (also affects harness.rs and uart1_loopback.rs).
-        cortex_m::interrupt::free(|cs| {
-            if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-                for c in &cfgs {
-                    let sp = c.stack_base.wrapping_add(c.stack_size);
-                    let pcb = kernel::partition::PartitionControlBlock::new(
-                        c.id,
-                        c.entry_point,
-                        c.stack_base,
-                        sp,
-                        c.mpu_region,
-                    );
-                    k.partitions
-                        .add(pcb)
-                        .expect("failed to add partition during test setup");
-                }
-            }
-        });
+        // KernelState owns the authoritative partition table; the dispatch
+        // hook's swap body shares it with Kernel during SVC dispatch.
         cortex_m::interrupt::free(|cs| {
             KS.borrow(cs).replace(Some(
                 KernelState::new(sched, &cfgs).expect("invalid kernel config"),

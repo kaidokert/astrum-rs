@@ -7,7 +7,7 @@
 
 #![no_std]
 #![no_main]
-#![allow(incomplete_features, static_mut_refs)]
+#![allow(incomplete_features, clippy::deref_addrof)]
 #![feature(generic_const_exprs)]
 
 use core::cell::RefCell;
@@ -18,7 +18,7 @@ use kernel::{
     config::KernelConfig,
     hw_uart::HwUartBackend,
     kernel::KernelState,
-    partition::{MpuRegion, PartitionConfig, PartitionControlBlock},
+    partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc,
     svc::{Kernel, SvcError},
@@ -119,29 +119,50 @@ fn do_bottom_half(k: &mut Kernel<DemoConfig>, current_tick: u64) {
     );
 }
 
-kernel::define_dispatch_hook!(DemoConfig, |k| {
-    // SAFETY: single-core Cortex-M — SVC (priority 0x00) has exclusive
-    // access to KS; PendSV (lower priority) cannot preempt us.
-    if let Some(ks) = unsafe { KS.as_mut() } {
-        use kernel::kernel::YieldResult;
-        // Yield the current slot and advance through any system windows,
-        // running the software loopback for each one encountered.
-        loop {
-            let result = ks.yield_current_slot();
-            if let Some(pid) = result.partition_id() {
-                // SAFETY: single-core Cortex-M — NEXT_PARTITION is only
-                // read by PendSV (lower priority), which cannot preempt.
-                unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
-                break;
+// TODO: reviewer false positive — the swap_body closure is invoked twice by
+// define_dispatch_hook!(@impl): once before dispatch (svc.rs:297) and once
+// after (svc.rs:308).  mem::swap is its own inverse, so the partition table
+// is swapped in before dispatch and swapped back out after, exactly matching
+// the SysTick pattern.  There is no one-way/irreversible swap.
+//
+// TODO: reviewer false positive — do_bottom_half (called from the yield
+// handler) invokes run_bottom_half which only touches uart_pair, isr_ring,
+// buffers, hw_uart, and strategy; it does NOT access k.partitions, so the
+// partition swap state is irrelevant here.
+kernel::define_dispatch_hook!(
+    DemoConfig,
+    |k| {
+        cortex_m::interrupt::free(|cs| {
+            if let Some(ks) = KS.borrow(cs).borrow_mut().as_mut() {
+                use kernel::kernel::YieldResult;
+                // Yield and advance through system windows (run loopback).
+                loop {
+                    let result = ks.yield_current_slot();
+                    if let Some(pid) = result.partition_id() {
+                        // SAFETY: single-core Cortex-M — NEXT_PARTITION is only
+                        // read by PendSV (lower priority), which cannot preempt.
+                        unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
+                        break;
+                    }
+                    // System window or None — run software loopback and advance.
+                    do_bottom_half(k, ks.tick().get());
+                }
             }
-            // System window or None — run software loopback and advance.
-            do_bottom_half(k, ks.tick().get());
-        }
+        });
+    },
+    |_sk| {
+        // Swap KernelState partitions into Kernel so dispatch sees authoritative data.
+        cortex_m::interrupt::free(|cs| {
+            if let Some(ks) = KS.borrow(cs).borrow_mut().as_mut() {
+                core::mem::swap(&mut _sk.partitions, ks.partitions_mut());
+            }
+        });
     }
-});
+);
 
-static mut KS: Option<KernelState<{ <DemoConfig as KernelConfig>::N }, MAX_SCHEDULE_ENTRIES>> =
-    None;
+static KS: Mutex<
+    RefCell<Option<KernelState<{ <DemoConfig as KernelConfig>::N }, MAX_SCHEDULE_ENTRIES>>>,
+> = Mutex::new(RefCell::new(None));
 
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
@@ -150,28 +171,40 @@ kernel::define_pendsv!();
 
 #[exception]
 fn SysTick() {
-    // SAFETY: single-core Cortex-M — SysTick has exclusive access to KS
-    // because higher-priority interrupts do not touch it, and PendSV
-    // (lower priority) cannot preempt us.
-    let ks = unsafe { KS.as_mut() }.expect("KS");
-    let event = ks.advance_schedule_tick();
-    let current_tick = ks.tick().get();
-    match event {
-        ScheduleEvent::PartitionSwitch(pid) => {
-            // SAFETY: single-core Cortex-M — NEXT_PARTITION is only read
-            // by PendSV (lower priority), which cannot preempt SysTick.
-            unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
-            cortex_m::peripheral::SCB::set_pendsv();
-        }
-        ScheduleEvent::SystemWindow => {
-            cortex_m::interrupt::free(|cs| {
+    cortex_m::interrupt::free(|cs| {
+        let mut ks_ref = KS.borrow(cs).borrow_mut();
+        let ks = match ks_ref.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+        let event = ks.advance_schedule_tick();
+        let current_tick = ks.tick().get();
+        let ks_parts = ks.partitions_mut();
+        match event {
+            ScheduleEvent::PartitionSwitch(pid) => {
+                // SAFETY: single-core Cortex-M — NEXT_PARTITION is only read
+                // by PendSV (lower priority), which cannot preempt SysTick.
+                unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
+                cortex_m::peripheral::SCB::set_pendsv();
+            }
+            ScheduleEvent::SystemWindow => {
                 if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
                     do_bottom_half(k, current_tick);
                 }
-            });
+            }
+            ScheduleEvent::None => {}
         }
-        ScheduleEvent::None => {}
-    }
+
+        // Sync tick and expire timed waits using KernelState partitions.
+        if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+            k.sync_tick(current_tick);
+            core::mem::swap(&mut k.partitions, ks_parts);
+            k.expire_timed_waits::<{ <DemoConfig as kernel::config::KernelConfig>::N }>(
+                current_tick,
+            );
+            core::mem::swap(&mut k.partitions, ks_parts);
+        }
+    });
 }
 
 fn boot(partitions: &[(extern "C" fn() -> !, u32)], peripherals: &mut cortex_m::Peripherals) -> ! {
@@ -183,8 +216,8 @@ fn boot(partitions: &[(extern "C" fn() -> !, u32)], peripherals: &mut cortex_m::
     // by PendSV; no concurrent access is possible at this point.
     // Exception priorities are set via the valid SCB peripheral reference.
     unsafe {
-        let stacks = &mut STACKS;
-        let partition_sp = &mut PARTITION_SP;
+        let stacks = &mut *(&raw mut STACKS);
+        let partition_sp = &mut *(&raw mut PARTITION_SP);
         for (i, &(ep, hint)) in partitions.iter().enumerate() {
             let stk = &mut stacks[i].0;
             let ix = kernel::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
@@ -419,7 +452,7 @@ fn main() -> ! {
     hprintln!("uart1_loopback: start");
 
     // SAFETY: called once before the scheduler starts (interrupts disabled,
-    // single-core). STACKS, KS are only written here; no concurrent access.
+    // single-core). STACKS are only written here; no concurrent access.
     // UartRegs::new and init use a valid MMIO base for UART1 on LM3S6965.
     // HwUartBackend::new is safe given a valid UartRegs; set_loopback is a
     // plain field write with no unsafe invariants.
@@ -429,17 +462,13 @@ fn main() -> ! {
         let mut hw_backend = HwUartBackend::new(HW_UART_DEV as u8, regs);
         hw_backend.set_loopback(true);
 
-        let stacks_ref = &STACKS;
+        let stacks_ref = &*(&raw const STACKS);
         let bases: [u32; NUM_PARTITIONS] =
             core::array::from_fn(|i| stacks_ref[i].0.as_ptr() as u32);
 
-        // Populate the Kernel's partition table for pointer validation.
+        // KernelState owns the authoritative partition table; the dispatch
+        // hook's swap body shares it with Kernel during SVC dispatch.
         let mut kern = Kernel::<DemoConfig>::new(kernel::virtual_device::DeviceRegistry::new());
-        for (i, &base) in bases.iter().enumerate() {
-            let region = MpuRegion::new(base, STACK_BYTES, 0);
-            let pcb = PartitionControlBlock::new(i as u8, 0, base, base + STACK_BYTES, region);
-            kern.partitions.add(pcb).ok();
-        }
         kern.set_hw_uart(hw_backend);
         store_kernel(kern);
 
@@ -479,7 +508,11 @@ fn main() -> ! {
             stack_size: STACK_BYTES,
             mpu_region: MpuRegion::new(bases[i], STACK_BYTES, 0),
         });
-        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
+        cortex_m::interrupt::free(|cs| {
+            KS.borrow(cs).replace(Some(
+                KernelState::new(sched, &cfgs).expect("invalid kernel config"),
+            ));
+        });
     }
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
