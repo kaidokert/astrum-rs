@@ -92,6 +92,10 @@ impl<const SIZE: usize> BufferSlot<SIZE> {
 
 pub struct BufferPool<const SLOTS: usize, const SIZE: usize> {
     slots: [BufferSlot<SIZE>; SLOTS],
+    /// Per-slot optional deadline (tick count). When set, the slot can be
+    /// automatically revoked by [`revoke_expired`] once the current tick
+    /// exceeds the deadline.
+    deadlines: [Option<u64>; SLOTS],
 }
 
 impl<const SLOTS: usize, const SIZE: usize> Default for BufferPool<SLOTS, SIZE> {
@@ -105,6 +109,7 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
     pub const fn new() -> Self {
         Self {
             slots: [const { BufferSlot::new() }; SLOTS],
+            deadlines: [None; SLOTS],
         }
     }
 
@@ -242,7 +247,46 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         strategy.remove_window(region_id);
         s.state = BorrowState::Free;
         s.mpu_region = None;
+        self.deadlines[slot] = None;
         Ok(())
+    }
+
+    /// Set (or clear) the deadline for a borrowed slot.
+    ///
+    /// Returns `Err(BufferError::InvalidSlot)` if the index is out of range,
+    /// or `Err(BufferError::SlotNotBorrowed)` if the slot is free.
+    pub fn set_deadline(&mut self, slot: usize, deadline: Option<u64>) -> Result<(), BufferError> {
+        let s = self.slots.get(slot).ok_or(BufferError::InvalidSlot)?;
+        if s.state == BorrowState::Free {
+            return Err(BufferError::SlotNotBorrowed);
+        }
+        self.deadlines[slot] = deadline;
+        Ok(())
+    }
+
+    /// Return the deadline for the given slot, or `None` if unset/out-of-range.
+    pub fn deadline(&self, slot: usize) -> Option<u64> {
+        self.deadlines.get(slot).copied().flatten()
+    }
+
+    /// Iterate all slots, revoking any whose deadline has passed
+    /// (`deadline <= current_tick`). Each revoked slot has its MPU window
+    /// removed via `strategy.remove_window`. Slots without a deadline
+    /// (`None`) are never revoked.
+    ///
+    /// Returns the number of slots revoked.
+    pub fn revoke_expired(&mut self, current_tick: u64, strategy: &dyn MpuStrategy) -> usize {
+        let mut count = 0usize;
+        for i in 0..SLOTS {
+            let expired = matches!(self.deadlines.get(i), Some(Some(dl)) if *dl <= current_tick);
+            if !expired {
+                continue;
+            }
+            if self.revoke_from_partition(i, strategy).is_ok() {
+                count += 1;
+            }
+        }
+        count
     }
 }
 
@@ -503,5 +547,106 @@ mod tests {
         assert_eq!(r, 6);
         assert_eq!(pool.get(1).unwrap().state(), BorrowState::BorrowedWrite { owner: 4 });
         assert_eq!(pool.get(1).unwrap().mpu_region(), Some(6));
+    }
+
+    // ------------------------------------------------------------------
+    // Deadline & revoke_expired tests
+    // ------------------------------------------------------------------
+
+    #[test] fn no_deadline_not_revoked() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+
+        pool.lend_to_partition(0, 1, false, &ds).unwrap();
+        // No deadline set — revoke_expired should skip it.
+        assert_eq!(pool.revoke_expired(1000, &ds), 0);
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedRead { owner: 1 });
+        assert!(ds.slot(5).is_some());
+    }
+
+    #[test] fn future_deadline_not_revoked() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+
+        pool.lend_to_partition(0, 1, true, &ds).unwrap();
+        pool.set_deadline(0, Some(500)).unwrap();
+        // current_tick=100 < deadline=500 — should not revoke.
+        assert_eq!(pool.revoke_expired(100, &ds), 0);
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedWrite { owner: 1 });
+        assert!(ds.slot(5).is_some());
+        assert_eq!(pool.deadline(0), Some(500));
+    }
+
+    #[test] fn expired_deadline_revoked_with_mpu_cleanup() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+
+        let rid = pool.lend_to_partition(0, 1, false, &ds).unwrap();
+        assert_eq!(rid, 5);
+        pool.set_deadline(0, Some(50)).unwrap();
+
+        // current_tick=50 == deadline=50 → expired (deadline <= current_tick).
+        assert_eq!(pool.revoke_expired(50, &ds), 1);
+
+        // Slot freed, MPU window removed, deadline cleared.
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
+        assert_eq!(pool.get(0).unwrap().mpu_region(), None);
+        assert!(ds.slot(5).is_none());
+        assert_eq!(pool.deadline(0), None);
+    }
+
+    #[test] fn mixed_deadlines_only_expired_revoked() {
+        let mut pool = BufferPool::<4, 32>::new();
+        let ds = DynamicStrategy::new();
+
+        pool.lend_to_partition(0, 1, false, &ds).unwrap(); // R5
+        pool.lend_to_partition(1, 2, true, &ds).unwrap();  // R6
+        pool.lend_to_partition(2, 3, false, &ds).unwrap(); // R7
+
+        // Slot 0: deadline in the past → should be revoked
+        pool.set_deadline(0, Some(10)).unwrap();
+        // Slot 1: no deadline → should NOT be revoked
+        // Slot 2: deadline in the future → should NOT be revoked
+        pool.set_deadline(2, Some(200)).unwrap();
+
+        let revoked = pool.revoke_expired(100, &ds);
+        assert_eq!(revoked, 1);
+
+        // Slot 0: revoked
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
+        assert!(ds.slot(5).is_none());
+        assert_eq!(pool.deadline(0), None);
+
+        // Slot 1: untouched (no deadline)
+        assert_eq!(pool.get(1).unwrap().state(), BorrowState::BorrowedWrite { owner: 2 });
+        assert!(ds.slot(6).is_some());
+
+        // Slot 2: untouched (future deadline)
+        assert_eq!(pool.get(2).unwrap().state(), BorrowState::BorrowedRead { owner: 3 });
+        assert!(ds.slot(7).is_some());
+        assert_eq!(pool.deadline(2), Some(200));
+    }
+
+    #[test] fn set_deadline_invalid_slot() {
+        let mut pool = BufferPool::<1, 32>::new();
+        assert_eq!(pool.set_deadline(5, Some(100)), Err(BufferError::InvalidSlot));
+    }
+
+    #[test] fn set_deadline_free_slot() {
+        let mut pool = BufferPool::<1, 32>::new();
+        assert_eq!(pool.set_deadline(0, Some(100)), Err(BufferError::SlotNotBorrowed));
+    }
+
+    #[test] fn revoke_from_partition_clears_deadline() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+
+        pool.lend_to_partition(0, 1, false, &ds).unwrap();
+        pool.set_deadline(0, Some(999)).unwrap();
+        assert_eq!(pool.deadline(0), Some(999));
+
+        // Manual revoke should also clear the deadline.
+        pool.revoke_from_partition(0, &ds).unwrap();
+        assert_eq!(pool.deadline(0), None);
     }
 }
