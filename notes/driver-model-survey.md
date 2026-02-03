@@ -2149,3 +2149,283 @@ The partition proxy is **chip-independent** — porting is kernel-only.
 but the kernel must use `VirtualDevice` (dyn-compatible) internally.
 The async facade is cosmetic — it pays the complexity cost of the async
 surface without gaining async behavior, because SVCs are synchronous.
+
+---
+
+### 3.2  Approach B — Kernel-Owned embedded-hal + Virtual Device Mirror
+
+The kernel itself implements `embedded_hal::spi::SpiDevice` (blocking)
+using the chip's PAC directly.  Partitions do **not** see embedded-hal
+traits at all.  Instead, each partition calls a single batched syscall
+whose shape mirrors `SpiDevice::transaction` — sending an operation
+descriptor that the kernel executes atomically against the real
+hardware.  This eliminates per-operation SVC overhead by design.
+
+#### 3.2.1  Kernel-Side: embedded-hal SPI Impl over PAC
+
+The kernel owns a concrete `SpiMaster` that implements the blocking
+`embedded_hal::spi::SpiDevice` trait.  This impl talks directly to
+PAC registers; no SVC boundary is involved.
+
+```rust
+use embedded_hal::spi::{self, ErrorType, Operation, SpiDevice};
+
+pub struct SpiMaster { /* regs: &'static pac::SPI1, cs: GpioPin */ }
+
+#[derive(Debug)]
+pub struct SpiHalError;
+impl spi::Error for SpiHalError {
+    fn kind(&self) -> spi::ErrorKind { spi::ErrorKind::Other }
+}
+impl ErrorType for SpiMaster { type Error = SpiHalError; }
+
+impl SpiDevice for SpiMaster {
+    fn transaction(
+        &mut self, operations: &mut [Operation<'_, u8>],
+    ) -> Result<(), Self::Error> {
+        self.cs_assert();
+        for op in operations {
+            match op {
+                Operation::Read(buf) => {
+                    for b in buf.iter_mut() {
+                        self.regs_write_dr(0xFF); // clock out dummy
+                        self.wait_rxne();
+                        *b = self.regs_read_dr();
+                    }
+                }
+                Operation::Write(data) => {
+                    for &b in data.iter() {
+                        self.regs_write_dr(b);
+                        self.wait_txe();
+                    }
+                    self.wait_not_busy();
+                }
+                Operation::Transfer(rd, wr) => { /* full-duplex DR xfer */ }
+                Operation::TransferInPlace(buf) => { /* in-place DR xfer */ }
+                Operation::DelayNs(ns) => {
+                    cortex_m::asm::delay(ns_to_cycles(*ns));
+                }
+            }
+        }
+        self.cs_deassert();
+        Ok(())
+    }
+}
+```
+
+Key properties:  (1) **Standard blocking embedded-hal** — any driver
+crate accepting `impl SpiDevice` works unmodified in the kernel.
+(2) **dyn-compatible** — blocking traits avoid the `async fn` object-
+safety problem; the kernel can store `&mut dyn SpiDevice<Error=E>`.
+(3) **Full hardware control** — CS, timing, busy-waits all kernel-side.
+
+#### 3.2.2  Partition-Side: Virtual Device Batched Syscall API
+
+Partitions do not use embedded-hal traits.  They use a kernel-native
+API that mirrors the *shape* of `SpiDevice::transaction` as a single
+batched syscall.
+
+```rust
+/// Operation descriptor passed from partition to kernel.
+/// Mirrors embedded_hal::spi::Operation but uses raw pointers
+/// for cross-partition transfer via the SVC ABI.
+#[repr(C)]
+pub enum SpiOp {
+    Read  { buf: *mut u8, len: u16 },
+    Write { data: *const u8, len: u16 },
+    Transfer { rd: *mut u8, wr: *const u8, len: u16 },
+    TransferInPlace { buf: *mut u8, len: u16 },
+    DelayNs(u32),
+}
+
+/// Partition-side SPI handle — analogous to SpiProxy from Approach A
+/// but the transaction is a single SVC, not per-operation.
+pub struct SpiHandle { device_id: u8 }
+
+/// Error type for partition SPI calls.
+#[derive(Debug)]
+pub struct SpiError(u32);
+
+impl SpiHandle {
+    /// Execute a complete SPI transaction as a single syscall.
+    /// The kernel asserts CS, executes all operations against real
+    /// hardware, deasserts CS, and returns the result.
+    ///
+    /// Mirrors SpiDevice::transaction() but is RTOS-native:
+    /// one SVC regardless of operation count.
+    pub fn transaction(&self, ops: &mut [SpiOp]) -> Result<(), SpiError> {
+        // r1 = device_id, r2 = ops.len(), r3 = ops.as_ptr()
+        let rc = svc!(SYS_SPI_TRANSACTION,
+                       self.device_id as u32,
+                       ops.len() as u32,
+                       ops.as_mut_ptr() as u32);
+        if rc & 0x8000_0000 != 0 { Err(SpiError(rc)) } else { Ok(()) }
+    }
+
+    /// Convenience: write then read in one transaction (common
+    /// sensor pattern: write command byte, read N data bytes).
+    pub fn write_then_read(
+        &self, cmd: &[u8], response: &mut [u8],
+    ) -> Result<(), SpiError> {
+        let mut ops = [
+            SpiOp::Write { data: cmd.as_ptr(), len: cmd.len() as u16 },
+            SpiOp::Read { buf: response.as_mut_ptr(),
+                          len: response.len() as u16 },
+        ];
+        self.transaction(&mut ops)
+    }
+}
+```
+
+The kernel-side handler for `SYS_SPI_TRANSACTION`:
+
+1. Validates the `ops` slice pointer via `validate_user_ptr`.
+2. Validates each individual buffer pointer within `SpiOp` entries.
+3. Translates `SpiOp` entries to `embedded_hal::spi::Operation`.
+4. Calls `SpiMaster::transaction()` (the real embedded-hal impl).
+5. Returns success or maps `SpiHalError` to an error code.
+
+#### 3.2.3  Syscall Count Analysis: Write-1 / Read-4 SPI Transaction
+
+Typical SPI sensor read: write 1 command byte, read 4 data bytes,
+single CS assertion.  Comparing with Approach A:
+
+| Approach | SVCs | Description |
+|----------|:----:|-------------|
+| **A: SpiProxy::transaction()** | **4** | CS_ASSERT + DEV_WRITE + DEV_READ + CS_DEASSERT |
+| **A: Batched SYS_SPI_TRANSACTION** | **1** | Hypothetical; couples kernel to Operation ABI |
+| **B: SpiHandle::transaction()** | **1** | Kernel receives SpiOp slice, executes all internally |
+| **B: write_then_read()** | **1** | Convenience wrapper; same single SVC |
+
+**Approach B achieves 1 SVC by design**, not as an optimization added
+later.  The API *is* the batched transaction — there are no individual
+read/write syscalls to accidentally use.
+
+**SVC cost comparison** at 168 MHz Cortex-M4 (~70 cycles/SVC):
+
+| | Approach A (4 SVCs) | Approach B (1 SVC) |
+|---|:---:|:---:|
+| Overhead | ~280 cycles / 1.7 µs | ~70 cycles / 0.4 µs |
+| % of 1 MHz SPI transfer (5 bytes) | 0.7% | 0.2% |
+
+The absolute savings are modest for slow SPI.  For high-rate polling
+(accelerometer at 1 kHz, 6-byte reads), Approach A costs 4000 SVCs/s
+vs. Approach B's 1000 SVCs/s — a 4× reduction in dispatch overhead.
+
+#### 3.2.4  Async / Blocking Boundary Analysis
+
+**No impedance mismatch.**  Approach B uses blocking embedded-hal on
+the kernel side and blocking SVCs on the partition side — the boundary
+is naturally synchronous in both directions.
+
+| Aspect | Approach A | Approach B |
+|--------|-----------|-----------|
+| Partition API | `async fn` (resolves immediately) | Blocking fn |
+| Kernel impl | VirtualDevice (blocking) | embedded-hal blocking |
+| Async executor needed | No (async is cosmetic) | No |
+| Waker plumbing | N/A (not truly async) | N/A |
+
+**Interrupt-driven completion:** For long DMA transfers, the kernel
+blocks the calling partition (transitions to `Waiting`), starts DMA,
+and the DMA-complete ISR wakes the partition via `event_set` through
+the existing bottom-half path.  The partition's `transaction()` SVC
+returns only after the entire operation completes — no partial results,
+no multi-SVC state to track.
+
+**True async extension:** If partition-level async is ever needed, it
+is simpler under Approach B: one SVC → one wakeup, versus Approach A's
+4 SVCs each needing coordination.
+
+#### 3.2.5  Error Propagation: HAL Errors → SvcError
+
+The kernel translates HAL-level errors to RTOS error codes at a
+single point — the `SYS_SPI_TRANSACTION` handler.
+
+```
+SpiHalError → SvcError::OperationFailed (0xFFFF_FFFA)
+  → partition r0 = 0xFFFF_FFFA → SpiError(0xFFFF_FFFA)
+```
+
+Extended error encoding (same scheme as Approach A §3.1.5):
+
+```
+0x8000_0000 | (SVC_CLASS_SPI << 16) | hal_error_variant
+```
+
+| Error Source | Approach A | Approach B |
+|---|---|---|
+| HAL hardware error | Mapped through VirtualDevice → DeviceError → SvcError | Mapped directly from SpiHalError → SvcError |
+| Pointer validation | SvcError::InvalidPointer per SVC | SvcError::InvalidPointer once |
+| Device not open | Per-SVC DeviceError::NotOpen | Once at transaction start |
+| Partial failure | Mid-transaction; CS may be stuck | Kernel handles cleanup (CS deassert in drop/error path) |
+
+**Approach B advantage:** error handling is atomic.  If byte 3 of a
+5-byte read fails, the kernel deasserts CS and returns an error.  In
+Approach A, the partition must handle mid-transaction errors across
+multiple SVC calls while CS is asserted — this is error-prone and
+can leave CS stuck low if the partition panics between SVCs.
+
+#### 3.2.6  DMA Integration
+
+DMA is straightforward under Approach B because the kernel owns both
+the SPI peripheral and the DMA controller.  Flow: partition calls
+`SYS_SPI_TRANSACTION` → kernel validates all buffer pointers once →
+asserts CS → for large ops, configures DMA and blocks partition →
+DMA-complete ISR wakes via bottom-half → deasserts CS → returns.
+
+| Aspect | Approach A | Approach B |
+|--------|-----------|-----------|
+| DMA setup per SVC | Yes — each DEV_WRITE/READ reconfigures DMA | No — kernel batches |
+| CS held across DMA | Partition trusts kernel across 4 SVCs | Kernel holds CS natively |
+| Buffer validation | Per-SVC (4×) | Once at transaction start |
+| Scatter-gather | Requires per-op DMA; no cross-op batching | Kernel can chain DMA descriptors across ops |
+
+The kernel's `BufferPool` (dynamic-mpu feature) provides DMA-safe
+buffers directly.  nRF52840 EasyDMA RAM-only constraints are checked
+once at transaction start rather than per-SVC.
+
+#### 3.2.7  Porting Effort per Chip Family
+
+| Aspect | STM32F4 | SAMD51 | nRF52840 |
+|--------|---------|--------|----------|
+| Kernel SpiMaster impl | ~200 lines | ~250 lines (SYNCBUSY) | ~150 lines |
+| embedded-hal SpiDevice | Yes — standard trait | Yes | Yes |
+| Clock setup | RCC APB enable | MCLK + GCLK | None |
+| Pin mux | AFRL/AFRH | PMUX + PINCFG | PSEL registers |
+| DMA | Stream/channel config | DMAC trigger routing | EasyDMA built-in |
+| Extra validation | — | — | RAM-only buffer check |
+| New syscalls | 1 (SYS_SPI_TRANSACTION) | 1 (shared) | 1 (shared) |
+| Partition API change | **None** | **None** | **None** |
+
+Porting requires a new `SpiMaster` impl using that chip's PAC.
+The partition-side `SpiHandle` and `SpiOp` are **chip-independent**.
+Unlike Approach A's `VirtualDevice` (RTOS-specific), `SpiMaster` can
+leverage existing HAL crates (stm32f4xx-hal, atsamd-hal, nrf-hal).
+
+#### 3.2.8  Summary: Approach B Trade-offs
+
+| Dimension | Assessment |
+|-----------|------------|
+| **API familiarity** | Medium — partition API is RTOS-native, not embedded-hal |
+| **dyn-compatibility** | **Yes** — blocking SpiDevice is object-safe |
+| **Async benefit** | N/A — no async surface; blocking end-to-end |
+| **Syscall overhead** | **1 SVC per transaction** (vs. 2–4 in Approach A) |
+| **Error fidelity** | High — single translation point; atomic cleanup |
+| **Waker complexity** | None |
+| **DMA path** | **Straightforward** — kernel owns hardware + DMA natively |
+| **Porting effort** | 150–250 lines kernel-side; 0 lines partition-side |
+| **Compile-time safety** | Medium — SpiOp is typed; device_id is runtime u8 |
+| **Ecosystem reuse** | **High** — kernel can use existing HAL crates + driver crates |
+| **Transaction atomicity** | **Yes** — CS held by kernel throughout; error cleanup guaranteed |
+
+**Contrast with Approach A:**
+
+| | Approach A | Approach B |
+|---|---|---|
+| Partition sees | embedded-hal-async traits | RTOS-native batched API |
+| SVCs per transaction | 2–4 (or 1 with dedicated batched SVC) | 1 (by design) |
+| Kernel driver layer | VirtualDevice (custom trait) | embedded-hal (standard trait) |
+| Existing HAL crate reuse | Not directly (must wrap in VirtualDevice) | Direct (SpiMaster can delegate) |
+| Transaction atomicity | Partition-managed (fragile) | Kernel-managed (robust) |
+| async fn in partition | Yes (cosmetic) | No |
+| dyn dispatch in kernel | VirtualDevice (dyn-compatible) | SpiDevice (dyn-compatible) |
