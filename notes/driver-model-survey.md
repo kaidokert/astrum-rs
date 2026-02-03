@@ -2,9 +2,12 @@
 
 This document surveys the `embedded-hal` 1.0 trait ecosystem to inform the
 design of a partition-facing hardware abstraction layer for the RTOS. The
-kernel uses ARINC 653-inspired static partitioning with MPU isolation; driver
-access from partitions must go through kernel-mediated trait objects (`dyn`)
-so the kernel can enforce access control and scheduling policy.
+kernel uses ARINC 653-inspired static partitioning with MPU isolation.
+Five architectural approaches are evaluated: (A) embedded-hal-async facade
+over SVCs, (B) kernel-owned embedded-hal with virtual device mirror,
+(C) pure RTOS-native syscall API, (D) user-space drivers with MPU
+peripheral pass-through, and (E) shared memory ring buffers (VirtIO style).
+The revised recommendation (Section 4.3) proposes a D-first hybrid strategy.
 
 Pin version: **embedded-hal 1.0.0** ([docs.rs](https://docs.rs/embedded-hal/1.0.0/embedded_hal/)).
 
@@ -3516,6 +3519,9 @@ Each requires a targeted prototype to produce concrete data.
 
 ### 5.1  Waker Plumbing Feasibility for Async Traits
 
+**Priority:** Low — primarily relevant to Approach A, which is not part
+of the recommended hybrid strategy.
+
 **Question:** Can `embedded_hal_async` trait methods be implemented over
 synchronous SVCs without a real async runtime, and what is the cost?
 
@@ -3534,6 +3540,9 @@ size overhead of the async state machine vs. a plain function call.
 
 ### 5.2  dyn Dispatch Overhead Measurement
 
+**Priority:** Low — relevant to Approach B (fallback path only); under
+the D-first strategy, most peripheral calls bypass the kernel entirely.
+
 **Question:** What is the per-call overhead of `dyn SpiDevice` dispatch
 in the kernel compared to static dispatch, and does it matter relative
 to SVC entry/exit cost?
@@ -3551,6 +3560,9 @@ vtable dispatch to the same impl, (c) full SVC round-trip including
 fraction of the total cost is vtable overhead.
 
 ### 5.3  DMA Buffer Ownership Across Partition Boundary
+
+**Priority:** Medium — still relevant for Approach E ring buffers and
+the Approach B fallback, but less urgent than D-specific questions.
 
 **Question:** How should DMA buffer ownership be managed when the
 kernel performs DMA on behalf of a partition, given MPU isolation?
@@ -3571,6 +3583,9 @@ double-mapping, correct data after preemption during transfer.
 
 ### 5.4  Manual Vtable for dyn-Compatible embedded-hal-async
 
+**Priority:** Low — only needed if Approach A is revisited; the D-first
+strategy does not use kernel-side dyn dispatch for peripheral access.
+
 **Question:** Can `embedded_hal_async` traits be made dyn-compatible
 via a hand-written vtable that erases the `Future` return type?
 
@@ -3588,7 +3603,10 @@ the vtable produces correct results, (c) code size overhead vs. direct
 `dyn` dispatch on blocking traits. If the overhead exceeds 5% of a
 direct blocking `dyn` call, the approach is not worthwhile.
 
-### 5.5  Latency Impact of Batched vs. Per-Call Syscalls
+### 5.5  Latency Impact of Batched vs. Per-Call Syscalls (Approach A vs. B/C)
+
+**Priority:** Low — compares Approach A vs. B/C syscall paths; under
+the D-first strategy, dedicated peripherals use zero syscalls.
 
 **Question:** What is the measurable latency difference between a
 single batched `SYS_SPI_TRANSACT` syscall (Approach B/C) and multiple
@@ -3610,6 +3628,9 @@ negligible.
 
 ### 5.6  Porting Effort Validation: STM32F4 SPI via Approach B
 
+**Priority:** Medium — useful for validating the Approach B fallback
+path cost, but not on the critical path for the D-first strategy.
+
 **Question:** How many lines of code does it actually take to port
 Approach B to a real chip family (STM32F4), and how much of the
 existing `stm32f4xx-hal` crate can be reused?
@@ -3628,6 +3649,61 @@ over Approach C may be smaller than estimated.
 surface used, (c) lines of PAC register access needed despite using
 the HAL crate. Compare against an equivalent Approach C
 implementation using only `stm32f4` PAC registers.
+
+### 5.7  Peripheral Ownership Conflict Detection
+
+**Priority:** High — directly supports Approach D, the recommended
+default strategy.
+
+**Question:** How can the build system statically verify that no two
+partitions claim the same peripheral register block?
+
+**Why it matters:** Approach D grants partitions direct MPU access to
+peripheral MMIO regions. If two partitions are accidentally configured
+with overlapping peripheral base addresses, both will be granted access
+to the same hardware — violating the isolation model silently at
+runtime. Unlike memory region overlaps (which the MPU can fault on),
+peripheral register conflicts may produce intermittent bus contention
+or corrupted peripheral state that is difficult to diagnose.
+
+**Prototype:** Implement a `validate_peripheral_ownership` function
+(callable from `KernelState::new` or a separate build-time check) that
+iterates all `PartitionConfig` entries and verifies that no two
+partitions' MPU peripheral regions overlap. The check should compare
+`(base_address, base_address + region_size)` intervals for all
+peripheral-type MPU regions across all partitions. Return a
+`ConfigError::PeripheralConflict { partition_a, partition_b, base }`
+on overlap. Additionally, explore whether a `const fn` version can
+catch conflicts at compile time using `assert!` in a `const` context,
+providing zero-runtime-cost validation.
+
+### 5.8  Ring Buffer Throughput Measurement
+
+**Priority:** High — directly supports Approach E, recommended for
+high-throughput batched I/O paths.
+
+**Question:** What is the throughput (operations/second) of a shared
+memory ring buffer for partition-to-kernel communication compared to
+per-syscall SVC dispatch?
+
+**Why it matters:** Approach E (Section 3.5) proposes shared memory
+descriptor rings as the transport for high-throughput peripheral I/O.
+The recommendation assumes ring buffers amortize syscall overhead
+effectively, but this has not been measured. If the ring buffer
+protocol overhead (descriptor management, memory barriers, doorbell
+SVCs) approaches the cost of individual SVCs, Approach E provides
+no advantage over Approach B/C for moderate data rates.
+
+**Prototype:** Implement a minimal `IsrRingBuffer`-based SPI sensor
+polling loop on QEMU. One partition enqueues SPI read descriptors into
+a shared ring buffer; the kernel (or a system window bottom-half)
+dequeues, performs the SPI transaction, and writes results back. Measure
+DWT CYCCNT for: (a) N sensor reads via N individual `SYS_SPI_TRANSACT`
+SVCs (Approach B/C baseline), (b) N sensor reads via ring buffer with
+a single doorbell SVC per batch (Approach E). Test N = 1, 4, 16, 64
+to find the crossover point where batching outperforms per-call
+dispatch. Report: operations/second, cycles/operation, and the minimum
+batch size at which Approach E breaks even.
 
 ---
 
