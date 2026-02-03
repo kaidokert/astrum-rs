@@ -2842,4 +2842,75 @@ mod tests {
         assert_eq!(k.partitions.get(0).unwrap().state(), PartitionState::Ready);
         assert!(k.dev_wait_queue.is_empty());
     }
+
+    // --- sync_tick dispatch integration tests ---
+
+    #[test]
+    fn sync_tick_then_get_time_returns_synced_value() {
+        let mut k = kernel(0, 0, 0);
+        k.sync_tick(42);
+        let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        // SAFETY: test-only dispatch on a valid ExceptionFrame.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 42);
+    }
+
+    #[test]
+    fn sync_tick_overwrite_returns_latest_value() {
+        let mut k = kernel(0, 0, 0);
+        k.sync_tick(5);
+        let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        // SAFETY: test-only dispatch on a valid ExceptionFrame.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 5);
+
+        k.sync_tick(10);
+        let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        // SAFETY: test-only dispatch on a valid ExceptionFrame.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 10);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn sync_tick_affects_buffer_alloc_deadline() {
+        use crate::syscall::SYS_BUF_ALLOC;
+
+        let mut k = kernel(0, 0, 0);
+        // Sync tick to 100, then alloc with timeout=50 → deadline should be 150.
+        k.sync_tick(100);
+        let mut ef = frame(SYS_BUF_ALLOC, 1, 50);
+        // SAFETY: test-only dispatch on a valid ExceptionFrame.
+        unsafe { k.dispatch(&mut ef) };
+        let slot = ef.r0 as usize;
+        assert_eq!(k.buffers.deadline(slot), Some(150));
+    }
+
+    #[test]
+    fn sync_tick_expire_timed_waits_uses_synced_tick() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+
+        let mut k = kernel(0, 0, 0);
+        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+
+        // Sync tick to 100, then dispatch a timed recv with timeout=50.
+        // The dispatch handler reads self.tick.get() (100) as current_tick,
+        // so the receiver blocks with expiry = 100 + 50 = 150.
+        k.sync_tick(100);
+        let ptr = low32_buf(0);
+        let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 50, ptr as u32);
+        // SAFETY: test-only dispatch on a valid ExceptionFrame.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(k.queuing.get(dst).unwrap().pending_receivers(), 1);
+
+        // Expire at the synced deadline tick.
+        k.expire_timed_waits::<8>(150);
+        assert_eq!(k.partitions.get(0).unwrap().state(), PartitionState::Ready);
+    }
 }
