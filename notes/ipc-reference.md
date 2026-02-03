@@ -53,12 +53,14 @@ Defined in `kernel/src/syscall.rs`. Number 1 is reserved (gap).
 | 24     | `SYS_DEV_WRITE`     | `DevWrite`        | Write to virtual device      | `dynamic-mpu` |
 | 25     | `SYS_DEV_IOCTL`     | `DevIoctl`        | Device I/O control           | `dynamic-mpu` |
 | 26     | `SYS_BUF_WRITE`     | `BufferWrite`     | Write data to buffer slot    | `dynamic-mpu` |
+| 29     | `SYS_DEV_CLOSE`     | `DevClose`        | Close virtual device         | `dynamic-mpu` |
+| 30     | `SYS_DEV_READ_TIMED`| `DevReadTimed`    | Blocking device read         | `dynamic-mpu` |
 
 Total: 19 base syscalls spanning numbers 0-19 (number 1 is reserved and
-returns `InvalidSyscall`). When the `dynamic-mpu` feature is enabled, 7
-additional syscalls (20-26) bring the total to 26. The first invalid
-number is 20 (without `dynamic-mpu`) or 27 (with it); all invalid
-numbers return `SvcError::InvalidSyscall`.
+returns `InvalidSyscall`). When the `dynamic-mpu` feature is enabled, 9
+additional syscalls (20-26, 29-30) bring the total to 28. The first
+invalid number is 20 (without `dynamic-mpu`) or 31 (with it); all
+invalid numbers return `SvcError::InvalidSyscall`.
 
 ## 2. Register Calling Convention
 
@@ -108,6 +110,8 @@ User partitions never supply their own PID in a register.
 | DevRead          | device_id      | buf_len      | buf_ptr     | byte count or error |
 | DevWrite         | device_id      | data_len     | data_ptr    | byte count or error |
 | DevIoctl         | device_id      | cmd          | arg         | result or error     |
+| DevClose         | device_id      | —            | —           | 0 or error          |
+| DevReadTimed     | device_id      | timeout_ticks| buf_ptr     | byte count or error |
 
 <!-- Note: Some dispatch paths in svc.rs pass frame.r2 as the caller
      parameter rather than using Kernel.current_partition. The table
@@ -145,9 +149,10 @@ fails, the syscall returns `SvcError::InvalidPointer` (`0xFFFF_FFF9`)
 without performing any operation. The validated syscalls are: MsgSend,
 MsgRecv, SamplingWrite, SamplingRead, QueuingSend, QueuingRecv,
 QueuingStatus, BbDisplay, BbRead, and (with `dynamic-mpu`) BufferWrite,
-DevRead, and DevWrite. Syscalls that pass integer arguments rather than
-pointers (e.g., DevOpen passes a device ID, DevIoctl passes opaque
-command/argument values) do not require pointer validation.
+DevRead, DevWrite, and DevReadTimed. Syscalls that pass integer
+arguments rather than pointers (e.g., DevOpen passes a device ID,
+DevIoctl passes opaque command/argument values, DevClose passes a
+device ID) do not require pointer validation.
 
 ## 4. Sampling Ports
 
@@ -502,7 +507,7 @@ and [§11.2](architecture.md#112-buffer-pool-memory-model).
 BufferSlot<const SIZE: usize>    (#[repr(C, align(32))])
     data:       [u8; SIZE]       // Fixed-size byte buffer (32-byte aligned)
     state:      BorrowState      // Free | BorrowedRead{owner} | BorrowedWrite{owner}
-    mpu_region: Option<u8>       // MPU region ID (5-7) set by lend_to_partition
+    mpu_region: Option<u8>       // MPU region ID (R4-R7) set by lend_to_partition
 
 BufferPool<const SLOTS: usize, const SIZE: usize>
     slots: [BufferSlot<SIZE>; SLOTS]
@@ -566,10 +571,11 @@ For cross-partition buffer sharing, the pool coordinates with
 must be `Free`. Computes the slot's physical base address and builds
 an MPU RASR value with `AP_RO_RO` (read-only) or `AP_FULL_ACCESS`
 (writable). Calls `strategy.add_window()` to claim a dynamic MPU
-region (R5-R7). On success, transitions the slot to `BorrowedRead`
-or `BorrowedWrite` and records the MPU region ID. Returns the region
-ID (5-7) or `BufferError::MpuWindowExhausted` if all 3 dynamic
-window slots are occupied.
+region (R4-R7; slot 0/R4 holds the partition's private RAM, slots
+1-3/R5-R7 are ad-hoc windows). On success, transitions the slot to
+`BorrowedRead` or `BorrowedWrite` and records the MPU region ID.
+Returns the region ID or `BufferError::MpuWindowExhausted` if all
+dynamic window slots are occupied.
 
 **revoke_from_partition(slot, strategy)** — Removes the MPU window
 via `strategy.remove_window(region_id)` and returns the slot to
@@ -583,10 +589,11 @@ field (placed first) is always 32-byte aligned — the minimum MPU
 region alignment for sizes >= 32. The `SIZE` const generic must be a
 power-of-two >= 32 for MPU compatibility.
 
-Dynamic MPU regions R5-R7 are managed by `DynamicStrategy`. Static
-partition regions (R0-R3: code, data, background, stack guard) are
-never disturbed by buffer lending. At most 3 buffer slots can be
-simultaneously lent across the system.
+Dynamic MPU regions R4-R7 are managed by `DynamicStrategy`. Slot 0
+(R4) holds the partition's private RAM; slots 1-3 (R5-R7) are ad-hoc
+windows for buffer lending. Static partition regions (R0-R3: code,
+data, background, stack guard) are never disturbed. At most 3 buffer
+slots can be simultaneously lent via the ad-hoc window slots.
 
 ## 11. Virtual Devices
 
@@ -616,16 +623,20 @@ own PID.
 ### DeviceError enum
 
 ```
-DeviceError { NotFound, PermissionDenied, NotOpen, BufferFull, BufferEmpty, InvalidPartition }
+DeviceError {
+    NotFound, PermissionDenied, NotOpen, AlreadyOpen,
+    BufferFull, BufferEmpty, InvalidPartition,
+    RegistryFull, DuplicateId
+}
 ```
 
 ### DeviceRegistry
 
 `DeviceRegistry<'a, const N: usize>` is a fixed-capacity array of
 `&mut dyn VirtualDevice` references with O(n) lookup by device ID.
-`add()` panics on duplicate IDs or full registry (these are
-configuration errors at init time). `get_mut(id)` returns a mutable
-trait object or `None`.
+`add()` returns `Result<(), DeviceError>` — `Err(DuplicateId)` if the
+device ID is already registered, `Err(RegistryFull)` if the registry is
+at capacity. `get_mut(id)` returns a mutable trait object or `None`.
 
 ### VirtualUartBackend
 
@@ -644,7 +655,10 @@ Ring buffer capacity is 64 bytes (`VirtualUartBackend::CAPACITY`).
 
 **Open/close**: Sets/clears a bit in `open_partitions`. Multiple
 partitions can open the same UART simultaneously (bitmask, not
-exclusive). Partition IDs >= 8 return `InvalidPartition`.
+exclusive). Partition IDs >= 8 return `InvalidPartition`. Note that
+`VirtualUartBackend` allows re-opening an already-open partition
+(idempotent); `HwUartBackend` rejects this with `AlreadyOpen` (see
+below).
 
 **Write** (via trait): Pushes bytes into the TX ring buffer. Returns
 the number of bytes enqueued (may be less than requested if the buffer
@@ -679,12 +693,36 @@ In the kernel's system-window tick handler, `transfer()` is called
 during bottom-half processing to move data between the two UART
 endpoints.
 
+<!-- TODO: Reviewer flagged HwUartBackend details as out-of-scope for the
+     DeviceError/DeviceRegistry/new-syscalls subtask. Kept here because it
+     documents the AlreadyOpen DeviceError variant in context; consider
+     splitting into a separate diff if the reviewer insists. -->
+
+### HwUartBackend
+
+Source: `kernel/src/hw_uart.rs`. A hardware-backed UART device that
+implements `VirtualDevice` using real UART registers (via `UartRegs`
+from `kernel/src/uart_hal.rs`).
+
+Behavioral differences from `VirtualUartBackend`:
+
+- **open()** returns `Err(DeviceError::AlreadyOpen)` if the partition
+  has already opened this device. `VirtualUartBackend` allows
+  idempotent re-opens.
+- **ISR top-half**: `isr_rx_to_ring()` drains hardware RX FIFO into
+  the software RX ring buffer; `drain_tx_to_hw()` flushes the TX ring
+  buffer to the hardware TX FIFO. These are called from interrupt
+  context (or, in loopback mode, from the bottom-half).
+- **Loopback mode**: When `set_loopback(true)` is called,
+  `drain_tx_to_hw` copies TX bytes directly into the RX ring buffer
+  instead of writing to hardware registers. Used for testing without
+  real UART hardware.
+
 ### Syscall semantics
 
 **SYS_DEV_OPEN (22)** — `r1` = device ID. Looks up the device via
-`dev_dispatch`, which calls `self.uart_pair.get_mut(device_id)` on the
-kernel's `VirtualUartPair`, and then calls `open(current_partition)`.
-Returns 0 on success.
+`dev_dispatch` (see below) and calls `open(current_partition)`. Returns
+0 on success.
 
 **SYS_DEV_READ (23)** — `r1` = device ID, `r2` = buffer length,
 `r3` = buffer pointer (validated). Calls `read(pid, buf)` on the
@@ -699,6 +737,22 @@ device. Returns byte count written.
 the IOCTL result value. No pointer validation (r2/r3 are opaque
 integers).
 
-All device syscalls use `dev_dispatch` in svc.rs, which resolves the
-device ID from `r1`, injects `current_partition` as the PID, and maps
-`DeviceError` variants to `SvcError` codes.
+**SYS_DEV_CLOSE (29)** — `r1` = device ID. Calls `close(pid)` on
+the device. Returns 0 on success.
+
+**SYS_DEV_READ_TIMED (30)** — `r1` = device ID, `r2` = timeout ticks
+(0 = non-blocking), `r3` = buffer pointer (validated, 1-byte read).
+Attempts a single-byte read. If no data is available and `timeout > 0`,
+the caller is blocked on a `DeviceWaitQueue` with
+`expiry = current_tick + timeout`. If `timeout == 0`, returns 0
+immediately. Blocked readers are woken during bottom-half processing
+when new RX data arrives.
+
+### dev_dispatch helper
+
+All device syscalls use `Kernel::dev_dispatch` in svc.rs, which looks
+up the device by ID via `self.registry.get_mut(device_id)` (the
+`DeviceRegistry`), injects `current_partition` as the PID, and maps
+`DeviceError` variants to `SvcError` codes. Returns
+`SvcError::InvalidResource` if the device ID is not found in the
+registry, or `SvcError::OperationFailed` on any `DeviceError`.
