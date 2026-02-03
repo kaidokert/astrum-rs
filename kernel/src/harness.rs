@@ -286,14 +286,16 @@ macro_rules! define_harness {
                 &HARNESS_STRATEGY
             );
 
-            // Expire timed waits (queuing ports, blackboards) each tick so
-            // blocked partitions are woken when their timeout elapses.
-            // Performed inside the same interrupt::free as the KERN borrow
-            // to keep tick processing atomic with respect to other
-            // interrupt-free sections.
+            // Synchronize Kernel.tick with the authoritative KernelState.tick
+            // and expire timed waits (queuing ports, blackboards) each tick.
+            // sync_tick ensures that subsequent SVC dispatches (which read
+            // Kernel.tick) see the correct monotonic value.  Both operations
+            // share a single interrupt::free / KERN borrow to keep tick
+            // processing atomic with respect to other interrupt-free sections.
             let current_tick = ks.tick().get();
             ::cortex_m::interrupt::free(|cs| {
                 if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+                    k.sync_tick(current_tick);
                     k.expire_timed_waits::<{ <$Config as $crate::config::KernelConfig>::N }>(
                         current_tick,
                     );
