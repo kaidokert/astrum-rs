@@ -84,6 +84,10 @@ name = "priv_fault_test"
 required-features = ["qemu"]
 
 [[example]]
+name = "get_time_test"
+required-features = ["qemu"]
+
+[[example]]
 name = "mpu_dynamic"
 required-features = ["qemu", "dynamic-mpu"]
 
