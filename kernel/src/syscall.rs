@@ -38,6 +38,8 @@ pub const SYS_DEV_WRITE: u32 = 24;
 pub const SYS_DEV_IOCTL: u32 = 25;
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_WRITE: u32 = 26;
+#[cfg(feature = "dynamic-mpu")]
+pub const SYS_DEV_CLOSE: u32 = 29;
 
 /// Typed syscall identifier for use in the kernel dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +79,8 @@ pub enum SyscallId {
     DevIoctl,
     #[cfg(feature = "dynamic-mpu")]
     BufferWrite,
+    #[cfg(feature = "dynamic-mpu")]
+    DevClose,
 }
 
 impl SyscallId {
@@ -121,6 +125,8 @@ impl SyscallId {
             SYS_DEV_IOCTL => Some(Self::DevIoctl),
             #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_WRITE => Some(Self::BufferWrite),
+            #[cfg(feature = "dynamic-mpu")]
+            SYS_DEV_CLOSE => Some(Self::DevClose),
             _ => None,
         }
     }
@@ -163,6 +169,8 @@ impl SyscallId {
             Self::DevIoctl => SYS_DEV_IOCTL,
             #[cfg(feature = "dynamic-mpu")]
             Self::BufferWrite => SYS_BUF_WRITE,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevClose => SYS_DEV_CLOSE,
         }
     }
 }
@@ -208,6 +216,8 @@ mod tests {
         (SYS_DEV_IOCTL, SyscallId::DevIoctl),
         #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_WRITE, SyscallId::BufferWrite),
+        #[cfg(feature = "dynamic-mpu")]
+        (SYS_DEV_CLOSE, SyscallId::DevClose),
     ];
 
     #[test]
@@ -237,7 +247,7 @@ mod tests {
         #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(SyscallId::from_u32(20), None);
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(SyscallId::from_u32(29), None);
+        assert_eq!(SyscallId::from_u32(30), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -249,7 +259,7 @@ mod tests {
         #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(ALL_VARIANTS.len(), 21);
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(ALL_VARIANTS.len(), 28);
+        assert_eq!(ALL_VARIANTS.len(), 29);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);

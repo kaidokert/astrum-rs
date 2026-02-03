@@ -855,6 +855,9 @@ where
             Some(SyscallId::DevIoctl) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
                 dev.ioctl(pid, frame.r2, frame.r3)
             }),
+            // TODO: DevClose dispatch will be added in the subsequent implementation subtask.
+            #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::DevClose) => SvcError::InvalidSyscall.to_u32(),
             Some(SyscallId::QueuingRecvTimed) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
