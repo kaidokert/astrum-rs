@@ -1,5 +1,5 @@
 [workspace]
-members = ["kernel", "rtos-traits", "bsp-nrf52840", "bsp-stm32f4"]
+members = ["kernel", "rtos-traits", "bsp-nrf52840", "bsp-stm32f4", "bsp-atsamd51"]
 resolver = "2"
 
 # Dev profile: full debug symbols and no optimisation for GDB debugging.
