@@ -3398,48 +3398,114 @@ possible weighted total is 45.
 
 ### 4.3  Recommendation
 
-**Approach B (Kernel-Owned embedded-hal + Virtual Device Mirror) is the
-recommended choice for this RTOS.**
+**Hybrid strategy: Approach D as the default, with targeted use of
+the server partition pattern, Approach E, and Approach B as a
+kernel-mediated fallback.**
 
-Rationale:
+#### 4.3.1  The Core Constraint: Interfaces Are Expensive, Implementation Is Cheap
 
-1. **Ecosystem leverage is the decisive factor.** This RTOS targets
-   Cortex-M chips from multiple vendors (STM32, nRF52, SAMD51). The
-   embedded Rust ecosystem already has mature, tested HAL crates for
-   each family. Approach B is the only option that lets the kernel
-   directly reuse these crates rather than re-implementing peripheral
-   drivers from PAC registers. For a small team, this reduces porting
-   effort from weeks to days per chip family.
+The original Section 4.3 recommended Approach B on the grounds that
+ecosystem HAL crate reuse was the decisive factor. That analysis
+treated implementation effort (writing driver code) as the dominant
+cost. In practice, the dominant cost for a small team maintaining an
+RTOS is **interface design and maintenance**: every new ABI surface
+(syscall numbers, operation enums, descriptor formats, error mapping
+layers) must be specified, documented, versioned, and kept stable
+across kernel releases.
 
-2. **Blocking traits are dyn-compatible.** The `embedded_hal::spi::SpiDevice`
-   blocking trait is object-safe, so the kernel can store `dyn SpiDevice`
-   and dispatch through it — fitting the RTOS's existing `dyn VirtualDevice`
-   pattern. Approach A's async traits are *not* dyn-compatible, which is
-   a fundamental architectural mismatch.
+This constraint — *interfaces are expensive, implementation is cheap*
+— flips the original evaluation:
 
-3. **Single-SVC transactions are natural.** The batched `SpiOp` slice
-   syscall gives 1 SVC per transaction with no async overhead. This is
-   slightly more overhead than Approach C's flat descriptor (slice
-   iteration vs. struct field access) but the difference is negligible
-   compared to actual SPI bus time.
+- Approaches B and C score well on implementation metrics (HAL reuse,
+  flat descriptors) but each requires designing a new ABI layer
+  between partitions and the kernel. `SpiOp`/`I2cOp` enums, batched
+  syscall calling conventions, error translation tables — all of this
+  is ABI surface that the RTOS team must own indefinitely.
+- Approach D scores 5/5 on interface design cost because it introduces
+  **zero new ABI**: the hardware register interface *is* the interface,
+  and the community-maintained `embedded-hal` trait impls running in
+  partition space *are* the driver. The kernel's role is reduced to
+  MPU grants and interrupt routing — mechanisms that already exist.
 
-4. **DMA path is straightforward.** The kernel owns both the
-   `SpiDevice` impl and the DMA controller. DMA can be wired into
-   the blocking `SpiDevice::transaction()` implementation without
-   crossing partition boundaries or managing buffer ownership across
-   multiple SVCs.
+When interface cost is weighted appropriately (×2 in the scoring
+table), Approach D's weighted total (43) dominates all alternatives
+by a wide margin.
 
-5. **Approach C remains viable as a targeted extension.** For
-   performance-critical peripheral classes (e.g., high-frequency ADC
-   sampling), Approach C-style flat-descriptor syscalls can be added
-   alongside Approach B without replacing it. The two approaches
-   coexist: Approach B for general-purpose peripheral access,
-   Approach C for hot paths where every cycle matters.
+#### 4.3.2  Hybrid Strategy
 
-**Migration path:** Start with Approach B for SPI and I2C. If
-profiling reveals that the `SpiOp` slice walk adds measurable latency
-for a specific use case, add an Approach C `SYS_SPI_TRANSACT` fast-path
-syscall for that peripheral class only.
+No single approach covers every peripheral topology. The recommended
+strategy selects the right approach based on the peripheral's
+ownership and throughput characteristics:
+
+| Peripheral topology | Recommended approach | Rationale |
+|---------------------|---------------------|-----------|
+| Dedicated peripheral (one partition owns it exclusively) | **D — User-space driver** | Zero syscall overhead, zero new ABI. Partition runs vendor HAL crate directly against MPU-granted MMIO registers. Kernel only configures MPU region and routes interrupts. |
+| Shared bus (multiple partitions need the same SPI/I2C bus) | **D + IPC — Server partition** | A dedicated driver partition owns the bus via Approach D. Other partitions send requests through existing queuing port IPC. No new syscall ABI; the IPC message format is application-level, not kernel ABI. |
+| High-throughput batched I/O (bulk sensor reads, streaming ADC) | **E — Shared memory ring buffers** | Amortized overhead via descriptor batching. Ring buffer protocol is justified when per-transaction syscall cost is measurable relative to data volume. |
+| Fallback / legacy integration | **B — Kernel-owned embedded-hal** | For peripherals that cannot be MPU-granted (e.g., peripheral registers that overlap with kernel-owned regions) or where a kernel-mediated path is required for safety certification. |
+
+#### 4.3.3  Why Not B as the Default?
+
+The original recommendation positioned Approach B as the primary
+strategy. With the full five-approach analysis, B is demoted to
+fallback for three reasons:
+
+1. **ABI burden.** Every peripheral class under Approach B requires
+   an `SpiOp`/`I2cOp`-style operation enum, a virtual device dispatch
+   path, and an error translation layer. This is new ABI surface that
+   the RTOS team must maintain. Under Approach D, the hardware
+   register map and vendor HAL crate provide the interface for free.
+
+2. **Ecosystem reuse is not exclusive to B.** The original analysis
+   assumed only Approach B could leverage existing HAL crates.
+   Approach D achieves the same ecosystem reuse — partition code uses
+   the *same* HAL crates — without routing through kernel dispatch.
+
+3. **Syscall overhead.** Approach B requires at least one SVC per
+   transaction. Approach D requires zero SVCs for normal operation.
+   For high-frequency peripheral access (>10 kHz polling), this
+   difference is measurable.
+
+Approach B remains valuable when MPU constraints prevent peripheral
+pass-through, or when a kernel-mediated path is required by the
+system's safety architecture.
+
+#### 4.3.4  Server Partition Pattern for Shared Buses
+
+Shared buses (e.g., one SPI bus used by two partitions for different
+sensors) cannot be handled by raw Approach D because only one
+partition can hold the MPU grant at a time. The server partition
+pattern resolves this without introducing new kernel ABI:
+
+1. A dedicated **driver partition** owns the bus via Approach D.
+2. Client partitions send request messages through **queuing ports**
+   (existing IPC, no new syscalls).
+3. The driver partition arbitrates access, performs the bus
+   transaction, and returns results via a response queuing port.
+
+The message format between client and driver partitions is an
+**application-level protocol**, not kernel ABI. This is a critical
+distinction: application protocols can evolve without kernel changes,
+while kernel ABI changes require updating every partition binary.
+
+#### 4.3.5  Migration Path
+
+The original migration path ("start with Approach B for SPI and I2C")
+is replaced:
+
+1. **Start with Approach D** for all dedicated peripherals. Implement
+   MPU peripheral pass-through and interrupt routing (mechanisms that
+   already exist in the dynamic-mpu feature). Validate with UART and
+   SPI on a real target.
+2. **Add the server partition pattern** for the first shared bus.
+   Validate that queuing port IPC provides acceptable latency for
+   bus arbitration.
+3. **Add Approach E** only when profiling shows that per-transaction
+   IPC overhead is a bottleneck for high-throughput data paths (e.g.,
+   streaming ADC, bulk flash writes).
+4. **Keep Approach B available** as a fallback for peripherals that
+   cannot be MPU-granted. Do not invest in `SpiOp`/`I2cOp` ABI
+   design until a concrete need arises.
 
 ---
 
@@ -3562,3 +3628,129 @@ over Approach C may be smaller than estimated.
 surface used, (c) lines of PAC register access needed despite using
 the HAL crate. Compare against an equivalent Approach C
 implementation using only `stm32f4` PAC registers.
+
+---
+
+## 6  Downstream Impact
+
+> **Note:** The downstream work items listed below should **not** be
+> ingested or acted upon until this survey's revised recommendation
+> (Section 4.3) is confirmed. The analysis here identifies *how* each
+> item is affected, not whether the item should proceed.
+
+The shift from a B-centric recommendation to a D-first hybrid strategy
+changes the assumptions underlying several planned work items. This
+section traces the impact through each affected document.
+
+### 6.1  async-syscall-bridge.md — Remote HAL Proxy
+
+The original Approach B design assumed that partition code would
+interact with peripherals through kernel-mediated syscalls, making a
+"Remote HAL proxy" (an `embedded-hal` trait impl that translates each
+method call into an SVC) a central architectural component.
+
+**Impact under revised recommendation:**
+
+- For **dedicated peripherals** (Approach D), the Remote HAL proxy is
+  **unnecessary**. The partition runs the real vendor HAL crate
+  directly against MPU-granted MMIO registers — there is no SVC in
+  the data path and therefore no proxy to build.
+- For **shared bus peripherals** (server partition pattern), the
+  client-side proxy becomes an IPC message formatter, not a syscall
+  bridge. The shape is similar (a struct implementing `SpiDevice`
+  that sends an IPC request internally) but the transport is queuing
+  port messages, not SVCs.
+- The Remote HAL proxy concept **survives only** for the Approach B
+  fallback path. Its scope is reduced from "all peripherals" to
+  "peripherals that cannot be MPU-granted."
+
+**Action when confirmed:** Narrow the async-syscall-bridge scope to
+the Approach B fallback case. Add a section covering the IPC-based
+client proxy for the server partition pattern.
+
+### 6.2  device-protocol-crate.md — SpiOp/I2cOp Types
+
+The device-protocol crate was planned to define `SpiOp`, `I2cOp`, and
+similar operation enum types that encode batched peripheral
+transactions for Approach B's virtual device mirror layer.
+
+**Impact under revised recommendation:**
+
+- Under Approach D, partitions call vendor HAL methods directly.
+  There is no operation enum in the data path. `SpiOp`/`I2cOp`
+  types become **less central** — they are needed only for the
+  Approach B fallback and possibly as the message schema for the
+  server partition pattern.
+- For the server partition pattern, a message schema is still needed,
+  but it is an **application-level protocol** between client and
+  driver partitions, not a kernel ABI type. This means the types can
+  live in a shared library crate rather than being baked into the
+  kernel's syscall interface.
+- The Approach E ring buffer path uses descriptor records, not
+  `SpiOp` enums. If Approach E is adopted for high-throughput
+  paths, a separate descriptor format will be needed.
+
+**Action when confirmed:** Reposition device-protocol-crate as a
+shared library for the server partition IPC schema, not a kernel ABI
+definition. Defer `SpiOp`/`I2cOp` design until a concrete Approach B
+fallback need materializes.
+
+### 6.3  device-schema-macros.md — Proc Macros
+
+The device-schema-macros crate was planned to provide procedural
+macros that auto-generate `VirtualDevice` trait impls and operation
+enum boilerplate from a declarative peripheral description.
+
+**Impact under revised recommendation:**
+
+- The proc macros were designed to reduce the boilerplate cost of
+  Approach B's virtual device mirror layer. Under the revised
+  recommendation, Approach B is a fallback — reducing the number of
+  peripherals that need auto-generated boilerplate.
+- For Approach D, the kernel's per-peripheral work is limited to MPU
+  region configuration (base address, size, permissions) and
+  interrupt routing entries. This is a small, declarative data
+  structure — potentially a better fit for a simple `const` table or
+  a lightweight macro than a full proc-macro crate.
+- Proc macros become **less critical** to the overall architecture.
+  They may still be useful for generating IPC message types for the
+  server partition pattern, but this is a lower-priority convenience,
+  not an architectural dependency.
+
+**Action when confirmed:** Deprioritize device-schema-macros. Consider
+a lightweight `macro_rules!` helper for MPU peripheral region tables
+instead. Revisit proc macros only if the server partition IPC message
+boilerplate becomes burdensome.
+
+### 6.4  BSP Crate Structure
+
+The BSP (Board Support Package) crates (`bsp-stm32f4`, `bsp-nrf52840`,
+`bsp-atsamd51`) were originally designed to provide kernel-side
+peripheral driver implementations using vendor HAL crates — fitting
+Approach B's model where the kernel owns the hardware.
+
+**Impact under revised recommendation:**
+
+- Under Approach D, peripheral drivers run **in partition space**, not
+  in the kernel. The BSP crate's role shifts from "kernel driver
+  provider" to "partition peripheral configuration provider":
+  describing which peripherals exist, their MMIO base addresses and
+  sizes, interrupt numbers, and default MPU region configurations.
+- BSP crates may **live in partition space** rather than being kernel
+  dependencies. A partition that owns a peripheral would depend on
+  the BSP crate for pin muxing, clock configuration, and peripheral
+  initialization — all done through direct MMIO access, not kernel
+  syscalls.
+- The kernel's BSP dependency is reduced to a **peripheral map**:
+  a static table of `(peripheral_id, base_address, region_size,
+  irq_number)` tuples used by the MPU grant and interrupt routing
+  mechanisms.
+- For the server partition pattern, the driver partition depends on
+  the BSP crate exactly as a bare-metal application would. This is a
+  natural fit — the driver partition *is* effectively a bare-metal
+  peripheral driver with IPC message handling bolted on.
+
+**Action when confirmed:** Restructure BSP crates as partition-space
+dependencies providing peripheral initialization and configuration.
+Extract a minimal kernel-side peripheral map (MPU regions + IRQ
+routing table) as the kernel's only BSP dependency.
