@@ -1893,3 +1893,259 @@ relevant to the RTOS driver model design.
    driver interface** — explicit trigger, poll for completion, clear. The
    register-centric STM32/SAMD51 model requires the kernel to abstract
    the byte-at-a-time + DMA duality.
+
+---
+
+## 3  Architectural Approaches for the Partition-Facing Driver API
+
+This section evaluates concrete approaches for how partition code
+accesses hardware peripherals through the kernel.
+
+### 3.1  Approach A — embedded-hal-async Facade
+
+Partition code programs against `embedded_hal_async::spi::SpiDevice`,
+`embedded_hal_async::i2c::I2c`, etc.  Each trait method is a thin proxy
+that issues SVCs to the kernel.  The kernel side owns the PAC-based
+driver behind the existing `VirtualDevice` trait
+(`kernel/src/virtual_device.rs`).
+
+#### 3.1.1  Partition-Side Proxy: SpiDevice over SVC
+
+Each method translates to `svc!` macro calls using the existing ABI
+(id in r0, args in r1–r3, return in r0).  Showing the key methods:
+
+```rust
+pub struct SpiProxy { device_id: u8 }
+
+#[derive(Debug)]
+pub struct SpiSvcError(u32);
+
+impl spi::Error for SpiSvcError {
+    fn kind(&self) -> spi::ErrorKind { spi::ErrorKind::Other }
+}
+impl ErrorType for SpiProxy { type Error = SpiSvcError; }
+
+/// Helper: check SVC return for error bit.
+fn check(rc: u32) -> Result<(), SpiSvcError> {
+    if rc & 0x8000_0000 != 0 { Err(SpiSvcError(rc)) } else { Ok(()) }
+}
+
+impl SpiBus for SpiProxy {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
+        check(svc!(SYS_DEV_READ, self.device_id as u32,
+                    buf.len() as u32, buf.as_mut_ptr() as u32))
+    }
+    async fn write(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+        check(svc!(SYS_DEV_WRITE, self.device_id as u32,
+                    data.len() as u32, data.as_ptr() as u32))
+    }
+    async fn transfer(&mut self, rd: &mut [u8], wr: &[u8])
+        -> Result<(), Self::Error>
+    {   // No single SVC for simultaneous TX+RX — two SVCs.
+        self.write(wr).await?; self.read(rd).await
+    }
+    async fn transfer_in_place(&mut self, buf: &mut [u8])
+        -> Result<(), Self::Error>
+    {   check(svc!(SYS_DEV_IOCTL, self.device_id as u32,
+                    IOCTL_XFER_INPLACE, buf.as_mut_ptr() as u32))
+    }
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        check(svc!(SYS_DEV_IOCTL, self.device_id as u32, IOCTL_FLUSH, 0u32))
+    }
+}
+
+impl SpiDevice for SpiProxy {
+    async fn transaction(&mut self, ops: &mut [Operation<'_, u8>])
+        -> Result<(), Self::Error>
+    {
+        check(svc!(SYS_DEV_IOCTL, self.device_id as u32,
+                    IOCTL_CS_ASSERT, 0u32))?;
+        for op in ops.iter_mut() {
+            match op {
+                Operation::Read(buf)            => self.read(buf).await?,
+                Operation::Write(data)          => self.write(data).await?,
+                Operation::Transfer(rd, wr)     => self.transfer(rd, wr).await?,
+                Operation::TransferInPlace(buf) => self.transfer_in_place(buf).await?,
+                Operation::DelayNs(_)           => { /* spin or SYS_DELAY */ }
+            }
+        }
+        check(svc!(SYS_DEV_IOCTL, self.device_id as u32,
+                    IOCTL_CS_DEASSERT, 0u32))
+    }
+}
+```
+
+Key observations:
+
+1. **`async fn` bodies are synchronous.** Each `svc!` traps into the
+   kernel; `async` satisfies the trait signature only.  The returned
+   futures resolve in a single poll — they never yield `Pending`.
+
+2. **Stateless handle.** All peripheral state lives in the kernel.
+   The proxy is parameterised only by `device_id`.
+
+3. **Error type is opaque.** `SpiSvcError` wraps the raw u32 SVC
+   return.  `kind()` returns `Other` because `DeviceError` variants
+   (NotOpen, BufferFull) have no `spi::ErrorKind` equivalents.
+
+#### 3.1.2  Kernel-Side Dispatch
+
+An SPI backend implements the existing `VirtualDevice` trait.  The
+`dev_dispatch` method (`kernel/src/svc.rs:484`) already routes by
+`device_id` and maps `DeviceError` → `SvcError::OperationFailed`:
+
+```rust
+pub struct SpiBackend {
+    device_id: u8,
+    open_partitions: u8,  // bitmask, max 8 partitions
+    // regs: &'static RegisterBlock,  // chip-specific PAC
+}
+
+impl VirtualDevice for SpiBackend {
+    fn device_id(&self) -> u8 { self.device_id }
+    fn open(&mut self, pid: u8) -> Result<(), DeviceError> {
+        if pid >= 8 { return Err(DeviceError::InvalidPartition); }
+        if self.open_partitions & (1 << pid) != 0 {
+            return Err(DeviceError::AlreadyOpen);
+        }
+        self.open_partitions |= 1 << pid;
+        Ok(())
+    }
+    fn close(&mut self, pid: u8) -> Result<(), DeviceError> { /* clear bit */ Ok(()) }
+    fn write(&mut self, pid: u8, data: &[u8]) -> Result<usize, DeviceError> {
+        self.require_open(pid)?;
+        // PAC: write bytes to DR/DATA, poll TXE/DRE per chip family.
+        Ok(data.len())
+    }
+    fn read(&mut self, pid: u8, buf: &mut [u8]) -> Result<usize, DeviceError> {
+        self.require_open(pid)?;
+        // PAC: clock out dummy bytes, read RXNE/RXC data.
+        Ok(buf.len())
+    }
+    fn ioctl(&mut self, pid: u8, cmd: u32, arg: u32) -> Result<u32, DeviceError> {
+        self.require_open(pid)?;
+        match cmd {
+            IOCTL_CS_ASSERT   => { /* GPIO low  */ Ok(0) }
+            IOCTL_CS_DEASSERT => { /* GPIO high */ Ok(0) }
+            IOCTL_FLUSH       => { /* wait TX empty */ Ok(0) }
+            IOCTL_XFER_INPLACE => { /* full-duplex DR xfer */ Ok(0) }
+            _ => Err(DeviceError::NotFound),
+        }
+    }
+}
+```
+
+No changes to the dispatch plumbing are needed — only a new backend.
+
+#### 3.1.3  Syscall Count Analysis: Write-1 / Read-4 SPI Transaction
+
+Typical SPI sensor read: write 1 command byte, read 4 data bytes,
+single CS assertion.
+
+| Path | SVCs | Description |
+|------|:----:|-------------|
+| **A: Individual calls** | **4** | IOCTL(CS_ASSERT) + DEV_WRITE + DEV_READ + IOCTL(CS_DEASSERT) |
+| **B: transaction()** | **4** | Same — proxy iterates ops, each issues an SVC |
+| **C: Kernel-managed CS** | **2** | DEV_WRITE + DEV_READ (CS auto-asserted on open) |
+| **D: Batched SYS_SPI_TRANSACTION** | **1** | Kernel receives Operation slice pointer, iterates internally |
+
+Path D is optimal but couples the kernel to the `Operation` enum ABI.
+Path C is simple but limits CS granularity.
+
+**SVC cost:** ~60–80 cycles per round-trip on M4 (exception entry +
+stacking + dispatch + return).  4 SVCs at 168 MHz ≈ 1.5 µs overhead —
+acceptable for most SPI devices, significant for high-rate polling.
+
+#### 3.1.4  Async / Blocking Boundary Analysis
+
+The `embedded_hal_async` traits use `async fn` returning opaque
+`impl Future`.  The RTOS uses synchronous SVC-based scheduling.
+This creates a fundamental impedance mismatch.
+
+**No async executor in partitions.** Partitions run bare-metal without
+an async runtime.  Each `svc!` blocks synchronously (partition enters
+`Waiting` state).  The `async` keyword is syntactic overhead — futures
+resolve immediately.
+
+**Waker plumbing across the SVC boundary is complex.** True async
+would require passing a `Waker` (fat pointer: `*const RawWakerVTable`
++ data) across the SVC boundary.  Options and issues:
+
+| Approach | Complexity | Issue |
+|----------|------------|-------|
+| Waker ptr in r1, vtable in r2 | Medium | Kernel must validate; vtable in partition memory |
+| Kernel-assigned waker ID | Low | Needs waker registry; partition polls via `SYS_EVT_WAIT` |
+| No true async (sync SVC) | **None** | Current model; recommended |
+
+**Recommendation:** Keep synchronous SVCs.  If interrupt-driven
+completion is needed later, reuse `SYS_EVT_WAIT` / `event_set` from
+the ISR bottom-half rather than implementing a Waker protocol.
+
+#### 3.1.5  Error Propagation: DeviceError → SpiError Mapping
+
+`DeviceError` (9 variants, `virtual_device.rs:10`) → `dev_dispatch`
+maps all to `SvcError::OperationFailed` → partition sees single u32 →
+`SpiSvcError` → `ErrorKind::Other`.  Original semantics lost.
+
+```
+DeviceError::BufferFull → SvcError::OperationFailed (0xFFFF_FFFA)
+  → partition r0 = 0xFFFF_FFFA → SpiSvcError → ErrorKind::Other
+```
+
+To preserve detail, encode `DeviceError` discriminant in the lower
+bits of the SVC return: `0x8000_0000 | (svc_class << 16) | dev_variant`.
+The lower 16 bits of `SvcError` codes are currently unused.
+
+#### 3.1.6  DMA Integration Path
+
+Kernel owns the DMA controller.  Flow: (1) partition calls
+`SYS_DEV_WRITE` with data pointer; (2) kernel validates pointer via
+`validated_ptr!` macro; (3) kernel configures DMA source/dest/count;
+(4) kernel blocks partition (→ `Waiting`); (5) DMA-complete ISR sets
+event flags via bottom-half; (6) scheduler resumes partition.
+
+| Family | DMA Setup | Complexity |
+|--------|-----------|:----------:|
+| STM32F4 | DMA stream/channel + NDTR | High (shared DMA1/DMA2) |
+| SAMD51 | DMAC channel + BTCNT + trigger | High (shared DMAC) |
+| nRF52840 | TXD.PTR/MAXCNT + TASKS_START | Low (per-peripheral EasyDMA) |
+
+The existing `BufferPool` (`buffer_pool.rs`, dynamic-mpu) provides
+kernel-owned DMA-safe buffers.  **nRF52840 constraint:** EasyDMA
+requires RAM-only buffers (`0x2000_0000..0x3000_0000`); pointer
+validation must check this.
+
+#### 3.1.7  Porting Effort per Chip Family
+
+| Aspect | STM32F4 | SAMD51 | nRF52840 |
+|--------|---------|--------|----------|
+| VirtualDevice impl | ~200 lines | ~250 lines (SYNCBUSY) | ~150 lines |
+| Clock setup | RCC APB enable | MCLK + GCLK | None |
+| Pin mux | AFRL/AFRH | PMUX + PINCFG | PSEL registers |
+| DMA | Stream/channel config | DMAC trigger routing | EasyDMA built-in |
+| Extra validation | — | — | RAM-only buffer check |
+| New syscalls | 0 (reuse SYS_DEV_*) | 0 | 0 |
+| Partition proxy | ~80 lines (shared) | ~80 lines (shared) | ~80 lines (shared) |
+
+The partition proxy is **chip-independent** — porting is kernel-only.
+
+#### 3.1.8  Summary: Approach A Trade-offs
+
+| Dimension | Assessment |
+|-----------|------------|
+| **API familiarity** | High — developers know embedded-hal-async |
+| **dyn-compatibility** | **No** — async fn traits not object-safe (Section 1) |
+| **Async benefit** | None — SVCs synchronous; async is syntactic overhead |
+| **Syscall overhead** | 2–4 SVCs without batching; 1 with dedicated syscall |
+| **Error fidelity** | Low — DeviceError → ErrorKind::Other |
+| **Waker complexity** | High if attempted; skip recommended |
+| **DMA path** | Feasible; per-family complexity varies |
+| **Porting effort** | 150–250 lines kernel-side; 80 lines shared proxy |
+| **Compile-time safety** | Low — device_id is runtime u8 |
+
+**Critical issue:** `embedded_hal_async` traits are not dyn-compatible
+(`async fn` returns opaque `impl Future`).  The kernel cannot store
+`dyn SpiDevice`.  The partition proxy satisfies async trait signatures,
+but the kernel must use `VirtualDevice` (dyn-compatible) internally.
+The async facade is cosmetic — it pays the complexity cost of the async
+surface without gaining async behavior, because SVCs are synchronous.
