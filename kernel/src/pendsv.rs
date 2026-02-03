@@ -40,11 +40,26 @@
 /// 3. Stores the updated PSP into `PARTITION_SP[current]`.
 /// 4. Loads `NEXT_PARTITION`, sets `CURRENT_PARTITION = NEXT_PARTITION`.
 /// 5. Restores r4-r11 from the next partition's stack via `ldmia`.
-/// 6. Sets PSP and returns with `EXC_RETURN = 0xFFFFFFFD` (Thread/PSP).
+/// 6. Sets PSP.
+/// 7. Sets `CONTROL.nPRIV = 1` so the partition executes unprivileged,
+///    followed by an `ISB` to ensure the pipeline observes the new
+///    privilege level before the `bx lr`.
+/// 8. Returns with `EXC_RETURN = 0xFFFFFFFD` (Thread/PSP).
 #[macro_export]
 macro_rules! define_pendsv {
     () => {
         #[cfg(target_arch = "arm")]
+        // SAFETY: This inline assembly implements the PendSV exception handler,
+        // which is the sole context-switch path for partitions. It executes at
+        // exception priority and accesses only the global symbols
+        // CURRENT_PARTITION, NEXT_PARTITION, and PARTITION_SP — all of which
+        // are `#[no_mangle] static mut` owned by the binary crate and
+        // exclusively mutated inside this handler.  The handler saves/restores
+        // r4-r11 and PSP following the ARM calling convention for exception
+        // entry, and sets CONTROL.nPRIV before returning to Thread mode so the
+        // partition runs unprivileged.  No Rust aliasing rules are violated
+        // because PendSV cannot preempt itself and SysTick only writes
+        // NEXT_PARTITION (a plain u32 store, atomic on Cortex-M).
         core::arch::global_asm!(
             r#"
             .syntax unified
@@ -82,6 +97,12 @@ macro_rules! define_pendsv {
 
             msr     psp, r3
 
+            /* Set CONTROL.nPRIV so the partition runs unprivileged. */
+            mrs     r0, CONTROL
+            orr     r0, r0, #1
+            msr     CONTROL, r0
+            isb
+
             ldr     lr, =0xFFFFFFFD
             bx      lr
 
@@ -100,6 +121,9 @@ macro_rules! define_pendsv {
 /// the MPU is reconfigured **inside PendSV** — the lowest-priority
 /// exception — rather than in SysTick, eliminating the race where code
 /// runs with a stale memory map.
+///
+/// Like `define_pendsv!`, the handler also sets `CONTROL.nPRIV = 1`
+/// before returning to Thread mode so the partition runs unprivileged.
 ///
 /// # Arguments
 ///
@@ -134,6 +158,17 @@ macro_rules! define_pendsv_dynamic {
         }
 
         #[cfg(target_arch = "arm")]
+        // SAFETY: This inline assembly implements the PendSV exception handler
+        // for the dynamic-MPU variant.  Same invariants as `define_pendsv!`
+        // apply: it runs at exception priority, exclusively accesses the
+        // `#[no_mangle] static mut` symbols CURRENT_PARTITION,
+        // NEXT_PARTITION, and PARTITION_SP, and saves/restores r4-r11 and PSP
+        // per the ARM exception-entry convention.  Additionally, it calls the
+        // Rust shim `__pendsv_program_mpu` (defined above) to reconfigure MPU
+        // regions while still in handler mode, which is safe because PendSV is
+        // the lowest-priority exception and holds exclusive access to the MPU
+        // peripheral.  CONTROL.nPRIV is set before returning to Thread mode so
+        // the partition runs unprivileged.
         core::arch::global_asm!(
             r#"
             .syntax unified
@@ -175,6 +210,12 @@ macro_rules! define_pendsv_dynamic {
             ldmia   r3!, {{r4-r11}}
 
             msr     psp, r3
+
+            /* Set CONTROL.nPRIV so the partition runs unprivileged. */
+            mrs     r0, CONTROL
+            orr     r0, r0, #1
+            msr     CONTROL, r0
+            isb
 
             ldr     lr, =0xFFFFFFFD
             bx      lr
