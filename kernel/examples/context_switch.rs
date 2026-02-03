@@ -134,6 +134,12 @@ PendSV:
     /* Set PSP */
     msr     psp, r3
 
+    /* Set CONTROL.nPRIV so the partition runs unprivileged. */
+    mrs     r0, CONTROL
+    orr     r0, r0, #1
+    msr     CONTROL, r0
+    isb
+
     /* Return to Thread mode using PSP (EXC_RETURN = 0xFFFFFFFD) */
     ldr     lr, =0xFFFFFFFD
     bx      lr

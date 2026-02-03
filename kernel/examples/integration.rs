@@ -69,6 +69,11 @@ core::arch::global_asm!(
     "ldr r3, [r2, r0]",
     "ldmia r3!, {{r4-r11}}",
     "msr psp, r3",
+    /* Set CONTROL.nPRIV so the partition runs unprivileged. */
+    "mrs r0, CONTROL",
+    "orr r0, r0, #1",
+    "msr CONTROL, r0",
+    "isb",
     "ldr lr, =0xFFFFFFFD",
     "bx lr",
     ".size PendSV, . - PendSV",
