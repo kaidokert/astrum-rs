@@ -2738,3 +2738,199 @@ where transaction semantics matter.
 | Transaction descriptor | Operation enum slice | SpiOp enum slice | Flat `SpiTransactDesc` struct |
 | Porting requires | VirtualDevice impl + SpiProxy | SpiMaster (embedded-hal) impl | PAC driver (no trait) |
 | Existing VirtualDevice | Is the backend | Replaced by SpiMaster | **Extended** with per-peripheral syscalls |
+
+---
+
+## 4  Recommendation Matrix
+
+### 4.1  Rating Scale
+
+Each approach is scored on six dimensions using a 1–5 scale:
+
+| Score | Meaning |
+|-------|---------|
+| 5 | Excellent — best-in-class for this RTOS |
+| 4 | Good — minor trade-offs |
+| 3 | Adequate — workable with known limitations |
+| 2 | Weak — significant drawbacks |
+| 1 | Poor — fundamental mismatch or blocker |
+
+### 4.2  Scoring Table
+
+| Dimension | Approach A | Approach B | Approach C | Notes |
+|-----------|:---:|:---:|:---:|-------|
+| **Partition code portability** | 4 | 3 | 2 | A: partitions use standard embedded-hal-async traits (portable to any async executor). B: partition API is RTOS-native but structurally mirrors embedded-hal (SpiOp enum), easing mental mapping. C: fully custom API, zero portability to other platforms. |
+| **Ecosystem driver reuse** | 2 | 5 | 1 | A: async proxy satisfies trait bounds but cannot use blocking HAL crates in kernel. B: kernel directly uses existing HAL crates (stm32f4xx-hal, nrf-hal, atsamd-hal) and embedded-hal driver crates. C: no trait surface at all — every driver must be written from PAC up. |
+| **Syscall overhead** | 2 | 4 | 5 | A: 2–4 SVCs per SPI transaction without a dedicated batched syscall. B: 1 SVC per transaction (operation slice). C: 1 SVC per transaction (flat descriptor, no slice walk — marginally cheaper). |
+| **Implementation complexity** | 2 | 4 | 4 | A: async facade adds waker plumbing questions and dyn-incompatibility workarounds with no runtime benefit. B: straightforward blocking path with standard traits; one translation layer. C: simpler than B (no trait machinery) but requires more per-peripheral boilerplate. |
+| **DMA readiness** | 2 | 4 | 5 | A: per-SVC DMA reconfiguration needed; buffer ownership unclear across multiple SVCs. B: kernel owns hardware and DMA natively through SpiDevice impl. C: flat descriptor maps directly to DMA source/dest/len — simplest path to zero-copy. |
+| **Porting effort per chip family** | 3 | 4 | 3 | A: need VirtualDevice impl + SpiProxy per family (~230–330 lines total). B: need SpiMaster (embedded-hal impl) per family (~150–250 lines); leverage existing HAL crates where available. C: need raw PAC driver per family (~120–200 lines) but no HAL crate reuse means writing everything from register level. |
+| | | | | |
+| **Weighted total (equal weight)** | **15** | **24** | **20** | |
+
+### 4.3  Recommendation
+
+**Approach B (Kernel-Owned embedded-hal + Virtual Device Mirror) is the
+recommended choice for this RTOS.**
+
+Rationale:
+
+1. **Ecosystem leverage is the decisive factor.** This RTOS targets
+   Cortex-M chips from multiple vendors (STM32, nRF52, SAMD51). The
+   embedded Rust ecosystem already has mature, tested HAL crates for
+   each family. Approach B is the only option that lets the kernel
+   directly reuse these crates rather than re-implementing peripheral
+   drivers from PAC registers. For a small team, this reduces porting
+   effort from weeks to days per chip family.
+
+2. **Blocking traits are dyn-compatible.** The `embedded_hal::spi::SpiDevice`
+   blocking trait is object-safe, so the kernel can store `dyn SpiDevice`
+   and dispatch through it — fitting the RTOS's existing `dyn VirtualDevice`
+   pattern. Approach A's async traits are *not* dyn-compatible, which is
+   a fundamental architectural mismatch.
+
+3. **Single-SVC transactions are natural.** The batched `SpiOp` slice
+   syscall gives 1 SVC per transaction with no async overhead. This is
+   slightly more overhead than Approach C's flat descriptor (slice
+   iteration vs. struct field access) but the difference is negligible
+   compared to actual SPI bus time.
+
+4. **DMA path is straightforward.** The kernel owns both the
+   `SpiDevice` impl and the DMA controller. DMA can be wired into
+   the blocking `SpiDevice::transaction()` implementation without
+   crossing partition boundaries or managing buffer ownership across
+   multiple SVCs.
+
+5. **Approach C remains viable as a targeted extension.** For
+   performance-critical peripheral classes (e.g., high-frequency ADC
+   sampling), Approach C-style flat-descriptor syscalls can be added
+   alongside Approach B without replacing it. The two approaches
+   coexist: Approach B for general-purpose peripheral access,
+   Approach C for hot paths where every cycle matters.
+
+**Migration path:** Start with Approach B for SPI and I2C. If
+profiling reveals that the `SpiOp` slice walk adds measurable latency
+for a specific use case, add an Approach C `SYS_SPI_TRANSACT` fast-path
+syscall for that peripheral class only.
+
+---
+
+## 5  Open Questions Requiring Prototyping
+
+The following questions cannot be resolved through analysis alone.
+Each requires a targeted prototype to produce concrete data.
+
+### 5.1  Waker Plumbing Feasibility for Async Traits
+
+**Question:** Can `embedded_hal_async` trait methods be implemented over
+synchronous SVCs without a real async runtime, and what is the cost?
+
+**Why it matters:** Approach A assumes async trait methods can be
+"trivially" backed by synchronous SVCs by returning `Poll::Ready`
+immediately. But if any ecosystem driver crate calls `.await` on an
+intermediate future or expects waker-based notification, the facade
+breaks silently.
+
+**Prototype:** Implement `SpiDevice` from `embedded_hal_async` for a
+test partition. Back each method with a synchronous `svc!` call
+returning `Poll::Ready`. Integrate a real async sensor driver crate
+(e.g., `lis3dh-async` or `bme280-rs` in async mode) and verify it
+compiles, runs on QEMU, and produces correct results. Measure code
+size overhead of the async state machine vs. a plain function call.
+
+### 5.2  dyn Dispatch Overhead Measurement
+
+**Question:** What is the per-call overhead of `dyn SpiDevice` dispatch
+in the kernel compared to static dispatch, and does it matter relative
+to SVC entry/exit cost?
+
+**Why it matters:** Approach B routes every peripheral call through
+`dyn SpiDevice` (or `dyn VirtualDevice`). If vtable dispatch adds
+significant latency on top of the SVC overhead, it could erode
+Approach B's advantage over Approach C.
+
+**Prototype:** Implement a minimal `SpiDevice` for the LM3S6965 UART
+(since QEMU supports it). Measure cycle counts (via DWT CYCCNT) for:
+(a) direct `SpiMaster::transaction()` call, (b) `dyn SpiDevice`
+vtable dispatch to the same impl, (c) full SVC round-trip including
+`dyn` dispatch. Compare (b)−(a) against (c)−(a) to determine what
+fraction of the total cost is vtable overhead.
+
+### 5.3  DMA Buffer Ownership Across Partition Boundary
+
+**Question:** How should DMA buffer ownership be managed when the
+kernel performs DMA on behalf of a partition, given MPU isolation?
+
+**Why it matters:** The kernel must read from / write to partition
+memory for DMA transfers. The partition's buffer may be in its MPU
+region (inaccessible to other partitions but accessible to the kernel
+in privileged mode). The kernel must ensure the buffer remains valid
+and unmoved for the duration of the DMA transfer — but the partition
+could be preempted mid-transfer by the schedule table.
+
+**Prototype:** Using the existing `BufferPool` infrastructure, implement
+a `DmaLoanDescriptor` that: (a) pins a buffer slot, (b) lends it to
+the DMA controller via MPU window, (c) reclaims it on transfer
+completion. Test with a mock DMA controller on QEMU (memory-to-memory
+copy simulating peripheral DMA). Verify: no use-after-free, no
+double-mapping, correct data after preemption during transfer.
+
+### 5.4  Manual Vtable for dyn-Compatible embedded-hal-async
+
+**Question:** Can `embedded_hal_async` traits be made dyn-compatible
+via a hand-written vtable that erases the `Future` return type?
+
+**Why it matters:** If this works, it removes Approach A's biggest
+blocker (async traits are not object-safe). The kernel could store
+`dyn SpiDevice` using async traits, getting both ecosystem
+compatibility and dyn dispatch.
+
+**Prototype:** Write a `SpiDeviceVtable` struct with function pointers
+for each `SpiDevice` method, where each function pointer takes
+`*mut ()` (erased self) and returns a `Result` directly (blocking
+internally). Implement `From<&dyn SpiDeviceDynSafe>` for construction.
+Verify: (a) it compiles without nightly features, (b) calling through
+the vtable produces correct results, (c) code size overhead vs. direct
+`dyn` dispatch on blocking traits. If the overhead exceeds 5% of a
+direct blocking `dyn` call, the approach is not worthwhile.
+
+### 5.5  Latency Impact of Batched vs. Per-Call Syscalls
+
+**Question:** What is the measurable latency difference between a
+single batched `SYS_SPI_TRANSACT` syscall (Approach B/C) and multiple
+`SYS_DEV_WRITE` + `SYS_DEV_READ` syscalls (Approach A) for a typical
+SPI transaction?
+
+**Why it matters:** The scoring table assumes batched syscalls are
+meaningfully faster, but the actual difference depends on SVC
+entry/exit cost, operation count, and SPI bus speed. If the difference
+is <5% of total transaction time at typical bus speeds (1–10 MHz SPI),
+the syscall overhead dimension becomes less important in the decision.
+
+**Prototype:** Implement both paths for a 4-byte SPI write + 4-byte
+SPI read transaction on QEMU. Measure DWT CYCCNT for: (a) two
+separate SVCs (write then read), (b) one batched SVC with `[SpiOp::Write(4), SpiOp::Read(4)]`. Run 1000 iterations and report
+min/median/max cycle counts. Test at simulated SPI speeds of 1 MHz
+and 10 MHz to determine at what bus speed syscall overhead becomes
+negligible.
+
+### 5.6  Porting Effort Validation: STM32F4 SPI via Approach B
+
+**Question:** How many lines of code does it actually take to port
+Approach B to a real chip family (STM32F4), and how much of the
+existing `stm32f4xx-hal` crate can be reused?
+
+**Why it matters:** The scoring table estimates 150–250 lines for
+Approach B porting, and assumes existing HAL crates can be leveraged.
+These numbers are based on analysis, not implementation. If the
+actual HAL crate integration requires significant glue code (clock
+configuration, DMA channel setup, pin muxing), the porting advantage
+over Approach C may be smaller than estimated.
+
+**Prototype:** Implement `SpiMaster` for STM32F407 using
+`stm32f4xx-hal::spi::Spi` as the backend. Wire it into the kernel's
+`Kernel` struct behind a `#[cfg(feature = "stm32f4")]` gate. Count:
+(a) lines of new code written, (b) lines of `stm32f4xx-hal` API
+surface used, (c) lines of PAC register access needed despite using
+the HAL crate. Compare against an equivalent Approach C
+implementation using only `stm32f4` PAC registers.
