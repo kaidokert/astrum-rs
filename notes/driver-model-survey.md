@@ -2429,3 +2429,312 @@ leverage existing HAL crates (stm32f4xx-hal, atsamd-hal, nrf-hal).
 | Transaction atomicity | Partition-managed (fragile) | Kernel-managed (robust) |
 | async fn in partition | Yes (cosmetic) | No |
 | dyn dispatch in kernel | VirtualDevice (dyn-compatible) | SpiDevice (dyn-compatible) |
+
+### 3.3  Approach C — Pure RTOS-Native Syscall API
+
+Approach C abandons embedded-hal trait shapes entirely — both at the
+partition surface (unlike A) and inside the kernel (unlike B).
+Partitions issue purpose-built syscalls defined by the RTOS.  The
+kernel dispatches each syscall to a chip-specific PAC driver with no
+trait abstraction layer.
+
+The existing `VirtualDevice` trait (`kernel/src/virtual_device.rs`)
+is a **partial implementation** of this philosophy: its RTOS-native
+`read`/`write`/`ioctl` already bypass embedded-hal.  Approach C goes
+further by defining **peripheral-class-specific** syscalls (SPI, I2C,
+UART) that encode full operations in a single SVC.
+
+#### 3.3.1  RTOS-Native SPI Syscall: `SYS_SPI_TRANSACT`
+
+A single syscall encodes an entire SPI transaction — command byte(s),
+response buffer, transfer length, and behavioral flags — in one SVC.
+No operation descriptors, no embedded-hal `Operation` enum, no
+per-byte SVC overhead.
+
+```rust
+// ── Syscall number (kernel/src/syscall.rs) ──────────────────────
+pub const SYS_SPI_TRANSACT: u32 = 30;
+
+// ── SVC ABI register layout ─────────────────────────────────────
+// r0 = SYS_SPI_TRANSACT (call number)
+// r1 = device_id (u8, zero-extended)
+// r2 = descriptor pointer → SpiTransactDesc (validated by kernel)
+// r3 = flags (SPI_FLAG_* bitmask)
+
+/// Flags for SPI transact behavior.
+pub const SPI_FLAG_WRITE_ONLY: u32 = 0x0001; // ignore rx_buf
+pub const SPI_FLAG_READ_ONLY: u32  = 0x0002; // tx sends 0xFF clocks
+pub const SPI_FLAG_FULL_DUPLEX: u32 = 0x0000; // default: simultaneous tx+rx
+pub const SPI_FLAG_CS_HOLD: u32    = 0x0010; // do not deassert CS after
+
+/// Descriptor passed from partition to kernel via validated pointer.
+/// Lives in the partition's MPU data region.
+#[repr(C)]
+pub struct SpiTransactDesc {
+    pub tx_buf: *const u8,  // source data (or null for read-only)
+    pub rx_buf: *mut u8,    // destination (or null for write-only)
+    pub len: u16,           // transfer length in bytes
+    pub _reserved: u16,     // pad to 4-byte alignment
+}
+```
+
+Key difference from Approaches A and B: there is no `Operation` enum
+or operation slice.  The syscall descriptor is a flat, fixed-size
+struct.  For the common "write command, read response" pattern, the
+caller sets `tx_buf` to the command bytes, `rx_buf` to the response
+buffer, and `len` to the total frame length.  The kernel handles
+CS assertion, clocking, and cleanup internally.
+
+#### 3.3.2  Partition-Side Typed Wrapper
+
+Partitions use a typed wrapper that constructs the descriptor and
+invokes the SVC.  No embedded-hal traits — the API is RTOS-native.
+
+```rust
+/// Partition-side SPI handle.  No embedded-hal traits.
+pub struct Spi { device_id: u8 }
+
+impl Spi {
+    pub const fn new(device_id: u8) -> Self { Self { device_id } }
+
+    /// Full-duplex transfer: write tx_data while reading into rx_buf.
+    /// Returns InvalidArgument if lengths differ or exceed u16::MAX.
+    pub fn transact(
+        &self, tx_data: &[u8], rx_buf: &mut [u8], flags: u32,
+    ) -> Result<(), SvcError> {
+        if tx_data.len() != rx_buf.len() {
+            return Err(SvcError::InvalidArgument);
+        }
+        self.transact_raw(tx_data.as_ptr(), rx_buf.as_mut_ptr(),
+                          tx_data.len(), flags)
+    }
+
+    /// Write-only: send data, discard received bytes.
+    pub fn write(&self, data: &[u8]) -> Result<(), SvcError> {
+        self.transact_raw(data.as_ptr(), core::ptr::null_mut(),
+                          data.len(), SPI_FLAG_WRITE_ONLY)
+    }
+
+    /// Read-only: clock out 0xFF, capture received bytes.
+    pub fn read(&self, buf: &mut [u8]) -> Result<(), SvcError> {
+        self.transact_raw(core::ptr::null(), buf.as_mut_ptr(),
+                          buf.len(), SPI_FLAG_READ_ONLY)
+    }
+
+    fn transact_raw(
+        &self, tx: *const u8, rx: *mut u8, len: usize, flags: u32,
+    ) -> Result<(), SvcError> {
+        let len = u16::try_from(len)
+            .map_err(|_| SvcError::InvalidArgument)?;
+        let desc = SpiTransactDesc { tx_buf: tx, rx_buf: rx,
+                                     len, _reserved: 0 };
+        SvcError::from_u32(svc!(SYS_SPI_TRANSACT,
+            self.device_id as u32,
+            &desc as *const _ as u32, flags))
+    }
+}
+```
+
+Error propagation uses `SvcError` directly — no intermediate
+`DeviceError` or `SpiHalError`.  The kernel returns the same error
+codes used by every other syscall (`InvalidPointer`,
+`InvalidResource`, `OperationFailed`).
+
+#### 3.3.3  Kernel Dispatch to PAC Driver
+
+The kernel handler validates inputs and drives the SPI peripheral
+via PAC register access — no embedded-hal trait indirection.
+
+```rust
+/// Timeout (in poll iterations) for SPI status-flag polling.
+/// Sized for worst-case at lowest SPI clock / highest core clock.
+const SPI_POLL_TIMEOUT: u32 = 100_000;
+
+fn handle_spi_transact(
+    &mut self, pid: u8, desc_ptr: u32, flags: u32,
+) -> Result<u32, SvcError> {
+    // 1. Validate descriptor pointer in partition's MPU region
+    validate_user_ptr(&self.partitions, pid,
+                      desc_ptr, core::mem::size_of::<SpiTransactDesc>())?;
+    // SAFETY: pointer validated against partition's MPU data region
+    let desc = unsafe { &*(desc_ptr as *const SpiTransactDesc) };
+    let len = desc.len as usize;
+
+    // 2. Validate tx_buf / rx_buf if non-null
+    if !desc.tx_buf.is_null() {
+        validate_user_ptr(&self.partitions, pid, desc.tx_buf as u32, len)?;
+    }
+    if !desc.rx_buf.is_null() {
+        validate_user_ptr(&self.partitions, pid, desc.rx_buf as u32, len)?;
+    }
+
+    // 3. Drive SPI via PAC registers (no trait)
+    let spi = &self.spi_regs;
+    self.cs_pin_assert();
+    for i in 0..len {
+        let tx_byte = if flags & SPI_FLAG_READ_ONLY != 0 || desc.tx_buf.is_null() {
+            0xFF
+        } else {
+            // SAFETY: tx_buf validated, i < len
+            unsafe { *desc.tx_buf.add(i) }
+        };
+        spi.dr.write(|w| w.dr().bits(tx_byte as u16));
+        // Wait for RXNE with timeout to avoid hanging on hardware faults
+        let mut timeout = SPI_POLL_TIMEOUT;
+        while spi.sr.read().rxne().bit_is_clear() {
+            timeout -= 1;
+            if timeout == 0 {
+                self.cs_pin_deassert();
+                return Err(SvcError::OperationFailed);
+            }
+        }
+        let rx_byte = spi.dr.read().dr().bits() as u8;
+        if flags & SPI_FLAG_WRITE_ONLY == 0 && !desc.rx_buf.is_null() {
+            // SAFETY: rx_buf validated, i < len
+            unsafe { *desc.rx_buf.add(i) = rx_byte; }
+        }
+    }
+    // Wait for BSY clear with timeout
+    let mut timeout = SPI_POLL_TIMEOUT;
+    while spi.sr.read().bsy().bit_is_set() {
+        timeout -= 1;
+        if timeout == 0 {
+            self.cs_pin_deassert();
+            return Err(SvcError::OperationFailed);
+        }
+    }
+    if flags & SPI_FLAG_CS_HOLD == 0 { self.cs_pin_deassert(); }
+    Ok(len as u32)
+}
+```
+
+The kernel talks to SPI registers directly (`spi.dr`, `spi.sr`) —
+the kernel *is* the driver.  No `SpiDevice` trait, no `VirtualDevice`
+dispatch, no `dyn` indirection.
+
+#### 3.3.4  Syscall Count Analysis: Write-1 / Read-4 SPI Transaction
+
+| Approach | SVCs | Description |
+|----------|:----:|-------------|
+| **A: SpiProxy::transaction()** | **4** | CS_ASSERT + DEV_WRITE + DEV_READ + CS_DEASSERT |
+| **B: SpiHandle::transaction()** | **1** | Kernel receives SpiOp slice, executes against embedded-hal impl |
+| **C: Spi::transact()** | **1** | Kernel receives flat descriptor, drives PAC registers directly |
+| **C: Spi::write() + Spi::read()** | **2** | Two separate SVCs; still fewer than A |
+
+Approaches B and C both achieve 1 SVC for the common batched case.
+Approach C's flat descriptor is simpler to validate (fixed-size struct
+vs. variable-length `SpiOp` slice) but less flexible for multi-phase
+transactions that mix read/write/delay segments.
+
+For the multi-phase case, Approach C can add a `SYS_SPI_TRANSACT_BATCH`
+that accepts a descriptor array — but this is an opt-in extension,
+not the default API.
+
+#### 3.3.5  Async Handling: Kernel-Controlled, Partition Blocks
+
+**No async at the partition level.**  The partition issues a blocking
+SVC; the kernel decides how to complete it (polled or DMA).
+
+| Aspect | Approach A | Approach B | Approach C |
+|--------|-----------|-----------|-----------|
+| Partition API | `async fn` (cosmetic) | Blocking fn | Blocking fn |
+| Kernel impl | VirtualDevice | embedded-hal blocking | PAC registers directly |
+| Async executor | Not needed | Not needed | Not needed |
+| Long-transfer | Busy-waits across SVCs | Kernel blocks, DMA | Kernel blocks, DMA |
+
+For DMA: kernel validates pointers → transitions partition to
+`Waiting` → configures DMA from descriptor → starts transfer →
+DMA-complete ISR wakes partition via bottom-half → `transact()`
+returns.  No intermediate states, no waker, no multi-SVC coordination.
+
+#### 3.3.6  Error Propagation: `SvcError` Directly
+
+Approach C eliminates all intermediate error types: `PAC register
+status → SvcError variant → partition r0`.
+
+| Error condition | Approach A | Approach B | Approach C |
+|---|---|---|---|
+| SPI bus overrun | PAC→SpiHalError→DeviceError→SvcError | PAC→SpiHalError→SvcError | PAC→**SvcError** |
+| Invalid pointer | InvalidPointer per SVC | InvalidPointer once | InvalidPointer once |
+| Device not open | DeviceError::NotOpen per SVC | DeviceError once | **SvcError::InvalidResource** |
+
+The partition returns `Result<(), SvcError>` — the same error type
+used by every other RTOS syscall.  Zero error-type proliferation.
+
+#### 3.3.7  DMA Integration: Kernel Has Full Control
+
+No abstraction layer between syscall handler and DMA controller.
+
+| Aspect | Approach A | Approach B | Approach C |
+|--------|-----------|-----------|-----------|
+| DMA config | Through VirtualDevice | Through SpiDevice impl | **Direct PAC DMA registers** |
+| Buffer validation | Per SVC (4×) | Once at transaction | Once from descriptor |
+| Scatter-gather | Per-op only | Kernel chains across ops | **Descriptor→DMA directly** |
+| Zero-copy BufferPool | Via DeviceWrite | Via SpiMaster | **Pool slot→DMA directly** |
+
+`SpiTransactDesc` maps directly to DMA config (`tx_buf`→source,
+`rx_buf`→dest, `len`→count) with no `Operation`/`SpiOp` translation.
+`BufferPool` zero-copy: kernel detects pool pointers and feeds slot
+addresses directly to the DMA controller.
+
+#### 3.3.8  Porting Effort: Kernel Driver per Chip, Partition API Stable
+
+| Aspect | STM32F4 | SAMD51 | nRF52840 |
+|--------|---------|--------|----------|
+| Kernel SPI driver | ~150 lines | ~200 lines (SYNCBUSY) | ~120 lines (EasyDMA) |
+| Uses embedded-hal / HAL crate | **No** (PAC only) | **No** (PAC only) | **No** (PAC only) |
+| New syscalls per peripheral | 1 (`SYS_SPI_TRANSACT`) | 1 (shared) | 1 (shared) |
+| Partition API change | **None** | **None** | **None** |
+
+Porting cost comparable to Approach B (150–200 lines) but simpler —
+no `SpiDevice` trait to implement.  Downside: HAL crates cannot be
+reused; every kernel driver is PAC-only.  Partition-side `Spi` and
+`SpiTransactDesc` are **chip-independent** RTOS API types.
+
+#### 3.3.9  Connection to Existing `VirtualDevice` Trait
+
+The `VirtualDevice` trait (`kernel/src/virtual_device.rs`) is a
+**partial implementation** of Approach C.  It provides RTOS-native
+`read`/`write`/`ioctl` (not embedded-hal), partition-aware
+`open`/`close` access control, `DeviceRegistry` dispatch, and
+`SYS_DEV_*` syscall wiring.
+
+Approach C extends this by adding **peripheral-class-specific**
+syscalls with structured descriptors (vs. generic byte-stream
+read/write), single-SVC transactions (vs. multi-SVC), `SvcError`
+directly (vs. `DeviceError`), and direct PAC access (vs. `dyn
+VirtualDevice`).
+
+Migration path: keep `VirtualDevice` for byte-stream devices (UART,
+GPIO); add `SYS_SPI_TRANSACT`, `SYS_I2C_TRANSACT` for protocols
+where transaction semantics matter.
+
+#### 3.3.10  Summary: Approach C Trade-offs
+
+| Dimension | Assessment |
+|-----------|------------|
+| **API familiarity** | Low — fully RTOS-specific; no embedded-hal knowledge transfers |
+| **dyn-compatibility** | N/A — no traits at partition boundary; syscalls are static dispatch |
+| **Async benefit** | N/A — no async surface; kernel controls all timing |
+| **Syscall overhead** | **1 SVC per transaction** (flat descriptor, no operation slice) |
+| **Error fidelity** | **Highest** — SvcError directly, zero intermediate types |
+| **Waker complexity** | None |
+| **DMA path** | **Simplest** — descriptor maps directly to DMA configuration |
+| **Porting effort** | 120–200 lines kernel-side; 0 lines partition-side; no HAL crate reuse |
+| **Compile-time safety** | High — typed wrapper + descriptor struct; device_id is runtime u8 |
+| **Ecosystem reuse** | **None** — cannot use embedded-hal driver crates in kernel |
+| **Transaction atomicity** | **Yes** — kernel owns entire operation lifecycle |
+
+**Three-way comparison:**
+
+| | Approach A | Approach B | Approach C |
+|---|---|---|---|
+| Partition sees | embedded-hal-async traits | RTOS-native batched API (SpiOp slice) | RTOS-native flat descriptor |
+| SVCs per transaction | 2–4 | 1 | 1 |
+| Kernel driver uses | VirtualDevice trait | embedded-hal trait (blocking) | PAC registers directly |
+| Embedded-hal crate reuse | Partition-side (async proxy) | Kernel-side (HAL crates) | **Neither** |
+| Error type chain | DeviceError → SvcError | SpiHalError → SvcError | **SvcError only** |
+| DMA complexity | Per-SVC reconfiguration | Through SpiDevice impl | **Direct descriptor→DMA** |
+| Transaction descriptor | Operation enum slice | SpiOp enum slice | Flat `SpiTransactDesc` struct |
+| Porting requires | VirtualDevice impl + SpiProxy | SpiMaster (embedded-hal) impl | PAC driver (no trait) |
+| Existing VirtualDevice | Is the backend | Replaced by SpiMaster | **Extended** with per-peripheral syscalls |
