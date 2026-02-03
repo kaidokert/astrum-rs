@@ -2741,6 +2741,236 @@ where transaction semantics matter.
 
 ---
 
+### 3.4  Approach D — User-Space Drivers: Peripheral Pass-Through
+
+Approaches A–C all keep the peripheral driver inside the kernel: the
+partition communicates with hardware indirectly through syscalls, and the
+kernel translates those requests into PAC register accesses.  Approach D
+inverts this: the partition runs the real HAL driver directly, and the
+kernel's only role is granting the partition MPU access to the
+peripheral's MMIO register block and routing its interrupt.
+
+This is the ARINC 653 equivalent of a "device partition" — a partition
+whose spatial domain includes the peripheral's physical registers.  The
+partition imports the vendor HAL crate (`nrf52840-hal`, `stm32f4xx-hal`,
+etc.) and calls it as normal embedded Rust code; no syscall translation
+layer exists.  The kernel enforces isolation by configuring an MPU region
+that covers exactly the peripheral's register block using
+`DynamicStrategy::add_window` from `kernel/src/mpu_strategy.rs`.
+
+#### 3.4.1  Mechanism: MPU Peripheral Pass-Through
+
+The mechanism has three phases:
+
+1. **Init-time grant** — During partition configuration the kernel calls
+   `DynamicStrategy::add_window(base, size, permissions, owner)` to
+   allocate an MPU region (R5–R7) covering the peripheral register
+   block.  The `base` and `size` come from the peripheral's memory map
+   in the vendor datasheet; `permissions` grants unprivileged RW with XN
+   (execute-never) since peripheral memory must never be executed.
+
+2. **Context-switch programming** — On every PendSV context switch
+   `DynamicStrategy::program_regions` writes the stored (RBAR, RASR)
+   values for R4–R7 into the MPU hardware, making the peripheral
+   accessible only to the owning partition.  Other partitions see the
+   background no-access region (R0) and fault if they touch the
+   peripheral address range.
+
+3. **Interrupt routing** — The peripheral's IRQ is enabled in the NVIC
+   and its handler either (a) signals an event to the owning partition
+   via `event_set`, or (b) runs a minimal ISR top-half that drains
+   hardware FIFOs into an `IsrRingBuffer` (see `kernel/src/split_isr.rs`)
+   for bottom-half processing during the partition's time slot.
+
+No syscall is needed for normal register access.  The partition's
+unprivileged load/store instructions hit the peripheral MMIO region
+directly because the MPU region grant makes those addresses accessible.
+
+#### 3.4.2  MPU Region Configuration for Peripheral Registers
+
+Peripheral register blocks on Cortex-M are memory-mapped at fixed
+addresses.  The MPU requires regions to be power-of-two sized and
+naturally aligned.  Most vendor peripheral blocks fit within a 4 KiB
+(0x1000) page — the smallest practical region for MMIO mapping.
+
+The kernel validates the region parameters using `validate_mpu_region`
+from `kernel/src/mpu.rs` before programming hardware:
+
+```rust
+use crate::mpu::{validate_mpu_region, build_rbar, build_rasr, encode_size};
+use crate::mpu::{AP_FULL_ACCESS};
+
+/// Build RBAR/RASR for an MMIO peripheral region.
+///
+/// - `base`: peripheral register block start (from datasheet)
+/// - `size`: region size in bytes (must be power-of-two, >= 32)
+/// - `region`: MPU region number (4–7 for dynamic slots)
+///
+/// Returns (RBAR, RASR) or None if parameters are invalid.
+fn peripheral_region(base: u32, size: u32, region: u32) -> Option<(u32, u32)> {
+    validate_mpu_region(base, size).ok()?;
+    let size_field = encode_size(size)?;
+    let rbar = build_rbar(base, region)?;
+    // Device-type memory: S=0, C=0, B=1 (Shareable Device)
+    // XN=1 (no execute), AP=full access (priv + unpriv RW)
+    let rasr = build_rasr(size_field, AP_FULL_ACCESS, true, (false, false, true));
+    Some((rbar, rasr))
+}
+```
+
+**Example: nRF52840 UARTE0 at 0x4000_2000, 4 KiB region**
+
+The nRF52840 UARTE0 peripheral occupies addresses 0x4000_2000 –
+0x4000_2FFF.  A 4 KiB MPU region covers the entire register block:
+
+```rust
+// UARTE0 register block: base = 0x4000_2000, size = 4096 (0x1000)
+let (rbar, rasr) = peripheral_region(0x4000_2000, 4096, 5)
+    .ok_or(MpuError::SizeNotPowerOfTwo)?;
+
+// RBAR = 0x4000_2000 | VALID(1<<4) | REGION(5) = 0x4000_2015
+// RASR: SIZE=11 (4 KiB), AP=011 (full), XN=1, B=1, ENABLE=1
+//     = (1<<28) | (0b011<<24) | (1<<16) | (11<<1) | 1
+//     = 0x1301_0017
+
+assert_eq!(rbar, 0x4000_2015);
+assert_eq!(rasr, 0x1301_0017);
+```
+
+The kernel grants this region via the existing `DynamicStrategy` API:
+
+```rust
+// In partition init code (kernel side):
+// strategy: &DynamicStrategy from kernel/src/mpu_strategy.rs
+let size_field = encode_size(4096)
+    .ok_or(MpuError::SizeNotPowerOfTwo)?;  // SIZE field = 11
+let rasr = build_rasr(
+    size_field,
+    AP_FULL_ACCESS,              // AP = 011 (priv + unpriv RW)
+    true,                        // XN = 1 (no execute)
+    (false, false, true),        // S=0, C=0, B=1 (Device memory)
+);
+
+// add_window validates alignment, allocates R5/R6/R7, stores descriptor
+let region_id = strategy.add_window(
+    0x4000_2000,  // base: UARTE0 register block
+    4096,         // size: 4 KiB
+    rasr,         // permissions: RW, XN, Device memory
+    partition_id, // owner: the UARTE driver partition
+)?;
+// region_id = 5 (first available dynamic slot)
+```
+
+#### 3.4.3  Concrete Example: nRF52840 UARTE in Partition Space
+
+In this model the partition imports `nrf52840-hal` directly and drives
+UARTE0 using the vendor HAL's public API.  The kernel performs three
+setup steps: (1) configure the MPU region for the UARTE0 register block,
+(2) route the UARTE0 interrupt to the partition, and (3) pass the owned
+PAC peripheral singletons (`UARTE0`, `P0`) to the partition entry point,
+establishing a safe ownership contract without `unsafe` `steal()`.
+
+**Kernel-side setup** (runs once during partition init):
+
+```rust
+// kernel/src/main.rs or partition init path
+
+use crate::mpu::{build_rasr, encode_size, AP_FULL_ACCESS};
+use crate::mpu_strategy::DynamicStrategy;
+
+/// Set up MPU region for UARTE0 peripheral pass-through.
+///
+/// Grants the target partition unprivileged RW access to the UARTE0
+/// register block (0x4000_2000, 4 KiB).  The partition can then
+/// construct an nrf52840-hal Uarte instance over this address range.
+fn grant_uarte0(strategy: &DynamicStrategy, partition_id: u8)
+    -> Result<u8, crate::mpu::MpuError>
+{
+    let size_field = encode_size(4096)
+        .ok_or(crate::mpu::MpuError::SizeNotPowerOfTwo)?;
+    let rasr = build_rasr(
+        size_field,
+        AP_FULL_ACCESS,
+        true,                     // XN
+        (false, false, true),     // Device memory (S=0, C=0, B=1)
+    );
+    strategy.add_window(0x4000_2000, 4096, rasr, partition_id)
+}
+
+// In partition table setup:
+// grant_uarte0(&dynamic_strategy, uarte_partition_id)?;
+//
+// Pass owned PAC peripheral singletons to the partition entry point.
+// The kernel splits dp (Peripherals::take()) at boot and hands each
+// partition only the peripherals it is authorised to use:
+//   partition_main(dp.UARTE0, dp.P0);
+//
+// Enable UARTE0_UART0 IRQ in NVIC, route to partition via event_set
+// or IsrRingBuffer top-half handler.
+```
+
+**Partition-side code** (runs in unprivileged Thread mode):
+
+```rust
+// In the partition crate's Cargo.toml:
+//   [dependencies]
+//   nrf52840-hal = "0.19"
+
+use nrf52840_hal::uarte::{Uarte, Baudrate, Parity, Pins};
+use nrf52840_hal::gpio::{p0, Level};
+use nrf52840_pac::UARTE0;
+
+/// Partition entry point.
+///
+/// The kernel passes owned peripheral singletons (UARTE0, P0) to the
+/// partition at init time, avoiding `unsafe` `Peripherals::steal()`.
+/// This establishes a clear ownership contract: the kernel grants
+/// exactly the peripherals the partition is authorised to use.
+fn partition_main(uarte0: UARTE0, p0: nrf52840_pac::P0) -> Result<(), nrf52840_hal::uarte::Error> {
+    let p0 = p0::Parts::new(p0);
+    let pins = Pins {
+        txd: p0.p0_06.into_push_pull_output(Level::High).degrade(),
+        rxd: p0.p0_08.into_floating_input().degrade(),
+        cts: None,
+        rts: None,
+    };
+
+    let mut uart = Uarte::new(uarte0, pins, Parity::EXCLUDED, Baudrate::BAUD115200);
+
+    let tx_buf = b"Hello from partition\r\n";
+    uart.write(tx_buf)?;
+
+    let mut rx_buf = [0u8; 64];
+    uart.read(&mut rx_buf)?;
+
+    Ok(())
+}
+```
+
+The partition code is nearly identical to what a bare-metal nRF52840
+application would write — no syscall wrappers, no proxy types, no custom
+error mapping.  The only structural difference is that the partition
+receives owned PAC singletons from the kernel rather than calling
+`Peripherals::take()` or `steal()`.  The `nrf52840-hal` crate's `Uarte`
+struct issues load/store instructions to the UARTE0 register block at
+0x4000_2000, and the MPU region grant makes those accesses succeed in
+unprivileged mode.
+
+**Key trade-offs vs. Approaches A–C:**
+
+| Dimension | Approach D (pass-through) |
+|---|---|
+| **Partition code portability** | Highest — real HAL code, zero RTOS coupling |
+| **Kernel complexity** | Lowest — MPU grant + interrupt routing only |
+| **Isolation granularity** | 4 KiB minimum (MPU constraint); may expose adjacent registers |
+| **Shared peripheral support** | Needs kernel arbitration (mutex/schedule) to share one peripheral across partitions |
+| **DMA buffer ownership** | Partition owns DMA buffers; must be in partition RAM visible to DMA controller |
+| **Error handling** | HAL errors only — no SvcError translation layer |
+| **MPU region cost** | 1 dynamic slot (R5/R6/R7) per peripheral per partition |
+| **Ecosystem reuse** | Full — vendor HAL + driver crates run unmodified in the partition |
+
+---
+
 ## 4  Recommendation Matrix
 
 ### 4.1  Rating Scale
