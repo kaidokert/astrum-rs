@@ -2969,6 +2969,171 @@ unprivileged mode.
 | **MPU region cost** | 1 dynamic slot (R5/R6/R7) per peripheral per partition |
 | **Ecosystem reuse** | Full — vendor HAL + driver crates run unmodified in the partition |
 
+#### 3.4.4  Interrupt Routing to Partitions
+
+When a peripheral is passed through to a partition, its hardware IRQ must
+still be handled safely.  The kernel owns the NVIC and the vector table;
+the partition cannot install an ISR directly.  Instead, the kernel
+provides a **split-ISR** model where:
+
+1. **Top-half (kernel context)** — The kernel's ISR fires in Handler mode
+   at privileged level.  It performs the minimum work required: reading
+   the peripheral's interrupt-status register to identify the event,
+   clearing the hardware condition that asserted the interrupt (status
+   flag, pending bit, or FIFO threshold — whatever the peripheral
+   requires to de-assert its IRQ line), and then delivering a
+   notification to the owning partition.  Clearing the interrupt source
+   is **mandatory**; if the ISR returns without doing so, the NVIC will
+   re-trigger the vector immediately, causing an interrupt livelock that
+   starves all Thread-mode execution.
+
+2. **Bottom-half (partition context)** — The partition processes the
+   interrupt in its own Thread-mode time slot, using the full vendor HAL.
+
+The kernel offers two notification mechanisms, both already implemented:
+
+**Lightweight event wakeup** — The ISR calls `event_set(partition_id,
+mask)` on the owning partition's event flags.  The partition calls
+`event_wait(mask)` at the start of its time slot and receives a bitmask
+indicating which events occurred.  This is sufficient when the partition
+only needs to know *that* an interrupt fired, not carry per-event payload.
+
+**Ring buffer delivery via `IsrRingBuffer`** — For peripherals that
+produce data in the ISR (e.g. UART RX bytes, ADC samples), the kernel's
+top-half pushes an `EventRecord` into the partition's `IsrRingBuffer<D,
+M>` (defined in `kernel/src/split_isr.rs`).  Each record carries a `tag`
+byte identifying the `DeviceNotification` variant (`DataAvailable`,
+`TxComplete`, or `Error`) and up to `M` bytes of payload.  The partition
+pops records from the ring during its time slot.
+
+```
+Hardware IRQ
+    │
+    ▼
+┌───────────────────────────────────────┐
+│  Kernel ISR (Handler mode, privileged)│
+│  1. Read peripheral status register   │
+│  2. Clear IRQ pending                 │
+│  3a. event_set(owner, IRQ_MASK)       │
+│      — OR —                           │
+│  3b. isr_ring.push_from_isr(tag, data)│
+└───────────────────────────────────────┘
+    │  (deferred to partition time slot)
+    ▼
+┌───────────────────────────────────────┐
+│  Partition bottom-half (Thread mode)  │
+│  event_wait(IRQ_MASK)                 │
+│  — OR —                               │
+│  isr_ring.pop_with(|tag, payload| ..) │
+│  Full vendor HAL processing           │
+└───────────────────────────────────────┘
+```
+
+The `IsrRingBuffer::push_from_isr` method is O(1), allocation-free, and
+ISR-safe on single-core Cortex-M.  If the ring is full, the oldest
+unprocessed event is silently dropped — the partition should drain the
+ring promptly in each time slot to avoid loss.
+
+**Latency note:** The partition cannot respond to the interrupt until its
+next scheduled time slot.  In the worst case — when the interrupt arrives
+just after the partition's slot ends — the response is deferred by the
+entire major frame (the sum of all other partitions' time slots before
+the owning partition is scheduled again).  For peripherals with hard
+real-time response requirements (sub-microsecond), the kernel top-half
+must perform the time-critical work directly; only the non-critical
+processing is deferred to the partition.
+
+#### 3.4.5  Shared Bus Arbitration
+
+Approach D assumes each peripheral is owned by exactly one partition.
+When multiple partitions need access to the same physical bus (e.g. a
+shared SPI bus with chip-selects routed to different sensors), three
+strategies handle the contention:
+
+**Strategy 1: Dedicated Assignment (most common)**
+
+Each peripheral instance is statically assigned to exactly one partition.
+No sharing, no arbitration overhead.  This is the default and covers the
+majority of embedded designs where peripherals outnumber partitions or
+where the system architect can allocate one SPI/I2C/UART per partition.
+
+*Use case:* UART0 → telemetry partition, SPI1 → sensor partition, I2C0 →
+actuator partition.  No bus contention exists.
+
+**Strategy 2: Server Partition Pattern**
+
+One partition owns the physical peripheral and exposes an IPC service to
+other partitions via sampling or queuing ports.  Client partitions send
+requests through queuing ports; the server partition dequeues them,
+performs the hardware transaction using the vendor HAL, and sends
+responses back.
+
+```
+┌─────────────┐   queuing port   ┌─────────────────────┐
+│ Client P1   │ ───── req ─────► │ Server partition     │
+│ (no HW)     │ ◄──── resp ───── │ (owns SPI + CS pins) │
+└─────────────┘                  │ uses vendor HAL      │
+┌─────────────┐   queuing port   │ directly             │
+│ Client P2   │ ───── req ─────► │                      │
+│ (no HW)     │ ◄──── resp ───── └─────────────────────┘
+└─────────────┘
+```
+
+The server partition serialises all bus transactions naturally — only one
+request executes at a time in its time slot.  This pattern is the ARINC
+653 idiomatic approach and composes well with the existing IPC primitives.
+
+*Use case:* Shared SPI bus with multiple chip-selects, or an I2C bus
+serving sensors owned by different partitions.
+
+**Strategy 3: Kernel-Mediated Fallback (Approach B for that peripheral)**
+
+For peripherals where the server partition pattern adds unacceptable
+latency or complexity, fall back to Approach B (kernel-owned
+embedded-hal) for that specific peripheral only.  The kernel owns the bus
+driver and exposes it through virtual device syscalls.  Other peripherals
+in the system can still use Approach D.
+
+*Use case:* A shared I2C bus on a system where the server partition's
+scheduling latency exceeds the peripheral's timing constraints, or where
+the bus requires atomic multi-device transactions that span multiple
+partition time slots.
+
+The three strategies are not mutually exclusive — a system can use
+dedicated assignment for most peripherals, the server pattern for a
+shared SPI bus, and kernel-mediated access for a timing-critical I2C
+sensor, all in the same image.
+
+#### 3.4.6  Summary: Approach D Trade-offs
+
+| Dimension | Rating | Notes |
+|---|---|---|
+| **Interface design cost** | None | Zero new ABI design required. The "interface" is the hardware registers plus community-defined `embedded-hal` / vendor HAL traits. No syscall wrappers, no proxy types, no error mapping. |
+| **Implementation cost** | Low | Kernel work is MPU region grant (`add_window`) + interrupt routing (top-half ISR). No peripheral driver code in the kernel. |
+| **Portability** | Highest | Partition code uses real vendor HAL crates (`nrf52840-hal`, `stm32f4xx-hal`, `atsamd-hal`) unmodified. Code is portable across RTOS and bare-metal. |
+| **Async support** | Native | Vendor HAL async implementations (DMA-backed futures) work directly in the partition. No kernel-side waker plumbing needed. |
+| **Syscall overhead** | Zero | Peripheral access is direct register load/store — no SVC trap, no context switch to kernel. Only interrupt notification uses the kernel path. |
+| **Shared bus support** | Indirect | Requires server partition pattern or kernel-mediated fallback. Not built-in like Approach B's virtual device multiplexing. |
+| **DMA readiness** | Native | Partition owns DMA buffers in its own RAM region. No zero-copy buffer pool or cross-partition lending needed. |
+
+**When to choose Approach D:**
+
+- The peripheral is dedicated to a single partition (most common case).
+- Partition code portability and ecosystem reuse are priorities.
+- The team wants to avoid designing and maintaining a kernel-side driver
+  abstraction layer.
+- Async/DMA support must work without kernel-side waker infrastructure.
+
+**When to avoid Approach D:**
+
+- Multiple partitions must share the same physical peripheral with
+  sub-millisecond arbitration.
+- The peripheral requires privileged-only registers that cannot be
+  exposed via MPU (rare on Cortex-M).
+- MPU region slots are exhausted (only 4 dynamic slots R4–R7 available).
+- The system requires uniform driver APIs across all partitions
+  regardless of peripheral assignment.
+
 ---
 
 ## 4  Recommendation Matrix
