@@ -3367,7 +3367,11 @@ kick (one SVC for N operations) even without DMA chaining.
 
 ### 4.1  Rating Scale
 
-Each approach is scored on six dimensions using a 1–5 scale:
+Each approach is scored on eight dimensions using a 1–5 scale.
+**Interface design cost** is weighted ×2 because the cost of designing,
+documenting, and maintaining a new ABI is the dominant long-term burden
+for a small team.  All other dimensions are weighted ×1.  Maximum
+possible weighted total is 45.
 
 | Score | Meaning |
 |-------|---------|
@@ -3379,16 +3383,18 @@ Each approach is scored on six dimensions using a 1–5 scale:
 
 ### 4.2  Scoring Table
 
-| Dimension | Approach A | Approach B | Approach C | Notes |
-|-----------|:---:|:---:|:---:|-------|
-| **Partition code portability** | 4 | 3 | 2 | A: partitions use standard embedded-hal-async traits (portable to any async executor). B: partition API is RTOS-native but structurally mirrors embedded-hal (SpiOp enum), easing mental mapping. C: fully custom API, zero portability to other platforms. |
-| **Ecosystem driver reuse** | 2 | 5 | 1 | A: async proxy satisfies trait bounds but cannot use blocking HAL crates in kernel. B: kernel directly uses existing HAL crates (stm32f4xx-hal, nrf-hal, atsamd-hal) and embedded-hal driver crates. C: no trait surface at all — every driver must be written from PAC up. |
-| **Syscall overhead** | 2 | 4 | 5 | A: 2–4 SVCs per SPI transaction without a dedicated batched syscall. B: 1 SVC per transaction (operation slice). C: 1 SVC per transaction (flat descriptor, no slice walk — marginally cheaper). |
-| **Implementation complexity** | 2 | 4 | 4 | A: async facade adds waker plumbing questions and dyn-incompatibility workarounds with no runtime benefit. B: straightforward blocking path with standard traits; one translation layer. C: simpler than B (no trait machinery) but requires more per-peripheral boilerplate. |
-| **DMA readiness** | 2 | 4 | 5 | A: per-SVC DMA reconfiguration needed; buffer ownership unclear across multiple SVCs. B: kernel owns hardware and DMA natively through SpiDevice impl. C: flat descriptor maps directly to DMA source/dest/len — simplest path to zero-copy. |
-| **Porting effort per chip family** | 3 | 4 | 3 | A: need VirtualDevice impl + SpiProxy per family (~230–330 lines total). B: need SpiMaster (embedded-hal impl) per family (~150–250 lines); leverage existing HAL crates where available. C: need raw PAC driver per family (~120–200 lines) but no HAL crate reuse means writing everything from register level. |
-| | | | | |
-| **Weighted total (equal weight)** | **15** | **24** | **20** | |
+| Dimension (weight) | A | B | C | D | E | Notes |
+|---------------------|:-:|:-:|:-:|:-:|:-:|-------|
+| **Interface design cost** (×2) | 3 | 3 | 2 | 5 | 2 | A: proxy types mirror embedded-hal-async but need waker/dyn workarounds. B: SpiOp enum + virtual device mirror layer to design. C: fully custom ABI per peripheral class. D: zero new ABI — hardware registers + community traits are the interface. E: new ring protocol ABI (descriptor format, kick/notify, completion signaling). |
+| **Partition code portability** | 4 | 3 | 2 | 5 | 2 | A: partitions use standard embedded-hal-async traits (portable to any async executor). B: partition API is RTOS-native but structurally mirrors embedded-hal (SpiOp enum), easing mental mapping. C: fully custom API, zero portability to other platforms. D: real vendor HAL code, portable between RTOS and bare-metal. E: ring protocol is RTOS-specific; adapter layer needed for embedded-hal. |
+| **Ecosystem driver reuse** | 2 | 5 | 1 | 5 | 2 | A: async proxy satisfies trait bounds but cannot use blocking HAL crates in kernel. B: kernel directly uses existing HAL crates (stm32f4xx-hal, nrf-hal, atsamd-hal) and embedded-hal driver crates. C: no trait surface at all — every driver must be written from PAC up. D: partitions run real HAL crates unmodified. E: ring descriptors bypass trait surface; per-peripheral descriptor codecs needed. |
+| **Syscall overhead** | 2 | 4 | 5 | 5 | 4 | A: 2–4 SVCs per SPI transaction without a dedicated batched syscall. B: 1 SVC per transaction (operation slice). C: 1 SVC per transaction (flat descriptor, no slice walk — marginally cheaper). D: zero SVCs — direct MMIO register access via MPU grant. E: amortized 1/N SVCs per batch (one kick for N descriptors); zero if kernel polls. |
+| **Implementation complexity** | 2 | 4 | 4 | 4 | 2 | A: async facade adds waker plumbing questions and dyn-incompatibility workarounds with no runtime benefit. B: straightforward blocking path with standard traits; one translation layer. C: simpler than B (no trait machinery) but requires more per-peripheral boilerplate. D: kernel work is MPU grant + ISR routing only; shared bus needs server partition pattern. E: ring management, buffer pool coordination, DMA scatter-gather builder — most complex kernel-side code. |
+| **DMA readiness** | 2 | 4 | 5 | 4 | 5 | A: per-SVC DMA reconfiguration needed; buffer ownership unclear across multiple SVCs. B: kernel owns hardware and DMA natively through SpiDevice impl. C: flat descriptor maps directly to DMA source/dest/len — simplest path to zero-copy. D: partition-owned DMA works natively but no kernel-managed scatter-gather. E: descriptor-to-scatter-gather mapping is direct; buffer pool slots are physically contiguous and MPU-aligned. |
+| **Porting effort per chip family** | 3 | 4 | 3 | 5 | 3 | A: need VirtualDevice impl + SpiProxy per family (~230–330 lines total). B: need SpiMaster (embedded-hal impl) per family (~150–250 lines); leverage existing HAL crates where available. C: need raw PAC driver per family (~120–200 lines) but no HAL crate reuse means writing everything from register level. D: kernel needs only MPU base/size per peripheral (~20 lines); partition uses vendor HAL as-is. E: ring infrastructure is chip-agnostic but each peripheral class needs a descriptor codec (~100–150 lines). |
+| **Async support** | 4 | 2 | 2 | 5 | 4 | A: async facade satisfies trait bounds but dyn-incompatible. B: blocking traits only; no async path without a wrapper. C: blocking kernel dispatch; no async integration. D: vendor HAL async impls (DMA-backed futures) work natively in the partition — no kernel waker plumbing. E: ring is inherently async (enqueue returns immediately, completion via status/event); maps to Future/Waker patterns. |
+| | | | | | | |
+| **Weighted total** | **25** | **32** | **26** | **43** | **26** | Interface design cost counted ×2; all others ×1. Max possible = 45. |
 
 ### 4.3  Recommendation
 
