@@ -1,7 +1,23 @@
-# TODO: reviewer requested [build] target = "thumbv7m-none-eabi" here,
-# but that forces `cargo test` onto the embedded target where no test
-# harness exists, breaking host tests.  Omitted until a per-crate
-# target override is available.
+# Multi-target workspace strategy
+# ================================
+# This workspace contains crates targeting different Cortex-M variants:
+#
+#   - kernel           → thumbv7m-none-eabi   (Cortex-M3, used by QEMU lm3s6965evb)
+#   - bsp-stm32f4      → thumbv7em-none-eabihf (Cortex-M4F, STM32F4 family)
+#   - bsp-atsamd51      → thumbv7em-none-eabihf (Cortex-M4F, Microchip SAMD51)
+#   - bsp-nrf52840      → thumbv7em-none-eabihf (Cortex-M4F, Nordic nRF52840)
+#   - rtos-traits       → any (pure-Rust, no arch dependency)
+#
+# We intentionally do NOT set [build] target here because that would
+# force `cargo test` onto an embedded target where no test harness
+# exists, breaking host-side unit tests.  Instead, each crate specifies
+# its target via `--target` on the command line (or in CI scripts).
+#
+# Runner entries below let `cargo run --target <triple>` invoke QEMU
+# automatically for both Cortex-M3 and Cortex-M4F binaries.
 
 [target.thumbv7m-none-eabi]
 runner = "qemu-system-arm -cpu cortex-m3 -machine lm3s6965evb -nographic -semihosting-config enable=on,target=native -kernel"
+
+[target.thumbv7em-none-eabihf]
+runner = "qemu-system-arm -cpu cortex-m4 -machine mps2-an385 -nographic -semihosting-config enable=on,target=native -kernel"
