@@ -121,6 +121,10 @@ fn main() -> ! {
     // SAFETY: accessing static-mut KS; single-core, interrupts not yet
     // enabled so there is no data race.
     unsafe {
+        // TODO: register devices in the registry at init time (backlog item 195).
+        #[cfg(feature = "dynamic-mpu")]
+        let mut k = Kernel::<DemoConfig>::new(kernel::virtual_device::DeviceRegistry::new());
+        #[cfg(not(feature = "dynamic-mpu"))]
         let mut k = Kernel::<DemoConfig>::new();
         s0 = k.sampling.create_port(PortDirection::Source, 10).unwrap();
         d0 = k

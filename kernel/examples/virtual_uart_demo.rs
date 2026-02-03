@@ -197,7 +197,10 @@ fn main() -> ! {
 
     // SAFETY: single-core, interrupts not yet enabled.
     unsafe {
-        store_kernel(Kernel::<DemoConfig>::new());
+        // TODO: register uart_pair backends in the registry (backlog item 195).
+        store_kernel(Kernel::<DemoConfig>::new(
+            kernel::virtual_device::DeviceRegistry::new(),
+        ));
 
         // Schedule: P1(2) → system window(1) → P2(2) → system window(1)
         let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();

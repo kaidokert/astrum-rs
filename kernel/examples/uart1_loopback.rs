@@ -425,7 +425,8 @@ fn main() -> ! {
             core::array::from_fn(|i| stacks_ref[i].0.as_ptr() as u32);
 
         // Populate the Kernel's partition table for pointer validation.
-        let mut kern = Kernel::<DemoConfig>::new();
+        // TODO: register uart_pair and hw_uart backends in the registry (backlog item 195).
+        let mut kern = Kernel::<DemoConfig>::new(kernel::virtual_device::DeviceRegistry::new());
         for (i, &base) in bases.iter().enumerate() {
             let region = MpuRegion::new(base, STACK_BYTES, 0);
             let pcb = PartitionControlBlock::new(i as u8, 0, base, base + STACK_BYTES, region);

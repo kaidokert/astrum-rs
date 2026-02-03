@@ -41,6 +41,9 @@ pub trait KernelConfig {
     /// Buffer slot size in bytes (only used with `dynamic-mpu` feature).
     #[cfg(feature = "dynamic-mpu")]
     const BZ: usize;
+    /// Device registry capacity (only used with `dynamic-mpu` feature).
+    #[cfg(feature = "dynamic-mpu")]
+    const DR: usize = 4;
 
     /// SVCall exception priority (0x00 = highest on Cortex-M).
     const SVCALL_PRIORITY: u8 = 0x00;

@@ -21,7 +21,7 @@ pub enum DeviceError {
 }
 
 /// Partition-aware virtual device trait.
-pub trait VirtualDevice {
+pub trait VirtualDevice: Send {
     fn device_id(&self) -> u8;
     fn open(&mut self, partition_id: u8) -> Result<(), DeviceError>;
     fn close(&mut self, partition_id: u8) -> Result<(), DeviceError>;

@@ -364,6 +364,8 @@ where
     [(); C::BP]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
 {
     pub partitions: PartitionTable<{ C::N }>,
     pub semaphores: SemaphorePool<{ C::S }, { C::SW }>,
@@ -392,6 +394,9 @@ where
     /// `dev_dispatch`. Set via [`set_hw_uart`](Self::set_hw_uart).
     #[cfg(feature = "dynamic-mpu")]
     pub hw_uart: Option<crate::hw_uart::HwUartBackend>,
+    /// Device registry for dynamic device dispatch.
+    #[cfg(feature = "dynamic-mpu")]
+    pub registry: crate::virtual_device::DeviceRegistry<'static, { C::DR }>,
 }
 
 impl<C: KernelConfig> Default for Kernel<C>
@@ -414,9 +419,14 @@ where
     [(); C::BP]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
 {
     fn default() -> Self {
-        Self::new()
+        Self::new(
+            #[cfg(feature = "dynamic-mpu")]
+            crate::virtual_device::DeviceRegistry::new(),
+        )
     }
 }
 
@@ -440,9 +450,20 @@ where
     [(); C::BP]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
 {
     /// Create a new `Kernel` with empty resource pools and partition table.
-    pub fn new() -> Self {
+    ///
+    /// When the `dynamic-mpu` feature is enabled, `registry` must be a
+    /// pre-constructed [`DeviceRegistry`](crate::virtual_device::DeviceRegistry)
+    /// containing all devices that `dev_dispatch` should be able to reach.
+    pub fn new(
+        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
+            'static,
+            { C::DR },
+        >,
+    ) -> Self {
         Self {
             partitions: PartitionTable::new(),
             semaphores: SemaphorePool::new(),
@@ -462,13 +483,20 @@ where
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
             #[cfg(feature = "dynamic-mpu")]
             hw_uart: None,
+            #[cfg(feature = "dynamic-mpu")]
+            registry,
         }
     }
 
     /// Install an optional hardware UART backend.
     ///
-    /// Once set, `dev_dispatch` will check this backend when the requested
-    /// `device_id` does not match either virtual UART in `uart_pair`.
+    /// Stores the backend in the `hw_uart` field for direct access (e.g.
+    /// ISR bottom-half draining).  `dev_dispatch` no longer falls back to
+    /// this field — callers must register the backend in the
+    /// [`DeviceRegistry`](crate::virtual_device::DeviceRegistry) to make
+    /// it reachable via syscall dispatch.
+    // TODO: migrate remaining callers to register hw_uart in the registry
+    // at init time, then remove this method (backlog item 195).
     #[cfg(feature = "dynamic-mpu")]
     pub fn set_hw_uart(&mut self, backend: crate::hw_uart::HwUartBackend) {
         self.hw_uart = Some(backend);
@@ -477,7 +505,8 @@ where
     /// Look up a virtual device by `device_id` and invoke `f` with a mutable
     /// reference to the device (as a trait object) and the current partition.
     ///
-    /// Checks `uart_pair` first, then falls through to `hw_uart`.
+    /// Resolves the device exclusively through the registry.  All devices
+    /// (virtual UARTs, hardware UART, etc.) must be registered at init time.
     /// Returns `InvalidResource` when the ID is unknown or `OperationFailed`
     /// when the closure returns a `DeviceError`.
     #[cfg(feature = "dynamic-mpu")]
@@ -486,18 +515,7 @@ where
         F: FnOnce(&mut dyn VirtualDevice, u8) -> Result<u32, crate::virtual_device::DeviceError>,
     {
         let pid = self.current_partition;
-        // Resolve the target device: virtual UART pair first, then hw_uart.
-        let dev: Option<&mut dyn VirtualDevice> = self
-            .uart_pair
-            .get_mut(device_id)
-            .map(|d| d as _)
-            .or_else(|| {
-                self.hw_uart
-                    .as_mut()
-                    .filter(|hw| hw.device_id() == device_id)
-                    .map(|hw| hw as _)
-            });
-        match dev {
+        match self.registry.get_mut(device_id) {
             Some(d) => match f(d, pid) {
                 Ok(val) => val,
                 Err(_) => SvcError::OperationFailed.to_u32(),
@@ -1069,8 +1087,76 @@ mod tests {
         t
     }
 
+    /// Build a default device registry with virtual UART backends for IDs 0
+    /// and 1 (matching the legacy `uart_pair` convention).
+    ///
+    /// Returns the registry and raw pointers to each backend so that tests
+    /// can call backend-specific helpers (e.g. `push_rx`, `pop_tx`) on the
+    /// same instances that `dev_dispatch` routes to.
+    #[cfg(feature = "dynamic-mpu")]
+    fn default_registry() -> (
+        crate::virtual_device::DeviceRegistry<'static, 4>,
+        *mut crate::virtual_uart::VirtualUartBackend,
+        *mut crate::virtual_uart::VirtualUartBackend,
+    ) {
+        use crate::virtual_uart::VirtualUartBackend;
+        let uart_a: &'static mut VirtualUartBackend =
+            Box::leak(Box::new(VirtualUartBackend::new(0)));
+        let ptr_a: *mut VirtualUartBackend = uart_a as *mut _;
+        let uart_b: &'static mut VirtualUartBackend =
+            Box::leak(Box::new(VirtualUartBackend::new(1)));
+        let ptr_b: *mut VirtualUartBackend = uart_b as *mut _;
+        let mut reg = crate::virtual_device::DeviceRegistry::new();
+        reg.add(uart_a).unwrap();
+        reg.add(uart_b).unwrap();
+        (reg, ptr_a, ptr_b)
+    }
+
+    /// Build a Kernel with 2 running partitions and a caller-supplied
+    /// device registry (only available with `dynamic-mpu`).
+    #[cfg(feature = "dynamic-mpu")]
+    fn kernel_with_registry(
+        sem_count: usize,
+        mtx_count: usize,
+        msg_queue_count: usize,
+        registry: crate::virtual_device::DeviceRegistry<'static, 4>,
+    ) -> Kernel<TestConfig> {
+        let t = tbl();
+        let s = SemaphorePool::<4, 4>::new();
+        let m = MutexPool::<4, 4>::new(mtx_count);
+        let mut msgs = MessagePool::<4, 4, 4, 4>::new();
+        for _ in 0..msg_queue_count {
+            msgs.add(MessageQueue::new()).unwrap();
+        }
+        let mut k = Kernel {
+            partitions: t,
+            semaphores: s,
+            mutexes: m,
+            messages: msgs,
+            tick: TickCounter::new(),
+            sampling: SamplingPortPool::new(),
+            queuing: QueuingPortPool::new(),
+            blackboards: BlackboardPool::new(),
+            current_partition: 0,
+            yield_requested: false,
+            buffers: crate::buffer_pool::BufferPool::new(),
+            uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
+            isr_ring: crate::split_isr::IsrRingBuffer::new(),
+            hw_uart: None,
+            registry,
+        };
+        for _ in 0..sem_count {
+            k.semaphores.add(Semaphore::new(1, 2)).unwrap();
+        }
+        k
+    }
+
     /// Build a Kernel with 2 running partitions, the given semaphore count,
     /// mutex count, and message queue count.
+    ///
+    /// When `dynamic-mpu` is enabled the kernel is constructed with a
+    /// [`DeviceRegistry`] pre-populated with virtual UART backends for
+    /// device IDs 0 and 1.
     fn kernel(sem_count: usize, mtx_count: usize, msg_queue_count: usize) -> Kernel<TestConfig> {
         let t = tbl();
         let s = SemaphorePool::<4, 4>::new();
@@ -1098,6 +1184,8 @@ mod tests {
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
             #[cfg(feature = "dynamic-mpu")]
             hw_uart: None,
+            #[cfg(feature = "dynamic-mpu")]
+            registry: default_registry().0,
         };
         // Add semaphores
         for _ in 0..sem_count {
@@ -1648,7 +1736,8 @@ mod tests {
     #[test]
     fn dev_write_dispatch_routes_to_uart() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_WRITE};
-        let mut k = kernel(0, 0, 0);
+        let (registry, uart_a, _) = default_registry();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
@@ -1658,20 +1747,26 @@ mod tests {
         let mut ef = frame4(SYS_DEV_WRITE, 0, 3, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 3);
-        assert_eq!(k.uart_pair.a.pop_tx(), Some(0xAA));
-        assert_eq!(k.uart_pair.a.pop_tx(), Some(0xBB));
-        assert_eq!(k.uart_pair.a.pop_tx(), Some(0xCC));
+        // SAFETY: uart_a points to a leaked VirtualUartBackend that is only
+        // accessed mutably here (dispatch is complete, no aliasing).
+        let ua = unsafe { &mut *uart_a };
+        assert_eq!(ua.pop_tx(), Some(0xAA));
+        assert_eq!(ua.pop_tx(), Some(0xBB));
+        assert_eq!(ua.pop_tx(), Some(0xCC));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_dispatch_routes_to_uart() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ};
-        let mut k = kernel(0, 0, 0);
+        let (registry, uart_a, _) = default_registry();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        k.uart_pair.a.push_rx(&[0xDE, 0xAD]);
+        // SAFETY: uart_a points to a leaked VirtualUartBackend; no aliasing
+        // because we only touch it here outside of dispatch.
+        unsafe { &mut *uart_a }.push_rx(&[0xDE, 0xAD]);
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_DEV_READ, 0, 4, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
@@ -1686,13 +1781,16 @@ mod tests {
     fn dev_ioctl_dispatch_routes_to_uart() {
         use crate::syscall::{SYS_DEV_IOCTL, SYS_DEV_OPEN};
         use crate::virtual_uart::IOCTL_AVAILABLE;
-        let mut k = kernel(0, 0, 0);
+        let (registry, _, uart_b) = default_registry();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open device 1
         let mut ef = frame(SYS_DEV_OPEN, 1, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Push some RX data into UART-B
-        k.uart_pair.b.push_rx(&[1, 2, 3]);
+        // SAFETY: uart_b points to a leaked VirtualUartBackend; no aliasing
+        // because we only touch it here outside of dispatch.
+        unsafe { &mut *uart_b }.push_rx(&[1, 2, 3]);
         // IOCTL_AVAILABLE should return 3
         let mut ef = frame4(SYS_DEV_IOCTL, 1, IOCTL_AVAILABLE, 0);
         unsafe { k.dispatch(&mut ef) };
@@ -1730,9 +1828,11 @@ mod tests {
         use crate::hw_uart::HwUartBackend;
         use crate::syscall::{SYS_DEV_CLOSE, SYS_DEV_OPEN};
         use crate::uart_hal::UartRegs;
-        let mut k = kernel(0, 0, 0);
-        k.set_hw_uart(HwUartBackend::new(5, UartRegs::new(0x4000_C000)));
-        // Open hw_uart device 5
+        let (mut registry, _, _) = default_registry();
+        let hw = Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
+        registry.add(hw).unwrap();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
+        // Open hw_uart device 5 (registered in the registry)
         let mut ef = frame(SYS_DEV_OPEN, 5, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
@@ -1748,8 +1848,10 @@ mod tests {
         use crate::hw_uart::HwUartBackend;
         use crate::syscall::SYS_DEV_CLOSE;
         use crate::uart_hal::UartRegs;
-        let mut k = kernel(0, 0, 0);
-        k.set_hw_uart(HwUartBackend::new(5, UartRegs::new(0x4000_C000)));
+        let (mut registry, _, _) = default_registry();
+        let hw = Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
+        registry.add(hw).unwrap();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         // Close device 5 without opening — HwUartBackend checks require_open,
         // so this returns OperationFailed.
         let mut ef = frame(SYS_DEV_CLOSE, 5, 0);
@@ -2325,17 +2427,20 @@ mod tests {
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
-    /// After set_hw_uart, dev_dispatch routes to the hw backend.
+    /// After registering hw_uart in the registry, dev_dispatch routes to it.
     #[cfg(feature = "dynamic-mpu")]
     #[test]
-    fn hw_uart_set_and_dispatch_open_write_read() {
+    fn hw_uart_registered_and_dispatch_open_write_read() {
         use crate::hw_uart::HwUartBackend;
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE};
         use crate::uart_hal::UartRegs;
-        let mut k = kernel(0, 0, 0);
-        k.set_hw_uart(HwUartBackend::new(5, UartRegs::new(0x4000_C000)));
-        assert!(k.hw_uart.is_some());
-        // Open hw_uart device 5.
+        let (mut registry, _, _) = default_registry();
+        let hw: &'static mut HwUartBackend =
+            Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
+        let hw_ptr: *mut HwUartBackend = hw as *mut _;
+        registry.add(hw).unwrap();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
+        // Open hw_uart device 5 (now in the registry).
         let mut ef = frame(SYS_DEV_OPEN, 5, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
@@ -2347,7 +2452,9 @@ mod tests {
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 3);
         // Inject bytes into hw_uart RX and read them back.
-        k.hw_uart.as_mut().unwrap().push_rx(&[0xAA, 0xBB]);
+        // SAFETY: hw_ptr points to a leaked HwUartBackend; no aliasing
+        // because dispatch is not active.
+        unsafe { &mut *hw_ptr }.push_rx(&[0xAA, 0xBB]);
         let mut ef = frame4(SYS_DEV_READ, 5, 4, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 2);
@@ -2356,30 +2463,43 @@ mod tests {
         assert_eq!(out, &[0xAA, 0xBB]);
     }
 
-    /// Virtual UARTs take priority over hw_uart when IDs overlap.
+    /// Registry rejects duplicate device IDs, preventing shadowing.
     #[cfg(feature = "dynamic-mpu")]
     #[test]
-    fn hw_uart_does_not_shadow_virtual_uart() {
+    fn registry_rejects_duplicate_device_id() {
         use crate::hw_uart::HwUartBackend;
-        use crate::syscall::SYS_DEV_OPEN;
         use crate::uart_hal::UartRegs;
-        let mut k = kernel(0, 0, 0);
-        // Install hw_uart with device_id = 0 (same as virtual UART-A).
-        k.set_hw_uart(HwUartBackend::new(0, UartRegs::new(0x4000_C000)));
-        // Open device 0 — should route to virtual UART-A, not hw_uart.
-        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        let (mut registry, _, _) = default_registry();
+        // Attempt to register hw_uart with device_id = 0 (same as UART-A).
+        let hw = Box::leak(Box::new(HwUartBackend::new(0, UartRegs::new(0x4000_C000))));
+        assert_eq!(
+            registry.add(hw),
+            Err(crate::virtual_device::DeviceError::DuplicateId)
+        );
+    }
+
+    // ---- device registry integration tests ----
+
+    /// Open + close lifecycle via a device registered in the registry.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn registry_dispatch_open_close_lifecycle() {
+        use crate::syscall::{SYS_DEV_CLOSE, SYS_DEV_OPEN};
+        use crate::virtual_uart::VirtualUartBackend;
+        let (mut registry, _, _) = default_registry();
+        let dev = Box::leak(Box::new(VirtualUartBackend::new(10)));
+        registry.add(dev).unwrap();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
+        let mut ef = frame(SYS_DEV_OPEN, 10, 0);
+        // SAFETY: dispatch requires a mutable ExceptionFrame pointer. The
+        // frame lives on the stack and is not accessed concurrently; this is
+        // a single-threaded test with no real interrupt context.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        // Write via device 0 goes to virtual UART-A TX.
-        let ptr = low32_buf(0);
-        // SAFETY: ptr points to a valid mmap'd page within MPU region.
-        unsafe { core::ptr::copy_nonoverlapping([0xFF].as_ptr(), ptr, 1) };
-        let mut ef = frame4(crate::syscall::SYS_DEV_WRITE, 0, 1, ptr as u32);
+        let mut ef = frame(SYS_DEV_CLOSE, 10, 0);
+        // SAFETY: same as above — single-threaded test, frame on the stack.
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 1);
-        // Byte should be in virtual UART-A's TX, not hw_uart's TX.
-        assert_eq!(k.uart_pair.a.pop_tx(), Some(0xFF));
-        assert_eq!(k.hw_uart.as_ref().unwrap().tx_len(), 0);
+        assert_eq!(ef.r0, 0);
     }
 
     // --- expire_timed_waits tests ---

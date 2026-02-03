@@ -320,7 +320,10 @@ fn main() -> ! {
             stack_size: STACK_SIZE,
             mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SIZES[i], 0),
         });
-        store_kernel(Kernel::<TestConfig>::new());
+        // TODO: register devices in the registry at init time (backlog item 195).
+        store_kernel(Kernel::<TestConfig>::new(
+            kernel::virtual_device::DeviceRegistry::new(),
+        ));
         // Register partitions in the Kernel struct so that
         // validate_user_ptr can verify SVC pointer arguments.
         // TODO: DRY – PCB construction from PartitionConfig is duplicated here
