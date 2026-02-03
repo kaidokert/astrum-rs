@@ -855,9 +855,11 @@ where
             Some(SyscallId::DevIoctl) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
                 dev.ioctl(pid, frame.r2, frame.r3)
             }),
-            // TODO: DevClose dispatch will be added in the subsequent implementation subtask.
             #[cfg(feature = "dynamic-mpu")]
-            Some(SyscallId::DevClose) => SvcError::InvalidSyscall.to_u32(),
+            Some(SyscallId::DevClose) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
+                dev.close(pid)?;
+                Ok(0)
+            }),
             Some(SyscallId::QueuingRecvTimed) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
@@ -1720,6 +1722,50 @@ mod tests {
         let mut ef = frame4(SYS_DEV_IOCTL, 99, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_close_after_open_returns_success() {
+        use crate::hw_uart::HwUartBackend;
+        use crate::syscall::{SYS_DEV_CLOSE, SYS_DEV_OPEN};
+        use crate::uart_hal::UartRegs;
+        let mut k = kernel(0, 0, 0);
+        k.set_hw_uart(HwUartBackend::new(5, UartRegs::new(0x4000_C000)));
+        // Open hw_uart device 5
+        let mut ef = frame(SYS_DEV_OPEN, 5, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Close device 5 — should succeed
+        let mut ef = frame(SYS_DEV_CLOSE, 5, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_close_without_open_returns_error() {
+        use crate::hw_uart::HwUartBackend;
+        use crate::syscall::SYS_DEV_CLOSE;
+        use crate::uart_hal::UartRegs;
+        let mut k = kernel(0, 0, 0);
+        k.set_hw_uart(HwUartBackend::new(5, UartRegs::new(0x4000_C000)));
+        // Close device 5 without opening — HwUartBackend checks require_open,
+        // so this returns OperationFailed.
+        let mut ef = frame(SYS_DEV_CLOSE, 5, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::OperationFailed.to_u32());
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_close_invalid_device_returns_invalid_resource() {
+        use crate::syscall::SYS_DEV_CLOSE;
+        let mut k = kernel(0, 0, 0);
+        // Close non-existent device 99
+        let mut ef = frame(SYS_DEV_CLOSE, 99, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
     // ---- InvalidPointer and validate_user_ptr tests ----
