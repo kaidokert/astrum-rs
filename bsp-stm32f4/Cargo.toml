@@ -1,0 +1,11 @@
+[package]
+name = "bsp-stm32f4"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kernel = { path = "../kernel" }
+rtos-traits = { path = "../rtos-traits" }
+stm32f4 = { version = "0.15", features = ["stm32f429", "rt"] }
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
