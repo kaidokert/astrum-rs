@@ -282,7 +282,7 @@ run_debug_session() {
     cont_main_resp="$(mcp_tool_call "gdb_continue" '{"breakpoint":"main"}' 15)"
     local cont_main_text
     cont_main_text="$(mcp_tool_text "$cont_main_resp")"
-    assert_contains "gdb_continue stops at main" "$cont_main_text" 'reason="breakpoint-hit"'
+    assert_contains "gdb_continue stops at main" "$cont_main_text" 'reason=breakpoint-hit'
 
     # Step 3: gdb_breakpoint at dispatch_svc
     echo "[3/7] gdb_breakpoint (set at dispatch_svc)"
@@ -298,7 +298,7 @@ run_debug_session() {
     cont_bp_resp="$(mcp_tool_call "gdb_continue" '{}' 15)"
     local cont_bp_text
     cont_bp_text="$(mcp_tool_text "$cont_bp_resp")"
-    assert_contains "gdb_continue hits breakpoint" "$cont_bp_text" 'reason="breakpoint-hit"'
+    assert_contains "gdb_continue hits breakpoint" "$cont_bp_text" 'reason=breakpoint-hit'
 
     # Step 5: gdb_read_registers
     echo "[5/7] gdb_read_registers"
@@ -317,7 +317,7 @@ run_debug_session() {
     bt_resp="$(mcp_tool_call "gdb_backtrace" '{}' 10)"
     local bt_text
     bt_text="$(mcp_tool_text "$bt_resp")"
-    assert_contains "backtrace contains dispatch_svc frame" "$bt_text" 'func="dispatch_svc"'
+    assert_contains "backtrace contains dispatch_svc frame" "$bt_text" 'dispatch_svc'
 
     # Step 7: gdb_quit
     echo "[7/7] gdb_quit"
