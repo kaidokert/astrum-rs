@@ -128,6 +128,18 @@ pub fn on_systick_dynamic<const P: usize, const S: usize>(
     event
 }
 
+/// Result of bottom-half processing.
+#[cfg(feature = "dynamic-mpu")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BottomHalfResult {
+    /// Bytes transferred UART-A TX → UART-B RX.
+    pub a_to_b: usize,
+    /// Bytes transferred UART-B TX → UART-A RX.
+    pub b_to_a: usize,
+    /// `true` when at least one device has RX data and a reader should be woken.
+    pub has_rx_data: bool,
+}
+
 /// Bottom-half processing for system window ticks.
 ///
 /// Called by the SysTick handler (or test harness) when
@@ -145,8 +157,7 @@ pub fn on_systick_dynamic<const P: usize, const S: usize>(
 ///    to hardware.
 /// 4. Revokes expired buffer pool borrows whose deadline has elapsed.
 ///
-/// Returns the number of bytes transferred by the UART pair as
-/// `(a_to_b, b_to_a)`.
+/// Returns a [`BottomHalfResult`] with transfer counts and `has_rx_data`.
 #[cfg(feature = "dynamic-mpu")]
 pub fn run_bottom_half<const D: usize, const M: usize, const BP: usize, const BZ: usize>(
     uart_pair: &mut crate::virtual_uart::VirtualUartPair,
@@ -155,9 +166,9 @@ pub fn run_bottom_half<const D: usize, const M: usize, const BP: usize, const BZ
     hw_uart: &mut Option<crate::hw_uart::HwUartBackend>,
     current_tick: u64,
     strategy: &dyn crate::mpu_strategy::MpuStrategy,
-) -> (usize, usize) {
+) -> BottomHalfResult {
     use crate::virtual_device::VirtualDevice;
-    let counts = uart_pair.transfer();
+    let (a_to_b, b_to_a) = uart_pair.transfer();
     let a_id = uart_pair.a.device_id();
     let b_id = uart_pair.b.device_id();
     while isr_ring.pop_with(|tag, data| {
@@ -175,7 +186,17 @@ pub fn run_bottom_half<const D: usize, const M: usize, const BP: usize, const BZ
         hw.drain_tx_to_hw();
     }
     buffers.revoke_expired(current_tick, strategy);
-    counts
+
+    // Check whether any device has pending RX data for the caller.
+    let has_rx_data = uart_pair.a.rx_len() > 0
+        || uart_pair.b.rx_len() > 0
+        || hw_uart.as_ref().is_some_and(|hw| hw.rx_len() > 0);
+
+    BottomHalfResult {
+        a_to_b,
+        b_to_a,
+        has_rx_data,
+    }
 }
 
 /// Test-mode helper: simulates [`on_systick_dynamic`] without hardware.
@@ -416,7 +437,7 @@ mod tests {
             let ds = DynamicStrategy::new();
 
             pair.a.push_tx(&[0xAA, 0xBB]);
-            let (a_to_b, b_to_a) = crate::tick::run_bottom_half(
+            let bh = crate::tick::run_bottom_half(
                 &mut pair,
                 &mut ring,
                 &mut buffers,
@@ -424,8 +445,8 @@ mod tests {
                 0,
                 &ds,
             );
-            assert_eq!(a_to_b, 2);
-            assert_eq!(b_to_a, 0);
+            assert_eq!(bh.a_to_b, 2);
+            assert_eq!(bh.b_to_a, 0);
 
             let mut buf = [0u8; 4];
             assert_eq!(pair.b.pop_rx(&mut buf), 2);
@@ -461,7 +482,7 @@ mod tests {
             let mut buffers = BufferPool::<4, 32>::new();
             let mut hw_uart = None;
             let ds = DynamicStrategy::new();
-            let (a, b) = crate::tick::run_bottom_half(
+            let bh = crate::tick::run_bottom_half(
                 &mut pair,
                 &mut ring,
                 &mut buffers,
@@ -469,7 +490,8 @@ mod tests {
                 0,
                 &ds,
             );
-            assert_eq!((a, b), (0, 0));
+            assert_eq!((bh.a_to_b, bh.b_to_a), (0, 0));
+            assert!(!bh.has_rx_data);
         }
 
         #[test]
@@ -701,6 +723,53 @@ mod tests {
                 crate::buffer_pool::BorrowState::BorrowedWrite { owner: 1 },
             );
             assert!(ds.slot(5).is_some());
+        }
+
+        // ---- device reader wake-up bottom-half tests ----
+
+        #[test]
+        fn run_bottom_half_has_rx_data_set_when_data_arrives() {
+            let mut pair = VirtualUartPair::new(0, 1);
+            let mut ring = IsrRingBuffer::<4, 8>::new();
+            let mut buffers = BufferPool::<4, 32>::new();
+            let mut hw_uart = None;
+            let ds = DynamicStrategy::new();
+
+            // Push data into UART-A TX so transfer delivers it to UART-B RX.
+            pair.a.push_tx(&[0x42]);
+
+            let bh = crate::tick::run_bottom_half(
+                &mut pair,
+                &mut ring,
+                &mut buffers,
+                &mut hw_uart,
+                10,
+                &ds,
+            );
+
+            // Data arrived in UART-B RX → has_rx_data should be true.
+            assert!(bh.has_rx_data);
+        }
+
+        #[test]
+        fn run_bottom_half_has_rx_data_false_when_no_data() {
+            let mut pair = VirtualUartPair::new(0, 1);
+            let mut ring = IsrRingBuffer::<4, 8>::new();
+            let mut buffers = BufferPool::<4, 32>::new();
+            let mut hw_uart = None;
+            let ds = DynamicStrategy::new();
+
+            let bh = crate::tick::run_bottom_half(
+                &mut pair,
+                &mut ring,
+                &mut buffers,
+                &mut hw_uart,
+                10,
+                &ds,
+            );
+
+            // No data arrived → has_rx_data should be false.
+            assert!(!bh.has_rx_data);
         }
     }
 }

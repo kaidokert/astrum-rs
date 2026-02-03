@@ -536,15 +536,20 @@ where
     /// `heapless::Vec<u8, E>`, then transitions each from
     /// [`Waiting`](PartitionState::Waiting) to [`Ready`](PartitionState::Ready).
     ///
+    /// With `dynamic-mpu`, also drains the device wait queue.
+    ///
     /// The tick handler should call this once per tick so that blocked
     /// senders/receivers are woken when their timeout elapses.
     ///
     /// `E` must be large enough to hold the total number of expired partition
-    /// IDs across both subsystems in a single tick.
+    /// IDs across all subsystems in a single tick.
     pub fn expire_timed_waits<const E: usize>(&mut self, current_tick: u64) {
         let mut expired: heapless::Vec<u8, E> = heapless::Vec::new();
         self.queuing.tick_timeouts(current_tick, &mut expired);
         self.blackboards.tick_timeouts(current_tick, &mut expired);
+        #[cfg(feature = "dynamic-mpu")]
+        self.dev_wait_queue
+            .drain_expired(current_tick, &mut expired);
         for &pid in expired.iter() {
             try_transition(&mut self.partitions, pid, PartitionState::Ready);
         }
@@ -1000,7 +1005,7 @@ where
 }
 
 /// Try to transition partition `pid` to `state`. Returns `true` on success.
-fn try_transition<const N: usize>(
+pub fn try_transition<const N: usize>(
     partitions: &mut PartitionTable<N>,
     pid: u8,
     state: PartitionState,
@@ -2795,5 +2800,30 @@ mod tests {
             k.partitions.get(0).unwrap().state(),
             PartitionState::Waiting
         );
+    }
+
+    // --- device wait queue expiry tests ---
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn expire_timed_waits_device_reader_expiry() {
+        let mut k = kernel(0, 0, 0);
+        k.dev_wait_queue.block_reader(0, 100).unwrap();
+        k.partitions
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        // Before expiry: stays Waiting.
+        k.expire_timed_waits::<8>(99);
+        assert_eq!(
+            k.partitions.get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(k.dev_wait_queue.len(), 1);
+        // At expiry: transitions Waiting→Ready.
+        k.expire_timed_waits::<8>(100);
+        assert_eq!(k.partitions.get(0).unwrap().state(), PartitionState::Ready);
+        assert!(k.dev_wait_queue.is_empty());
     }
 }

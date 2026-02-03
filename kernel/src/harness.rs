@@ -93,7 +93,8 @@ macro_rules! _harness_handle_yield {
 
 /// Dynamic-mpu variant: if yield lands on a system window, run the
 /// bottom-half using the already-borrowed kernel reference and keep
-/// advancing until a partition slot is reached.
+/// advancing until a partition slot is reached. When the bottom-half
+/// detects RX data, the oldest blocked device reader is woken.
 #[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 #[doc(hidden)]
@@ -109,7 +110,7 @@ macro_rules! _harness_handle_yield {
                 break;
             }
             if result.is_system_window() {
-                $crate::tick::run_bottom_half(
+                let bh = $crate::tick::run_bottom_half(
                     &mut $kern.uart_pair,
                     &mut $kern.isr_ring,
                     &mut $kern.buffers,
@@ -117,6 +118,15 @@ macro_rules! _harness_handle_yield {
                     $tick,
                     $strategy,
                 );
+                if bh.has_rx_data {
+                    if let Some(woken) = $kern.dev_wait_queue.wake_one_reader() {
+                        $crate::svc::try_transition(
+                            &mut $kern.partitions,
+                            woken,
+                            $crate::partition::PartitionState::Ready,
+                        );
+                    }
+                }
                 continue;
             }
             // ScheduleEvent::None — schedule not started or empty.
@@ -143,11 +153,10 @@ macro_rules! _harness_handle_tick {
 /// Internal helper (dynamic-mpu variant).
 ///
 /// On `PartitionSwitch` this behaves identically to the non-dynamic
-/// variant.  On `SystemWindow` it borrows `KERN` (the
-/// `Mutex<RefCell<Option<Kernel<…>>>>` emitted by
-/// [`define_dispatch_hook!`]) and calls
+/// variant.  On `SystemWindow` it borrows `KERN` and calls
 /// [`run_bottom_half`](crate::tick::run_bottom_half) to perform
-/// deferred kernel work (UART transfer, ISR drain, buffer revocation).
+/// deferred kernel work (UART transfer, ISR drain, buffer revocation,
+/// and device reader wake-up).
 #[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 #[doc(hidden)]
@@ -164,7 +173,7 @@ macro_rules! _harness_handle_tick {
             $crate::scheduler::ScheduleEvent::SystemWindow => {
                 ::cortex_m::interrupt::free(|cs| {
                     if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-                        $crate::tick::run_bottom_half(
+                        let bh = $crate::tick::run_bottom_half(
                             &mut k.uart_pair,
                             &mut k.isr_ring,
                             &mut k.buffers,
@@ -172,6 +181,15 @@ macro_rules! _harness_handle_tick {
                             $tick,
                             $strategy,
                         );
+                        if bh.has_rx_data {
+                            if let Some(woken) = k.dev_wait_queue.wake_one_reader() {
+                                $crate::svc::try_transition(
+                                    &mut k.partitions,
+                                    woken,
+                                    $crate::partition::PartitionState::Ready,
+                                );
+                            }
+                        }
                     }
                 });
             }
