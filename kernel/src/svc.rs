@@ -792,8 +792,17 @@ where
                 } else {
                     BorrowMode::Write
                 };
+                let max_ticks = frame.r2;
                 match self.buffers.alloc(self.current_partition, m) {
-                    Some(slot) => slot as u32,
+                    Some(slot) => {
+                        if max_ticks > 0 {
+                            let deadline = self.tick.get().wrapping_add(max_ticks as u64);
+                            // set_deadline cannot fail here: slot is valid and
+                            // just-allocated (non-free), so we ignore the result.
+                            let _ = self.buffers.set_deadline(slot, Some(deadline));
+                        }
+                        slot as u32
+                    }
                     None => SvcError::OperationFailed.to_u32(),
                 }
             }
@@ -1695,6 +1704,29 @@ mod tests {
         assert_eq!(svc!(SYS_BUF_RELEASE, 0), eres); // double-release
         k.current_partition = 1; // switch to partition 1
         assert_eq!(svc!(SYS_BUF_RELEASE, 1), eres); // wrong owner
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_alloc_sets_deadline_from_r2() {
+        use crate::syscall::SYS_BUF_ALLOC;
+        let mut k = kernel(0, 0, 0);
+
+        // r2=0 → no deadline
+        let mut ef = frame(SYS_BUF_ALLOC, 1, 0);
+        // SAFETY: test-only dispatch on a valid ExceptionFrame.
+        unsafe { k.dispatch(&mut ef) };
+        let slot0 = ef.r0 as usize;
+        assert_eq!(slot0, 0);
+        assert_eq!(k.buffers.deadline(slot0), None);
+
+        // r2=100 → deadline = tick + 100; tick starts at 0 ⇒ deadline=100
+        let mut ef = frame(SYS_BUF_ALLOC, 0, 100);
+        // SAFETY: test-only dispatch on a valid ExceptionFrame.
+        unsafe { k.dispatch(&mut ef) };
+        let slot1 = ef.r0 as usize;
+        assert_eq!(slot1, 1);
+        assert_eq!(k.buffers.deadline(slot1), Some(100));
     }
 
     #[cfg(feature = "dynamic-mpu")]

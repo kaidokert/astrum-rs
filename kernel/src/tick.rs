@@ -143,7 +143,7 @@ pub fn on_systick_dynamic<const P: usize, const S: usize>(
 /// 3. If `hw_uart` is `Some`, calls
 ///    [`HwUartBackend::drain_tx_to_hw`] to flush the TX ring buffer
 ///    to hardware.
-/// 4. Revokes expired buffer pool borrows (placeholder — see TODO).
+/// 4. Revokes expired buffer pool borrows whose deadline has elapsed.
 ///
 /// Returns the number of bytes transferred by the UART pair as
 /// `(a_to_b, b_to_a)`.
@@ -153,6 +153,8 @@ pub fn run_bottom_half<const D: usize, const M: usize, const BP: usize, const BZ
     isr_ring: &mut crate::split_isr::IsrRingBuffer<D, M>,
     buffers: &mut crate::buffer_pool::BufferPool<BP, BZ>,
     hw_uart: &mut Option<crate::hw_uart::HwUartBackend>,
+    current_tick: u64,
+    strategy: &dyn crate::mpu_strategy::MpuStrategy,
 ) -> (usize, usize) {
     use crate::virtual_device::VirtualDevice;
     let counts = uart_pair.transfer();
@@ -172,10 +174,7 @@ pub fn run_bottom_half<const D: usize, const M: usize, const BP: usize, const BZ
     if let Some(hw) = hw_uart.as_mut() {
         hw.drain_tx_to_hw();
     }
-    // TODO: revoke expired buffer pool borrows — BufferPool lacks a
-    // time-based sweep method; add BufferPool::revoke_expired(tick,
-    // &mut dyn MpuStrategy) when timed-lending is implemented.
-    let _ = buffers;
+    buffers.revoke_expired(current_tick, strategy);
     counts
 }
 
@@ -414,10 +413,17 @@ mod tests {
             let mut ring = IsrRingBuffer::<4, 8>::new();
             let mut buffers = BufferPool::<4, 32>::new();
             let mut hw_uart = None;
+            let ds = DynamicStrategy::new();
 
             pair.a.push_tx(&[0xAA, 0xBB]);
-            let (a_to_b, b_to_a) =
-                crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+            let (a_to_b, b_to_a) = crate::tick::run_bottom_half(
+                &mut pair,
+                &mut ring,
+                &mut buffers,
+                &mut hw_uart,
+                0,
+                &ds,
+            );
             assert_eq!(a_to_b, 2);
             assert_eq!(b_to_a, 0);
 
@@ -433,11 +439,12 @@ mod tests {
             let mut ring = IsrRingBuffer::<4, 8>::new();
             let mut buffers = BufferPool::<4, 32>::new();
             let mut hw_uart = None;
+            let ds = DynamicStrategy::new();
             // Push ISR records tagged with device IDs 0 and 1.
             ring.push_from_isr(1, &[10]).unwrap();
             ring.push_from_isr(0, &[20, 30]).unwrap();
 
-            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart, 0, &ds);
             assert!(ring.is_empty());
             // Tag 1 → UART-B RX, tag 0 → UART-A RX.
             let mut buf = [0u8; 4];
@@ -453,8 +460,15 @@ mod tests {
             let mut ring = IsrRingBuffer::<4, 8>::new();
             let mut buffers = BufferPool::<4, 32>::new();
             let mut hw_uart = None;
-            let (a, b) =
-                crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+            let ds = DynamicStrategy::new();
+            let (a, b) = crate::tick::run_bottom_half(
+                &mut pair,
+                &mut ring,
+                &mut buffers,
+                &mut hw_uart,
+                0,
+                &ds,
+            );
             assert_eq!((a, b), (0, 0));
         }
 
@@ -478,7 +492,14 @@ mod tests {
             for _ in 0..5 {
                 let event = on_systick_dynamic_test(&mut st, &ds);
                 if matches!(event, ScheduleEvent::SystemWindow) {
-                    crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut None);
+                    crate::tick::run_bottom_half(
+                        &mut pair,
+                        &mut ring,
+                        &mut buffers,
+                        &mut None,
+                        0,
+                        &ds,
+                    );
                     saw_system_window = true;
                 }
             }
@@ -529,7 +550,8 @@ mod tests {
             assert_eq!(hw.tx_len(), 3);
 
             let mut hw_uart = Some(hw);
-            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+            let ds = DynamicStrategy::new();
+            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart, 0, &ds);
 
             // TX ring should be drained to hardware.
             assert_eq!(hw_uart.as_ref().unwrap().tx_len(), 0);
@@ -548,7 +570,8 @@ mod tests {
             ring.push_from_isr(0, &[0x10]).unwrap();
             ring.push_from_isr(5, &[0x20, 0x30]).unwrap();
 
-            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+            let ds = DynamicStrategy::new();
+            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart, 0, &ds);
 
             assert!(ring.is_empty());
             // Virtual UART-A should have received tag-0 data.
@@ -577,7 +600,8 @@ mod tests {
             assert_eq!(hw.rx_len(), 0);
 
             let mut hw_uart = Some(hw);
-            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+            let ds = DynamicStrategy::new();
+            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart, 0, &ds);
 
             let hw = hw_uart.as_mut().unwrap();
             // TX drained, bytes looped back into RX.
@@ -599,12 +623,84 @@ mod tests {
             let mut hw_uart: Option<HwUartBackend> = None;
 
             ring.push_from_isr(99, &[0xFF]).unwrap();
-            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart);
+            let ds = DynamicStrategy::new();
+            crate::tick::run_bottom_half(&mut pair, &mut ring, &mut buffers, &mut hw_uart, 0, &ds);
             // Ring should be drained (record consumed but tag unmatched).
             assert!(ring.is_empty());
             // No crash, no data routed.
             assert_eq!(pair.a.rx_len(), 0);
             assert_eq!(pair.b.rx_len(), 0);
+        }
+
+        // ---- buffer revocation bottom-half tests ----
+
+        #[test]
+        fn run_bottom_half_revokes_expired_buffers() {
+            let mut pair = VirtualUartPair::new(0, 1);
+            let mut ring = IsrRingBuffer::<4, 8>::new();
+            let mut buffers = BufferPool::<4, 32>::new();
+            let mut hw_uart = None;
+            let ds = DynamicStrategy::new();
+
+            // Lend slot 0 with deadline=50, slot 1 with deadline=200.
+            buffers.lend_to_partition(0, 1, false, &ds).unwrap();
+            buffers.set_deadline(0, Some(50)).unwrap();
+            buffers.lend_to_partition(1, 2, true, &ds).unwrap();
+            buffers.set_deadline(1, Some(200)).unwrap();
+
+            // At tick=100, slot 0 is expired (deadline 50 <= 100), slot 1 is not.
+            crate::tick::run_bottom_half(
+                &mut pair,
+                &mut ring,
+                &mut buffers,
+                &mut hw_uart,
+                100,
+                &ds,
+            );
+
+            // Slot 0: revoked (free, MPU window removed, deadline cleared).
+            assert_eq!(
+                buffers.get(0).unwrap().state(),
+                crate::buffer_pool::BorrowState::Free,
+            );
+            assert!(ds.slot(5).is_none());
+            assert_eq!(buffers.deadline(0), None);
+
+            // Slot 1: still active (deadline 200 > 100).
+            assert_eq!(
+                buffers.get(1).unwrap().state(),
+                crate::buffer_pool::BorrowState::BorrowedWrite { owner: 2 },
+            );
+            assert!(ds.slot(6).is_some());
+            assert_eq!(buffers.deadline(1), Some(200));
+        }
+
+        #[test]
+        fn run_bottom_half_no_deadline_not_revoked() {
+            let mut pair = VirtualUartPair::new(0, 1);
+            let mut ring = IsrRingBuffer::<4, 8>::new();
+            let mut buffers = BufferPool::<4, 32>::new();
+            let mut hw_uart = None;
+            let ds = DynamicStrategy::new();
+
+            // Lend slot 0 with no deadline.
+            buffers.lend_to_partition(0, 1, true, &ds).unwrap();
+
+            // Even at a very high tick, the slot should not be revoked.
+            crate::tick::run_bottom_half(
+                &mut pair,
+                &mut ring,
+                &mut buffers,
+                &mut hw_uart,
+                u64::MAX,
+                &ds,
+            );
+
+            assert_eq!(
+                buffers.get(0).unwrap().state(),
+                crate::buffer_pool::BorrowState::BorrowedWrite { owner: 1 },
+            );
+            assert!(ds.slot(5).is_some());
         }
     }
 }

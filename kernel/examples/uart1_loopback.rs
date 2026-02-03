@@ -102,15 +102,20 @@ fn record(pass: bool, name: &str) {
     });
 }
 
+static STRATEGY: kernel::mpu_strategy::DynamicStrategy =
+    kernel::mpu_strategy::DynamicStrategy::new();
+
 /// Run the bottom-half processing for virtual-UART, ISR-ring, and
 /// HwUartBackend.  Software loopback is handled internally by
 /// `HwUartBackend::drain_tx_to_hw` when loopback mode is enabled.
-fn do_bottom_half(k: &mut Kernel<DemoConfig>) {
+fn do_bottom_half(k: &mut Kernel<DemoConfig>, current_tick: u64) {
     kernel::tick::run_bottom_half(
         &mut k.uart_pair,
         &mut k.isr_ring,
         &mut k.buffers,
         &mut k.hw_uart,
+        current_tick,
+        &STRATEGY,
     );
 }
 
@@ -130,7 +135,7 @@ kernel::define_dispatch_hook!(DemoConfig, |k| {
                 break;
             }
             // System window or None — run software loopback and advance.
-            do_bottom_half(k);
+            do_bottom_half(k, ks.tick().get());
         }
     }
 });
@@ -148,7 +153,9 @@ fn SysTick() {
     // SAFETY: single-core Cortex-M — SysTick has exclusive access to KS
     // because higher-priority interrupts do not touch it, and PendSV
     // (lower priority) cannot preempt us.
-    let event = unsafe { KS.as_mut() }.expect("KS").advance_schedule_tick();
+    let ks = unsafe { KS.as_mut() }.expect("KS");
+    let event = ks.advance_schedule_tick();
+    let current_tick = ks.tick().get();
     match event {
         ScheduleEvent::PartitionSwitch(pid) => {
             // SAFETY: single-core Cortex-M — NEXT_PARTITION is only read
@@ -159,7 +166,7 @@ fn SysTick() {
         ScheduleEvent::SystemWindow => {
             cortex_m::interrupt::free(|cs| {
                 if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-                    do_bottom_half(k);
+                    do_bottom_half(k, current_tick);
                 }
             });
         }
@@ -445,10 +452,8 @@ fn main() -> ! {
                 // fields). Interrupts are disabled (interrupt::free),
                 // guaranteeing exclusive access on single-core Cortex-M.
                 // The 'static lifetime is valid because KERN is 'static.
-                let a: &'static mut dyn VirtualDevice =
-                    &mut *(&mut k.uart_pair.a as *mut _);
-                let b: &'static mut dyn VirtualDevice =
-                    &mut *(&mut k.uart_pair.b as *mut _);
+                let a: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.a as *mut _);
+                let b: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.b as *mut _);
                 k.registry.add(a).expect("register UART-A");
                 k.registry.add(b).expect("register UART-B");
                 if let Some(hw) = k.hw_uart.as_mut() {

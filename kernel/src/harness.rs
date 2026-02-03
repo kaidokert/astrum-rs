@@ -98,7 +98,7 @@ macro_rules! _harness_handle_yield {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _harness_handle_yield {
-    ($ks:expr, $next:ident, $kern:expr) => {{
+    ($ks:expr, $next:ident, $kern:expr, $tick:expr, $strategy:expr) => {{
         use $crate::kernel::YieldResult;
         loop {
             let result = $ks.yield_current_slot();
@@ -114,6 +114,8 @@ macro_rules! _harness_handle_yield {
                     &mut $kern.isr_ring,
                     &mut $kern.buffers,
                     &mut $kern.hw_uart,
+                    $tick,
+                    $strategy,
                 );
                 continue;
             }
@@ -145,12 +147,12 @@ macro_rules! _harness_handle_tick {
 /// `Mutex<RefCell<Option<Kernel<…>>>>` emitted by
 /// [`define_dispatch_hook!`]) and calls
 /// [`run_bottom_half`](crate::tick::run_bottom_half) to perform
-/// deferred kernel work (UART transfer, ISR drain).
+/// deferred kernel work (UART transfer, ISR drain, buffer revocation).
 #[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _harness_handle_tick {
-    ($event:expr, $next:ident) => {
+    ($event:expr, $next:ident, $tick:expr, $strategy:expr) => {
         match $event {
             $crate::scheduler::ScheduleEvent::PartitionSwitch(pid) => {
                 // SAFETY: single-core Cortex-M — SysTick has exclusive
@@ -167,6 +169,8 @@ macro_rules! _harness_handle_tick {
                             &mut k.isr_ring,
                             &mut k.buffers,
                             &mut k.hw_uart,
+                            $tick,
+                            $strategy,
                         );
                     }
                 });
@@ -198,6 +202,10 @@ macro_rules! define_harness {
         #[no_mangle]
         static mut NEXT_PARTITION: u32 = 0;
 
+        #[cfg(feature = "dynamic-mpu")]
+        static HARNESS_STRATEGY: $crate::mpu_strategy::DynamicStrategy =
+            $crate::mpu_strategy::DynamicStrategy::new();
+
         $crate::define_dispatch_hook!($Config, |_k| {
             // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
             // exclusive access; PendSV cannot preempt us.  KS and
@@ -206,7 +214,13 @@ macro_rules! define_harness {
                 #[cfg(not(feature = "dynamic-mpu"))]
                 $crate::_harness_handle_yield!(ks, NEXT_PARTITION);
                 #[cfg(feature = "dynamic-mpu")]
-                $crate::_harness_handle_yield!(ks, NEXT_PARTITION, _k);
+                $crate::_harness_handle_yield!(
+                    ks,
+                    NEXT_PARTITION,
+                    _k,
+                    ks.tick().get(),
+                    &HARNESS_STRATEGY
+                );
             }
         });
 
@@ -244,10 +258,15 @@ macro_rules! define_harness {
 
             let event = ks.advance_schedule_tick();
 
-            // TODO: _harness_handle_tick! (dynamic-mpu variant) enters its
-            // own interrupt::free / KERN borrow, so it cannot be merged into
-            // the critical section below without restructuring the macro.
+            #[cfg(not(feature = "dynamic-mpu"))]
             $crate::_harness_handle_tick!(event, NEXT_PARTITION);
+            #[cfg(feature = "dynamic-mpu")]
+            $crate::_harness_handle_tick!(
+                event,
+                NEXT_PARTITION,
+                ks.tick().get(),
+                &HARNESS_STRATEGY
+            );
 
             // Expire timed waits (queuing ports, blackboards) each tick so
             // blocked partitions are woken when their timeout elapses.
