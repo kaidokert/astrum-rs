@@ -76,6 +76,10 @@ name = "blackboard_demo"
 required-features = ["qemu"]
 
 [[example]]
+name = "priv_drop_test"
+required-features = ["qemu"]
+
+[[example]]
 name = "mpu_dynamic"
 required-features = ["qemu", "dynamic-mpu"]
 
