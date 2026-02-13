@@ -275,7 +275,7 @@ is validated by the event flag round-trip, not by worker console output.
 
 ### Kernel Features Exercised
 
-`KernelState` and `ScheduleTable` initialization, `advance_schedule_tick`,
+`Kernel` and `ScheduleTable` initialization, `advance_schedule_tick`,
 `partition_mpu_regions` validation, `MessageQueue` send/receive,
 `events::event_set`, PendSV global assembly, `init_stack_frame`, partition
 state transitions. Unlike the IPC demos, all IPC testing happens inside
@@ -343,7 +343,7 @@ at the full IPC demos.
 | `mpu_partition` | Verifies `partition_mpu_regions` computes correct RBAR/RASR for two partitions. |
 | `context_switch` | Two-partition PendSV context switch with separate stacks, monitored by SysTick. |
 | `partition_switch` | SysTick-driven partition toggling with MPU region updates on each switch (6 switches). |
-| `scheduler_tick` | Full `KernelState` + `ScheduleTable` integration with SysTick-driven scheduling. |
+| `scheduler_tick` | Full `Kernel` + `ScheduleTable` integration with SysTick-driven scheduling. |
 | `svc_yield` | SVC handler integration -- links the kernel SVC trampoline and dispatches a yield. |
 
 Run any of these with:
