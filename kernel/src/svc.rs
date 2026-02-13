@@ -1194,6 +1194,29 @@ where
         }
         result
     }
+
+    /// Start the schedule and return the initial partition ID.
+    ///
+    /// Calls `self.schedule.start()` to initialize the schedule table's
+    /// internal state (resetting to the first slot). Returns the partition
+    /// ID of the first schedule entry, or `None` if the schedule is empty.
+    ///
+    /// This centralizes schedule startup in the Kernel, allowing the harness
+    /// to call `kernel.start_schedule()` instead of managing schedule state
+    /// separately.
+    pub fn start_schedule(&mut self) -> Option<u8> {
+        self.schedule.start();
+        let first_pid = self.schedule.current_partition();
+        if let Some(pid) = first_pid {
+            self.active_partition = Some(pid);
+        }
+        first_pid
+    }
+
+    /// Returns an immutable reference to the tick counter.
+    pub fn tick(&self) -> &TickCounter {
+        &self.tick
+    }
 }
 
 /// Try to transition partition `pid` to `state`. Returns `true` on success.
@@ -3499,5 +3522,102 @@ mod tests {
         // Should switch to P1
         assert_eq!(result.partition_id(), Some(1));
         assert!(!result.is_system_window());
+    }
+
+    /// Helper to create a Kernel with an UNSTARTED schedule for testing
+    /// the start_schedule() method.
+    fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
+        // Create 2-slot schedule: P0 for 5 ticks, P1 for 3 ticks
+        // NOTE: do NOT call schedule.start() here
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 5)).unwrap();
+        schedule.add(ScheduleEntry::new(1, 3)).unwrap();
+        let cfgs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0000,
+                stack_base: 0x2000_0000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            },
+            PartitionConfig {
+                id: 1,
+                entry_point: 0x0800_1000,
+                stack_base: 0x2000_1000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+            },
+        ];
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let k = Kernel::<TestConfig>::new(schedule, &cfgs).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        let k = Kernel::<TestConfig>::new(
+            schedule,
+            &cfgs,
+            crate::virtual_device::DeviceRegistry::new(),
+        )
+        .unwrap();
+        k
+    }
+
+    #[test]
+    fn start_schedule_returns_initial_partition() {
+        let mut k = kernel_unstarted_schedule();
+        // Before start, active_partition is None (kernel hasn't started scheduling)
+        assert_eq!(k.active_partition, None);
+
+        // Start the schedule
+        let initial = k.start_schedule();
+        assert_eq!(initial, Some(0)); // First entry is partition 0
+        assert_eq!(k.active_partition, Some(0));
+        assert_eq!(k.schedule().current_partition(), Some(0));
+    }
+
+    #[test]
+    fn start_schedule_empty_returns_none() {
+        // Create empty kernel via new_empty
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let mut k = Kernel::<TestConfig>::new_empty();
+        #[cfg(feature = "dynamic-mpu")]
+        let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
+
+        // Start empty schedule returns None
+        let initial = k.start_schedule();
+        assert_eq!(initial, None);
+        assert_eq!(k.active_partition, None);
+    }
+
+    #[cfg(not(feature = "dynamic-mpu"))]
+    #[test]
+    fn start_schedule_allows_advance_tick() {
+        let mut k = kernel_unstarted_schedule();
+        // Start the schedule
+        let initial = k.start_schedule();
+        assert_eq!(initial, Some(0));
+
+        // Now advance ticks - schedule should work normally
+        // P0 has 5 ticks, so 4 advances should return None
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), None);
+        }
+        // 5th tick triggers switch to P1
+        assert_eq!(k.advance_schedule_tick(), Some(1));
+        assert_eq!(k.active_partition, Some(1));
+    }
+
+    #[test]
+    fn tick_accessor_returns_tick_counter() {
+        let k = kernel_with_schedule();
+        // Initial tick is 0
+        assert_eq!(k.tick().get(), 0);
+    }
+
+    #[test]
+    fn tick_accessor_reflects_increments() {
+        let mut k = kernel_with_schedule();
+        assert_eq!(k.tick().get(), 0);
+        // Use sync_tick to change the tick (simulating what SysTick handler does)
+        k.sync_tick(42);
+        assert_eq!(k.tick().get(), 42);
     }
 }
