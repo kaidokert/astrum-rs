@@ -156,6 +156,11 @@ name = "disable_interrupts"
 path = "examples/adversarial/disable_interrupts.rs"
 required-features = ["qemu"]
 
+[[example]]
+name = "write_control"
+path = "examples/adversarial/write_control.rs"
+required-features = ["qemu"]
+
 [features]
 qemu = []
 dynamic-mpu = []
