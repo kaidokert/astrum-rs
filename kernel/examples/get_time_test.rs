@@ -1,37 +1,35 @@
+// Migrated to unified Kernel API.
+
 //! QEMU test: verify SYS_GET_TIME returns the actual tick count.
 //!
 //! Boots a single partition whose entry function calls `SYS_GET_TIME`
 //! in a loop and stores each reading to an atomic.  The SysTick handler
-//! (running privileged) drives the scheduler, syncs the tick counter
-//! into the Kernel struct, and periodically checks the partition's
-//! readings:
+//! (running privileged) drives the scheduler and periodically checks
+//! the partition's readings:
 //!
 //! 1. After a few ticks the partition's reading must be non-zero,
-//!    proving the tick counter is being incremented and synchronized.
+//!    proving the tick counter is being incremented.
 //! 2. A later reading must be >= the first (monotonicity).
 //!
 //! All semihosting output happens from handler mode (SysTick), since
 //! partitions run unprivileged and BKPT traps fault on QEMU.
 //!
-//! This validates the end-to-end path: SysTick increments
-//! `KernelState.tick`, SysTick syncs to `Kernel.tick` via `sync_tick`,
-//! and `SYS_GET_TIME` returns the correct value.
+//! This validates the end-to-end path: SysTick increments the kernel
+//! tick via `advance_schedule_tick`, and `SYS_GET_TIME` returns the
+//! correct value via the unified Kernel struct.
 
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
-use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
-use cortex_m::interrupt::Mutex;
 use cortex_m::peripheral::scb::SystemHandler;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    kernel::KernelState,
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
@@ -67,12 +65,10 @@ impl KernelConfig for TestConfig {
     const DR: usize = 4;
 }
 
-kernel::define_dispatch_hook!(TestConfig, |_k| {}, |_cs| { None::<()> });
+kernel::define_unified_kernel!(TestConfig, |_k| {});
 
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
-
-static KS: Mutex<RefCell<Option<KernelState<NP, 4>>>> = Mutex::new(RefCell::new(None));
 
 kernel::define_pendsv!();
 
@@ -107,15 +103,15 @@ fn SysTick() {
     static mut FIRST_NONZERO: u32 = 0;
     *TICK += 1;
 
-    // Drive scheduler and sync tick to Kernel.
+    // Drive scheduler via unified Kernel.
     cortex_m::interrupt::free(|cs| {
-        let mut ks_ref = KS.borrow(cs).borrow_mut();
-        let ks = match ks_ref.as_mut() {
-            Some(ks) => ks,
+        let mut k_ref = KERNEL.borrow(cs).borrow_mut();
+        let k = match k_ref.as_mut() {
+            Some(k) => k,
             None => return,
         };
 
-        let event = ks.advance_schedule_tick();
+        let event = k.advance_schedule_tick();
         #[cfg(not(feature = "dynamic-mpu"))]
         if let Some(pid) = event {
             // SAFETY: single-core; PendSV cannot preempt SysTick.
@@ -126,15 +122,6 @@ fn SysTick() {
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
             cortex_m::peripheral::SCB::set_pendsv();
-        }
-
-        // Sync tick and expire timed waits.
-        let current_tick = ks.tick().get();
-        if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-            k.sync_tick(current_tick);
-            k.expire_timed_waits::<{ <TestConfig as kernel::config::KernelConfig>::N }>(
-                current_tick,
-            );
         }
     });
 
@@ -177,15 +164,8 @@ fn main() -> ! {
 
     // SAFETY: single-core, interrupts not yet enabled — exclusive access.
     unsafe {
-        #[cfg(feature = "dynamic-mpu")]
-        let k = Kernel::<TestConfig>::new_empty(kernel::virtual_device::DeviceRegistry::new());
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let k = Kernel::<TestConfig>::new_empty();
-        store_kernel(k);
-
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 2)).expect("schedule entry");
-        sched.start();
 
         let cfgs: [PartitionConfig; NP] = [{
             let b = STACKS[0].0.as_ptr() as u32;
@@ -198,10 +178,20 @@ fn main() -> ! {
             }
         }];
 
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel config");
+        #[cfg(feature = "dynamic-mpu")]
+        let k =
+            Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+                .expect("kernel config");
+
+        store_kernel(k);
+
+        // Start the schedule after storing the kernel.
         cortex_m::interrupt::free(|cs| {
-            KS.borrow(cs).replace(Some(
-                KernelState::new(sched, &cfgs).expect("invalid kernel config"),
-            ));
+            if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
+                k.start_schedule();
+            }
         });
 
         let stk = &mut STACKS[0].0;
