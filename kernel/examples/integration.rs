@@ -1,25 +1,53 @@
-// Not migrated to define_harness! — this integration test uses a
-// custom SysTick handler that lazily initialises KernelState and
-// MessageQueue as handler-local statics, performs inline MPU and IPC
-// assertions, and exits via semihosting. Its structure is
-// fundamentally different from the standard harness pattern.
+// Not migrated to define_unified_harness! — this integration test uses a
+// custom SysTick handler that lazily initialises Kernel as a handler-local
+// static, performs inline MPU and IPC assertions, and exits via semihosting.
+// Its structure is fundamentally different from the standard harness pattern.
 
 //! Integration test: SysTick scheduling, MPU, and IPC under QEMU.
 #![no_std]
 #![no_main]
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
+
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::peripheral::scb::SystemHandler;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+use kernel::config::KernelConfig;
 use kernel::context::init_stack_frame;
 use kernel::events;
-use kernel::kernel::KernelState;
-use kernel::message::{MessageQueue, SendOutcome};
+use kernel::message::SendOutcome;
 use kernel::mpu;
 use kernel::partition::{MpuRegion, PartitionConfig, PartitionState};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
+use kernel::svc::Kernel;
 use panic_semihosting as _;
+
+struct IntegrationConfig;
+impl KernelConfig for IntegrationConfig {
+    const N: usize = 4;
+    const SCHED: usize = 8;
+    const S: usize = 1;
+    const SW: usize = 1;
+    const MS: usize = 1;
+    const MW: usize = 1;
+    const QS: usize = 4;
+    const QD: usize = 4;
+    const QM: usize = 4;
+    const QW: usize = 4;
+    const SP: usize = 1;
+    const SM: usize = 1;
+    const BS: usize = 1;
+    const BM: usize = 1;
+    const BW: usize = 1;
+    #[cfg(feature = "dynamic-mpu")]
+    const BP: usize = 1;
+    #[cfg(feature = "dynamic-mpu")]
+    const BZ: usize = 32;
+    #[cfg(feature = "dynamic-mpu")]
+    const DR: usize = 4;
+}
 
 static mut STACK_P0: [u32; 256] = [0; 256];
 static mut STACK_P1: [u32; 256] = [0; 256];
@@ -93,21 +121,28 @@ fn pcfg(id: u8, base: u32) -> PartitionConfig {
 fn SysTick() {
     static mut T: u32 = 0;
     static mut SW: u32 = 0;
-    static mut KS: Option<KernelState<4, 8>> = None;
-    static mut MQ: Option<MessageQueue<4, 4, 4>> = None;
+    static mut K: Option<Kernel<IntegrationConfig>> = None;
     static mut IPC: bool = false;
-    if KS.is_none() {
+    if K.is_none() {
         let mut s: ScheduleTable<8> = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 3)).unwrap();
         s.add(ScheduleEntry::new(1, 3)).unwrap();
         s.start();
         let cfgs = [pcfg(0, 0x2000_0000), pcfg(1, 0x2000_2000)];
-        *KS = Some(KernelState::new(s, &cfgs).expect("invalid kernel config"));
-        *MQ = Some(MessageQueue::new());
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let mut kernel = Kernel::new(s, &cfgs).expect("kernel config");
+        #[cfg(feature = "dynamic-mpu")]
+        let mut kernel =
+            Kernel::new(s, &cfgs, kernel::virtual_device::DeviceRegistry::new()).expect("kernel");
+        // Add a message queue for IPC testing.
+        let _ = kernel
+            .messages
+            .add(kernel::message::MessageQueue::<4, 4, 4>::new());
+        *K = Some(kernel);
     }
-    let (ks, mq) = (KS.as_mut().unwrap(), MQ.as_mut().unwrap());
+    let k = K.as_mut().unwrap();
     *T += 1;
-    let _tick_result = ks.advance_schedule_tick();
+    let _tick_result = k.advance_schedule_tick();
     #[cfg(not(feature = "dynamic-mpu"))]
     let switch_pid: Option<u8> = _tick_result;
     #[cfg(feature = "dynamic-mpu")]
@@ -116,7 +151,7 @@ fn SysTick() {
         _ => None,
     };
     if let Some(pid) = switch_pid {
-        let pcb = ks.partitions().get(pid as usize).unwrap();
+        let pcb = k.partitions.get(pid as usize).unwrap();
         assert!(mpu::partition_mpu_regions(pcb).is_some());
         hprintln!("[PASS] MPU + switch {} -> P{}", *SW + 1, pid);
         unsafe {
@@ -128,17 +163,24 @@ fn SysTick() {
     if *T == 4 && !*IPC {
         let msg = [0xCA, 0xFE, 0xBA, 0xBE];
         assert!(matches!(
-            mq.send(0, &msg),
+            k.messages.send(0, 0, &msg),
             Ok(SendOutcome::Delivered { .. })
         ));
         let mut buf = [0u8; 4];
-        assert!(mq.recv(1, &mut buf).is_ok() && buf == msg);
+        assert!(k.messages.recv(0, 1, &mut buf).is_ok() && buf == msg);
         hprintln!("[PASS] msg_send + msg_recv");
-        let pt = ks.partitions_mut();
-        let _ = pt.get_mut(0).unwrap().transition(PartitionState::Running);
-        let _ = pt.get_mut(1).unwrap().transition(PartitionState::Running);
-        events::event_set(pt, 0, 0x01);
-        assert!(pt.get(0).unwrap().event_flags() & 0x01 != 0);
+        let _ = k
+            .partitions
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running);
+        let _ = k
+            .partitions
+            .get_mut(1)
+            .unwrap()
+            .transition(PartitionState::Running);
+        events::event_set(&mut k.partitions, 0, 0x01);
+        assert!(k.partitions.get(0).unwrap().event_flags() & 0x01 != 0);
         hprintln!("[PASS] event_flag ack");
         *IPC = true;
     }
