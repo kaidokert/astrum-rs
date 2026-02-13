@@ -151,6 +151,11 @@ name = "syscall_bad_ids"
 path = "examples/adversarial/syscall_bad_ids.rs"
 required-features = ["qemu"]
 
+[[example]]
+name = "disable_interrupts"
+path = "examples/adversarial/disable_interrupts.rs"
+required-features = ["qemu"]
+
 [features]
 qemu = []
 dynamic-mpu = []
