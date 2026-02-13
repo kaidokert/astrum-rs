@@ -7,8 +7,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    kernel::KernelState,
-    partition::PartitionConfig,
+    partition::{MpuRegion, PartitionConfig},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc,
@@ -18,7 +17,6 @@ use kernel::{
 };
 use panic_semihosting as _;
 
-const MAX_SCHEDULE_ENTRIES: usize = 8;
 const NUM_PARTITIONS: usize = 3;
 const STACK_WORDS: usize = 256;
 
@@ -29,6 +27,7 @@ const STACK_WORDS: usize = 256;
 struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 4;
+    const SCHED: usize = 8;
     const S: usize = 4;
     const SW: usize = 4;
     const MS: usize = 4;
@@ -50,12 +49,8 @@ impl KernelConfig for DemoConfig {
     const DR: usize = 4;
 }
 
-kernel::define_harness!(
-    DemoConfig,
-    NUM_PARTITIONS,
-    MAX_SCHEDULE_ENTRIES,
-    STACK_WORDS
-);
+// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
+kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS);
 
 extern "C" fn sensor_main() -> ! {
     let (src, mut v) = (unpack_r0!() >> 16, 0u8);
@@ -119,46 +114,57 @@ extern "C" fn display_main() -> ! {
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("sampling_demo: start");
-    let (s0, d0, s1, d1);
-    // SAFETY: accessing static-mut KS; single-core, interrupts not yet
-    // enabled so there is no data race.
-    unsafe {
-        // TODO: register devices in the registry at init time (backlog item 195).
-        #[cfg(feature = "dynamic-mpu")]
-        let mut k = Kernel::<DemoConfig>::new(kernel::virtual_device::DeviceRegistry::new());
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let mut k = Kernel::<DemoConfig>::new();
-        s0 = k.sampling.create_port(PortDirection::Source, 10).unwrap();
-        d0 = k
-            .sampling
-            .create_port(PortDirection::Destination, 10)
-            .unwrap();
-        k.sampling.connect_ports(s0, d0).unwrap();
-        s1 = k.sampling.create_port(PortDirection::Source, 10).unwrap();
-        d1 = k
-            .sampling
-            .create_port(PortDirection::Destination, 10)
-            .unwrap();
-        k.sampling.connect_ports(s1, d1).unwrap();
-        store_kernel(k);
 
-        let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
-        for i in 0..NUM_PARTITIONS as u8 {
-            sched.add(ScheduleEntry::new(i, 2)).unwrap();
-        }
-        sched.start();
-        let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| {
-            let b = 0x2000_0000 + (i as u32) * 0x2000;
+    // Build schedule: each partition runs for 2 ticks per slot.
+    let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();
+    for i in 0..NUM_PARTITIONS as u8 {
+        sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
+    }
+
+    // Build partition configs using the STACKS addresses.
+    // SAFETY: single-core, interrupts disabled — exclusive access.
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
+        core::array::from_fn(|i| {
+            let b = STACKS[i].0.as_ptr() as u32;
             PartitionConfig {
                 id: i as u8,
-                entry_point: 0,
+                entry_point: 0, // Not used by Kernel::new
                 stack_base: b,
-                stack_size: 1024,
-                mpu_region: kernel::partition::MpuRegion::new(b, 1024, 0),
+                stack_size: (STACK_WORDS * 4) as u32,
+                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
             }
-        });
-        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
-    }
+        })
+    };
+
+    // Create the unified kernel with schedule and partitions.
+    #[cfg(feature = "dynamic-mpu")]
+    let mut k =
+        Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+            .expect("kernel creation");
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let mut k = Kernel::<DemoConfig>::new(sched, &cfgs).expect("kernel creation");
+
+    // Create and connect sampling ports.
+    let s0 = k
+        .sampling
+        .create_port(PortDirection::Source, 10)
+        .expect("s0");
+    let d0 = k
+        .sampling
+        .create_port(PortDirection::Destination, 10)
+        .expect("d0");
+    k.sampling.connect_ports(s0, d0).expect("connect s0->d0");
+    let s1 = k
+        .sampling
+        .create_port(PortDirection::Source, 10)
+        .expect("s1");
+    let d1 = k
+        .sampling
+        .create_port(PortDirection::Destination, 10)
+        .expect("d1");
+    k.sampling.connect_ports(s1, d1).expect("connect s1->d1");
+
+    store_kernel(k);
 
     // Pack port IDs into a single u32 passed to each partition via r0.
     // See queuing_demo and blackboard_demo for the same convention.
