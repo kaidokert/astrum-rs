@@ -17,11 +17,11 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
     hw_uart::HwUartBackend,
-    kernel::KernelState,
+    mpu_strategy::DynamicStrategy,
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc,
-    svc::{Kernel, SvcError},
+    svc::{Kernel, SvcError, YieldResult},
     syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE, SYS_YIELD},
     uart_hal::UartRegs,
     virtual_device::VirtualDevice,
@@ -29,7 +29,6 @@ use kernel::{
 use panic_semihosting as _;
 
 const NUM_PARTITIONS: usize = 2;
-const MAX_SCHEDULE_ENTRIES: usize = 8;
 const STACK_WORDS: usize = 256;
 const STACK_BYTES: u32 = (STACK_WORDS * 4) as u32;
 const HW_UART_DEV: u32 = 2;
@@ -103,8 +102,7 @@ fn record(pass: bool, name: &str) {
     });
 }
 
-static STRATEGY: kernel::mpu_strategy::DynamicStrategy =
-    kernel::mpu_strategy::DynamicStrategy::new();
+static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 
 /// Run the bottom-half processing for virtual-UART, ISR-ring, and
 /// HwUartBackend.  Software loopback is handled internally by
@@ -120,33 +118,22 @@ fn do_bottom_half(k: &mut Kernel<DemoConfig>, current_tick: u64) {
     );
 }
 
-kernel::define_dispatch_hook!(
-    DemoConfig,
-    |k| {
-        cortex_m::interrupt::free(|cs| {
-            if let Some(ks) = KS.borrow(cs).borrow_mut().as_mut() {
-                use kernel::kernel::YieldResult;
-                // Yield and advance through system windows (run loopback).
-                loop {
-                    let result = ks.yield_current_slot();
-                    if let Some(pid) = result.partition_id() {
-                        // SAFETY: single-core Cortex-M — NEXT_PARTITION is only
-                        // read by PendSV (lower priority), which cannot preempt.
-                        unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
-                        break;
-                    }
-                    // System window or None — run software loopback and advance.
-                    do_bottom_half(k, ks.tick().get());
-                }
-            }
-        });
-    },
-    |_cs| { None::<()> }
-);
-
-static KS: Mutex<
-    RefCell<Option<KernelState<{ <DemoConfig as KernelConfig>::N }, MAX_SCHEDULE_ENTRIES>>>,
-> = Mutex::new(RefCell::new(None));
+// Use define_unified_kernel! with a custom yield handler that runs through
+// system windows processing the bottom-half before continuing.
+kernel::define_unified_kernel!(DemoConfig, |k| {
+    // Yield and advance through system windows (run loopback).
+    loop {
+        let result = k.yield_current_slot();
+        if let Some(pid) = result.partition_id() {
+            // SAFETY: single-core Cortex-M — NEXT_PARTITION is only
+            // read by PendSV (lower priority), which cannot preempt.
+            unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
+            break;
+        }
+        // System window or None — run software loopback and advance.
+        do_bottom_half(k, k.tick().get());
+    }
+});
 
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
@@ -156,14 +143,13 @@ kernel::define_pendsv!();
 #[exception]
 fn SysTick() {
     cortex_m::interrupt::free(|cs| {
-        let mut ks_ref = KS.borrow(cs).borrow_mut();
-        let ks = match ks_ref.as_mut() {
-            Some(s) => s,
+        let mut guard = KERNEL.borrow(cs).borrow_mut();
+        let k = match guard.as_mut() {
+            Some(k) => k,
             None => return,
         };
-        let event = ks.advance_schedule_tick();
-        let current_tick = ks.tick().get();
-        let _ks_parts = ks.partitions_mut();
+        let event = k.advance_schedule_tick();
+        let current_tick = k.tick().get();
         match event {
             ScheduleEvent::PartitionSwitch(pid) => {
                 // SAFETY: single-core Cortex-M — NEXT_PARTITION is only read
@@ -172,20 +158,11 @@ fn SysTick() {
                 cortex_m::peripheral::SCB::set_pendsv();
             }
             ScheduleEvent::SystemWindow => {
-                if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-                    do_bottom_half(k, current_tick);
-                }
+                do_bottom_half(k, current_tick);
             }
             ScheduleEvent::None => {}
         }
-
-        // Sync tick and expire timed waits using KernelState partitions.
-        if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-            k.sync_tick(current_tick);
-            k.expire_timed_waits::<{ <DemoConfig as kernel::config::KernelConfig>::N }>(
-                current_tick,
-            );
-        }
+        k.expire_timed_waits::<{ <DemoConfig as kernel::config::KernelConfig>::N }>(current_tick);
     });
 }
 
@@ -433,37 +410,53 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("uart1_loopback: start");
 
+    // Build schedule: P1(3) → system window(1) → P2(3) → system window(1)
+    let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();
+    sched.add(ScheduleEntry::new(0, 3)).unwrap();
+    sched.add_system_window(1).unwrap();
+    sched.add(ScheduleEntry::new(1, 3)).unwrap();
+    sched.add_system_window(1).unwrap();
+
+    // Build partition configs
     // SAFETY: called once before the scheduler starts (interrupts disabled,
     // single-core). STACKS are only written here; no concurrent access.
-    // UartRegs::new and init use a valid MMIO base for UART1 on LM3S6965.
-    // HwUartBackend::new is safe given a valid UartRegs; set_loopback is a
-    // plain field write with no unsafe invariants.
-    unsafe {
-        let regs = UartRegs::new(0x4000_D000);
-        regs.init(115_200, 12_000_000);
-        let mut hw_backend = HwUartBackend::new(HW_UART_DEV as u8, regs);
-        hw_backend.set_loopback(true);
-
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
         let stacks_ref = &*(&raw const STACKS);
-        let bases: [u32; NUM_PARTITIONS] =
-            core::array::from_fn(|i| stacks_ref[i].0.as_ptr() as u32);
+        core::array::from_fn(|i| {
+            let base = stacks_ref[i].0.as_ptr() as u32;
+            PartitionConfig {
+                id: i as u8,
+                entry_point: 0,
+                stack_base: base,
+                stack_size: STACK_BYTES,
+                mpu_region: MpuRegion::new(base, STACK_BYTES, 0),
+            }
+        })
+    };
 
-        // KernelState owns the authoritative partition table; the dispatch
-        // hook's swap body shares it with Kernel during SVC dispatch.
-        let mut kern =
-            Kernel::<DemoConfig>::new_empty(kernel::virtual_device::DeviceRegistry::new());
-        kern.set_hw_uart(hw_backend);
-        store_kernel(kern);
+    // Create unified kernel with schedule and partitions
+    let mut kern =
+        Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+            .expect("kernel creation");
 
-        // Register the uart_pair and hw_uart backends in the device
-        // registry so that dev_dispatch routes SYS_DEV_* syscalls to them.
-        cortex_m::interrupt::free(|cs| {
-            if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-                // SAFETY: KERN is a static that is never dropped. The
-                // backends live inside KERN (uart_pair and hw_uart
-                // fields). Interrupts are disabled (interrupt::free),
-                // guaranteeing exclusive access on single-core Cortex-M.
-                // The 'static lifetime is valid because KERN is 'static.
+    // Set up HW UART backend with software loopback
+    let regs = UartRegs::new(0x4000_D000);
+    regs.init(115_200, 12_000_000);
+    let mut hw_backend = HwUartBackend::new(HW_UART_DEV as u8, regs);
+    hw_backend.set_loopback(true);
+    kern.set_hw_uart(hw_backend);
+
+    // Store kernel and register device backends
+    store_kernel(kern);
+
+    cortex_m::interrupt::free(|cs| {
+        if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
+            // SAFETY: KERNEL is a static that is never dropped. The
+            // backends live inside KERNEL (uart_pair and hw_uart
+            // fields). Interrupts are disabled (interrupt::free),
+            // guaranteeing exclusive access on single-core Cortex-M.
+            // The 'static lifetime is valid because KERNEL is 'static.
+            unsafe {
                 let a: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.a as *mut _);
                 let b: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.b as *mut _);
                 k.registry.add(a).expect("register UART-A");
@@ -474,29 +467,8 @@ fn main() -> ! {
                     k.registry.add(hw).expect("register HW UART");
                 }
             }
-        });
-
-        // Schedule: P1(3) → system window(1) → P2(3) → system window(1)
-        let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
-        sched.add(ScheduleEntry::new(0, 3)).unwrap();
-        sched.add_system_window(1).unwrap();
-        sched.add(ScheduleEntry::new(1, 3)).unwrap();
-        sched.add_system_window(1).unwrap();
-        sched.start();
-
-        let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| PartitionConfig {
-            id: i as u8,
-            entry_point: 0,
-            stack_base: bases[i],
-            stack_size: STACK_BYTES,
-            mpu_region: MpuRegion::new(bases[i], STACK_BYTES, 0),
-        });
-        cortex_m::interrupt::free(|cs| {
-            KS.borrow(cs).replace(Some(
-                KernelState::new(sched, &cfgs).expect("invalid kernel config"),
-            ));
-        });
-    }
+        }
+    });
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
     boot(&parts, &mut p)

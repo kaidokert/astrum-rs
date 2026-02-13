@@ -12,18 +12,17 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
-use core::cell::RefCell;
-use cortex_m::interrupt::Mutex;
 use cortex_m::peripheral::scb::SystemHandler;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    kernel::KernelState,
+    config::KernelConfig,
     mpu::{self, build_rasr, encode_size, AP_FULL_ACCESS, RBAR_ADDR_MASK},
     mpu_strategy::{DynamicStrategy, MpuStrategy},
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
+    svc::Kernel,
 };
 use panic_semihosting as _;
 
@@ -59,9 +58,31 @@ static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
 
-/// Kernel state protected by a critical-section Mutex so SysTick can
-/// access it without bare `static mut`.
-static KS: Mutex<RefCell<Option<KernelState<NP, 4>>>> = Mutex::new(RefCell::new(None));
+struct TestConfig;
+impl KernelConfig for TestConfig {
+    const N: usize = 2;
+    const SCHED: usize = 4;
+    const S: usize = 1;
+    const SW: usize = 1;
+    const MS: usize = 1;
+    const MW: usize = 1;
+    const QS: usize = 1;
+    const QD: usize = 1;
+    const QM: usize = 1;
+    const QW: usize = 1;
+    const SP: usize = 1;
+    const SM: usize = 1;
+    const BS: usize = 1;
+    const BM: usize = 1;
+    const BW: usize = 1;
+    const BP: usize = 1;
+    const BZ: usize = 32;
+    const DR: usize = 4;
+}
+
+// Use define_unified_kernel! with empty yield handler (this test doesn't use SVC yield).
+kernel::define_unified_kernel!(TestConfig, |_k| {});
+
 static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 
 kernel::define_pendsv_dynamic!(STRATEGY);
@@ -149,11 +170,14 @@ fn SysTick() {
     }
 
     cortex_m::interrupt::free(|cs| {
-        let mut ks_ref = KS.borrow(cs).borrow_mut();
-        let state = ks_ref.as_mut().expect("KS");
-        let event = kernel::tick::on_systick(state);
+        let mut guard = KERNEL.borrow(cs).borrow_mut();
+        let k = match guard.as_mut() {
+            Some(k) => k,
+            None => return,
+        };
+        let event = k.advance_schedule_tick();
         if let ScheduleEvent::PartitionSwitch(pid) = event {
-            if let Some(pcb) = state.partitions().get(pid as usize) {
+            if let Some(pcb) = k.partitions().get(pid as usize) {
                 if let Some(regions) = mpu::partition_dynamic_regions(pcb) {
                     let _ = STRATEGY.configure_partition(pid, &regions);
                 }
@@ -176,17 +200,18 @@ fn main() -> ! {
         TARGET_SWITCHES
     );
 
-    // SAFETY: before interrupts; single-core exclusive.
-    unsafe {
-        let mut sched = ScheduleTable::<4>::new();
-        sched.add(ScheduleEntry::new(0, 2)).unwrap();
-        sched.add(ScheduleEntry::new(1, 2)).unwrap();
-        sched.start();
+    // Build schedule table
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
+    sched.add(ScheduleEntry::new(0, 2)).unwrap();
+    sched.add(ScheduleEntry::new(1, 2)).unwrap();
 
-        // stack_base/stack_size point at the actual partition stacks (STACKS
-        // array), not the data regions. mpu_region carries the data-region
-        // descriptor that DynamicStrategy programs into MPU R4.
-        let cfgs: [PartitionConfig; NP] = core::array::from_fn(|i| {
+    // Build partition configs
+    // SAFETY: before interrupts; single-core exclusive.
+    // stack_base/stack_size point at the actual partition stacks (STACKS
+    // array), not the data regions. mpu_region carries the data-region
+    // descriptor that DynamicStrategy programs into MPU R4.
+    let cfgs: [PartitionConfig; NP] = unsafe {
+        core::array::from_fn(|i| {
             let stk_base = STACKS[i].0.as_ptr() as u32;
             PartitionConfig {
                 id: i as u8,
@@ -195,14 +220,17 @@ fn main() -> ! {
                 stack_size: STACK_SIZE,
                 mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SIZES[i], 0),
             }
-        });
+        })
+    };
 
-        cortex_m::interrupt::free(|cs| {
-            KS.borrow(cs).replace(Some(
-                KernelState::new(sched, &cfgs).expect("invalid kernel config"),
-            ));
-        });
+    // Create unified kernel
+    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+        .expect("kernel creation");
+    store_kernel(k);
 
+    // Initialize partition stacks
+    // SAFETY: before interrupts; single-core exclusive.
+    unsafe {
         for i in 0..NP {
             let stk = &mut STACKS[i].0;
             let ix = kernel::context::init_stack_frame(

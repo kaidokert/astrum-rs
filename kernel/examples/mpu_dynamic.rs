@@ -20,11 +20,12 @@ use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    kernel::KernelState,
-    mpu::{self, RBAR_ADDR_MASK},
-    mpu_strategy::DynamicStrategy,
+    config::KernelConfig,
+    mpu::{self, partition_dynamic_regions, RBAR_ADDR_MASK},
+    mpu_strategy::{DynamicStrategy, MpuStrategy},
     partition::{MpuRegion, PartitionConfig},
-    scheduler::{ScheduleEntry, ScheduleTable},
+    scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
+    svc::Kernel,
 };
 use panic_semihosting as _;
 
@@ -33,14 +34,45 @@ const DATA_BASES: [u32; NP] = [0x2000_0000, 0x2000_8000];
 const DATA_SZ: u32 = 4096;
 const TARGET_SWITCHES: u32 = 4;
 
-static mut STACKS: [[u32; 256]; NP] = [[0; 256]; NP];
+#[repr(C, align(1024))]
+struct AlignedStack([u32; 256]);
+
+static mut STACKS: [AlignedStack; NP] = {
+    const ZERO: AlignedStack = AlignedStack([0; 256]);
+    [ZERO; NP]
+};
 #[no_mangle]
 static mut PARTITION_SP: [u32; NP] = [0; NP];
 #[no_mangle]
 static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
-static mut KS: Option<KernelState<NP, 4>> = None;
+
+struct TestConfig;
+impl KernelConfig for TestConfig {
+    const N: usize = 2;
+    const SCHED: usize = 4;
+    const S: usize = 1;
+    const SW: usize = 1;
+    const MS: usize = 1;
+    const MW: usize = 1;
+    const QS: usize = 1;
+    const QD: usize = 1;
+    const QM: usize = 1;
+    const QW: usize = 1;
+    const SP: usize = 1;
+    const SM: usize = 1;
+    const BS: usize = 1;
+    const BM: usize = 1;
+    const BW: usize = 1;
+    const BP: usize = 1;
+    const BZ: usize = 32;
+    const DR: usize = 4;
+}
+
+// Use define_unified_kernel! with empty yield handler (this test doesn't use SVC yield).
+kernel::define_unified_kernel!(TestConfig, |_k| {});
+
 static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 
 kernel::define_pendsv_dynamic!(STRATEGY);
@@ -56,9 +88,6 @@ fn SysTick() {
     static mut SW: u32 = 0;
     static mut LAST_PID: Option<u8> = None;
 
-    let ks = &raw mut KS;
-    // SAFETY: single-core; SysTick has exclusive access to KS.
-    let state = unsafe { (*ks).as_mut() }.expect("KS");
     // SAFETY: sole MPU accessor at this priority; steal() yields a
     // reference to the memory-mapped MPU registers.
     let p = unsafe { cortex_m::Peripherals::steal() };
@@ -91,16 +120,27 @@ fn SysTick() {
         }
     }
 
-    if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) =
-        kernel::tick::on_systick_dynamic(state, &p.MPU, &STRATEGY)
-    {
-        // SAFETY: single-core exclusive write.
-        unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
+    cortex_m::interrupt::free(|cs| {
+        let mut guard = KERNEL.borrow(cs).borrow_mut();
+        let k = match guard.as_mut() {
+            Some(k) => k,
+            None => return,
+        };
+        let event = k.advance_schedule_tick();
+        if let ScheduleEvent::PartitionSwitch(pid) = event {
+            if let Some(pcb) = k.partitions().get(pid as usize) {
+                if let Some(regions) = partition_dynamic_regions(pcb) {
+                    let _ = STRATEGY.configure_partition(pid, &regions);
+                }
+            }
+            // SAFETY: single-core exclusive write.
+            unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
 
-        *SW += 1;
-        *LAST_PID = Some(pid);
-        hprintln!("switch {}: scheduled p{}", *SW, pid);
-    }
+            *SW += 1;
+            *LAST_PID = Some(pid);
+            hprintln!("switch {}: scheduled p{}", *SW, pid);
+        }
+    });
 }
 
 #[entry]
@@ -108,23 +148,33 @@ fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
     hprintln!("mpu_dynamic: start");
 
+    // Build schedule table
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
+    sched.add(ScheduleEntry::new(0, 2)).unwrap();
+    sched.add(ScheduleEntry::new(1, 2)).unwrap();
+
+    // Build partition configs
     // SAFETY: before interrupts; single-core exclusive.
-    unsafe {
-        let mut sched = ScheduleTable::<4>::new();
-        sched.add(ScheduleEntry::new(0, 2)).unwrap();
-        sched.add(ScheduleEntry::new(1, 2)).unwrap();
-        sched.start();
-        let cfgs: [PartitionConfig; NP] = core::array::from_fn(|i| PartitionConfig {
+    let cfgs: [PartitionConfig; NP] = unsafe {
+        core::array::from_fn(|i| PartitionConfig {
             id: i as u8,
             entry_point: 0,
-            stack_base: DATA_BASES[i],
+            stack_base: STACKS[i].0.as_ptr() as u32,
             stack_size: DATA_SZ,
             mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SZ, 0),
-        });
-        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
+        })
+    };
 
+    // Create unified kernel
+    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+        .expect("kernel creation");
+    store_kernel(k);
+
+    // Initialize partition stacks
+    // SAFETY: before interrupts; single-core exclusive.
+    unsafe {
         for i in 0..NP {
-            let stk = &mut STACKS[i];
+            let stk = &mut STACKS[i].0;
             let ix = kernel::context::init_stack_frame(
                 stk,
                 partition_main as *const () as u32,

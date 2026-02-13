@@ -6,18 +6,13 @@
 //! mapping the buffer into P2's MPU window.  P2 reads and verifies the data,
 //! then signals completion.  The kernel revokes the MPU window and verifies
 //! cleanup.
-//!
-//! Uses `on_systick` (not `on_systick_dynamic`) to avoid the R0 deny-all
-//! that blocks handler access.
 
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
-use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
-use cortex_m::interrupt::Mutex;
 use cortex_m::peripheral::scb::SystemHandler;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
@@ -26,11 +21,10 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::syscall::{SYS_BUF_ALLOC, SYS_BUF_RELEASE, SYS_BUF_WRITE};
 use kernel::{
     config::KernelConfig,
-    kernel::KernelState,
     mpu,
     mpu_strategy::{DynamicStrategy, MpuStrategy},
     partition::{MpuRegion, PartitionConfig},
-    scheduler::{ScheduleEntry, ScheduleTable},
+    scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
 };
 use panic_semihosting as _;
@@ -79,10 +73,12 @@ impl KernelConfig for TestConfig {
     const DR: usize = 4;
 }
 
-kernel::define_dispatch_hook!(TestConfig, |_k| {}, |_cs| { None::<()> });
+// Use define_unified_kernel! to create the KERNEL static and dispatch hook.
+// The yield handler is empty since this test uses a custom SysTick handler.
+kernel::define_unified_kernel!(TestConfig, |_k| {});
+
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
-static KS: Mutex<RefCell<Option<KernelState<NP, 4>>>> = Mutex::new(RefCell::new(None));
 static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 kernel::define_pendsv_dynamic!(STRATEGY);
 
@@ -201,22 +197,19 @@ fn SysTick() {
     static mut RID: u8 = 0;
     *TICK += 1;
 
-    // Drive scheduler, configure R4 via DynamicStrategy (skip R0-R3).
+    // Drive scheduler using the unified Kernel, configure R4 via DynamicStrategy.
     cortex_m::interrupt::free(|cs| {
-        let mut ks = KS.borrow(cs).borrow_mut();
-        let state = match ks.as_mut() {
-            Some(s) => s,
+        let mut guard = KERNEL.borrow(cs).borrow_mut();
+        let k = match guard.as_mut() {
+            Some(k) => k,
             None => return,
         };
-        let event = kernel::tick::on_systick(state);
-        if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
-            if let Some(pcb) = state.partitions().get(pid as usize) {
+        let event = k.advance_schedule_tick();
+        if let ScheduleEvent::PartitionSwitch(pid) = event {
+            if let Some(pcb) = k.partitions().get(pid as usize) {
                 if let Some(regions) = mpu::partition_dynamic_regions(pcb) {
                     let _ = STRATEGY.configure_partition(pid, &regions);
                 }
-            }
-            if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-                k.current_partition = pid;
             }
             // SAFETY: single-core; PendSV cannot preempt SysTick.
             unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
@@ -235,7 +228,8 @@ fn SysTick() {
             }
             let state_ok = slot_ok
                 && cortex_m::interrupt::free(|cs| {
-                    KERN.borrow(cs)
+                    KERNEL
+                        .borrow(cs)
                         .borrow_mut()
                         .as_mut()
                         .map(|k| {
@@ -250,7 +244,7 @@ fn SysTick() {
             // Step 2: Kernel lends the buffer (with P1's data) read-only to P2.
             // lend_to_partition is a privileged kernel operation with no
             // corresponding user-space syscall.
-            if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+            if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
                 match k.buffers.lend_to_partition(*SLOT, P2, false, &STRATEGY) {
                     Ok(rid) => {
                         *RID = rid;
@@ -274,7 +268,7 @@ fn SysTick() {
         ),
         11 => cortex_m::interrupt::free(|cs| {
             // Step 4: revoke access, verify MPU region disabled.
-            if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
+            if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
                 match k.buffers.revoke_from_partition(*SLOT, &STRATEGY) {
                     Ok(()) => {
                         let slot = k.buffers.get(*SLOT).unwrap();
@@ -308,34 +302,36 @@ fn SysTick() {
 fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
     hprintln!("buffer_pool_test: start");
+
+    // Build schedule table
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
+    sched.add(ScheduleEntry::new(0, 2)).unwrap();
+    sched.add(ScheduleEntry::new(1, 2)).unwrap();
+
+    // Build partition configs
     // SAFETY: before interrupts; single-core exclusive access.
-    unsafe {
-        let mut sched = ScheduleTable::<4>::new();
-        sched.add(ScheduleEntry::new(0, 2)).unwrap();
-        sched.add(ScheduleEntry::new(1, 2)).unwrap();
-        sched.start();
-        let entries = [
-            partition_p1_entry as *const () as u32,
-            partition_p2_entry as *const () as u32,
-        ];
-        let cfgs: [PartitionConfig; NP] = core::array::from_fn(|i| PartitionConfig {
+    let cfgs: [PartitionConfig; NP] = unsafe {
+        core::array::from_fn(|i| PartitionConfig {
             id: i as u8,
             entry_point: 0,
             stack_base: STACKS[i].0.as_ptr() as u32,
             stack_size: STACK_SIZE,
             mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SIZES[i], 0),
-        });
-        // TODO: register devices in the registry at init time (backlog item 195).
-        store_kernel(Kernel::<TestConfig>::new_empty(
-            kernel::virtual_device::DeviceRegistry::new(),
-        ));
-        // KernelState owns the authoritative partition table; the dispatch
-        // hook's swap body shares it with Kernel during SVC dispatch.
-        cortex_m::interrupt::free(|cs| {
-            KS.borrow(cs).replace(Some(
-                KernelState::new(sched, &cfgs).expect("invalid kernel config"),
-            ));
-        });
+        })
+    };
+
+    // Create the unified kernel with schedule and partitions
+    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+        .expect("kernel creation");
+    store_kernel(k);
+
+    // Initialize partition stacks
+    // SAFETY: before interrupts; single-core exclusive access.
+    unsafe {
+        let entries = [
+            partition_p1_entry as *const () as u32,
+            partition_p2_entry as *const () as u32,
+        ];
         for i in 0..NP {
             let stk = &mut STACKS[i].0;
             let ix = kernel::context::init_stack_frame(stk, entries[i], Some(i as u32))
@@ -346,6 +342,7 @@ fn main() -> ! {
         cp.SCB.set_priority(SystemHandler::PendSV, 0xFF);
         cp.SCB.set_priority(SystemHandler::SysTick, 0xFE);
     }
+
     // SAFETY: interrupts not yet enabled; PRIVDEFENA keeps privileged default map.
     unsafe { cp.MPU.ctrl.write(mpu::MPU_CTRL_ENABLE_PRIVDEFENA) };
     cortex_m::asm::dsb();
