@@ -119,16 +119,6 @@ fn do_bottom_half(k: &mut Kernel<DemoConfig>, current_tick: u64) {
     );
 }
 
-// TODO: reviewer false positive — the swap_body closure is invoked twice by
-// define_dispatch_hook!(@impl): once before dispatch (svc.rs:297) and once
-// after (svc.rs:308).  mem::swap is its own inverse, so the partition table
-// is swapped in before dispatch and swapped back out after, exactly matching
-// the SysTick pattern.  There is no one-way/irreversible swap.
-//
-// TODO: reviewer false positive — do_bottom_half (called from the yield
-// handler) invokes run_bottom_half which only touches uart_pair, isr_ring,
-// buffers, hw_uart, and strategy; it does NOT access k.partitions, so the
-// partition swap state is irrelevant here.
 kernel::define_dispatch_hook!(
     DemoConfig,
     |k| {
@@ -150,13 +140,11 @@ kernel::define_dispatch_hook!(
             }
         });
     },
-    |_sk| {
-        // Swap KernelState partitions into Kernel so dispatch sees authoritative data.
-        cortex_m::interrupt::free(|cs| {
-            if let Some(ks) = KS.borrow(cs).borrow_mut().as_mut() {
-                core::mem::swap(&mut _sk.partitions, ks.partitions_mut());
-            }
-        });
+    |cs| {
+        KS.borrow(cs)
+            .borrow_mut()
+            .as_mut()
+            .map(|ks| ks.partitions_mut())
     }
 );
 
@@ -198,11 +186,10 @@ fn SysTick() {
         // Sync tick and expire timed waits using KernelState partitions.
         if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
             k.sync_tick(current_tick);
-            core::mem::swap(&mut k.partitions, ks_parts);
             k.expire_timed_waits::<{ <DemoConfig as kernel::config::KernelConfig>::N }>(
                 current_tick,
+                ks_parts,
             );
-            core::mem::swap(&mut k.partitions, ks_parts);
         }
     });
 }

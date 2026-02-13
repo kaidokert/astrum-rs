@@ -244,14 +244,12 @@ macro_rules! define_harness {
                     );
                 }
             },
-            |_sk| {
+            |_cs| {
                 // SAFETY: KS is initialised before SysTick/SVC fire.
-                // TODO: see svc.rs define_dispatch_hook!(@impl) — mem::swap is
-                // an interim approach; a future refactor should pass partitions
-                // as an explicit argument to dispatch()/expire_timed_waits().
-                if let Some(ks) = (unsafe { KS.as_mut() }) {
-                    core::mem::swap(&mut _sk.partitions, ks.partitions_mut());
-                }
+                // Single-core Cortex-M: interrupts are masked by the
+                // surrounding interrupt::free, so exclusive access is
+                // guaranteed.
+                unsafe { KS.as_mut().map(|ks| ks.partitions_mut()) }
             }
         );
 
@@ -304,18 +302,13 @@ macro_rules! define_harness {
 
             // Synchronize Kernel.tick with the authoritative KernelState.tick
             // and expire timed waits (queuing ports, blackboards) each tick.
-            // TODO: mem::swap is used to temporarily give Kernel the KernelState
-            // partition table so expire_timed_waits() sees the shared state.
-            // A cleaner design would pass &mut PartitionTable as an argument,
-            // but that requires a broader refactor of Kernel methods. Deferred.
             ::cortex_m::interrupt::free(|cs| {
                 if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
                     k.sync_tick(current_tick);
-                    core::mem::swap(&mut k.partitions, ks_parts);
                     k.expire_timed_waits::<{ <$Config as $crate::config::KernelConfig>::N }>(
                         current_tick,
+                        ks_parts,
                     );
-                    core::mem::swap(&mut k.partitions, ks_parts);
                 }
             });
         }
@@ -341,27 +334,6 @@ macro_rules! define_harness {
             unsafe {
                 let stacks = &mut *(&raw mut STACKS);
                 let partition_sp = &mut *(&raw mut PARTITION_SP);
-
-                // Register partitions in the Kernel struct so that
-                // validate_user_ptr can verify SVC pointer arguments
-                // against each partition's MPU region.
-                let stack_bytes = ($SW * 4) as u32;
-                ::cortex_m::interrupt::free(|cs| {
-                    if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-                        for i in 0..partitions.len() {
-                            let base = stacks[i].0.as_ptr() as u32;
-                            let region = $crate::partition::MpuRegion::new(base, stack_bytes, 0);
-                            let pcb = $crate::partition::PartitionControlBlock::new(
-                                i as u8,
-                                0,
-                                base,
-                                base + stack_bytes,
-                                region,
-                            );
-                            k.partitions.add(pcb).ok();
-                        }
-                    }
-                });
 
                 for (i, &(ep, hint)) in partitions.iter().enumerate() {
                     let stk = &mut stacks[i].0;
