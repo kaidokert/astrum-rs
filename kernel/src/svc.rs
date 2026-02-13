@@ -685,7 +685,11 @@ where
                     .messages
                     .recv(frame.r1 as usize, frame.r2 as usize, buf)
                 {
-                    Ok(outcome) => apply_recv_outcome(pt, outcome),
+                    Ok(outcome) => match apply_recv_outcome(self, pt, outcome) {
+                        Ok(Some(_blocked)) => 0,
+                        Ok(None) => 0,
+                        Err(e) => e.to_u32(),
+                    },
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
@@ -1074,26 +1078,54 @@ fn apply_send_outcome<const N: usize>(
 }
 
 /// Apply a `RecvOutcome` by transitioning partition states as needed.
-/// Returns 0 on success, or `u32::MAX` if a partition transition fails.
-fn apply_recv_outcome<const N: usize>(
-    partitions: &mut PartitionTable<N>,
+/// Returns `Ok(Some(blocked_pid))` if a receiver blocked, `Ok(None)` otherwise.
+/// Returns `Err(SvcError::TransitionFailed)` if a partition transition fails.
+///
+/// When a receiver blocks, this function calls `trigger_deschedule()` on the
+/// kernel to pend PendSV and set `yield_requested`.
+fn apply_recv_outcome<C: KernelConfig>(
+    kernel: &mut Kernel<C>,
+    partitions: &mut PartitionTable<{ C::N }>,
     outcome: RecvOutcome,
-) -> u32 {
+) -> Result<Option<u32>, SvcError>
+where
+    [(); C::N]:,
+    [(); C::S]:,
+    [(); C::SW]:,
+    [(); C::MS]:,
+    [(); C::MW]:,
+    [(); C::QS]:,
+    [(); C::QD]:,
+    [(); C::QM]:,
+    [(); C::QW]:,
+    [(); C::SP]:,
+    [(); C::SM]:,
+    [(); C::BS]:,
+    [(); C::BM]:,
+    [(); C::BW]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+{
     match outcome {
         RecvOutcome::Received {
             wake_sender: Some(pid),
         } => {
             if !try_transition(partitions, pid, PartitionState::Ready) {
-                return SvcError::TransitionFailed.to_u32();
+                return Err(SvcError::TransitionFailed);
             }
-            0
+            Ok(None)
         }
-        RecvOutcome::Received { wake_sender: None } => 0,
+        RecvOutcome::Received { wake_sender: None } => Ok(None),
         RecvOutcome::ReceiverBlocked { blocked } => {
             if !try_transition(partitions, blocked, PartitionState::Waiting) {
-                return SvcError::TransitionFailed.to_u32();
+                return Err(SvcError::TransitionFailed);
             }
-            0
+            kernel.trigger_deschedule();
+            Ok(Some(blocked as u32))
         }
     }
 }
@@ -1415,8 +1447,7 @@ mod tests {
         // Receive from queue 0 into partition 1's buffer
         let mut recv_buf = [0u8; 4];
         let outcome = k.messages.recv(0, 1, &mut recv_buf).unwrap();
-        let r0 = apply_recv_outcome(&mut t, outcome);
-        assert_eq!(r0, 0);
+        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(None));
         assert_eq!(recv_buf, [0xDE, 0xAD, 0xBE, 0xEF]);
     }
 
@@ -1436,13 +1467,13 @@ mod tests {
         // Recv from queue 1 first
         let mut buf = [0u8; 4];
         let outcome = k.messages.recv(1, 1, &mut buf).unwrap();
-        assert_eq!(apply_recv_outcome(&mut t, outcome), 0);
+        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(None));
         assert_eq!(buf, [5, 6, 7, 8]);
 
         // Recv from queue 0
         let mut buf = [0u8; 4];
         let outcome = k.messages.recv(0, 1, &mut buf).unwrap();
-        assert_eq!(apply_recv_outcome(&mut t, outcome), 0);
+        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(None));
         assert_eq!(buf, [1, 2, 3, 4]);
     }
 
@@ -1477,7 +1508,7 @@ mod tests {
                 wake_sender: Some(1)
             }
         );
-        assert_eq!(apply_recv_outcome(&mut t, outcome), 0);
+        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(None));
         assert_eq!(t.get(1).unwrap().state(), PartitionState::Ready);
         assert_eq!(buf, [0; 4]); // first message enqueued
     }
@@ -1489,7 +1520,7 @@ mod tests {
         let mut buf = [0u8; 4];
         let outcome = k.messages.recv(0, 0, &mut buf).unwrap();
         assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: 0 });
-        assert_eq!(apply_recv_outcome(&mut t, outcome), 0);
+        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(Some(0)));
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
 
         // Send should wake partition 0
@@ -1525,6 +1556,25 @@ mod tests {
         // After blocking and triggering deschedule, yield_requested should be true
         assert!(k.yield_requested);
         assert_eq!(t.get(1).unwrap().state(), PartitionState::Waiting);
+    }
+
+    #[test]
+    fn msg_recv_blocks_sets_yield_requested() {
+        let (mut k, mut t) = kernel(0, 0, 1);
+        // yield_requested should initially be false
+        assert!(!k.yield_requested);
+
+        // Recv on empty queue blocks partition 0
+        let mut buf = [0u8; 4];
+        let outcome = k.messages.recv(0, 0, &mut buf).unwrap();
+        assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: 0 });
+
+        // apply_recv_outcome calls trigger_deschedule internally
+        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(Some(0)));
+
+        // yield_requested should now be true after blocking
+        assert!(k.yield_requested);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
     }
 
     #[test]
