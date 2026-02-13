@@ -111,6 +111,11 @@ required-features = ["qemu", "dynamic-mpu"]
 name = "adversarial_mod_stub"
 required-features = ["qemu"]
 
+[[example]]
+name = "read_kernel_mem"
+path = "examples/adversarial/read_kernel_mem.rs"
+required-features = ["qemu"]
+
 [features]
 qemu = []
 dynamic-mpu = []
