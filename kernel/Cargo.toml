@@ -173,6 +173,11 @@ name = "write_control"
 path = "examples/adversarial/write_control.rs"
 required-features = ["qemu"]
 
+[[example]]
+name = "syscall_kernel_ptr"
+path = "examples/adversarial/syscall_kernel_ptr.rs"
+required-features = ["qemu"]
+
 [features]
 qemu = []
 dynamic-mpu = []

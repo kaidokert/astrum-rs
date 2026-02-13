@@ -22,8 +22,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    kernel::KernelState,
-    partition::PartitionConfig,
+    partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc,
     svc::{Kernel, SvcError},
@@ -33,7 +32,6 @@ use kernel::{
 use panic_semihosting as _;
 
 const NUM_PARTITIONS: usize = 2;
-const MAX_SCHEDULE_ENTRIES: usize = 8;
 const STACK_WORDS: usize = 256;
 
 /// UART-A device ID (used by P1).
@@ -71,12 +69,8 @@ impl KernelConfig for DemoConfig {
     const DR: usize = 4;
 }
 
-kernel::define_harness!(
-    DemoConfig,
-    NUM_PARTITIONS,
-    MAX_SCHEDULE_ENTRIES,
-    STACK_WORDS
-);
+// Use the unified harness: single KERNEL global, no separate KS/KERN.
+kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS);
 
 // ---------------------------------------------------------------------------
 // P1: opens UART-A, writes message, yields, later reads response
@@ -206,50 +200,48 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("virtual_uart_demo: start");
 
-    // SAFETY: single-core, interrupts not yet enabled.
-    unsafe {
-        store_kernel(Kernel::<DemoConfig>::new_empty(
-            kernel::virtual_device::DeviceRegistry::new(),
-        ));
+    // Schedule: P1(2) → system window(1) → P2(2) → system window(1)
+    let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();
+    sched.add(ScheduleEntry::new(0, 2)).unwrap();
+    sched.add_system_window(1).unwrap();
+    sched.add(ScheduleEntry::new(1, 2)).unwrap();
+    sched.add_system_window(1).unwrap();
 
-        // Register the uart_pair backends in the device registry so that
-        // dev_dispatch can route SYS_DEV_* syscalls to UART-A and UART-B.
-        cortex_m::interrupt::free(|cs| {
-            if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-                // TODO: reviewer false positive — this SAFETY comment was
-                // not removed; the diff was truncated.
-                // SAFETY: KERN is a static that is never dropped. The
-                // backends live inside uart_pair which lives inside
-                // KERN. Interrupts are disabled (interrupt::free),
-                // guaranteeing exclusive access on single-core Cortex-M.
-                // The 'static lifetime is valid because KERN is 'static.
-                let a: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.a as *mut _);
-                let b: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.b as *mut _);
-                k.registry.add(a).expect("register UART-A");
-                k.registry.add(b).expect("register UART-B");
-            }
-        });
-
-        // Schedule: P1(2) → system window(1) → P2(2) → system window(1)
-        let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
-        sched.add(ScheduleEntry::new(0, 2)).unwrap();
-        sched.add_system_window(1).unwrap();
-        sched.add(ScheduleEntry::new(1, 2)).unwrap();
-        sched.add_system_window(1).unwrap();
-        sched.start();
-
-        let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| {
-            let b = 0x2000_0000 + (i as u32) * 0x2000;
+    // Build partition configs using the STACKS addresses.
+    // SAFETY: single-core, interrupts disabled — exclusive access.
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
+        core::array::from_fn(|i| {
+            let b = STACKS[i].0.as_ptr() as u32;
             PartitionConfig {
                 id: i as u8,
-                entry_point: 0,
+                entry_point: 0, // Not used by Kernel::new
                 stack_base: b,
-                stack_size: 1024,
-                mpu_region: kernel::partition::MpuRegion::new(b, 1024, 0),
+                stack_size: (STACK_WORDS * 4) as u32,
+                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
             }
-        });
-        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
+        })
+    };
+
+    // Create the unified kernel with schedule and partitions.
+    let mut k =
+        Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+            .expect("kernel creation");
+
+    // Register the uart_pair backends in the device registry so that
+    // dev_dispatch can route SYS_DEV_* syscalls to UART-A and UART-B.
+    // SAFETY: k is a local variable that will be stored into the static
+    // KERNEL before boot() is called. The backends live inside uart_pair
+    // which lives inside k. Single-core, interrupts disabled guarantees
+    // exclusive access. The 'static lifetime is valid because KERNEL is
+    // 'static once stored.
+    unsafe {
+        let a: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.a as *mut _);
+        let b: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.b as *mut _);
+        k.registry.add(a).expect("register UART-A");
+        k.registry.add(b).expect("register UART-B");
     }
+
+    store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
 

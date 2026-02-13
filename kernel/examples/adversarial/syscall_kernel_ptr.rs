@@ -17,8 +17,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    kernel::KernelState,
-    partition::PartitionConfig,
+    partition::{MpuRegion, PartitionConfig},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
@@ -44,14 +43,13 @@ const TEST_NAME: &str = "syscall_kernel_ptr";
 // Kernel configuration
 // ---------------------------------------------------------------------------
 
-const MAX_SCHEDULE_ENTRIES: usize = 4;
 const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
 struct TestConfig;
 impl KernelConfig for TestConfig {
-    // N must match NUM_PARTITIONS for KernelState consistency.
-    const N: usize = 1;
+    const N: usize = NUM_PARTITIONS;
+    const SCHED: usize = 4;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -73,13 +71,8 @@ impl KernelConfig for TestConfig {
     const DR: usize = 4;
 }
 
-// Use the standard harness for partition scheduling.
-kernel::define_harness!(
-    TestConfig,
-    NUM_PARTITIONS,
-    MAX_SCHEDULE_ENTRIES,
-    STACK_WORDS
-);
+// Use the unified harness: single KERNEL global, no separate KS/KERN.
+kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
 
 // ---------------------------------------------------------------------------
 // Partition entry point
@@ -88,7 +81,7 @@ kernel::define_harness!(
 /// Partition entry: invoke SYS_SAMPLING_WRITE with kernel address as data ptr.
 extern "C" fn test_partition_main() -> ! {
     // Unpack the port ID passed via r0.
-    let port_id = kernel::unpack_r0!() as u32;
+    let port_id = kernel::unpack_r0!();
 
     // Issue SYS_SAMPLING_WRITE with:
     //   r1 = port_id (valid sampling port)
@@ -126,44 +119,42 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
     hprintln!("{}: start", TEST_NAME);
 
-    // Create a sampling port for the test partition.
-    let port_id;
-    // SAFETY: single-core, interrupts not yet enabled — exclusive access.
-    unsafe {
-        #[cfg(feature = "dynamic-mpu")]
-        let mut k = Kernel::<TestConfig>::new(kernel::virtual_device::DeviceRegistry::new());
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let mut k = Kernel::<TestConfig>::new();
+    // Build schedule: single partition.
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
+    sched
+        .add(ScheduleEntry::new(0, 2))
+        .expect("schedule entry must fit");
 
-        // Create a source port (partition will "write" to it).
-        port_id = k
-            .sampling
-            .create_port(PortDirection::Source, 10)
-            .expect("create port");
-
-        store_kernel(k);
-
-        // Set up schedule: single partition.
-        let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
-        sched
-            .add(ScheduleEntry::new(0, 2))
-            .expect("schedule entry must fit");
-        sched.start();
-
-        // Build partition config using proper struct fields.
-        let cfgs: [PartitionConfig; NUM_PARTITIONS] = [{
-            let b = 0x2000_0000u32;
+    // Build partition configs using the STACKS addresses.
+    // SAFETY: single-core, interrupts disabled — exclusive access.
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
+        core::array::from_fn(|i| {
+            let b = STACKS[i].0.as_ptr() as u32;
             PartitionConfig {
-                id: 0,
-                entry_point: 0,
+                id: i as u8,
+                entry_point: 0, // Not used by Kernel::new
                 stack_base: b,
-                stack_size: 1024,
-                mpu_region: kernel::partition::MpuRegion::new(b, 1024, 0),
+                stack_size: (STACK_WORDS * 4) as u32,
+                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
             }
-        }];
+        })
+    };
 
-        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
-    }
+    // Create the unified kernel with schedule and partitions.
+    #[cfg(feature = "dynamic-mpu")]
+    let mut k =
+        Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+            .expect("kernel creation");
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let mut k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel creation");
+
+    // Create a source port (partition will "write" to it).
+    let port_id = k
+        .sampling
+        .create_port(PortDirection::Source, 10)
+        .expect("create port");
+
+    store_kernel(k);
 
     hprintln!("  port_id: {}", port_id);
     hprintln!("  kernel_addr (r3): {:#010x}", KERNEL_ADDR);
