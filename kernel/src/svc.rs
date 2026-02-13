@@ -666,7 +666,14 @@ where
                     .messages
                     .send(frame.r1 as usize, frame.r2 as usize, data)
                 {
-                    Ok(outcome) => apply_send_outcome(pt, outcome),
+                    Ok(outcome) => match apply_send_outcome(pt, outcome) {
+                        Ok(Some(_blocked)) => {
+                            self.trigger_deschedule();
+                            0
+                        }
+                        Ok(None) => 0,
+                        Err(e) => e.to_u32(),
+                    },
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
@@ -1039,28 +1046,29 @@ pub fn try_transition<const N: usize>(
 }
 
 /// Apply a `SendOutcome` by transitioning partition states as needed.
-/// Returns 0 on success or `u32::MAX` if a partition transition fails.
+/// Returns `Some(blocked_pid)` if a sender blocked, `None` otherwise.
+/// Returns `Err(SvcError::TransitionFailed)` if a partition transition fails.
 fn apply_send_outcome<const N: usize>(
     partitions: &mut PartitionTable<N>,
     outcome: SendOutcome,
-) -> u32 {
+) -> Result<Option<u32>, SvcError> {
     match outcome {
         SendOutcome::Delivered {
             wake_receiver: Some(pid),
         } => {
             if !try_transition(partitions, pid, PartitionState::Ready) {
-                return SvcError::TransitionFailed.to_u32();
+                return Err(SvcError::TransitionFailed);
             }
-            0
+            Ok(None)
         }
         SendOutcome::Delivered {
             wake_receiver: None,
-        } => 0,
+        } => Ok(None),
         SendOutcome::SenderBlocked { blocked } => {
             if !try_transition(partitions, blocked, PartitionState::Waiting) {
-                return SvcError::TransitionFailed.to_u32();
+                return Err(SvcError::TransitionFailed);
             }
-            0
+            Ok(Some(blocked as u32))
         }
     }
 }
@@ -1402,8 +1410,7 @@ mod tests {
         // Send to queue 0 from partition 0
         let data: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
         let outcome = k.messages.send(0, 0, &data).unwrap();
-        let r0 = apply_send_outcome(&mut t, outcome);
-        assert_eq!(r0, 0);
+        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
 
         // Receive from queue 0 into partition 1's buffer
         let mut recv_buf = [0u8; 4];
@@ -1421,10 +1428,10 @@ mod tests {
         let data_q1: [u8; 4] = [5, 6, 7, 8];
 
         let outcome = k.messages.send(0, 0, &data_q0).unwrap();
-        assert_eq!(apply_send_outcome(&mut t, outcome), 0);
+        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
 
         let outcome = k.messages.send(1, 0, &data_q1).unwrap();
-        assert_eq!(apply_send_outcome(&mut t, outcome), 0);
+        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
 
         // Recv from queue 1 first
         let mut buf = [0u8; 4];
@@ -1452,13 +1459,13 @@ mod tests {
         // Fill the depth-4 queue to capacity
         for i in 0..4u8 {
             let outcome = k.messages.send(0, 0, &[i; 4]).unwrap();
-            assert_eq!(apply_send_outcome(&mut t, outcome), 0);
+            assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
         }
 
         // Next send blocks partition 1
         let outcome = k.messages.send(0, 1, &[99; 4]).unwrap();
         assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: 1 });
-        assert_eq!(apply_send_outcome(&mut t, outcome), 0);
+        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(Some(1)));
         assert_eq!(t.get(1).unwrap().state(), PartitionState::Waiting);
 
         // Recv should wake partition 1
@@ -1493,8 +1500,31 @@ mod tests {
                 wake_receiver: Some(0)
             }
         );
-        assert_eq!(apply_send_outcome(&mut t, outcome), 0);
+        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn msg_send_blocks_sets_yield_requested() {
+        let (mut k, mut t) = kernel(0, 0, 1);
+        // Fill the depth-4 queue to capacity
+        for i in 0..4u8 {
+            let outcome = k.messages.send(0, 0, &[i; 4]).unwrap();
+            assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
+        }
+        // yield_requested should still be false after successful sends
+        assert!(!k.yield_requested);
+
+        // Next send blocks partition 1
+        let outcome = k.messages.send(0, 1, &[99; 4]).unwrap();
+        assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: 1 });
+        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(Some(1)));
+        // Caller is responsible for triggering deschedule
+        k.trigger_deschedule();
+
+        // After blocking and triggering deschedule, yield_requested should be true
+        assert!(k.yield_requested);
+        assert_eq!(t.get(1).unwrap().state(), PartitionState::Waiting);
     }
 
     #[test]
