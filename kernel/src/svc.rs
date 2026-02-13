@@ -126,7 +126,9 @@ macro_rules! validated_ptr {
 }
 
 use crate::events;
-use crate::kernel::YieldResult;
+// TODO: pub re-export required by harness macros (_unified_handle_yield uses $crate::svc::YieldResult).
+// Reviewer flagged as out-of-scope API change, but removal breaks compilation.
+pub use crate::kernel::YieldResult;
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
 use crate::mutex::MutexPool;
 use crate::partition::{ConfigError, PartitionConfig, PartitionState, PartitionTable};
@@ -215,111 +217,6 @@ pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
     });
 }
 
-/// Declare a `Mutex<RefCell<Option<Kernel<$Config>>>>` static, an SVC
-/// dispatch hook that forwards to [`Kernel::dispatch`], and a helper to
-/// store the kernel instance.
-///
-/// This is the companion to [`define_pendsv!`](crate::define_pendsv): it
-/// eliminates the boilerplate that every QEMU example otherwise duplicates
-/// for the safe `Mutex`-based kernel storage and dispatch pattern.
-///
-/// # Generated items
-///
-/// | Item | Description |
-/// |------|-------------|
-/// | `static KERN: Mutex<RefCell<Option<Kernel<$Config>>>>` | Thread-safe kernel storage |
-/// | `unsafe extern "C" fn dispatch_hook(f: &mut ExceptionFrame)` | SVC hook that dispatches via `KERN` |
-/// | `fn store_kernel(k: Kernel<$Config>)` | Store the kernel and install the hook |
-///
-/// # Yield handler
-///
-/// An optional second argument is a block `{ |k| … }` that is called
-/// after `k.dispatch(f)` when `k.yield_requested` is set.  The harness
-/// uses this to force-advance the schedule without duplicating the
-/// entire macro body.
-///
-/// # Usage
-///
-/// ```ignore
-/// // Standalone (no yield handling, no partition swap):
-/// kernel::define_dispatch_hook!(DemoConfig);
-///
-/// // With yield handler only (standalone examples):
-/// kernel::define_dispatch_hook!(DemoConfig, |k| { … });
-///
-/// // With yield handler and partitions accessor (used by define_harness!):
-/// kernel::define_dispatch_hook!(DemoConfig, |k| { … }, |cs| { … });
-/// ```
-#[macro_export]
-macro_rules! define_dispatch_hook {
-    // Standalone variant (no yield, no partitions accessor).
-    ($Config:ty) => {
-        $crate::define_dispatch_hook!(@impl $Config, |_k| {}, |_cs| { None::<()> });
-    };
-    // Yield-only variant (no partitions accessor — used by standalone examples
-    // like uart1_loopback that manage their own KS).
-    ($Config:ty, |$k:ident| $yield_body:block) => {
-        $crate::define_dispatch_hook!(@impl $Config, |$k| $yield_body, |_cs| { None::<()> });
-    };
-    // Harness variant with yield handler and partitions accessor.
-    ($Config:ty, |$k:ident| $yield_body:block, |$cs:ident| $parts_body:block) => {
-        $crate::define_dispatch_hook!(@impl $Config,
-            |$k| $yield_body,
-            |$cs| $parts_body
-        );
-    };
-    // Internal implementation shared by all arms.
-    (@impl $Config:ty, |$k:ident| $yield_body:block, |$cs:ident| $parts_body:block) => {
-        static KERN: ::cortex_m::interrupt::Mutex<
-            ::core::cell::RefCell<Option<$crate::svc::Kernel<$Config>>>,
-        > = ::cortex_m::interrupt::Mutex::new(::core::cell::RefCell::new(None));
-
-        unsafe extern "C" fn dispatch_hook(f: &mut $crate::context::ExceptionFrame) {
-            // SAFETY: called from SVC exception context on single-core Cortex-M;
-            // `cortex_m::interrupt::free` masks interrupts, ensuring exclusive access.
-            ::cortex_m::interrupt::free(|cs| {
-                if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-                    // Synchronise the kernel's caller identity from the
-                    // assembly-level CURRENT_PARTITION written by PendSV.
-                    // SAFETY: CURRENT_PARTITION is a #[no_mangle] static mut u32
-                    // written by the PendSV handler; reading it here is safe
-                    // because interrupts are masked by `interrupt::free` on
-                    // single-core Cortex-M, so no concurrent write can occur.
-                    extern "C" { static CURRENT_PARTITION: u32; }
-                    // SAFETY: read-only access; value is always a valid u8
-                    // partition index (set by PendSV from NEXT_PARTITION).
-                    k.current_partition =
-                        unsafe { core::ptr::read_volatile(&raw const CURRENT_PARTITION) } as u8;
-
-                    // Dispatch uses self.partitions internally.
-                    // SAFETY: see above — interrupts masked, exclusive access.
-                    unsafe { k.dispatch(f) }
-
-                    // Suppress unused variable warning for $cs/$parts_body when
-                    // the partitions accessor is provided but not needed here.
-                    let _ = (|| { let $cs = cs; $parts_body })();
-
-                    {
-                        if k.yield_requested {
-                            k.yield_requested = false;
-                            let $k = k;
-                            $yield_body
-                        }
-                    }
-                }
-            });
-        }
-
-        /// Store the kernel instance and install the SVC dispatch hook.
-        fn store_kernel(k: $crate::svc::Kernel<$Config>) {
-            ::cortex_m::interrupt::free(|cs| {
-                KERN.borrow(cs).replace(Some(k));
-            });
-            $crate::svc::set_dispatch_hook(dispatch_hook);
-        }
-    };
-}
-
 /// Declares a unified kernel storage static with dispatch hook and store function.
 ///
 /// This macro generates:
@@ -342,8 +239,7 @@ macro_rules! define_dispatch_hook {
 /// });
 /// ```
 ///
-/// This is intended as a forward-looking replacement for `define_dispatch_hook!`,
-/// consolidating kernel storage under a single `KERNEL` static.
+/// This macro consolidates kernel storage under a single `KERNEL` static.
 #[macro_export]
 macro_rules! define_unified_kernel {
     // Basic variant with no custom yield handler.
