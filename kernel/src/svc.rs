@@ -815,7 +815,7 @@ where
                         }
                         Ok(crate::blackboard::ReadBlackboardOutcome::ReaderBlocked) => {
                             try_transition(pt, self.current_partition, PartitionState::Waiting);
-                            0
+                            self.trigger_deschedule()
                         }
                         Err(_) => SvcError::InvalidResource.to_u32(),
                     }
@@ -2298,6 +2298,32 @@ mod tests {
         assert_eq!(ptr as usize, addr, "mmap MAP_FIXED failed");
         ptr
     }
+
+    // ---- BbRead blocking dispatch tests ----
+
+    #[test]
+    fn bb_read_blocks_sets_yield_requested() {
+        use crate::syscall::SYS_BB_READ;
+        let (mut k, mut t) = kernel(0, 0, 0);
+        let id = k.blackboards.create().unwrap();
+        let ptr = low32_buf(0);
+        // BbRead with timeout > 0 on empty blackboard should block
+        let mut ef = frame4(SYS_BB_READ, id as u32, 50, ptr as u32);
+        assert!(
+            !k.yield_requested,
+            "yield_requested should be false before blocking read"
+        );
+        // SAFETY: test-only dispatch on a valid ExceptionFrame.
+        unsafe { k.dispatch(&mut ef, &mut t) };
+        assert_eq!(ef.r0, 0);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert!(
+            k.yield_requested,
+            "yield_requested should be true after blocking read"
+        );
+    }
+
+    // ---- QueuingRecvTimed dispatch tests ----
 
     #[test]
     fn queuing_recv_timed_delivers_message_and_wakes_sender() {
