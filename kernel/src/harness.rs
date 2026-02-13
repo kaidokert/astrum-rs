@@ -377,6 +377,280 @@ macro_rules! define_harness {
     };
 }
 
+#[cfg(not(feature = "dynamic-mpu"))]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _unified_handle_tick {
+    ($kernel:expr, $next:ident) => {{
+        let event = $kernel.advance_schedule_tick();
+        if let Some(pid) = event {
+            // SAFETY: single-core Cortex-M — SysTick has exclusive access to
+            // NEXT_PARTITION; PendSV (lower priority) cannot preempt us.
+            unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+            cortex_m::peripheral::SCB::set_pendsv();
+        }
+    }};
+}
+
+#[cfg(feature = "dynamic-mpu")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _unified_handle_tick {
+    ($kernel:expr, $next:ident, $tick:expr, $strategy:expr) => {{
+        let event = $kernel.advance_schedule_tick();
+        $crate::_unified_handle_tick_event!($kernel, event, $next, $tick, $strategy);
+    }};
+}
+
+/// Shared helper: run bottom-half processing for system window and wake any
+/// blocked device readers. Used by both `_unified_handle_tick_event!` and
+/// `_unified_handle_yield!` to avoid code duplication.
+#[cfg(feature = "dynamic-mpu")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _unified_run_system_window {
+    ($kernel:expr, $tick:expr, $strategy:expr) => {{
+        let bh = $crate::tick::run_bottom_half(
+            &mut $kernel.uart_pair,
+            &mut $kernel.isr_ring,
+            &mut $kernel.buffers,
+            &mut $kernel.hw_uart,
+            $tick,
+            $strategy,
+        );
+        if bh.has_rx_data {
+            if let Some(woken) = $kernel.dev_wait_queue.wake_one_reader() {
+                $crate::svc::try_transition(
+                    $kernel.partitions_mut(),
+                    woken,
+                    $crate::partition::PartitionState::Ready,
+                );
+            }
+        }
+    }};
+}
+
+#[cfg(feature = "dynamic-mpu")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _unified_handle_tick_event {
+    ($kernel:expr, $event:expr, $next:ident, $tick:expr, $strategy:expr) => {{
+        match $event {
+            $crate::scheduler::ScheduleEvent::PartitionSwitch(pid) => {
+                // SAFETY: single-core Cortex-M — SysTick has exclusive access to
+                // NEXT_PARTITION; PendSV (lower priority) cannot preempt us.
+                unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+                cortex_m::peripheral::SCB::set_pendsv();
+            }
+            $crate::scheduler::ScheduleEvent::SystemWindow => {
+                $crate::_unified_run_system_window!($kernel, $tick, $strategy);
+            }
+            $crate::scheduler::ScheduleEvent::None => {}
+        }
+    }};
+}
+
+#[cfg(not(feature = "dynamic-mpu"))]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _unified_handle_yield {
+    ($kernel:expr, $next:ident) => {{
+        use $crate::kernel::YieldResult;
+        let result = $kernel.yield_current_slot();
+        if let Some(pid) = result.partition_id() {
+            // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
+            // exclusive access; PendSV (priority 0xFF) cannot preempt.
+            unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+        }
+    }};
+}
+
+#[cfg(feature = "dynamic-mpu")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _unified_handle_yield {
+    ($kernel:expr, $next:ident, $tick:expr, $strategy:expr) => {{
+        use $crate::kernel::YieldResult;
+        loop {
+            let result = $kernel.yield_current_slot();
+            if let Some(pid) = result.partition_id() {
+                // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
+                // exclusive access; PendSV (priority 0xFF) cannot preempt.
+                unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+                break;
+            }
+            if result.is_system_window() {
+                $crate::_unified_run_system_window!($kernel, $tick, $strategy);
+                continue;
+            }
+            break;
+        }
+    }};
+}
+
+/// Unified harness: single `KERNEL` global for SVC dispatch and SysTick scheduling.
+/// Generates STACKS, PARTITION_SP, CURRENT/NEXT_PARTITION, KERNEL, PendSV, SysTick, boot().
+///
+/// # MPU Alignment Constraint
+///
+/// The stack alignment is hardcoded to 1024 bytes, which requires `$SW == 256`
+/// (256 words × 4 bytes = 1024 bytes). This is enforced by a compile-time
+/// assertion. Supporting variable stack sizes would require either:
+/// - A procedural macro that can compute alignment from the size parameter
+/// - Multiple macro variants for different power-of-two sizes
+/// - A build.rs script to generate the appropriate alignment
+#[macro_export]
+macro_rules! define_unified_harness {
+    ($Config:ty, $NP:expr, $SW:expr) => {
+        // Compile-time check: MPU requires stack alignment == stack size.
+        // Since #[repr(align(...))] requires a literal, we hardcode 1024-byte
+        // alignment, which mandates $SW == 256 words (256 * 4 = 1024 bytes).
+        const _: () = assert!(
+            $SW == 256,
+            "define_unified_harness! requires $SW == 256 (1024-byte stacks) for correct MPU alignment"
+        );
+
+        /// Wrapper that aligns each partition stack to 1024 bytes so
+        /// that the address is valid as an MPU region base.
+        /// Note: alignment is hardcoded; see MPU Alignment Constraint above.
+        #[repr(C, align(1024))]
+        struct AlignedStack([u32; $SW]);
+
+        static mut STACKS: [AlignedStack; $NP] = {
+            const ZERO: AlignedStack = AlignedStack([0; $SW]);
+            [ZERO; $NP]
+        };
+
+        #[no_mangle]
+        static mut PARTITION_SP: [u32; $NP] = [0; $NP];
+
+        #[no_mangle]
+        static mut CURRENT_PARTITION: u32 = u32::MAX;
+
+        #[no_mangle]
+        static mut NEXT_PARTITION: u32 = 0;
+
+        #[cfg(feature = "dynamic-mpu")]
+        static HARNESS_STRATEGY: $crate::mpu_strategy::DynamicStrategy =
+            $crate::mpu_strategy::DynamicStrategy::new();
+
+        $crate::define_unified_kernel!($Config, |k| {
+            #[cfg(not(feature = "dynamic-mpu"))]
+            $crate::_unified_handle_yield!(k, NEXT_PARTITION);
+            #[cfg(feature = "dynamic-mpu")]
+            {
+                let tick_val = k.tick().get();
+                $crate::_unified_handle_yield!(k, NEXT_PARTITION, tick_val, &HARNESS_STRATEGY);
+            }
+        });
+
+        #[used]
+        static _SVC: unsafe extern "C" fn(&mut $crate::context::ExceptionFrame) =
+            $crate::svc::SVC_HANDLER;
+
+        $crate::define_pendsv!();
+
+        #[exception]
+        fn SysTick() {
+            ::cortex_m::interrupt::free(|cs| {
+                let mut guard = KERNEL.borrow(cs).borrow_mut();
+                let k = match guard.as_mut() {
+                    Some(k) => k,
+                    None => return,
+                };
+                #[cfg(not(feature = "dynamic-mpu"))]
+                $crate::_unified_handle_tick!(k, NEXT_PARTITION);
+                #[cfg(feature = "dynamic-mpu")]
+                {
+                    let tick_val = k.tick().get();
+                    $crate::_unified_handle_tick!(k, NEXT_PARTITION, tick_val, &HARNESS_STRATEGY);
+                }
+                let current_tick = k.tick().get();
+                k.expire_timed_waits::<{ <$Config as $crate::config::KernelConfig>::N }>(
+                    current_tick,
+                );
+            });
+        }
+
+        /// Initialize stacks, priorities, start schedule, enable SysTick, enter idle loop.
+        fn boot(
+            partitions: &[(extern "C" fn() -> !, u32)],
+            peripherals: &mut cortex_m::Peripherals,
+        ) -> ! {
+            use cortex_m::peripheral::scb::SystemHandler;
+            use cortex_m::peripheral::syst::SystClkSource;
+            use cortex_m::peripheral::SCB;
+
+            // SAFETY: called exactly once from main() with interrupts
+            // disabled (before the scheduler has started). Single-core
+            // Cortex-M guarantees exclusive access to these statics and
+            // to the exception priority registers.
+            unsafe {
+                let stacks = &mut *(&raw mut STACKS);
+                let partition_sp = &mut *(&raw mut PARTITION_SP);
+
+                for (i, &(ep, hint)) in partitions.iter().enumerate() {
+                    let stk = &mut stacks[i].0;
+                    // TODO(panic-free): expect() can panic if stack is too small for
+                    // the exception frame. At boot time there is no recovery path, but
+                    // a panic-free design would propagate the error to the caller.
+                    let ix =
+                        $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
+                            .expect("init_stack_frame");
+                    partition_sp[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
+                }
+
+                const { $crate::config::assert_priority_order::<$Config>() }
+
+                peripherals.SCB.set_priority(
+                    SystemHandler::SVCall,
+                    <$Config as $crate::config::KernelConfig>::SVCALL_PRIORITY,
+                );
+                peripherals.SCB.set_priority(
+                    SystemHandler::PendSV,
+                    <$Config as $crate::config::KernelConfig>::PENDSV_PRIORITY,
+                );
+                peripherals.SCB.set_priority(
+                    SystemHandler::SysTick,
+                    <$Config as $crate::config::KernelConfig>::SYSTICK_PRIORITY,
+                );
+            }
+
+            let first_partition = ::cortex_m::interrupt::free(|cs| {
+                KERNEL
+                    .borrow(cs)
+                    .borrow_mut()
+                    .as_mut()
+                    .and_then(|k| k.start_schedule())
+            });
+
+            // SAFETY: single-core Cortex-M — boot() is called exactly once
+            // before SysTick/PendSV are enabled, so exclusive access is
+            // guaranteed.
+            // TODO(panic-free): expect() can panic if no partition is ready.
+            // At boot time there is no recovery path, but a panic-free design
+            // would return an error from boot() instead of diverging.
+            unsafe {
+                core::ptr::write_volatile(
+                    &raw mut NEXT_PARTITION,
+                    first_partition.expect("no partition ready at boot") as u32,
+                );
+            }
+
+            peripherals.SYST.set_clock_source(SystClkSource::Core);
+            peripherals.SYST.set_reload(120_000 - 1);
+            peripherals.SYST.clear_current();
+            peripherals.SYST.enable_counter();
+            peripherals.SYST.enable_interrupt();
+            SCB::set_pendsv();
+
+            loop {
+                cortex_m::asm::wfi();
+            }
+        }
+    };
+}
+
 // Unit tests: the define_harness! macro emits global_asm (via
 // define_pendsv!) and an #[exception] handler, which are only
 // meaningful on ARM targets.  Correctness is verified by the QEMU
