@@ -1,8 +1,8 @@
-// Not migrated to define_harness! — this example intentionally tests
-// the raw PendSV context-switch mechanism without KernelState, SVC
-// dispatch, or the round-robin scheduler. Its custom SysTick handler
-// (switch counting, semihosting exit) and separate per-partition
-// stacks don't fit the shared harness pattern.
+// Not migrated to define_unified_harness! — this example intentionally tests
+// the raw PendSV context-switch mechanism without Kernel, SVC dispatch,
+// or the round-robin scheduler. Its custom SysTick handler (switch counting,
+// semihosting exit) and separate per-partition stacks don't fit the shared
+// harness pattern.
 
 //! QEMU integration example: two-partition context switch via PendSV.
 //!
