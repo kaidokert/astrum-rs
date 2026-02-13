@@ -88,6 +88,10 @@ name = "get_time_test"
 required-features = ["qemu"]
 
 [[example]]
+name = "blocking_deschedule"
+required-features = ["qemu"]
+
+[[example]]
 name = "mpu_dynamic"
 required-features = ["qemu", "dynamic-mpu"]
 
