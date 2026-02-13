@@ -212,6 +212,12 @@ pub enum ConfigError {
     StackOverflow { partition_id: u8 },
     /// The partition table is full; no room for another partition.
     PartitionTableFull,
+    /// A partition's id does not match its array index.
+    PartitionIdMismatch {
+        index: usize,
+        expected_id: u8,
+        actual_id: u8,
+    },
 }
 
 impl core::fmt::Display for ConfigError {
@@ -244,6 +250,15 @@ impl core::fmt::Display for ConfigError {
                 "partition {partition_id}: stack base + stack size overflows u32"
             ),
             Self::PartitionTableFull => write!(f, "partition table is full"),
+            Self::PartitionIdMismatch {
+                index,
+                expected_id,
+                actual_id,
+            } => write!(
+                f,
+                "partition config[{index}] has id {actual_id}, expected {expected_id} \
+                 — ids must match array index"
+            ),
         }
     }
 }
@@ -437,6 +452,11 @@ mod tests {
             ConfigError::StackBaseNotAligned { partition_id: 3 },
             ConfigError::StackOverflow { partition_id: 4 },
             ConfigError::PartitionTableFull,
+            ConfigError::PartitionIdMismatch {
+                index: 0,
+                expected_id: 0,
+                actual_id: 5,
+            },
         ];
         for (i, a) in variants.iter().enumerate() {
             for (j, b) in variants.iter().enumerate() {
@@ -511,6 +531,22 @@ mod tests {
     }
 
     #[test]
+    fn config_error_display_partition_id_mismatch() {
+        let msg = format!(
+            "{}",
+            ConfigError::PartitionIdMismatch {
+                index: 2,
+                expected_id: 2,
+                actual_id: 7,
+            }
+        );
+        assert!(msg.contains("config[2]"), "should contain index");
+        assert!(msg.contains("id 7"), "should contain actual_id");
+        assert!(msg.contains("expected 2"), "should contain expected_id");
+        assert!(msg.contains("ids must match array index"));
+    }
+
+    #[test]
     fn config_error_debug_contains_variant_names() {
         assert!(format!("{:?}", ConfigError::ScheduleEmpty).contains("ScheduleEmpty"));
         assert!(format!(
@@ -543,6 +579,15 @@ mod tests {
                 .contains("StackOverflow")
         );
         assert!(format!("{:?}", ConfigError::PartitionTableFull).contains("PartitionTableFull"));
+        assert!(format!(
+            "{:?}",
+            ConfigError::PartitionIdMismatch {
+                index: 0,
+                expected_id: 0,
+                actual_id: 1,
+            }
+        )
+        .contains("PartitionIdMismatch"));
     }
 
     #[test]
