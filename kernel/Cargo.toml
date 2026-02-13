@@ -141,6 +141,11 @@ name = "syscall_other_ptr"
 path = "examples/adversarial/syscall_other_ptr.rs"
 required-features = ["qemu"]
 
+[[example]]
+name = "syscall_bad_ptrs"
+path = "examples/adversarial/syscall_bad_ptrs.rs"
+required-features = ["qemu"]
+
 [features]
 qemu = []
 dynamic-mpu = []
