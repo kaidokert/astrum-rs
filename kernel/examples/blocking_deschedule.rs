@@ -60,7 +60,7 @@ impl KernelConfig for Cfg {
 // Use define_unified_kernel! which generates KERNEL static, dispatch_hook, and store_kernel
 kernel::define_unified_kernel!(Cfg, |k| {
     // Yield handler: advance schedule when yield_requested is set
-    use kernel::kernel::YieldResult;
+    use kernel::svc::YieldResult;
     let result = k.yield_current_slot();
     if let Some(pid) = result.partition_id() {
         // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
