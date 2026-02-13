@@ -1,11 +1,11 @@
-//! Adversarial test: partition 0 attempts to read partition 1's stack region.
+//! Adversarial test: partition 0 attempts to write to partition 1's stack region.
 //!
 //! This test verifies that MPU isolation prevents unprivileged partition code
-//! from accessing another partition's data region. With PRIVDEFENA and
-//! separate MPU data regions per partition, an attempt by partition 0 to read
+//! from writing to another partition's data region. With PRIVDEFENA and
+//! separate MPU data regions per partition, an attempt by partition 0 to write
 //! an address within partition 1's stack must generate a MemManage fault.
 //!
-//! Run with: cargo run --target thumbv7m-none-eabi --features qemu --example read_other_stack
+//! Run with: cargo run --target thumbv7m-none-eabi --features qemu --example write_other_stack
 
 #![no_std]
 #![no_main]
@@ -25,13 +25,13 @@ use adversarial::{AlignedStack, FaultInfo};
 // ---------------------------------------------------------------------------
 
 /// Test name for reporting.
-const TEST_NAME: &str = "read_other_stack";
+const TEST_NAME: &str = "write_other_stack";
 
 // ---------------------------------------------------------------------------
 // Partition stacks and fault capture
 // ---------------------------------------------------------------------------
 
-/// Partition 0 stack (adversarial partition that attempts the read).
+/// Partition 0 stack (adversarial partition that attempts the write).
 static mut P0_STACK: AlignedStack = AlignedStack::new();
 
 /// Partition 1 stack (victim partition whose memory should be protected).
@@ -51,7 +51,7 @@ fn main() -> ! {
 
     // SAFETY: P0_STACK and P1_STACK are only accessed here before dropping to
     // unprivileged mode, and by the partition code during the test.
-    // The read operation deliberately triggers a MemManage fault.
+    // The write operation deliberately triggers a MemManage fault.
     unsafe {
         adversarial::run_other_stack_test(
             TEST_NAME,
@@ -59,8 +59,8 @@ fn main() -> ! {
             &raw const P0_STACK,
             &raw const P1_STACK,
             |target_addr| {
-                // Attempt to read partition 1's stack — must fault (DACCVIOL).
-                let _ = ptr::read_volatile(target_addr as *const u32);
+                // Attempt to write to partition 1's stack — must fault (DACCVIOL).
+                ptr::write_volatile(target_addr as *mut u32, 0xDEAD_BEEF);
             },
         )
     }

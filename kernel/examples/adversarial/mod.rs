@@ -4,7 +4,15 @@
 
 #[cfg(feature = "qemu")]
 use cortex_m::asm;
+#[cfg(feature = "qemu")]
+use cortex_m::peripheral::scb::Exception;
 use cortex_m::peripheral::SCB;
+#[cfg(feature = "qemu")]
+use cortex_m::register::{control, psp};
+#[cfg(feature = "qemu")]
+use cortex_m_semihosting::hprintln;
+#[cfg(feature = "qemu")]
+use kernel::mpu;
 
 pub const MMFSR_MMARVALID: u8 = 1 << 7;
 pub const MMFSR_DACCVIOL: u8 = 1 << 1;
@@ -120,6 +128,30 @@ pub unsafe fn clear_mmfsr() {
 /// Define a MemManage handler that captures fault info and runs an action.
 #[macro_export]
 macro_rules! define_memmanage_handler {
+    // Simple form: just capture fault and report for the given test name
+    ($fault_info:ident, $test_name:ident) => {
+        define_memmanage_handler!($fault_info, {
+            // SAFETY: Reading FAULT from the exception handler that just wrote it.
+            // No other code accesses FAULT concurrently (interrupts of same/lower
+            // priority are blocked during this exception).
+            let info = unsafe { core::ptr::read_volatile(&raw const $fault_info) };
+
+            // Verify we got a DACCVIOL (data access violation)
+            let outcome = if info.is_daccviol() {
+                adversarial::FaultOutcome::Faulted {
+                    mmfsr: info.mmfsr,
+                    mmfar: info.mmfar,
+                }
+            } else if info.faulted {
+                adversarial::FaultOutcome::Error("fault without DACCVIOL")
+            } else {
+                adversarial::FaultOutcome::NoFault
+            };
+
+            adversarial::report_result($test_name, outcome);
+        });
+    };
+    // Full form: capture fault and run custom action
     ($fault_info:ident, $action:expr) => {
         #[cortex_m_rt::exception]
         fn MemoryManagement() {
@@ -136,6 +168,155 @@ macro_rules! define_memmanage_handler {
             $action
         }
     };
+}
+
+// ---------------------------------------------------------------------------
+// Shared stack and test infrastructure
+// ---------------------------------------------------------------------------
+
+/// Stack size in words (256 words = 1 KiB).
+pub const STACK_WORDS: usize = 256;
+
+/// Stack size in bytes.
+pub const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
+
+/// Code region size for MPU.
+pub const CODE_SIZE: u32 = 32 * 1024;
+
+/// Aligned stack for partition use (1 KiB, aligned to 1024 for MPU).
+#[repr(C, align(1024))]
+pub struct AlignedStack(pub [u32; STACK_WORDS]);
+
+impl AlignedStack {
+    pub const fn new() -> Self {
+        Self([0; STACK_WORDS])
+    }
+
+    /// Get the base address of this stack.
+    pub fn base(&self) -> u32 {
+        (self as *const Self).cast::<u32>() as u32
+    }
+
+    /// Get the top address of this stack (base + size).
+    pub fn top(&self) -> u32 {
+        self.base() + STACK_SIZE
+    }
+}
+
+/// Configure MPU for a single partition: only allow access to that partition's stack.
+///
+/// R0: code RX (flash 0x0) — priv+unpriv read-only
+/// R1: data RW (partition stack) — full access, XN
+///
+/// Any address outside these regions will fault for unprivileged access.
+#[cfg(feature = "qemu")]
+fn configure_single_partition_mpu(mpu_periph: &cortex_m::peripheral::MPU, data_base: u32) {
+    // SAFETY: single-core, interrupts disabled — exclusive MPU access.
+    unsafe { mpu_periph.ctrl.write(0) };
+    asm::dsb();
+    asm::isb();
+
+    // R0: code RX — covers flash binary (priv+unpriv read-only)
+    let code_sf = mpu::encode_size(CODE_SIZE).expect("code size");
+    let code_rbar = mpu::build_rbar(0x0000_0000, 0).expect("code rbar");
+    let code_rasr = mpu::build_rasr(code_sf, mpu::AP_RO_RO, false, (false, false, false));
+    mpu::configure_region(mpu_periph, code_rbar, code_rasr);
+
+    // R1: data RW — partition stack (full access, XN)
+    let data_sf = mpu::encode_size(STACK_SIZE).expect("data size");
+    let data_rbar = mpu::build_rbar(data_base, 1).expect("data rbar");
+    let data_rasr = mpu::build_rasr(data_sf, mpu::AP_FULL_ACCESS, true, (true, true, false));
+    mpu::configure_region(mpu_periph, data_rbar, data_rasr);
+
+    // Enable MPU with PRIVDEFENA.
+    // SAFETY: regions programmed; barriers ensure visibility.
+    unsafe { mpu_periph.ctrl.write(mpu::MPU_CTRL_ENABLE_PRIVDEFENA) };
+    asm::dsb();
+    asm::isb();
+}
+
+/// Drop to unprivileged mode using the given stack.
+///
+/// # Safety
+/// The stack must be valid and accessible (MPU configured).
+#[cfg(feature = "qemu")]
+unsafe fn drop_to_unprivileged(stack_top: u32) {
+    psp::write(stack_top);
+    let mut ctrl = control::read();
+    ctrl.set_spsel(control::Spsel::Psp);
+    ctrl.set_npriv(control::Npriv::Unprivileged);
+    control::write(ctrl);
+}
+
+/// Run an "other stack" test: partition 0 attempts to access partition 1's stack.
+///
+/// This sets up MPU, enables MemManage, drops to unprivileged mode, then
+/// calls the provided closure to perform the access that should fault.
+///
+/// # Safety
+/// - `p0_stack` and `p1_stack` must point to valid, non-overlapping `AlignedStack` instances.
+/// - The `access_fn` closure should perform a memory access to `target_addr` that triggers a fault.
+#[cfg(feature = "qemu")]
+pub unsafe fn run_other_stack_test<F>(
+    test_name: &str,
+    p: &mut cortex_m::Peripherals,
+    p0_stack: *const AlignedStack,
+    p1_stack: *const AlignedStack,
+    access_fn: F,
+) -> !
+where
+    F: FnOnce(u32),
+{
+    hprintln!("{}: start", test_name);
+
+    // Enable MemManage fault handler.
+    p.SCB.enable(Exception::MemoryManagement);
+
+    // Get stack addresses.
+    let p0_stack_base = (*p0_stack).base();
+    let p0_stack_top = (*p0_stack).top();
+    let p1_stack_base = (*p1_stack).base();
+    let p1_stack_top = (*p1_stack).top();
+
+    // Target address: middle of partition 1's stack.
+    let target_addr = p1_stack_base + STACK_SIZE / 2;
+
+    hprintln!(
+        "  P0 stack: {:#010x} - {:#010x}",
+        p0_stack_base,
+        p0_stack_top
+    );
+    hprintln!(
+        "  P1 stack: {:#010x} - {:#010x}",
+        p1_stack_base,
+        p1_stack_top
+    );
+    hprintln!("  target (P1): {:#010x}", target_addr);
+
+    // Verify stacks don't overlap (sanity check).
+    assert!(
+        p0_stack_top <= p1_stack_base || p1_stack_top <= p0_stack_base,
+        "stacks must not overlap"
+    );
+
+    // Configure MPU for partition 0 before dropping privileges.
+    configure_single_partition_mpu(&p.MPU, p0_stack_base);
+
+    hprintln!("  MPU configured for P0, dropping to unprivileged...");
+
+    // Drop to unprivileged mode.
+    drop_to_unprivileged(p0_stack_top);
+
+    // Now unprivileged on PSP, running as "partition 0".
+    // No semihosting here — would fault before reaching the intentional access.
+    //
+    // Perform the access that should fault.
+    access_fn(target_addr);
+
+    // Should never reach here — if we do, no fault occurred.
+    loop {
+        asm::nop();
+    }
 }
 
 /// MPU configuration for two-partition adversarial test setup.

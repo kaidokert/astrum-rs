@@ -121,6 +121,11 @@ name = "read_other_stack"
 path = "examples/adversarial/read_other_stack.rs"
 required-features = ["qemu"]
 
+[[example]]
+name = "write_other_stack"
+path = "examples/adversarial/write_other_stack.rs"
+required-features = ["qemu"]
+
 [features]
 qemu = []
 dynamic-mpu = []
