@@ -8,6 +8,8 @@
 pub trait KernelConfig {
     /// Maximum number of partitions.
     const N: usize;
+    /// Schedule table capacity (number of schedule entries).
+    const SCHED: usize;
     /// Semaphore pool capacity.
     const S: usize;
     /// Semaphore wait-queue depth.
@@ -83,6 +85,7 @@ mod tests {
     struct DefaultPriority;
     impl KernelConfig for DefaultPriority {
         const N: usize = 2;
+        const SCHED: usize = 4;
         const S: usize = 1;
         const SW: usize = 1;
         const MS: usize = 1;
@@ -108,6 +111,7 @@ mod tests {
     struct CustomPriority;
     impl KernelConfig for CustomPriority {
         const N: usize = 2;
+        const SCHED: usize = 4;
         const S: usize = 1;
         const SW: usize = 1;
         const MS: usize = 1;

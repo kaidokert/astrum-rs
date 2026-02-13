@@ -60,6 +60,7 @@ static mut NEXT_PARTITION: u32 = 0;
 struct TestConfig;
 impl KernelConfig for TestConfig {
     const N: usize = 2;
+    const SCHED: usize = 4;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -330,7 +331,7 @@ fn main() -> ! {
             mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SIZES[i], 0),
         });
         // TODO: register devices in the registry at init time (backlog item 195).
-        store_kernel(Kernel::<TestConfig>::new(
+        store_kernel(Kernel::<TestConfig>::new_empty(
             kernel::virtual_device::DeviceRegistry::new(),
         ));
         // KernelState owns the authoritative partition table; the dispatch

@@ -124,9 +124,10 @@ macro_rules! validated_ptr {
 use crate::events;
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
 use crate::mutex::MutexPool;
-use crate::partition::{PartitionState, PartitionTable};
+use crate::partition::{ConfigError, PartitionConfig, PartitionState, PartitionTable};
 use crate::queuing::{QueuingPortPool, QueuingPortStatus, SendQueuingOutcome};
 use crate::sampling::SamplingPortPool;
+use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
 use crate::syscall::SyscallId;
 use crate::tick::TickCounter;
@@ -366,6 +367,7 @@ pub fn dispatch_syscall<const N: usize>(
 pub struct Kernel<C: KernelConfig>
 where
     [(); C::N]:,
+    [(); C::SCHED]:,
     [(); C::S]:,
     [(); C::SW]:,
     [(); C::MS]:,
@@ -386,6 +388,12 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
+    /// Partition control blocks for all partitions.
+    pub partitions: PartitionTable<{ C::N }>,
+    /// Static schedule table.
+    pub schedule: ScheduleTable<{ C::SCHED }>,
+    /// Currently active partition index, if any.
+    pub active_partition: Option<u8>,
     pub semaphores: SemaphorePool<{ C::S }, { C::SW }>,
     pub mutexes: MutexPool<{ C::MS }, { C::MW }>,
     pub messages: MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
@@ -420,9 +428,15 @@ where
     pub dev_wait_queue: crate::waitqueue::DeviceWaitQueue<{ C::N }>,
 }
 
+/// Helper function to align an address down to an 8-byte boundary.
+const fn align_down_8(addr: u32) -> u32 {
+    addr & !7
+}
+
 impl<C: KernelConfig> Default for Kernel<C>
 where
     [(); C::N]:,
+    [(); C::SCHED]:,
     [(); C::S]:,
     [(); C::SW]:,
     [(); C::MS]:,
@@ -444,7 +458,7 @@ where
     [(); C::DR]:,
 {
     fn default() -> Self {
-        Self::new(
+        Self::new_empty(
             #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
         )
@@ -454,6 +468,7 @@ where
 impl<C: KernelConfig> Kernel<C>
 where
     [(); C::N]:,
+    [(); C::SCHED]:,
     [(); C::S]:,
     [(); C::SW]:,
     [(); C::MS]:,
@@ -474,18 +489,87 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    /// Create a new `Kernel` with empty resource pools and partition table.
+    /// Create a new `Kernel` with the given schedule and partition configs.
     ///
-    /// When the `dynamic-mpu` feature is enabled, `registry` must be a
-    /// pre-constructed [`DeviceRegistry`](crate::virtual_device::DeviceRegistry)
-    /// containing all devices that `dev_dispatch` should be able to reach.
+    /// Validates that: schedule is non-empty, all schedule entries reference
+    /// valid partitions, and all partition configs pass MPU/stack validation.
     pub fn new(
+        schedule: ScheduleTable<{ C::SCHED }>,
+        configs: &[PartitionConfig],
+        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
+            'static,
+            { C::DR },
+        >,
+    ) -> Result<Self, ConfigError> {
+        use crate::partition::PartitionControlBlock;
+        if schedule.is_empty() {
+            return Err(ConfigError::ScheduleEmpty);
+        }
+        for (i, entry) in schedule.entries().iter().enumerate() {
+            #[cfg(feature = "dynamic-mpu")]
+            if entry.is_system_window {
+                continue;
+            }
+            if entry.partition_index as usize >= configs.len() {
+                return Err(ConfigError::ScheduleIndexOutOfBounds {
+                    entry_index: i,
+                    partition_index: entry.partition_index,
+                    num_partitions: configs.len(),
+                });
+            }
+        }
+        let mut partitions = PartitionTable::new();
+        for c in configs {
+            c.validate()?;
+            let sp = align_down_8(c.stack_base.wrapping_add(c.stack_size));
+            let pcb =
+                PartitionControlBlock::new(c.id, c.entry_point, c.stack_base, sp, c.mpu_region);
+            if partitions.add(pcb).is_err() {
+                return Err(ConfigError::PartitionTableFull);
+            }
+        }
+        Ok(Self {
+            partitions,
+            schedule,
+            active_partition: None,
+            semaphores: SemaphorePool::new(),
+            mutexes: MutexPool::new(0),
+            messages: MessagePool::new(),
+            tick: TickCounter::new(),
+            sampling: SamplingPortPool::new(),
+            queuing: QueuingPortPool::new(),
+            blackboards: BlackboardPool::new(),
+            current_partition: 0,
+            yield_requested: false,
+            #[cfg(feature = "dynamic-mpu")]
+            buffers: crate::buffer_pool::BufferPool::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
+            #[cfg(feature = "dynamic-mpu")]
+            isr_ring: crate::split_isr::IsrRingBuffer::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            hw_uart: None,
+            #[cfg(feature = "dynamic-mpu")]
+            registry,
+            #[cfg(feature = "dynamic-mpu")]
+            dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
+        })
+    }
+
+    /// Create a `Kernel` with empty partition table and schedule.
+    ///
+    /// This is for backward compatibility with examples that manage
+    /// partitions via `KernelState` separately.
+    pub fn new_empty(
         #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
             'static,
             { C::DR },
         >,
     ) -> Self {
         Self {
+            partitions: PartitionTable::new(),
+            schedule: ScheduleTable::new(),
+            active_partition: None,
             semaphores: SemaphorePool::new(),
             mutexes: MutexPool::new(0),
             messages: MessagePool::new(),
@@ -1090,6 +1174,7 @@ fn apply_recv_outcome<C: KernelConfig>(
 ) -> Result<Option<u32>, SvcError>
 where
     [(); C::N]:,
+    [(); C::SCHED]:,
     [(); C::S]:,
     [(); C::SW]:,
     [(); C::MS]:,
@@ -1144,6 +1229,7 @@ mod tests {
     use crate::config::KernelConfig;
     use crate::message::MessageQueue;
     use crate::partition::{MpuRegion, PartitionControlBlock};
+    use crate::scheduler::ScheduleEntry;
     use crate::semaphore::Semaphore;
     use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_YIELD};
 
@@ -1151,6 +1237,7 @@ mod tests {
     struct TestConfig;
     impl KernelConfig for TestConfig {
         const N: usize = 4;
+        const SCHED: usize = 4;
         const S: usize = 4;
         const SW: usize = 4;
         const MS: usize = 4;
@@ -1249,6 +1336,9 @@ mod tests {
             msgs.add(MessageQueue::new()).unwrap();
         }
         let mut k = Kernel {
+            partitions: PartitionTable::new(),
+            schedule: ScheduleTable::new(),
+            active_partition: None,
             semaphores: s,
             mutexes: m,
             messages: msgs,
@@ -1290,6 +1380,9 @@ mod tests {
             msgs.add(MessageQueue::new()).unwrap();
         }
         let mut k = Kernel {
+            partitions: PartitionTable::new(),
+            schedule: ScheduleTable::new(),
+            active_partition: None,
             semaphores: s,
             mutexes: m,
             messages: msgs,
@@ -3056,5 +3149,40 @@ mod tests {
         // Expire at the synced deadline tick.
         k.expire_timed_waits::<8>(150, &mut t);
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+    }
+
+    // Kernel::new() validation - comprehensive tests in kernel.rs for KernelState
+
+    #[test]
+    fn kernel_new_validates_and_creates() {
+        // Test empty schedule rejection
+        let empty: ScheduleTable<4> = ScheduleTable::new();
+        let cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+        };
+        #[cfg(not(feature = "dynamic-mpu"))]
+        assert!(matches!(
+            Kernel::<TestConfig>::new(empty, &[cfg]),
+            Err(ConfigError::ScheduleEmpty)
+        ));
+        #[cfg(feature = "dynamic-mpu")]
+        assert!(matches!(
+            Kernel::<TestConfig>::new(empty, &[cfg], crate::virtual_device::DeviceRegistry::new()),
+            Err(ConfigError::ScheduleEmpty)
+        ));
+        // Test valid config succeeds
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let k = Kernel::<TestConfig>::new(s, &[cfg]).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        let k = Kernel::<TestConfig>::new(s, &[cfg], crate::virtual_device::DeviceRegistry::new())
+            .unwrap();
+        assert_eq!(k.partitions.len(), 1);
+        assert_eq!(k.active_partition, None);
     }
 }
