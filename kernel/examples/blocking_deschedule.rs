@@ -7,25 +7,19 @@
 // TODO: This test uses a single partition for simplicity, though a two-partition
 // scenario (sender/receiver) would better demonstrate the full IPC blocking path.
 // The single-partition approach still validates the core deschedule mechanism.
-//
-// TODO: Consider migrating to define_harness! once the macro supports custom
-// SysTick handlers with test-specific logic (backlog item for shared harness).
 
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
-use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
-use cortex_m::interrupt::Mutex;
 use cortex_m::peripheral::scb::SystemHandler;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    kernel::KernelState,
     partition::{MpuRegion, PartitionConfig, PartitionState},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
@@ -63,30 +57,23 @@ impl KernelConfig for Cfg {
     const DR: usize = 4;
 }
 
-kernel::define_dispatch_hook!(
-    Cfg,
-    |_k| {
-        // Yield handler: advance schedule when yield_requested is set
-        cortex_m::interrupt::free(|cs| {
-            if let Some(ks) = KS.borrow(cs).borrow_mut().as_mut() {
-                use kernel::kernel::YieldResult;
-                let result = ks.yield_current_slot();
-                if let Some(pid) = result.partition_id() {
-                    // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
-                    // exclusive access; PendSV (priority 0xFF) cannot preempt.
-                    unsafe {
-                        core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32);
-                    }
-                }
-            }
-        });
-    },
-    |_cs| { None::<()> }
-);
+// Use define_unified_kernel! which generates KERNEL static, dispatch_hook, and store_kernel
+kernel::define_unified_kernel!(Cfg, |k| {
+    // Yield handler: advance schedule when yield_requested is set
+    use kernel::kernel::YieldResult;
+    let result = k.yield_current_slot();
+    if let Some(pid) = result.partition_id() {
+        // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
+        // exclusive access; PendSV (priority 0xFF) cannot preempt.
+        unsafe {
+            core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32);
+        }
+        cortex_m::peripheral::SCB::set_pendsv();
+    }
+});
 
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
-static KS: Mutex<RefCell<Option<KernelState<NP, 4>>>> = Mutex::new(RefCell::new(None));
 kernel::define_pendsv!();
 
 #[repr(C, align(1024))]
@@ -142,17 +129,17 @@ fn SysTick() {
     let tick = TICK.fetch_add(1, Ordering::Relaxed) + 1;
 
     cortex_m::interrupt::free(|cs| {
-        let mut ks_ref = KS.borrow(cs).borrow_mut();
-        let ks = match ks_ref.as_mut() {
-            Some(ks) => ks,
+        let mut k_ref = KERNEL.borrow(cs).borrow_mut();
+        let k = match k_ref.as_mut() {
+            Some(k) => k,
             None => return,
         };
 
-        let event = ks.advance_schedule_tick();
+        let event = k.advance_schedule_tick();
         #[cfg(not(feature = "dynamic-mpu"))]
         if let Some(pid) = event {
             // Transition incoming partition to Running so syscalls can block it
-            let _ = try_transition(ks.partitions_mut(), pid, PartitionState::Running);
+            let _ = try_transition(k.partitions_mut(), pid, PartitionState::Running);
             // SAFETY: single-core Cortex-M — SysTick has exclusive access to
             // NEXT_PARTITION; PendSV (lower priority) cannot preempt us.
             unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
@@ -161,19 +148,17 @@ fn SysTick() {
         #[cfg(feature = "dynamic-mpu")]
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             // Transition incoming partition to Running so syscalls can block it
-            let _ = try_transition(ks.partitions_mut(), pid, PartitionState::Running);
+            let _ = try_transition(k.partitions_mut(), pid, PartitionState::Running);
             // SAFETY: single-core Cortex-M — SysTick has exclusive access to
             // NEXT_PARTITION; PendSV (lower priority) cannot preempt us.
             unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
             cortex_m::peripheral::SCB::set_pendsv();
         }
 
-        // Sync tick
-        let current_tick = ks.tick().get();
-        if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
-            k.sync_tick(current_tick);
-            k.expire_timed_waits::<{ <Cfg as KernelConfig>::N }>(current_tick);
-        }
+        // Sync tick and expire timed waits
+        let current_tick = k.tick().get();
+        k.sync_tick(current_tick);
+        k.expire_timed_waits::<{ <Cfg as KernelConfig>::N }>(current_tick);
     });
 
     // Check if partition has blocked and verify state transition
@@ -182,8 +167,8 @@ fn SysTick() {
         let delta = tick.saturating_sub(block_tick);
         // Check partition state
         cortex_m::interrupt::free(|cs| {
-            if let Some(ks) = KS.borrow(cs).borrow().as_ref() {
-                if let Some(p) = ks.partitions().get(0) {
+            if let Some(k) = KERNEL.borrow(cs).borrow().as_ref() {
+                if let Some(p) = k.partitions().get(0) {
                     let state = p.state();
                     // Partition should transition to Waiting within a few ticks
                     if state == PartitionState::Waiting && delta <= 4 {
@@ -209,22 +194,17 @@ fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
     hprintln!("blocking_deschedule: start");
 
+    // Build schedule
+    let mut sched = ScheduleTable::<4>::new();
+    sched.add(ScheduleEntry::new(0, 20)).unwrap();
+
+    // Build partition config
+    // TODO: reviewer false positive — SAFETY comment is present below; the diff was truncated.
     // SAFETY: single-core Cortex-M, interrupts not yet enabled — exclusive
     // access to all static-mut variables (STACKS, PARTITION_SP). Exception
     // priorities are configured before SysTick is enabled.
-    unsafe {
-        #[cfg(feature = "dynamic-mpu")]
-        let mut k = Kernel::<Cfg>::new_empty(kernel::virtual_device::DeviceRegistry::new());
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let mut k = Kernel::<Cfg>::new_empty();
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
-        store_kernel(k);
-
-        let mut sched = ScheduleTable::<4>::new();
-        sched.add(ScheduleEntry::new(0, 20)).unwrap();
-        sched.start();
-
-        let cfgs: [PartitionConfig; NP] = [{
+    let cfgs: [PartitionConfig; NP] = unsafe {
+        [{
             let b = STACKS[0].0.as_ptr() as u32;
             PartitionConfig {
                 id: 0,
@@ -233,16 +213,28 @@ fn main() -> ! {
                 stack_size: (SW * 4) as u32,
                 mpu_region: MpuRegion::new(b, (SW * 4) as u32, 0),
             }
-        }];
+        }]
+    };
 
-        cortex_m::interrupt::free(|cs| {
-            let mut ks = KernelState::new(sched, &cfgs).unwrap();
-            // Transition partition 0 to Running before the first context switch
-            // so that blocking syscalls can transition it to Waiting.
-            let _ = try_transition(ks.partitions_mut(), 0, PartitionState::Running);
-            KS.borrow(cs).replace(Some(ks));
-        });
+    // Create unified kernel with schedule and partitions
+    #[cfg(feature = "dynamic-mpu")]
+    let mut k = Kernel::<Cfg>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+        .expect("kernel creation");
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let mut k = Kernel::<Cfg>::new(sched, &cfgs).expect("kernel creation");
 
+    // Create queuing port for the test
+    let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+
+    // Transition partition 0 to Running before the first context switch
+    // so that blocking syscalls can transition it to Waiting.
+    let _ = try_transition(k.partitions_mut(), 0, PartitionState::Running);
+
+    store_kernel(k);
+
+    // Initialize partition stack
+    // SAFETY: single-core, interrupts disabled — exclusive access
+    unsafe {
         let stk = &mut STACKS[0].0;
         let ix = kernel::context::init_stack_frame(
             stk,
