@@ -307,10 +307,12 @@ macro_rules! define_harness {
                     k.sync_tick(current_tick);
                     k.expire_timed_waits::<{ <$Config as $crate::config::KernelConfig>::N }>(
                         current_tick,
-                        ks_parts,
                     );
                 }
             });
+            // Suppress unused variable warning for ks_parts now that dispatch
+            // and expire_timed_waits use self.partitions_mut() internally.
+            let _ = ks_parts;
         }
 
         /// Initialise partition stacks, configure exception priorities,

@@ -111,9 +111,13 @@ pub fn validate_user_ptr<const N: usize>(
 ///
 /// Returns `SvcError::InvalidPointer` when `validate_user_ptr` fails;
 /// otherwise evaluates `$body` (which must produce `u32`).
+///
+/// Uses `$self.partitions` (immutable borrow) for validation, then
+/// releases the borrow before executing `$body` so that `$body` may
+/// freely call `$self.partitions_mut()`.
 macro_rules! validated_ptr {
-    ($self:ident, $pt:expr, $ptr:expr, $len:expr, $body:expr) => {
-        if !validate_user_ptr($pt, $self.current_partition, $ptr, $len) {
+    ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
+        if !validate_user_ptr(&$self.partitions, $self.current_partition, $ptr, $len) {
             SvcError::InvalidPointer.to_u32()
         } else {
             $body
@@ -250,12 +254,12 @@ pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
 macro_rules! define_dispatch_hook {
     // Standalone variant (no yield, no partitions accessor).
     ($Config:ty) => {
-        $crate::define_dispatch_hook!(@impl $Config, |_k| {}, |_cs| { None });
+        $crate::define_dispatch_hook!(@impl $Config, |_k| {}, |_cs| { None::<()> });
     };
     // Yield-only variant (no partitions accessor — used by standalone examples
     // like uart1_loopback that manage their own KS).
     ($Config:ty, |$k:ident| $yield_body:block) => {
-        $crate::define_dispatch_hook!(@impl $Config, |$k| $yield_body, |_cs| { None });
+        $crate::define_dispatch_hook!(@impl $Config, |$k| $yield_body, |_cs| { None::<()> });
     };
     // Harness variant with yield handler and partitions accessor.
     ($Config:ty, |$k:ident| $yield_body:block, |$cs:ident| $parts_body:block) => {
@@ -287,12 +291,13 @@ macro_rules! define_dispatch_hook {
                     k.current_partition =
                         unsafe { core::ptr::read_volatile(&raw const CURRENT_PARTITION) } as u8;
 
-                    // Get the partition table from KernelState (if available)
-                    // and pass it to dispatch as an explicit argument.
-                    if let Some(pt) = { let $cs = cs; $parts_body } {
-                        // SAFETY: see above — interrupts masked, exclusive access.
-                        unsafe { k.dispatch(f, pt) }
-                    }
+                    // Dispatch uses self.partitions internally.
+                    // SAFETY: see above — interrupts masked, exclusive access.
+                    unsafe { k.dispatch(f) }
+
+                    // Suppress unused variable warning for $cs/$parts_body when
+                    // the partitions accessor is provided but not needed here.
+                    let _ = (|| { let $cs = cs; $parts_body })();
 
                     {
                         if k.yield_requested {
@@ -660,11 +665,7 @@ where
     ///
     /// `E` must be large enough to hold the total number of expired partition
     /// IDs across all subsystems in a single tick.
-    pub fn expire_timed_waits<const E: usize>(
-        &mut self,
-        current_tick: u64,
-        pt: &mut PartitionTable<{ C::N }>,
-    ) {
+    pub fn expire_timed_waits<const E: usize>(&mut self, current_tick: u64) {
         let mut expired: heapless::Vec<u8, E> = heapless::Vec::new();
         self.queuing.tick_timeouts(current_tick, &mut expired);
         self.blackboards.tick_timeouts(current_tick, &mut expired);
@@ -672,7 +673,7 @@ where
         self.dev_wait_queue
             .drain_expired(current_tick, &mut expired);
         for &pid in expired.iter() {
-            try_transition(pt, pid, PartitionState::Ready);
+            try_transition(self.partitions_mut(), pid, PartitionState::Ready);
         }
     }
 
@@ -707,17 +708,20 @@ where
     /// partition's memory region. For `QueuingStatus`, `r2` must point to a
     /// writable `QueuingPortStatus`. The caller is responsible for ensuring
     /// this; in production the MPU enforces partition isolation.
-    pub unsafe fn dispatch(
-        &mut self,
-        frame: &mut ExceptionFrame,
-        pt: &mut PartitionTable<{ C::N }>,
-    ) {
+    pub unsafe fn dispatch(&mut self, frame: &mut ExceptionFrame) {
         frame.r0 = match SyscallId::from_u32(frame.r0) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
-            Some(SyscallId::EventWait) => events::event_wait(pt, frame.r1 as usize, frame.r2),
-            Some(SyscallId::EventSet) => events::event_set(pt, frame.r1 as usize, frame.r2),
-            Some(SyscallId::EventClear) => events::event_clear(pt, frame.r1 as usize, frame.r2),
+            Some(SyscallId::EventWait) => {
+                events::event_wait(self.partitions_mut(), frame.r1 as usize, frame.r2)
+            }
+            Some(SyscallId::EventSet) => {
+                events::event_set(self.partitions_mut(), frame.r1 as usize, frame.r2)
+            }
+            Some(SyscallId::EventClear) => {
+                events::event_clear(self.partitions_mut(), frame.r1 as usize, frame.r2)
+            }
             Some(SyscallId::SemWait) => {
+                let pt = &mut self.partitions;
                 match self
                     .semaphores
                     .wait(pt, frame.r1 as usize, frame.r2 as usize)
@@ -726,17 +730,22 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
-            Some(SyscallId::SemSignal) => match self.semaphores.signal(pt, frame.r1 as usize) {
-                Ok(()) => 0,
-                Err(_) => SvcError::InvalidResource.to_u32(),
-            },
+            Some(SyscallId::SemSignal) => {
+                let pt = &mut self.partitions;
+                match self.semaphores.signal(pt, frame.r1 as usize) {
+                    Ok(()) => 0,
+                    Err(_) => SvcError::InvalidResource.to_u32(),
+                }
+            }
             Some(SyscallId::MutexLock) => {
+                let pt = &mut self.partitions;
                 match self.mutexes.lock(pt, frame.r1 as usize, frame.r2 as usize) {
                     Ok(()) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::MutexUnlock) => {
+                let pt = &mut self.partitions;
                 match self
                     .mutexes
                     .unlock(pt, frame.r1 as usize, frame.r2 as usize)
@@ -745,7 +754,7 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
-            Some(SyscallId::MsgSend) => validated_ptr!(self, pt, frame.r3, C::QM, {
+            Some(SyscallId::MsgSend) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
                 let data = unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, C::QM) };
@@ -753,7 +762,7 @@ where
                     .messages
                     .send(frame.r1 as usize, frame.r2 as usize, data)
                 {
-                    Ok(outcome) => match apply_send_outcome(pt, outcome) {
+                    Ok(outcome) => match apply_send_outcome(self.partitions_mut(), outcome) {
                         Ok(Some(_blocked)) => {
                             self.trigger_deschedule();
                             0
@@ -764,7 +773,7 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
-            Some(SyscallId::MsgRecv) => validated_ptr!(self, pt, frame.r3, C::QM, {
+            Some(SyscallId::MsgRecv) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
                 let buf = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
@@ -772,7 +781,7 @@ where
                     .messages
                     .recv(frame.r1 as usize, frame.r2 as usize, buf)
                 {
-                    Ok(outcome) => match apply_recv_outcome(self, pt, outcome) {
+                    Ok(outcome) => match apply_recv_outcome(self, outcome) {
                         Ok(Some(_blocked)) => 0,
                         Ok(None) => 0,
                         Err(e) => e.to_u32(),
@@ -781,7 +790,7 @@ where
                 }
             }),
             Some(SyscallId::SamplingWrite) => {
-                validated_ptr!(self, pt, frame.r3, frame.r2 as usize, {
+                validated_ptr!(self, frame.r3, frame.r2 as usize, {
                     // SAFETY: validated_ptr confirmed [r3, r3+r2) lies within
                     // the calling partition's MPU data region.
                     let d = unsafe {
@@ -797,7 +806,7 @@ where
                     }
                 })
             }
-            Some(SyscallId::SamplingRead) => validated_ptr!(self, pt, frame.r3, C::SM, {
+            Some(SyscallId::SamplingRead) => validated_ptr!(self, frame.r3, C::SM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+SM) lies within
                 // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::SM) };
@@ -810,7 +819,7 @@ where
                 }
             }),
             Some(SyscallId::QueuingSend) => {
-                validated_ptr!(self, pt, frame.r3, frame.r2 as usize, {
+                validated_ptr!(self, frame.r3, frame.r2 as usize, {
                     // SAFETY: validated_ptr confirmed [r3, r3+r2) lies within
                     // the calling partition's MPU data region.
                     let d = unsafe {
@@ -825,7 +834,7 @@ where
                     ) {
                         Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
                             if let Some(pid) = w {
-                                try_transition(pt, pid, PartitionState::Ready);
+                                try_transition(self.partitions_mut(), pid, PartitionState::Ready);
                             }
                             0
                         }
@@ -834,7 +843,7 @@ where
                     }
                 })
             }
-            Some(SyscallId::QueuingRecv) => validated_ptr!(self, pt, frame.r3, C::QM, {
+            Some(SyscallId::QueuingRecv) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
@@ -850,7 +859,7 @@ where
                         wake_sender: w,
                     }) => {
                         if let Some(pid) = w {
-                            try_transition(pt, pid, PartitionState::Ready);
+                            try_transition(self.partitions_mut(), pid, PartitionState::Ready);
                         }
                         msg_len as u32
                     }
@@ -859,27 +868,21 @@ where
                 }
             }),
             Some(SyscallId::QueuingStatus) => {
-                validated_ptr!(
-                    self,
-                    pt,
-                    frame.r2,
-                    core::mem::size_of::<QueuingPortStatus>(),
-                    {
-                        // SAFETY: validated_ptr confirmed [r2, r2+size_of QueuingPortStatus)
-                        // lies within the calling partition's MPU data region.
-                        let status_ptr = frame.r2 as *mut QueuingPortStatus;
-                        match self.queuing.get_queuing_port_status(frame.r1 as usize) {
-                            Ok(status) => {
-                                unsafe { core::ptr::write(status_ptr, status) };
-                                0
-                            }
-                            Err(_) => SvcError::InvalidResource.to_u32(),
+                validated_ptr!(self, frame.r2, core::mem::size_of::<QueuingPortStatus>(), {
+                    // SAFETY: validated_ptr confirmed [r2, r2+size_of QueuingPortStatus)
+                    // lies within the calling partition's MPU data region.
+                    let status_ptr = frame.r2 as *mut QueuingPortStatus;
+                    match self.queuing.get_queuing_port_status(frame.r1 as usize) {
+                        Ok(status) => {
+                            unsafe { core::ptr::write(status_ptr, status) };
+                            0
                         }
+                        Err(_) => SvcError::InvalidResource.to_u32(),
                     }
-                )
+                })
             }
             Some(SyscallId::BbDisplay) => {
-                validated_ptr!(self, pt, frame.r3, frame.r2 as usize, {
+                validated_ptr!(self, frame.r3, frame.r2 as usize, {
                     // SAFETY: validated_ptr confirmed [r3, r3+r2) lies within
                     // the calling partition's MPU data region.
                     let d = unsafe {
@@ -888,7 +891,7 @@ where
                     match self.blackboards.display_blackboard(frame.r1 as usize, d) {
                         Ok(woken) => {
                             for &pid in woken.iter() {
-                                try_transition(pt, pid, PartitionState::Ready);
+                                try_transition(self.partitions_mut(), pid, PartitionState::Ready);
                             }
                             0
                         }
@@ -897,7 +900,7 @@ where
                 })
             }
             Some(SyscallId::BbRead) => {
-                validated_ptr!(self, pt, frame.r3, C::BM, {
+                validated_ptr!(self, frame.r3, C::BM, {
                     // SAFETY: validated_ptr confirmed [r3, r3+BM) lies within
                     // the calling partition's MPU data region.
                     let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
@@ -912,7 +915,8 @@ where
                             msg_len as u32
                         }
                         Ok(crate::blackboard::ReadBlackboardOutcome::ReaderBlocked) => {
-                            try_transition(pt, self.current_partition, PartitionState::Waiting);
+                            let pid = self.current_partition;
+                            try_transition(self.partitions_mut(), pid, PartitionState::Waiting);
                             self.trigger_deschedule()
                         }
                         Err(_) => SvcError::InvalidResource.to_u32(),
@@ -960,7 +964,7 @@ where
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferWrite) => {
-                validated_ptr!(self, pt, frame.r3, frame.r2 as usize, {
+                validated_ptr!(self, frame.r3, frame.r2 as usize, {
                     use crate::buffer_pool::BorrowState;
                     let slot_idx = frame.r1 as usize;
                     let len = frame.r2 as usize;
@@ -996,7 +1000,7 @@ where
             }),
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevRead) => {
-                validated_ptr!(self, pt, frame.r3, frame.r2 as usize, {
+                validated_ptr!(self, frame.r3, frame.r2 as usize, {
                     let len = frame.r2 as usize;
                     let buf_ptr = frame.r3 as *mut u8;
                     self.dev_dispatch(frame.r1 as u8, |dev, pid| {
@@ -1009,7 +1013,7 @@ where
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevWrite) => {
-                validated_ptr!(self, pt, frame.r3, frame.r2 as usize, {
+                validated_ptr!(self, frame.r3, frame.r2 as usize, {
                     let len = frame.r2 as usize;
                     let data_ptr = frame.r3 as *const u8;
                     self.dev_dispatch(frame.r1 as u8, |dev, pid| {
@@ -1033,7 +1037,7 @@ where
             Some(SyscallId::DevReadTimed) => {
                 // r1 = device_id, r2 = timeout_ticks (0 = non-blocking), r3 = buf_ptr
                 // Reads a single byte; blocks caller if no data and timeout > 0.
-                validated_ptr!(self, pt, frame.r3, 1, {
+                validated_ptr!(self, frame.r3, 1, {
                     let buf_ptr = frame.r3 as *mut u8;
                     let timeout = frame.r2;
                     let pid = self.current_partition;
@@ -1050,7 +1054,11 @@ where
                                     let expiry = self.tick.get() + timeout as u64;
                                     match self.dev_wait_queue.block_reader(pid, expiry) {
                                         Ok(()) => {
-                                            try_transition(pt, pid, PartitionState::Waiting);
+                                            try_transition(
+                                                self.partitions_mut(),
+                                                pid,
+                                                PartitionState::Waiting,
+                                            );
                                             self.trigger_deschedule()
                                         }
                                         Err(_) => SvcError::WaitQueueFull.to_u32(),
@@ -1064,7 +1072,7 @@ where
                     }
                 })
             }
-            Some(SyscallId::QueuingRecvTimed) => validated_ptr!(self, pt, frame.r3, C::QM, {
+            Some(SyscallId::QueuingRecvTimed) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
@@ -1080,12 +1088,13 @@ where
                         wake_sender: w,
                     }) => {
                         if let Some(pid) = w {
-                            try_transition(pt, pid, PartitionState::Ready);
+                            try_transition(self.partitions_mut(), pid, PartitionState::Ready);
                         }
                         msg_len as u32
                     }
                     Ok(crate::queuing::RecvQueuingOutcome::ReceiverBlocked { .. }) => {
-                        try_transition(pt, self.current_partition, PartitionState::Waiting);
+                        let pid = self.current_partition;
+                        try_transition(self.partitions_mut(), pid, PartitionState::Waiting);
                         self.trigger_deschedule()
                     }
                     Err(_) => SvcError::InvalidResource.to_u32(),
@@ -1094,7 +1103,7 @@ where
             Some(SyscallId::QueuingSendTimed) => {
                 let data_len = (frame.r2 & 0xFFFF) as usize;
                 let timeout = (frame.r2 >> 16) as u64;
-                validated_ptr!(self, pt, frame.r3, data_len, {
+                validated_ptr!(self, frame.r3, data_len, {
                     // SAFETY: validated_ptr confirmed [r3, r3+data_len) lies within
                     // the calling partition's MPU data region.
                     let d = unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, data_len) };
@@ -1107,12 +1116,13 @@ where
                     ) {
                         Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
                             if let Some(pid) = w {
-                                try_transition(pt, pid, PartitionState::Ready);
+                                try_transition(self.partitions_mut(), pid, PartitionState::Ready);
                             }
                             0
                         }
                         Ok(SendQueuingOutcome::SenderBlocked { .. }) => {
-                            try_transition(pt, self.current_partition, PartitionState::Waiting);
+                            let pid = self.current_partition;
+                            try_transition(self.partitions_mut(), pid, PartitionState::Waiting);
                             self.trigger_deschedule()
                         }
                         Err(_) => SvcError::InvalidResource.to_u32(),
@@ -1234,7 +1244,6 @@ fn apply_send_outcome<const N: usize>(
 /// kernel to pend PendSV and set `yield_requested`.
 fn apply_recv_outcome<C: KernelConfig>(
     kernel: &mut Kernel<C>,
-    partitions: &mut PartitionTable<{ C::N }>,
     outcome: RecvOutcome,
 ) -> Result<Option<u32>, SvcError>
 where
@@ -1264,14 +1273,14 @@ where
         RecvOutcome::Received {
             wake_sender: Some(pid),
         } => {
-            if !try_transition(partitions, pid, PartitionState::Ready) {
+            if !try_transition(kernel.partitions_mut(), pid, PartitionState::Ready) {
                 return Err(SvcError::TransitionFailed);
             }
             Ok(None)
         }
         RecvOutcome::Received { wake_sender: None } => Ok(None),
         RecvOutcome::ReceiverBlocked { blocked } => {
-            if !try_transition(partitions, blocked, PartitionState::Waiting) {
+            if !try_transition(kernel.partitions_mut(), blocked, PartitionState::Waiting) {
                 return Err(SvcError::TransitionFailed);
             }
             kernel.trigger_deschedule();
@@ -1384,16 +1393,15 @@ mod tests {
         (reg, ptr_a, ptr_b)
     }
 
-    /// Build a Kernel with a caller-supplied device registry, plus a
-    /// separate PartitionTable with 2 running partitions.
+    /// Build a Kernel with a caller-supplied device registry,
+    /// pre-populated with 2 running partitions.
     #[cfg(feature = "dynamic-mpu")]
     fn kernel_with_registry(
         sem_count: usize,
         mtx_count: usize,
         msg_queue_count: usize,
         registry: crate::virtual_device::DeviceRegistry<'static, 4>,
-    ) -> (Kernel<TestConfig>, PartitionTable<4>) {
-        let t = tbl();
+    ) -> Kernel<TestConfig> {
         let s = SemaphorePool::<4, 4>::new();
         let m = MutexPool::<4, 4>::new(mtx_count);
         let mut msgs = MessagePool::<4, 4, 4, 4>::new();
@@ -1401,7 +1409,7 @@ mod tests {
             msgs.add(MessageQueue::new()).unwrap();
         }
         let mut k = Kernel {
-            partitions: PartitionTable::new(),
+            partitions: tbl(),
             schedule: ScheduleTable::new(),
             active_partition: None,
             semaphores: s,
@@ -1423,7 +1431,7 @@ mod tests {
         for _ in 0..sem_count {
             k.semaphores.add(Semaphore::new(1, 2)).unwrap();
         }
-        (k, t)
+        k
     }
 
     /// Build a Kernel with 2 running partitions, the given semaphore count,
@@ -1432,12 +1440,7 @@ mod tests {
     /// When `dynamic-mpu` is enabled the kernel is constructed with a
     /// [`DeviceRegistry`] pre-populated with virtual UART backends for
     /// device IDs 0 and 1.
-    fn kernel(
-        sem_count: usize,
-        mtx_count: usize,
-        msg_queue_count: usize,
-    ) -> (Kernel<TestConfig>, PartitionTable<4>) {
-        let t = tbl();
+    fn kernel(sem_count: usize, mtx_count: usize, msg_queue_count: usize) -> Kernel<TestConfig> {
         let s = SemaphorePool::<4, 4>::new();
         let m = MutexPool::<4, 4>::new(mtx_count);
         let mut msgs = MessagePool::<4, 4, 4, 4>::new();
@@ -1445,7 +1448,7 @@ mod tests {
             msgs.add(MessageQueue::new()).unwrap();
         }
         let mut k = Kernel {
-            partitions: PartitionTable::new(),
+            partitions: tbl(),
             schedule: ScheduleTable::new(),
             active_partition: None,
             semaphores: s,
@@ -1474,7 +1477,7 @@ mod tests {
         for _ in 0..sem_count {
             k.semaphores.add(Semaphore::new(1, 2)).unwrap();
         }
-        (k, t)
+        k
     }
 
     #[test]
@@ -1487,31 +1490,31 @@ mod tests {
 
     #[test]
     fn yield_sets_yield_requested_flag() {
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         assert!(!k.yield_requested);
         let mut ef = frame(SYS_YIELD, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         assert!(k.yield_requested);
     }
 
     #[test]
     fn yield_requested_cleared_after_manual_reset() {
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let mut ef = frame(SYS_YIELD, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert!(k.yield_requested);
         k.yield_requested = false;
         assert!(!k.yield_requested);
         // Non-yield syscall does not set the flag
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert!(!k.yield_requested);
     }
 
     #[test]
     fn trigger_deschedule_sets_yield_requested() {
-        let (mut k, _t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         assert!(!k.yield_requested);
         let ret = k.trigger_deschedule();
         assert_eq!(ret, 0);
@@ -1572,90 +1575,93 @@ mod tests {
 
     #[test]
     fn sem_wait_and_signal_dispatch() {
-        let (mut k, mut t) = kernel(1, 0, 0);
+        let mut k = kernel(1, 0, 0);
         let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         let mut ef = frame(crate::syscall::SYS_SEM_SIGNAL, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
     }
 
     #[test]
     fn mutex_lock_unlock_dispatch() {
-        let (mut k, mut t) = kernel(0, 1, 0);
+        let mut k = kernel(0, 1, 0);
         let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         assert_eq!(k.mutexes.owner(0), Ok(Some(0)));
         let mut ef = frame(crate::syscall::SYS_MTX_UNLOCK, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         assert_eq!(k.mutexes.owner(0), Ok(None));
     }
 
     #[test]
     fn msg_send_recv_pointer_based() {
-        let (mut k, mut t) = kernel(0, 0, 2);
+        let mut k = kernel(0, 0, 2);
         // Send to queue 0 from partition 0
         let data: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
         let outcome = k.messages.send(0, 0, &data).unwrap();
-        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
+        assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
 
         // Receive from queue 0 into partition 1's buffer
         let mut recv_buf = [0u8; 4];
         let outcome = k.messages.recv(0, 1, &mut recv_buf).unwrap();
-        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(None));
+        assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(None));
         assert_eq!(recv_buf, [0xDE, 0xAD, 0xBE, 0xEF]);
     }
 
     #[test]
     fn msg_send_recv_multiple_queues() {
-        let (mut k, mut t) = kernel(0, 0, 2);
+        let mut k = kernel(0, 0, 2);
         // Send different data to queue 0 and queue 1
         let data_q0: [u8; 4] = [1, 2, 3, 4];
         let data_q1: [u8; 4] = [5, 6, 7, 8];
 
         let outcome = k.messages.send(0, 0, &data_q0).unwrap();
-        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
+        assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
 
         let outcome = k.messages.send(1, 0, &data_q1).unwrap();
-        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
+        assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
 
         // Recv from queue 1 first
         let mut buf = [0u8; 4];
         let outcome = k.messages.recv(1, 1, &mut buf).unwrap();
-        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(None));
+        assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(None));
         assert_eq!(buf, [5, 6, 7, 8]);
 
         // Recv from queue 0
         let mut buf = [0u8; 4];
         let outcome = k.messages.recv(0, 1, &mut buf).unwrap();
-        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(None));
+        assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(None));
         assert_eq!(buf, [1, 2, 3, 4]);
     }
 
     #[test]
     fn msg_invalid_queue_id_returns_max() {
-        let (mut k, _t) = kernel(0, 0, 1);
+        let mut k = kernel(0, 0, 1);
         assert!(k.messages.send(99, 0, &[1; 4]).is_err());
         assert!(k.messages.recv(99, 0, &mut [0; 4]).is_err());
     }
 
     #[test]
     fn msg_send_blocks_and_wakes() {
-        let (mut k, mut t) = kernel(0, 0, 1);
+        let mut k = kernel(0, 0, 1);
         // Fill the depth-4 queue to capacity
         for i in 0..4u8 {
             let outcome = k.messages.send(0, 0, &[i; 4]).unwrap();
-            assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
+            assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
         }
 
         // Next send blocks partition 1
         let outcome = k.messages.send(0, 1, &[99; 4]).unwrap();
         assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: 1 });
-        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(Some(1)));
-        assert_eq!(t.get(1).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(Some(1)));
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting
+        );
 
         // Recv should wake partition 1
         let mut buf = [0u8; 4];
@@ -1666,20 +1672,26 @@ mod tests {
                 wake_sender: Some(1)
             }
         );
-        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(None));
-        assert_eq!(t.get(1).unwrap().state(), PartitionState::Ready);
+        assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(None));
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
         assert_eq!(buf, [0; 4]); // first message enqueued
     }
 
     #[test]
     fn msg_recv_blocks_and_wakes() {
-        let (mut k, mut t) = kernel(0, 0, 1);
+        let mut k = kernel(0, 0, 1);
         // Recv on empty queue blocks partition 0
         let mut buf = [0u8; 4];
         let outcome = k.messages.recv(0, 0, &mut buf).unwrap();
         assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: 0 });
-        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(Some(0)));
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(Some(0)));
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
 
         // Send should wake partition 0
         let outcome = k.messages.send(0, 1, &[9; 4]).unwrap();
@@ -1689,17 +1701,20 @@ mod tests {
                 wake_receiver: Some(0)
             }
         );
-        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+        assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
     }
 
     #[test]
     fn msg_send_blocks_sets_yield_requested() {
-        let (mut k, mut t) = kernel(0, 0, 1);
+        let mut k = kernel(0, 0, 1);
         // Fill the depth-4 queue to capacity
         for i in 0..4u8 {
             let outcome = k.messages.send(0, 0, &[i; 4]).unwrap();
-            assert_eq!(apply_send_outcome(&mut t, outcome), Ok(None));
+            assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
         }
         // yield_requested should still be false after successful sends
         assert!(!k.yield_requested);
@@ -1707,18 +1722,21 @@ mod tests {
         // Next send blocks partition 1
         let outcome = k.messages.send(0, 1, &[99; 4]).unwrap();
         assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: 1 });
-        assert_eq!(apply_send_outcome(&mut t, outcome), Ok(Some(1)));
+        assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(Some(1)));
         // Caller is responsible for triggering deschedule
         k.trigger_deschedule();
 
         // After blocking and triggering deschedule, yield_requested should be true
         assert!(k.yield_requested);
-        assert_eq!(t.get(1).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting
+        );
     }
 
     #[test]
     fn msg_recv_blocks_sets_yield_requested() {
-        let (mut k, mut t) = kernel(0, 0, 1);
+        let mut k = kernel(0, 0, 1);
         // yield_requested should initially be false
         assert!(!k.yield_requested);
 
@@ -1728,36 +1746,39 @@ mod tests {
         assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: 0 });
 
         // apply_recv_outcome calls trigger_deschedule internally
-        assert_eq!(apply_recv_outcome(&mut k, &mut t, outcome), Ok(Some(0)));
+        assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(Some(0)));
 
         // yield_requested should now be true after blocking
         assert!(k.yield_requested);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
     }
 
     #[test]
     fn get_time_returns_zero_initially() {
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
     }
 
     #[test]
     fn get_time_after_increments() {
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         k.tick.sync(5);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 5);
     }
 
     #[test]
     fn get_time_preserves_other_registers() {
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         k.tick.sync(1);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0xAA, 0xBB);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 1);
         assert_eq!(ef.r1, 0xAA);
         assert_eq!(ef.r2, 0xBB);
@@ -1765,16 +1786,16 @@ mod tests {
 
     #[test]
     fn get_time_truncates_to_u32() {
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         k.tick.sync((1u64 << 32) + 7);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 7);
     }
 
     #[test]
     fn sync_tick_updates_kernel_tick() {
-        let (mut k, _t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         assert_eq!(k.tick.get(), 0);
         k.sync_tick(42);
         assert_eq!(k.tick.get(), 42);
@@ -1799,7 +1820,7 @@ mod tests {
     fn sampling_dispatch_write_read_and_errors() {
         use crate::sampling::PortDirection;
         use crate::syscall::{SYS_SAMPLING_READ, SYS_SAMPLING_WRITE};
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let src = k.sampling.create_port(PortDirection::Source, 1000).unwrap();
         let dst = k
             .sampling
@@ -1821,17 +1842,17 @@ mod tests {
         // validation passes and the invalid port ID (99) is reached.
         let inv = SvcError::InvalidResource.to_u32();
         let mut ef = frame4(SYS_SAMPLING_WRITE, 99, 1, 0x2000_0000);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
         let mut ef = frame4(SYS_SAMPLING_READ, 99, 0, 0x2000_0000);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
     }
 
     #[test]
     fn bb_nonblocking_read_empty_returns_error_without_enqueue() {
         use crate::blackboard::BlackboardError;
-        let (mut k, _t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let id = k.blackboards.create().unwrap();
         let mut buf = [0u8; 64];
         // Non-blocking read (timeout=0) on empty board returns error
@@ -1846,7 +1867,7 @@ mod tests {
     #[test]
     fn bb_blocking_read_and_display_wake() {
         use crate::blackboard::ReadBlackboardOutcome;
-        let (mut k, _t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let id = k.blackboards.create().unwrap();
         let mut buf = [0u8; 64];
         // Blocking read (timeout>0) enqueues the caller
@@ -1867,11 +1888,12 @@ mod tests {
     #[test]
     fn bb_blocking_read_wakes_partition() {
         use crate::blackboard::ReadBlackboardOutcome;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let id = k.blackboards.create().unwrap();
         let mut buf = [0u8; 64];
         // Transition partition 1 to Waiting and block it on the blackboard
-        t.get_mut(1)
+        k.partitions_mut()
+            .get_mut(1)
             .unwrap()
             .transition(PartitionState::Waiting)
             .unwrap();
@@ -1883,15 +1905,18 @@ mod tests {
         let woken = k.blackboards.display_blackboard(id, &[0x01]).unwrap();
         assert_eq!(woken.as_slice(), &[1]);
         for &pid in woken.iter() {
-            try_transition(&mut t, pid, PartitionState::Ready);
+            try_transition(k.partitions_mut(), pid, PartitionState::Ready);
         }
-        assert_eq!(t.get(1).unwrap().state(), PartitionState::Ready);
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
     }
 
     #[test]
     fn bb_invalid_board_errors() {
         use crate::blackboard::BlackboardError;
-        let (mut k, _t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let r: Result<heapless::Vec<u8, 4>, _> = k.blackboards.display_blackboard(99, &[1]);
         assert_eq!(r, Err(BlackboardError::InvalidBoard));
     }
@@ -1900,12 +1925,12 @@ mod tests {
     fn bb_clear_svc_dispatch() {
         use crate::blackboard::BlackboardError;
         use crate::syscall::SYS_BB_CLEAR;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let id = k.blackboards.create().unwrap();
         let _ = k.blackboards.display_blackboard(id, &[42]).unwrap();
         // Clear via SVC dispatch
         let mut ef = frame(SYS_BB_CLEAR, id as u32, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Non-blocking read after clear should fail
         let mut buf = [0u8; 64];
@@ -1915,7 +1940,7 @@ mod tests {
         );
         // Invalid board via SVC
         let mut ef = frame(SYS_BB_CLEAR, 99, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
@@ -2010,11 +2035,11 @@ mod tests {
             SvcError::OperationFailed.to_u32(),
             SvcError::InvalidResource.to_u32(),
         );
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         macro_rules! svc {
             ($r0:expr,$r1:expr) => {{
                 let mut ef = frame($r0, $r1, 0);
-                unsafe { k.dispatch(&mut ef, &mut t) };
+                unsafe { k.dispatch(&mut ef) };
                 ef.r0
             }};
         }
@@ -2034,12 +2059,12 @@ mod tests {
     #[test]
     fn buf_alloc_sets_deadline_from_r2() {
         use crate::syscall::SYS_BUF_ALLOC;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
 
         // r2=0 → no deadline
         let mut ef = frame(SYS_BUF_ALLOC, 1, 0);
         // SAFETY: test-only dispatch on a valid ExceptionFrame.
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         let slot0 = ef.r0 as usize;
         assert_eq!(slot0, 0);
         assert_eq!(k.buffers.deadline(slot0), None);
@@ -2047,7 +2072,7 @@ mod tests {
         // r2=100 → deadline = tick + 100; tick starts at 0 ⇒ deadline=100
         let mut ef = frame(SYS_BUF_ALLOC, 0, 100);
         // SAFETY: test-only dispatch on a valid ExceptionFrame.
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         let slot1 = ef.r0 as usize;
         assert_eq!(slot1, 1);
         assert_eq!(k.buffers.deadline(slot1), Some(100));
@@ -2057,18 +2082,18 @@ mod tests {
     #[test]
     fn dev_open_dispatch_valid_and_invalid() {
         use crate::syscall::SYS_DEV_OPEN;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         // Open device 0 (UART-A) — should succeed
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Open device 1 (UART-B) — should succeed
         let mut ef = frame(SYS_DEV_OPEN, 1, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Open invalid device 99 — should return InvalidResource
         let mut ef = frame(SYS_DEV_OPEN, 99, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
@@ -2093,15 +2118,15 @@ mod tests {
     fn dev_write_dispatch_routes_to_uart() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_WRITE};
         let (registry, uart_a, _) = default_registry();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         let ptr = low32_buf(0);
         // SAFETY: ptr points to a valid mmap'd page.
         unsafe { core::ptr::copy_nonoverlapping([0xAA, 0xBB, 0xCC].as_ptr(), ptr, 3) };
         let mut ef = frame4(SYS_DEV_WRITE, 0, 3, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 3);
         // SAFETY: uart_a points to a leaked VirtualUartBackend that is only
         // accessed mutably here (dispatch is complete, no aliasing).
@@ -2116,16 +2141,16 @@ mod tests {
     fn dev_read_dispatch_routes_to_uart() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ};
         let (registry, uart_a, _) = default_registry();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // SAFETY: uart_a points to a leaked VirtualUartBackend; no aliasing
         // because we only touch it here outside of dispatch.
         unsafe { &mut *uart_a }.push_rx(&[0xDE, 0xAD]);
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_DEV_READ, 0, 4, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 2);
         // SAFETY: ptr is valid for 4096 bytes (mmap via low32_buf), 2 were written.
         let out = unsafe { core::slice::from_raw_parts(ptr, 2) };
@@ -2138,10 +2163,10 @@ mod tests {
         use crate::syscall::{SYS_DEV_IOCTL, SYS_DEV_OPEN};
         use crate::virtual_uart::IOCTL_AVAILABLE;
         let (registry, _, uart_b) = default_registry();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open device 1
         let mut ef = frame(SYS_DEV_OPEN, 1, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Push some RX data into UART-B
         // SAFETY: uart_b points to a leaked VirtualUartBackend; no aliasing
@@ -2149,7 +2174,7 @@ mod tests {
         unsafe { &mut *uart_b }.push_rx(&[1, 2, 3]);
         // IOCTL_AVAILABLE should return 3
         let mut ef = frame4(SYS_DEV_IOCTL, 1, IOCTL_AVAILABLE, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 3);
     }
 
@@ -2159,22 +2184,22 @@ mod tests {
         use crate::syscall::{SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE};
         let inv = SvcError::InvalidResource.to_u32();
         let inv_ptr = SvcError::InvalidPointer.to_u32();
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         // Open invalid device
         let mut ef = frame(SYS_DEV_OPEN, 99, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
         // Write to invalid device — pointer validation rejects first
         let mut ef = frame4(SYS_DEV_WRITE, 99, 1, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv_ptr);
         // Read from invalid device — pointer validation rejects first
         let mut ef = frame4(SYS_DEV_READ, 99, 4, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv_ptr);
         // Ioctl on invalid device
         let mut ef = frame4(SYS_DEV_IOCTL, 99, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
     }
 
@@ -2187,14 +2212,14 @@ mod tests {
         let (mut registry, _, _) = default_registry();
         let hw = Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
         registry.add(hw).unwrap();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open hw_uart device 5 (registered in the registry)
         let mut ef = frame(SYS_DEV_OPEN, 5, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Close device 5 — should succeed
         let mut ef = frame(SYS_DEV_CLOSE, 5, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
     }
 
@@ -2207,11 +2232,11 @@ mod tests {
         let (mut registry, _, _) = default_registry();
         let hw = Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
         registry.add(hw).unwrap();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         // Close device 5 without opening — HwUartBackend checks require_open,
         // so this returns OperationFailed.
         let mut ef = frame(SYS_DEV_CLOSE, 5, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::OperationFailed.to_u32());
     }
 
@@ -2219,10 +2244,10 @@ mod tests {
     #[test]
     fn dev_close_invalid_device_returns_invalid_resource() {
         use crate::syscall::SYS_DEV_CLOSE;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         // Close non-existent device 99
         let mut ef = frame(SYS_DEV_CLOSE, 99, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
@@ -2233,10 +2258,10 @@ mod tests {
     fn dev_read_timed_immediate_data_returns_byte_count() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
         let (registry, uart_a, _) = default_registry();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open device 0
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Push a byte into the RX buffer so read succeeds immediately.
         // SAFETY: uart_a points to a leaked VirtualUartBackend; no aliasing.
@@ -2244,13 +2269,16 @@ mod tests {
         let ptr = low32_buf(0);
         // timeout=10 but data is available, so should return immediately.
         let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 10, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 1, "should return 1 byte read");
         // SAFETY: ptr was mmap'd by low32_buf and dispatch wrote 1 byte.
         let out = unsafe { core::slice::from_raw_parts(ptr, 1) };
         assert_eq!(out, &[0x42]);
         // Partition should remain Running (not blocked).
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Running);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -2258,17 +2286,20 @@ mod tests {
     fn dev_read_timed_blocks_on_empty_with_timeout() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
         let (registry, _, _) = default_registry();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open device 0
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         let ptr = low32_buf(0);
         // No RX data; timeout=50 should block the caller.
         let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 50, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
         assert_eq!(k.dev_wait_queue.len(), 1);
     }
 
@@ -2277,18 +2308,21 @@ mod tests {
     fn dev_read_timed_blocking_sets_yield_requested() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
         let (registry, _, _) = default_registry();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open device 0
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         let ptr = low32_buf(0);
         // No RX data; timeout>0 should block and trigger deschedule.
         assert!(!k.yield_requested);
         let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 50, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
         assert!(
             k.yield_requested,
             "yield_requested should be true after blocking read"
@@ -2300,18 +2334,21 @@ mod tests {
     fn dev_read_timed_nonblocking_empty_returns_zero() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
         let (registry, _, _) = default_registry();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open device 0
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         let ptr = low32_buf(0);
         // No RX data; timeout=0 (non-blocking) should return 0 immediately.
         let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 0, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Partition should remain Running (not blocked).
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Running);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
         assert_eq!(k.dev_wait_queue.len(), 0);
     }
 
@@ -2319,10 +2356,10 @@ mod tests {
     #[test]
     fn dev_read_timed_invalid_device_returns_error() {
         use crate::syscall::SYS_DEV_READ_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_DEV_READ_TIMED, 99, 10, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
@@ -2330,9 +2367,9 @@ mod tests {
     #[test]
     fn dev_read_timed_rejects_out_of_bounds_pointer() {
         use crate::syscall::SYS_DEV_READ_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 10, 0xDEAD_0000);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
     }
 
@@ -2454,12 +2491,12 @@ mod tests {
         ];
 
         for &(sys_id, r1, r2, msg_queues, ref sampling_dir) in cases {
-            let (mut k, mut t) = kernel(0, 0, msg_queues);
+            let mut k = kernel(0, 0, msg_queues);
             if let Some(dir) = sampling_dir {
                 k.sampling.create_port(*dir, 1000).unwrap();
             }
             let mut ef = frame4(sys_id, r1, r2, 0xDEAD_0000);
-            unsafe { k.dispatch(&mut ef, &mut t) };
+            unsafe { k.dispatch(&mut ef) };
             assert_eq!(
                 ef.r0,
                 SvcError::InvalidPointer.to_u32(),
@@ -2503,10 +2540,10 @@ mod tests {
         ];
 
         for &(sys_id, r1, r2, r3, dir) in cases {
-            let (mut k, mut t) = kernel(0, 0, 0);
+            let mut k = kernel(0, 0, 0);
             k.queuing.create_port(dir).unwrap();
             let mut ef = frame4(sys_id, r1, r2, r3);
-            unsafe { k.dispatch(&mut ef, &mut t) };
+            unsafe { k.dispatch(&mut ef) };
             assert_eq!(
                 ef.r0,
                 SvcError::InvalidPointer.to_u32(),
@@ -2520,10 +2557,10 @@ mod tests {
     #[test]
     fn blackboard_syscalls_reject_out_of_bounds_pointer() {
         // BbDisplay: r1 = board id, r2 = data len, r3 = data ptr (out-of-bounds)
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         k.blackboards.create().unwrap();
         let mut ef = frame4(crate::syscall::SYS_BB_DISPLAY, 0, 4, 0xDEAD_0000);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(
             ef.r0,
             SvcError::InvalidPointer.to_u32(),
@@ -2531,10 +2568,10 @@ mod tests {
         );
 
         // BbRead: r1 = board id, r2 = timeout, r3 = buf ptr (out-of-bounds)
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         k.blackboards.create().unwrap();
         let mut ef = frame4(crate::syscall::SYS_BB_READ, 0, 0, 0xDEAD_0000);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(
             ef.r0,
             SvcError::InvalidPointer.to_u32(),
@@ -2565,7 +2602,7 @@ mod tests {
     #[test]
     fn bb_read_blocks_sets_yield_requested() {
         use crate::syscall::SYS_BB_READ;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let id = k.blackboards.create().unwrap();
         let ptr = low32_buf(0);
         // BbRead with timeout > 0 on empty blackboard should block
@@ -2575,9 +2612,12 @@ mod tests {
             "yield_requested should be false before blocking read"
         );
         // SAFETY: test-only dispatch on a valid ExceptionFrame.
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
         assert!(
             k.yield_requested,
             "yield_requested should be true after blocking read"
@@ -2590,7 +2630,7 @@ mod tests {
     fn queuing_recv_timed_delivers_message_and_wakes_sender() {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
         k.queuing
             .get_mut(dst)
@@ -2602,7 +2642,7 @@ mod tests {
             .enqueue_blocked_sender(1, u64::MAX);
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 100, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 2, "should return msg_len=2");
         // Verify message data was delivered to the buffer.
         // SAFETY: ptr was mmap'd by low32_buf and dispatch wrote into it.
@@ -2613,20 +2653,26 @@ mod tests {
             "buffer should contain delivered data"
         );
         // Blocked sender (partition 1) should be woken to Ready
-        assert_eq!(t.get(1).unwrap().state(), PartitionState::Ready);
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
     }
 
     #[test]
     fn queuing_recv_timed_blocks_on_empty_queue() {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 50, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
         assert_eq!(k.queuing.get(dst).unwrap().pending_receivers(), 1);
     }
 
@@ -2634,7 +2680,7 @@ mod tests {
     fn queuing_recv_timed_blocks_sets_yield_requested() {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 50, ptr as u32);
@@ -2642,9 +2688,12 @@ mod tests {
             !k.yield_requested,
             "yield_requested should be false before blocking recv"
         );
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
         assert!(
             k.yield_requested,
             "yield_requested should be true after blocking recv"
@@ -2655,21 +2704,21 @@ mod tests {
     fn queuing_recv_timed_zero_timeout_returns_error() {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 0, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
     #[test]
     fn queuing_recv_timed_invalid_port_returns_error() {
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, 99, 50, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
@@ -2677,10 +2726,10 @@ mod tests {
     fn queuing_recv_timed_rejects_out_of_bounds_pointer() {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         k.queuing.create_port(PortDirection::Destination).unwrap();
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, 0, 50, 0xDEAD_0000);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
     }
 
@@ -2688,33 +2737,39 @@ mod tests {
     fn queuing_recv_timed_received_no_sender_to_wake() {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
         k.queuing.get_mut(dst).unwrap().inject_message(1, &[42]);
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 100, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 1, "should return msg_len=1");
         // Verify message data was actually delivered to the buffer.
         // SAFETY: ptr was mmap'd by low32_buf and dispatch wrote into it.
         let delivered = unsafe { core::slice::from_raw_parts(ptr, 1) };
         assert_eq!(delivered[0], 42, "buffer should contain the delivered byte");
-        assert_eq!(t.get(1).unwrap().state(), PartitionState::Running);
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Running
+        );
     }
 
     #[test]
     fn queuing_recv_original_unchanged_still_uses_zero_timeout() {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
         let ptr = low32_buf(0);
         // Empty queue with original QueuingRecv (timeout=0) → QueueEmpty → InvalidResource
         let mut ef = frame4(SYS_QUEUING_RECV, dst as u32, 0, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
         // Partition should NOT be in Waiting (no blocking happened)
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Running);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
     }
 
     // ---- QueuingSendTimed dispatch tests ----
@@ -2764,7 +2819,7 @@ mod tests {
     #[test]
     fn queuing_send_timed_delivers_message_and_wakes_receiver() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let (s, d) = connected_send_pair(&mut k);
         // Enqueue a blocked receiver on the destination port
         k.queuing
@@ -2780,11 +2835,14 @@ mod tests {
         }
         let r2 = pack_r2(100, 2);
         let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0, "send should return 0 on successful delivery");
         assert_queued_message(&mut k, d, &[0xAA, 0xBB]);
         // Blocked receiver (partition 1) should be woken to Ready
-        assert_eq!(t.get(1).unwrap().state(), PartitionState::Ready);
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
     }
 
     // TODO: reviewer false positive – this test (full queue, timeout>0) already
@@ -2792,7 +2850,7 @@ mod tests {
     #[test]
     fn queuing_send_timed_blocks_on_full_queue() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let (s, d) = connected_send_pair(&mut k);
         // Fill the destination queue to capacity (QD=4)
         for _ in 0..4 {
@@ -2801,10 +2859,13 @@ mod tests {
         let ptr = low32_buf(0);
         let r2 = pack_r2(50, 1);
         let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Caller (partition 0) should transition to Waiting
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
         assert_eq!(k.queuing.get(d).unwrap().pending_senders(), 1);
     }
 
@@ -2813,7 +2874,7 @@ mod tests {
     #[test]
     fn queuing_send_timed_zero_timeout_full_returns_error() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let (s, d) = connected_send_pair(&mut k);
         // Fill destination queue
         for _ in 0..4 {
@@ -2822,7 +2883,7 @@ mod tests {
         let ptr = low32_buf(0);
         let r2 = pack_r2(0, 1);
         let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         // timeout=0 with full queue → QueueFull → InvalidResource
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
@@ -2830,11 +2891,11 @@ mod tests {
     #[test]
     fn queuing_send_timed_invalid_port_returns_error() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let ptr = low32_buf(0);
         let r2 = pack_r2(10, 1);
         let mut ef = frame4(SYS_QUEUING_SEND_TIMED, 99, r2, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
@@ -2843,18 +2904,18 @@ mod tests {
     #[test]
     fn queuing_send_timed_rejects_out_of_bounds_pointer() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         connected_send_pair(&mut k);
         let r2 = pack_r2(10, 4);
         let mut ef = frame4(SYS_QUEUING_SEND_TIMED, 0, r2, 0xDEAD_0000);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
     }
 
     #[test]
     fn queuing_send_timed_delivered_no_receiver_to_wake() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let (s, d) = connected_send_pair(&mut k);
         let ptr = low32_buf(0);
         // SAFETY: test-only, writing to a known-mapped page.
@@ -2863,18 +2924,21 @@ mod tests {
         }
         let r2 = pack_r2(100, 1);
         let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0, "send should return 0 on delivery");
         assert_queued_message(&mut k, d, &[0x42]);
         // No receiver was blocked, so partition 1 should remain Running
-        assert_eq!(t.get(1).unwrap().state(), PartitionState::Running);
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Running
+        );
     }
 
     #[test]
     fn queuing_send_original_unchanged_still_uses_zero_timeout() {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_SEND;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let s = k.queuing.create_port(PortDirection::Source).unwrap();
         let d = k.queuing.create_port(PortDirection::Destination).unwrap();
         k.queuing.connect_ports(s, d).unwrap();
@@ -2886,16 +2950,19 @@ mod tests {
         // Original QueuingSend: r2=data_len (used as raw len), timeout=0
         // Full queue with timeout=0 → QueueFull → InvalidResource
         let mut ef = frame4(SYS_QUEUING_SEND, s as u32, 1, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
         // Partition should NOT be in Waiting (no blocking with original handler)
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Running);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
     }
 
     #[test]
     fn queuing_send_timed_blocks_sets_yield_requested() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let (s, d) = connected_send_pair(&mut k);
         // Fill the destination queue to capacity (QD=4)
         for _ in 0..4 {
@@ -2908,9 +2975,12 @@ mod tests {
             !k.yield_requested,
             "yield_requested should be false before blocking send"
         );
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
         assert!(
             k.yield_requested,
             "yield_requested should be true after blocking send"
@@ -2924,15 +2994,15 @@ mod tests {
     #[test]
     fn hw_uart_none_virtual_uarts_still_dispatch() {
         use crate::syscall::SYS_DEV_OPEN;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         assert!(k.hw_uart.is_none());
         // Virtual UART-A (device 0) opens successfully.
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Virtual UART-B (device 1) opens successfully.
         let mut ef = frame(SYS_DEV_OPEN, 1, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
     }
 
@@ -2941,9 +3011,9 @@ mod tests {
     #[test]
     fn hw_uart_none_unknown_id_returns_invalid_resource() {
         use crate::syscall::SYS_DEV_OPEN;
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let mut ef = frame(SYS_DEV_OPEN, 5, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
@@ -2959,24 +3029,24 @@ mod tests {
             Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
         let hw_ptr: *mut HwUartBackend = hw as *mut _;
         registry.add(hw).unwrap();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open hw_uart device 5 (now in the registry).
         let mut ef = frame(SYS_DEV_OPEN, 5, 0);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Write 3 bytes via device 5 (ptr within partition 0 MPU region).
         let ptr = low32_buf(0);
         // SAFETY: ptr points to a valid mmap'd page within MPU region.
         unsafe { core::ptr::copy_nonoverlapping([0x11, 0x22, 0x33].as_ptr(), ptr, 3) };
         let mut ef = frame4(SYS_DEV_WRITE, 5, 3, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 3);
         // Inject bytes into hw_uart RX and read them back.
         // SAFETY: hw_ptr points to a leaked HwUartBackend; no aliasing
         // because dispatch is not active.
         unsafe { &mut *hw_ptr }.push_rx(&[0xAA, 0xBB]);
         let mut ef = frame4(SYS_DEV_READ, 5, 4, ptr as u32);
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 2);
         // SAFETY: ptr is valid for 4096 bytes via low32_buf.
         let out = unsafe { core::slice::from_raw_parts(ptr, 2) };
@@ -3009,16 +3079,16 @@ mod tests {
         let (mut registry, _, _) = default_registry();
         let dev = Box::leak(Box::new(VirtualUartBackend::new(10)));
         registry.add(dev).unwrap();
-        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        let mut k = kernel_with_registry(0, 0, 0, registry);
         let mut ef = frame(SYS_DEV_OPEN, 10, 0);
         // SAFETY: dispatch requires a mutable ExceptionFrame pointer. The
         // frame lives on the stack and is not accessed concurrently; this is
         // a single-threaded test with no real interrupt context.
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         let mut ef = frame(SYS_DEV_CLOSE, 10, 0);
         // SAFETY: same as above — single-threaded test, frame on the stack.
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
     }
 
@@ -3029,7 +3099,7 @@ mod tests {
         use crate::queuing::RecvQueuingOutcome;
         use crate::sampling::PortDirection;
 
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         // Create a destination queuing port (empty queue → recv blocks).
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
 
@@ -3046,15 +3116,22 @@ mod tests {
         );
 
         // Simulate the SVC handler: transition partition 0 from Running→Waiting.
-        t.get_mut(0)
+        k.partitions_mut()
+            .get_mut(0)
             .unwrap()
             .transition(PartitionState::Waiting)
             .unwrap();
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
 
         // Tick 150: expiry fires, partition should move Waiting→Ready.
-        k.expire_timed_waits::<8>(150, &mut t);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+        k.expire_timed_waits::<8>(150);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
     }
 
     #[test]
@@ -3062,7 +3139,7 @@ mod tests {
         use crate::queuing::SendQueuingOutcome;
         use crate::sampling::PortDirection;
 
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         // Create a source port and a connected destination port.
         let src = k.queuing.create_port(PortDirection::Source).unwrap();
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
@@ -3083,15 +3160,22 @@ mod tests {
         );
 
         // Simulate the SVC handler: transition partition 1 Running→Waiting.
-        t.get_mut(1)
+        k.partitions_mut()
+            .get_mut(1)
             .unwrap()
             .transition(PartitionState::Waiting)
             .unwrap();
-        assert_eq!(t.get(1).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting
+        );
 
         // Tick 150: expiry fires, partition should move Waiting→Ready.
-        k.expire_timed_waits::<8>(150, &mut t);
-        assert_eq!(t.get(1).unwrap().state(), PartitionState::Ready);
+        k.expire_timed_waits::<8>(150);
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
     }
 
     #[test]
@@ -3099,7 +3183,7 @@ mod tests {
         use crate::queuing::RecvQueuingOutcome;
         use crate::sampling::PortDirection;
 
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
 
         // Block partition 0 as receiver with expiry at tick 200.
@@ -3113,18 +3197,25 @@ mod tests {
             RecvQueuingOutcome::ReceiverBlocked { expiry_tick: 200 }
         );
 
-        t.get_mut(0)
+        k.partitions_mut()
+            .get_mut(0)
             .unwrap()
             .transition(PartitionState::Waiting)
             .unwrap();
 
         // Tick 150: before expiry — partition must remain Waiting.
-        k.expire_timed_waits::<8>(150, &mut t);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        k.expire_timed_waits::<8>(150);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
 
         // Tick 199: still before expiry.
-        k.expire_timed_waits::<8>(199, &mut t);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        k.expire_timed_waits::<8>(199);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
     }
 
     // --- device wait queue expiry tests ---
@@ -3132,19 +3223,26 @@ mod tests {
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn expire_timed_waits_device_reader_expiry() {
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         k.dev_wait_queue.block_reader(0, 100).unwrap();
-        t.get_mut(0)
+        k.partitions_mut()
+            .get_mut(0)
             .unwrap()
             .transition(PartitionState::Waiting)
             .unwrap();
         // Before expiry: stays Waiting.
-        k.expire_timed_waits::<8>(99, &mut t);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        k.expire_timed_waits::<8>(99);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
         assert_eq!(k.dev_wait_queue.len(), 1);
         // At expiry: transitions Waiting→Ready.
-        k.expire_timed_waits::<8>(100, &mut t);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+        k.expire_timed_waits::<8>(100);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
         assert!(k.dev_wait_queue.is_empty());
     }
 
@@ -3152,27 +3250,27 @@ mod tests {
 
     #[test]
     fn sync_tick_then_get_time_returns_synced_value() {
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         k.sync_tick(42);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         // SAFETY: test-only dispatch on a valid ExceptionFrame.
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 42);
     }
 
     #[test]
     fn sync_tick_overwrite_returns_latest_value() {
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         k.sync_tick(5);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         // SAFETY: test-only dispatch on a valid ExceptionFrame.
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 5);
 
         k.sync_tick(10);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         // SAFETY: test-only dispatch on a valid ExceptionFrame.
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 10);
     }
 
@@ -3181,12 +3279,12 @@ mod tests {
     fn sync_tick_affects_buffer_alloc_deadline() {
         use crate::syscall::SYS_BUF_ALLOC;
 
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         // Sync tick to 100, then alloc with timeout=50 → deadline should be 150.
         k.sync_tick(100);
         let mut ef = frame(SYS_BUF_ALLOC, 1, 50);
         // SAFETY: test-only dispatch on a valid ExceptionFrame.
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         let slot = ef.r0 as usize;
         assert_eq!(k.buffers.deadline(slot), Some(150));
     }
@@ -3196,7 +3294,7 @@ mod tests {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
 
-        let (mut k, mut t) = kernel(0, 0, 0);
+        let mut k = kernel(0, 0, 0);
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
 
         // Sync tick to 100, then dispatch a timed recv with timeout=50.
@@ -3206,14 +3304,20 @@ mod tests {
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 50, ptr as u32);
         // SAFETY: test-only dispatch on a valid ExceptionFrame.
-        unsafe { k.dispatch(&mut ef, &mut t) };
+        unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
         assert_eq!(k.queuing.get(dst).unwrap().pending_receivers(), 1);
 
         // Expire at the synced deadline tick.
-        k.expire_timed_waits::<8>(150, &mut t);
-        assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+        k.expire_timed_waits::<8>(150);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
     }
 
     // Kernel::new() validation - comprehensive tests in kernel.rs for KernelState
@@ -3256,7 +3360,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     /// Helper to create a Kernel with a started schedule and partitions.
-    fn kernel_with_schedule() -> (Kernel<TestConfig>, PartitionTable<4>) {
+    fn kernel_with_schedule() -> Kernel<TestConfig> {
         // Create 2-slot schedule: P0 for 5 ticks, P1 for 3 ticks
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
@@ -3287,13 +3391,12 @@ mod tests {
             crate::virtual_device::DeviceRegistry::new(),
         )
         .unwrap();
-        let t = tbl(); // External partition table for dispatch
-        (k, t)
+        k
     }
 
     #[test]
     fn partitions_accessor_returns_partition_table() {
-        let (k, _t) = kernel_with_schedule();
+        let k = kernel_with_schedule();
         assert_eq!(k.partitions().len(), 2);
         assert!(k.partitions().get(0).is_some());
         assert!(k.partitions().get(1).is_some());
@@ -3301,7 +3404,7 @@ mod tests {
 
     #[test]
     fn partitions_mut_accessor_allows_modification() {
-        let (mut k, _t) = kernel_with_schedule();
+        let mut k = kernel_with_schedule();
         let pcb = k.partitions_mut().get_mut(0).unwrap();
         // Verify we can read partition state through the mutable reference
         assert_eq!(pcb.id(), 0);
@@ -3309,7 +3412,7 @@ mod tests {
 
     #[test]
     fn schedule_accessor_returns_schedule_table() {
-        let (k, _t) = kernel_with_schedule();
+        let k = kernel_with_schedule();
         assert_eq!(k.schedule().major_frame_ticks, 8); // 5 + 3
         assert_eq!(k.schedule().len(), 2);
     }
@@ -3317,7 +3420,7 @@ mod tests {
     #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn advance_schedule_tick_updates_active_partition() {
-        let (mut k, _t) = kernel_with_schedule();
+        let mut k = kernel_with_schedule();
         // Initially no active partition
         assert_eq!(k.active_partition, None);
         // Advance 4 ticks within slot 0 - no switch
@@ -3332,7 +3435,7 @@ mod tests {
     #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn advance_schedule_tick_increments_tick_counter() {
-        let (mut k, _t) = kernel_with_schedule();
+        let mut k = kernel_with_schedule();
         assert_eq!(k.tick.get(), 0);
         k.advance_schedule_tick();
         assert_eq!(k.tick.get(), 1);
@@ -3343,7 +3446,7 @@ mod tests {
     #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn yield_current_slot_advances_to_next_partition() {
-        let (mut k, _t) = kernel_with_schedule();
+        let mut k = kernel_with_schedule();
         // Consume 2 ticks in slot 0
         k.advance_schedule_tick();
         k.advance_schedule_tick();
@@ -3356,7 +3459,7 @@ mod tests {
     #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn yield_current_slot_wraps_around() {
-        let (mut k, _t) = kernel_with_schedule();
+        let mut k = kernel_with_schedule();
         // Yield to P1
         let r1 = k.yield_current_slot();
         assert_eq!(r1.partition_id(), Some(1));
@@ -3369,7 +3472,7 @@ mod tests {
     #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn yield_does_not_increment_tick_counter() {
-        let (mut k, _t) = kernel_with_schedule();
+        let mut k = kernel_with_schedule();
         let tick_before = k.tick.get();
         k.yield_current_slot();
         assert_eq!(k.tick.get(), tick_before);
@@ -3379,7 +3482,7 @@ mod tests {
     #[test]
     fn advance_schedule_tick_returns_schedule_event() {
         use crate::scheduler::ScheduleEvent;
-        let (mut k, _t) = kernel_with_schedule();
+        let mut k = kernel_with_schedule();
         // Advance through P0's 5-tick slot
         for _ in 0..4 {
             assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
@@ -3391,7 +3494,7 @@ mod tests {
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn yield_current_slot_returns_schedule_event() {
-        let (mut k, _t) = kernel_with_schedule();
+        let mut k = kernel_with_schedule();
         let result = k.yield_current_slot();
         // Should switch to P1
         assert_eq!(result.partition_id(), Some(1));
