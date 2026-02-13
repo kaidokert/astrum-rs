@@ -266,11 +266,8 @@ mod tests {
     fn from_u32_rejects_invalid() {
         // Gap at 1 (reserved for SYS_GET_ID, not in this enum).
         assert_eq!(SyscallId::from_u32(1), None);
-        // Just above the defined range.
-        #[cfg(not(feature = "dynamic-mpu"))]
-        assert_eq!(SyscallId::from_u32(20), None);
-        #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(SyscallId::from_u32(31), None);
+        // Just above the defined range (33 is after SYS_DEBUG_EXIT=32).
+        assert_eq!(SyscallId::from_u32(33), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
