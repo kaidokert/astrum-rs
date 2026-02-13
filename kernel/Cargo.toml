@@ -92,6 +92,14 @@ name = "blocking_deschedule"
 required-features = ["qemu"]
 
 [[example]]
+name = "unified_minimal"
+required-features = ["qemu"]
+
+[[example]]
+name = "debug_boot"
+required-features = ["qemu"]
+
+[[example]]
 name = "mpu_dynamic"
 required-features = ["qemu", "dynamic-mpu"]
 

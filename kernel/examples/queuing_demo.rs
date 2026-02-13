@@ -13,8 +13,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    kernel::KernelState,
-    partition::PartitionConfig,
+    partition::{MpuRegion, PartitionConfig},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc,
@@ -29,7 +28,6 @@ use panic_semihosting as _;
 // ---------------------------------------------------------------------------
 const QUEUE_DEPTH: usize = 4;
 const QUEUE_MSG_SIZE: usize = 4;
-const MAX_SCHEDULE_ENTRIES: usize = 8;
 const NUM_PARTITIONS: usize = 2;
 const STACK_WORDS: usize = 256;
 
@@ -40,6 +38,7 @@ const STACK_WORDS: usize = 256;
 struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 4;
+    const SCHED: usize = 8;
     const S: usize = 4;
     const SW: usize = 4;
     const MS: usize = 4;
@@ -99,12 +98,8 @@ const EXPECTED_RSPS: [u8; QUEUE_DEPTH] = [
     RSP_EXTRA_1_ACK,
 ];
 
-kernel::define_harness!(
-    DemoConfig,
-    NUM_PARTITIONS,
-    MAX_SCHEDULE_ENTRIES,
-    STACK_WORDS
-);
+// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
+kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS);
 
 // ---------------------------------------------------------------------------
 // Commander partition: sends commands, detects queue-full, receives responses
@@ -323,47 +318,59 @@ extern "C" fn worker_main() -> ! {
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("queuing_demo: start");
-    let (cs, cd, rs, rd);
-    // SAFETY: accessing static-mut KS; single-core, interrupts not yet
-    // enabled so there is no data race.
-    unsafe {
-        // TODO: register devices in the registry at init time (backlog item 195).
-        #[cfg(feature = "dynamic-mpu")]
-        let mut k = Kernel::<DemoConfig>::new(kernel::virtual_device::DeviceRegistry::new());
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let mut k = Kernel::<DemoConfig>::new();
 
-        // Command channel: commander (Source cs) -> worker (Destination cd)
-        cs = k.queuing.create_port(PortDirection::Source).unwrap();
-        cd = k.queuing.create_port(PortDirection::Destination).unwrap();
-        k.queuing.connect_ports(cs, cd).unwrap();
+    // Build schedule: each partition runs for 2 ticks per slot.
+    let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();
+    for i in 0..NUM_PARTITIONS as u8 {
+        sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
+    }
 
-        // Response channel: worker (Source rs) -> commander (Destination rd)
-        rs = k.queuing.create_port(PortDirection::Source).unwrap();
-        rd = k.queuing.create_port(PortDirection::Destination).unwrap();
-        k.queuing.connect_ports(rs, rd).unwrap();
-
-        store_kernel(k);
-
-        let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
-        for i in 0..NUM_PARTITIONS as u8 {
-            sched.add(ScheduleEntry::new(i, 2)).unwrap();
-        }
-        sched.start();
-
-        let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| {
+    // Build partition configs using the STACKS addresses.
+    // SAFETY: single-core, interrupts disabled — exclusive access.
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
+        core::array::from_fn(|i| {
             let b = STACKS[i].0.as_ptr() as u32;
-            let sz = (STACK_WORDS * 4) as u32;
             PartitionConfig {
                 id: i as u8,
-                entry_point: 0,
+                entry_point: 0, // Not used by Kernel::new
                 stack_base: b,
-                stack_size: sz,
-                mpu_region: kernel::partition::MpuRegion::new(b, sz, 0),
+                stack_size: (STACK_WORDS * 4) as u32,
+                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
             }
-        });
-        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
-    }
+        })
+    };
+
+    // Create the unified kernel with schedule and partitions.
+    #[cfg(feature = "dynamic-mpu")]
+    let mut k =
+        Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+            .expect("kernel creation");
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let mut k = Kernel::<DemoConfig>::new(sched, &cfgs).expect("kernel creation");
+
+    // Command channel: commander (Source cs) -> worker (Destination cd)
+    let cs = k
+        .queuing
+        .create_port(PortDirection::Source)
+        .expect("cs port");
+    let cd = k
+        .queuing
+        .create_port(PortDirection::Destination)
+        .expect("cd port");
+    k.queuing.connect_ports(cs, cd).expect("connect cs->cd");
+
+    // Response channel: worker (Source rs) -> commander (Destination rd)
+    let rs = k
+        .queuing
+        .create_port(PortDirection::Source)
+        .expect("rs port");
+    let rd = k
+        .queuing
+        .create_port(PortDirection::Destination)
+        .expect("rd port");
+    k.queuing.connect_ports(rs, rd).expect("connect rs->rd");
+
+    store_kernel(k);
 
     // Pack two port IDs into a single u32 passed to each partition via r0:
     //   bits [31:16] = outgoing (Source) port ID
