@@ -144,6 +144,22 @@ macro_rules! _unified_handle_yield {
 /// Unified harness: single `KERNEL` global for SVC dispatch and SysTick scheduling.
 /// Generates STACKS, PARTITION_SP, CURRENT/NEXT_PARTITION, KERNEL, PendSV, SysTick, boot().
 ///
+/// # Usage
+///
+/// Basic form (standard scheduler):
+/// ```ignore
+/// kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS);
+/// ```
+///
+/// Extended form with SysTick hook for test verification:
+/// ```ignore
+/// kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, k| {
+///     // tick: current tick count (u32)
+///     // k: &mut Kernel<Config>
+///     if tick == 10 { /* verify something */ }
+/// });
+/// ```
+///
 /// # MPU Alignment Constraint
 ///
 /// The stack alignment is hardcoded to 1024 bytes, which requires `$SW == 256`
@@ -154,7 +170,16 @@ macro_rules! _unified_handle_yield {
 /// - A build.rs script to generate the appropriate alignment
 #[macro_export]
 macro_rules! define_unified_harness {
+    // Basic form: no SysTick hook
     ($Config:ty, $NP:expr, $SW:expr) => {
+        $crate::define_unified_harness!(@impl $Config, $NP, $SW, |_tick, _k| {});
+    };
+    // Extended form: with SysTick hook
+    ($Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
+        $crate::define_unified_harness!(@impl $Config, $NP, $SW, |$tick, $k| $hook);
+    };
+    // Internal implementation
+    (@impl $Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
         // Compile-time check: MPU requires stack alignment == stack size.
         // Since #[repr(align(...))] requires a literal, we hardcode 1024-byte
         // alignment, which mandates $SW == 256 words (256 * 4 = 1024 bytes).
@@ -201,35 +226,42 @@ macro_rules! define_unified_harness {
         static _SVC: unsafe extern "C" fn(&mut $crate::context::ExceptionFrame) =
             $crate::svc::SVC_HANDLER;
 
+        #[cfg(not(feature = "dynamic-mpu"))]
         $crate::define_pendsv!();
+        #[cfg(feature = "dynamic-mpu")]
+        $crate::define_pendsv_dynamic!(HARNESS_STRATEGY);
 
         #[exception]
         fn SysTick() {
+            static _HARNESS_TICK_COUNT: ::core::sync::atomic::AtomicU32 =
+                ::core::sync::atomic::AtomicU32::new(0);
+            let _systick_tick: u32 = _HARNESS_TICK_COUNT
+                .fetch_add(1, ::core::sync::atomic::Ordering::Relaxed)
+                + 1;
             #[cfg(feature = "qemu")]
-            {
-                static mut TICK_COUNT: u32 = 0;
-                // SAFETY: SysTick is not reentrant; exclusive access to TICK_COUNT.
-                let tc = unsafe { &mut *(&raw mut TICK_COUNT) };
-                *tc += 1;
-                ::cortex_m_semihosting::hprintln!("[SysTick] #{}", *tc);
-            }
+            ::cortex_m_semihosting::hprintln!("[SysTick] #{}", _systick_tick);
+
             ::cortex_m::interrupt::free(|cs| {
                 let mut guard = KERNEL.borrow(cs).borrow_mut();
-                let k = match guard.as_mut() {
+                let _systick_kernel = match guard.as_mut() {
                     Some(k) => k,
                     None => return,
                 };
                 #[cfg(not(feature = "dynamic-mpu"))]
-                $crate::_unified_handle_tick!(k, NEXT_PARTITION);
+                $crate::_unified_handle_tick!(_systick_kernel, NEXT_PARTITION);
                 #[cfg(feature = "dynamic-mpu")]
                 {
-                    let tick_val = k.tick().get();
-                    $crate::_unified_handle_tick!(k, NEXT_PARTITION, tick_val, &HARNESS_STRATEGY);
+                    let tick_val = _systick_kernel.tick().get();
+                    $crate::_unified_handle_tick!(_systick_kernel, NEXT_PARTITION, tick_val, &HARNESS_STRATEGY);
                 }
-                let current_tick = k.tick().get();
-                k.expire_timed_waits::<{ <$Config as $crate::config::KernelConfig>::N }>(
+                let current_tick = _systick_kernel.tick().get();
+                _systick_kernel.expire_timed_waits::<{ <$Config as $crate::config::KernelConfig>::N }>(
                     current_tick,
                 );
+                // Call user-provided SysTick hook
+                let $tick = _systick_tick;
+                let $k = _systick_kernel;
+                $hook
             });
         }
 
