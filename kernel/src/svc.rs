@@ -988,7 +988,7 @@ where
                     }
                     Ok(crate::queuing::RecvQueuingOutcome::ReceiverBlocked { .. }) => {
                         try_transition(pt, self.current_partition, PartitionState::Waiting);
-                        0
+                        self.trigger_deschedule()
                     }
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
@@ -2341,6 +2341,27 @@ mod tests {
         assert_eq!(ef.r0, 0);
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
         assert_eq!(k.queuing.get(dst).unwrap().pending_receivers(), 1);
+    }
+
+    #[test]
+    fn queuing_recv_timed_blocks_sets_yield_requested() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+        let (mut k, mut t) = kernel(0, 0, 0);
+        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let ptr = low32_buf(0);
+        let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 50, ptr as u32);
+        assert!(
+            !k.yield_requested,
+            "yield_requested should be false before blocking recv"
+        );
+        unsafe { k.dispatch(&mut ef, &mut t) };
+        assert_eq!(ef.r0, 0);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert!(
+            k.yield_requested,
+            "yield_requested should be true after blocking recv"
+        );
     }
 
     #[test]
