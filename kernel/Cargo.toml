@@ -107,6 +107,10 @@ required-features = ["qemu", "dynamic-mpu"]
 name = "uart1_loopback"
 required-features = ["qemu", "dynamic-mpu"]
 
+[[example]]
+name = "adversarial_mod_stub"
+required-features = ["qemu"]
+
 [features]
 qemu = []
 dynamic-mpu = []
