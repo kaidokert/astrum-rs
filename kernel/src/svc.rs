@@ -126,16 +126,46 @@ macro_rules! validated_ptr {
 }
 
 use crate::events;
-// TODO: pub re-export required by harness macros (_unified_handle_yield uses $crate::svc::YieldResult).
-// Reviewer flagged as out-of-scope API change, but removal breaks compilation.
-pub use crate::kernel::YieldResult;
+#[cfg(feature = "dynamic-mpu")]
+use crate::scheduler::ScheduleEvent;
+
+/// Abstracts over schedule advance return type for feature-gated code.
+///
+/// Harness macros use `$crate::svc::YieldResult` to extract partition IDs
+/// uniformly regardless of which feature gates are enabled.
+pub trait YieldResult {
+    fn partition_id(&self) -> Option<u8>;
+    fn is_system_window(&self) -> bool;
+}
+
+#[cfg(not(feature = "dynamic-mpu"))]
+impl YieldResult for Option<u8> {
+    fn partition_id(&self) -> Option<u8> {
+        *self
+    }
+    fn is_system_window(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(feature = "dynamic-mpu")]
+impl YieldResult for ScheduleEvent {
+    fn partition_id(&self) -> Option<u8> {
+        if let Self::PartitionSwitch(p) = self {
+            Some(*p)
+        } else {
+            None
+        }
+    }
+    fn is_system_window(&self) -> bool {
+        matches!(self, Self::SystemWindow)
+    }
+}
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
 use crate::mutex::MutexPool;
 use crate::partition::{ConfigError, PartitionConfig, PartitionState, PartitionTable};
 use crate::queuing::{QueuingPortPool, QueuingPortStatus, SendQueuingOutcome};
 use crate::sampling::SamplingPortPool;
-#[cfg(feature = "dynamic-mpu")]
-use crate::scheduler::ScheduleEvent;
 use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
 use crate::syscall::SyscallId;
