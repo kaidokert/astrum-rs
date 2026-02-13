@@ -442,9 +442,16 @@ macro_rules! define_unified_kernel {
 /// when called from the SVCall assembly trampoline above.
 #[no_mangle]
 pub unsafe extern "C" fn dispatch_svc(frame: &mut ExceptionFrame) {
+    #[cfg(feature = "qemu")]
+    cortex_m_semihosting::hprintln!("[dispatch_svc] entered, r0={:#x}", frame.r0);
     let hook = with_cs(|cs| *SVC_DISPATCH_HOOK.borrow(cs).borrow());
     if let Some(hook) = hook {
-        return hook(frame);
+        #[cfg(feature = "qemu")]
+        cortex_m_semihosting::hprintln!("[dispatch_svc] calling hook");
+        hook(frame);
+        #[cfg(feature = "qemu")]
+        cortex_m_semihosting::hprintln!("[dispatch_svc] hook returned, r0={:#x}", frame.r0);
+        return;
     }
     frame.r0 = match SyscallId::from_u32(frame.r0) {
         Some(SyscallId::Yield) => handle_yield(),
@@ -817,6 +824,8 @@ where
     /// writable `QueuingPortStatus`. The caller is responsible for ensuring
     /// this; in production the MPU enforces partition isolation.
     pub unsafe fn dispatch(&mut self, frame: &mut ExceptionFrame) {
+        #[cfg(feature = "qemu")]
+        cortex_m_semihosting::hprintln!("[Kernel::dispatch] syscall={}", frame.r0);
         frame.r0 = match SyscallId::from_u32(frame.r0) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::EventWait) => {
@@ -1237,8 +1246,51 @@ where
                     }
                 })
             }
+            // Debug syscalls: only available in qemu builds with semihosting.
+            // For non-qemu builds these are recognized but return NotImplemented.
+            Some(SyscallId::DebugPrint) => {
+                #[cfg(feature = "qemu")]
+                {
+                    // SAFETY: caller ensures r1 points to a valid string of length r2
+                    // within the partition's memory region. Semihosting is available
+                    // in QEMU builds.
+                    let ptr = frame.r1 as *const u8;
+                    let len = frame.r2 as usize;
+                    if len > 0 && !ptr.is_null() {
+                        let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+                        if let Ok(s) = core::str::from_utf8(slice) {
+                            cortex_m_semihosting::hprint!("{}", s);
+                        }
+                    }
+                    0
+                }
+                #[cfg(not(feature = "qemu"))]
+                {
+                    SvcError::NotImplemented.to_u32()
+                }
+            }
+            Some(SyscallId::DebugExit) => {
+                #[cfg(feature = "qemu")]
+                {
+                    use cortex_m_semihosting::debug;
+                    if frame.r1 == 0 {
+                        debug::exit(debug::EXIT_SUCCESS);
+                    } else {
+                        debug::exit(debug::EXIT_FAILURE);
+                    }
+                    // Note: debug::exit() does not return in QEMU.
+                    #[allow(unreachable_code)]
+                    0
+                }
+                #[cfg(not(feature = "qemu"))]
+                {
+                    SvcError::NotImplemented.to_u32()
+                }
+            }
             None => SvcError::InvalidSyscall.to_u32(),
         };
+        #[cfg(feature = "qemu")]
+        cortex_m_semihosting::hprintln!("[Kernel::dispatch] returning r0={:#x}", frame.r0);
     }
 
     // -------------------------------------------------------------------------

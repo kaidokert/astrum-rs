@@ -79,12 +79,7 @@ impl KernelConfig for TestConfig {
     const DR: usize = 4;
 }
 
-kernel::define_dispatch_hook!(TestConfig, |_k| {}, |cs| {
-    KS.borrow(cs)
-        .borrow_mut()
-        .as_mut()
-        .map(|ks| ks.partitions_mut())
-});
+kernel::define_dispatch_hook!(TestConfig, |_k| {}, |_cs| { None::<()> });
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 static KS: Mutex<RefCell<Option<KernelState<NP, 4>>>> = Mutex::new(RefCell::new(None));

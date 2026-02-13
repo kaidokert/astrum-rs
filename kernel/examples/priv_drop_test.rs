@@ -21,15 +21,13 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    kernel::KernelState,
-    partition::PartitionConfig,
+    partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
 };
 use panic_semihosting as _;
 
 const NUM_PARTITIONS: usize = 1;
-const MAX_SCHEDULE_ENTRIES: usize = 4;
 const STACK_WORDS: usize = 256;
 
 // TODO: dynamic-mpu constants (BP, BZ, DR) and the Kernel::new() branch
@@ -40,6 +38,7 @@ const STACK_WORDS: usize = 256;
 struct TestConfig;
 impl KernelConfig for TestConfig {
     const N: usize = 1;
+    const SCHED: usize = 4;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -61,12 +60,8 @@ impl KernelConfig for TestConfig {
     const DR: usize = 4;
 }
 
-kernel::define_harness!(
-    TestConfig,
-    NUM_PARTITIONS,
-    MAX_SCHEDULE_ENTRIES,
-    STACK_WORDS
-);
+// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
+kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
 
 /// Partition entry: reads CONTROL, asserts nPRIV and SPSEL, then exits.
 extern "C" fn partition_main() -> ! {
@@ -113,37 +108,35 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals already taken");
     hprintln!("priv_drop_test: start");
 
-    // SAFETY: single-core, interrupts not yet enabled — exclusive access
-    // to all statics.
-    unsafe {
-        #[cfg(feature = "dynamic-mpu")]
-        let k = Kernel::<TestConfig>::new(kernel::virtual_device::DeviceRegistry::new());
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let k = Kernel::<TestConfig>::new();
-        store_kernel(k);
+    // Build schedule: single partition runs for 2 ticks.
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
+    sched
+        .add(ScheduleEntry::new(0, 2))
+        .expect("static schedule entry must fit");
 
-        let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
-        sched
-            .add(ScheduleEntry::new(0, 2))
-            .expect("static schedule entry must fit");
-        sched.start();
-
-        // TODO: MpuRegion is structurally required by PartitionConfig
-        // (validation enforces size >= 32).  This test only cares about
-        // the CONTROL register, not MPU behaviour; the region below is
-        // the minimum valid configuration.
-        let cfgs: [PartitionConfig; NUM_PARTITIONS] = [{
-            let b = 0x2000_0000u32;
+    // Build partition configs using the STACKS addresses.
+    // SAFETY: single-core, interrupts disabled — exclusive access.
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
+        [{
+            let b = STACKS[0].0.as_ptr() as u32;
             PartitionConfig {
                 id: 0,
                 entry_point: 0,
                 stack_base: b,
-                stack_size: 1024,
-                mpu_region: kernel::partition::MpuRegion::new(b, 1024, 0),
+                stack_size: (STACK_WORDS * 4) as u32,
+                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
             }
-        }];
-        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
-    }
+        }]
+    };
+
+    // Create the unified kernel with schedule and partitions.
+    #[cfg(feature = "dynamic-mpu")]
+    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+        .expect("kernel creation");
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel creation");
+
+    store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
     boot(&parts, &mut p)

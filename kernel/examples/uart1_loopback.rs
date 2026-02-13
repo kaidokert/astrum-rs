@@ -45,6 +45,7 @@ const TX_CAPACITY: usize = 64;
 struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 4;
+    const SCHED: usize = 8;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -140,12 +141,7 @@ kernel::define_dispatch_hook!(
             }
         });
     },
-    |cs| {
-        KS.borrow(cs)
-            .borrow_mut()
-            .as_mut()
-            .map(|ks| ks.partitions_mut())
-    }
+    |_cs| { None::<()> }
 );
 
 static KS: Mutex<
@@ -167,7 +163,7 @@ fn SysTick() {
         };
         let event = ks.advance_schedule_tick();
         let current_tick = ks.tick().get();
-        let ks_parts = ks.partitions_mut();
+        let _ks_parts = ks.partitions_mut();
         match event {
             ScheduleEvent::PartitionSwitch(pid) => {
                 // SAFETY: single-core Cortex-M — NEXT_PARTITION is only read
@@ -188,7 +184,6 @@ fn SysTick() {
             k.sync_tick(current_tick);
             k.expire_timed_waits::<{ <DemoConfig as kernel::config::KernelConfig>::N }>(
                 current_tick,
-                ks_parts,
             );
         }
     });
@@ -455,7 +450,8 @@ fn main() -> ! {
 
         // KernelState owns the authoritative partition table; the dispatch
         // hook's swap body shares it with Kernel during SVC dispatch.
-        let mut kern = Kernel::<DemoConfig>::new(kernel::virtual_device::DeviceRegistry::new());
+        let mut kern =
+            Kernel::<DemoConfig>::new_empty(kernel::virtual_device::DeviceRegistry::new());
         kern.set_hw_uart(hw_backend);
         store_kernel(kern);
 

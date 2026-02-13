@@ -52,6 +52,7 @@ const MSG_REPLY: &[u8] = b"Ok";
 struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 4;
+    const SCHED: usize = 8;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -207,7 +208,7 @@ fn main() -> ! {
 
     // SAFETY: single-core, interrupts not yet enabled.
     unsafe {
-        store_kernel(Kernel::<DemoConfig>::new(
+        store_kernel(Kernel::<DemoConfig>::new_empty(
             kernel::virtual_device::DeviceRegistry::new(),
         ));
 

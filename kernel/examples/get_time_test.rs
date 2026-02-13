@@ -45,6 +45,7 @@ const STACK_WORDS: usize = 256;
 struct TestConfig;
 impl KernelConfig for TestConfig {
     const N: usize = 1;
+    const SCHED: usize = 4;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -66,12 +67,7 @@ impl KernelConfig for TestConfig {
     const DR: usize = 4;
 }
 
-kernel::define_dispatch_hook!(TestConfig, |_k| {}, |cs| {
-    KS.borrow(cs)
-        .borrow_mut()
-        .as_mut()
-        .map(|ks| ks.partitions_mut())
-});
+kernel::define_dispatch_hook!(TestConfig, |_k| {}, |_cs| { None::<()> });
 
 #[used]
 static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
@@ -132,14 +128,12 @@ fn SysTick() {
             cortex_m::peripheral::SCB::set_pendsv();
         }
 
-        // Sync tick and expire timed waits using KernelState partitions.
+        // Sync tick and expire timed waits.
         let current_tick = ks.tick().get();
-        let ks_parts = ks.partitions_mut();
         if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
             k.sync_tick(current_tick);
             k.expire_timed_waits::<{ <TestConfig as kernel::config::KernelConfig>::N }>(
                 current_tick,
-                ks_parts,
             );
         }
     });
@@ -184,9 +178,9 @@ fn main() -> ! {
     // SAFETY: single-core, interrupts not yet enabled — exclusive access.
     unsafe {
         #[cfg(feature = "dynamic-mpu")]
-        let k = Kernel::<TestConfig>::new(kernel::virtual_device::DeviceRegistry::new());
+        let k = Kernel::<TestConfig>::new_empty(kernel::virtual_device::DeviceRegistry::new());
         #[cfg(not(feature = "dynamic-mpu"))]
-        let k = Kernel::<TestConfig>::new();
+        let k = Kernel::<TestConfig>::new_empty();
         store_kernel(k);
 
         let mut sched = ScheduleTable::<4>::new();

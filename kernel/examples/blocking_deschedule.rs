@@ -41,6 +41,7 @@ const SW: usize = 256;
 struct Cfg;
 impl KernelConfig for Cfg {
     const N: usize = 1;
+    const SCHED: usize = 4;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -80,12 +81,7 @@ kernel::define_dispatch_hook!(
             }
         });
     },
-    |cs| {
-        KS.borrow(cs)
-            .borrow_mut()
-            .as_mut()
-            .map(|ks| ks.partitions_mut())
-    }
+    |_cs| { None::<()> }
 );
 
 #[used]
@@ -174,10 +170,9 @@ fn SysTick() {
 
         // Sync tick
         let current_tick = ks.tick().get();
-        let ks_parts = ks.partitions_mut();
         if let Some(k) = KERN.borrow(cs).borrow_mut().as_mut() {
             k.sync_tick(current_tick);
-            k.expire_timed_waits::<{ <Cfg as KernelConfig>::N }>(current_tick, ks_parts);
+            k.expire_timed_waits::<{ <Cfg as KernelConfig>::N }>(current_tick);
         }
     });
 
@@ -219,9 +214,9 @@ fn main() -> ! {
     // priorities are configured before SysTick is enabled.
     unsafe {
         #[cfg(feature = "dynamic-mpu")]
-        let mut k = Kernel::<Cfg>::new(kernel::virtual_device::DeviceRegistry::new());
+        let mut k = Kernel::<Cfg>::new_empty(kernel::virtual_device::DeviceRegistry::new());
         #[cfg(not(feature = "dynamic-mpu"))]
-        let mut k = Kernel::<Cfg>::new();
+        let mut k = Kernel::<Cfg>::new_empty();
         let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
         store_kernel(k);
 

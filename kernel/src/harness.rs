@@ -552,6 +552,14 @@ macro_rules! define_unified_harness {
 
         #[exception]
         fn SysTick() {
+            #[cfg(feature = "qemu")]
+            {
+                static mut TICK_COUNT: u32 = 0;
+                // SAFETY: SysTick is not reentrant; exclusive access to TICK_COUNT.
+                let tc = unsafe { &mut *(&raw mut TICK_COUNT) };
+                *tc += 1;
+                ::cortex_m_semihosting::hprintln!("[SysTick] #{}", *tc);
+            }
             ::cortex_m::interrupt::free(|cs| {
                 let mut guard = KERNEL.borrow(cs).borrow_mut();
                 let k = match guard.as_mut() {
@@ -580,6 +588,11 @@ macro_rules! define_unified_harness {
             use cortex_m::peripheral::scb::SystemHandler;
             use cortex_m::peripheral::syst::SystClkSource;
             use cortex_m::peripheral::SCB;
+            #[cfg(feature = "qemu")]
+            use ::cortex_m_semihosting::hprintln;
+
+            #[cfg(feature = "qemu")]
+            hprintln!("[boot] entered");
 
             // SAFETY: called exactly once from main() with interrupts
             // disabled (before the scheduler has started). Single-core
@@ -588,6 +601,9 @@ macro_rules! define_unified_harness {
             unsafe {
                 let stacks = &mut *(&raw mut STACKS);
                 let partition_sp = &mut *(&raw mut PARTITION_SP);
+
+                #[cfg(feature = "qemu")]
+                hprintln!("[boot] init stacks for {} partitions", partitions.len());
 
                 for (i, &(ep, hint)) in partitions.iter().enumerate() {
                     let stk = &mut stacks[i].0;
@@ -598,6 +614,8 @@ macro_rules! define_unified_harness {
                         $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
                             .expect("init_stack_frame");
                     partition_sp[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
+                    #[cfg(feature = "qemu")]
+                    hprintln!("[boot] partition {} sp={:#010x}", i, partition_sp[i]);
                 }
 
                 const { $crate::config::assert_priority_order::<$Config>() }
@@ -616,6 +634,9 @@ macro_rules! define_unified_harness {
                 );
             }
 
+            #[cfg(feature = "qemu")]
+            hprintln!("[boot] priorities set");
+
             let first_partition = ::cortex_m::interrupt::free(|cs| {
                 KERNEL
                     .borrow(cs)
@@ -623,6 +644,9 @@ macro_rules! define_unified_harness {
                     .as_mut()
                     .and_then(|k| k.start_schedule())
             });
+
+            #[cfg(feature = "qemu")]
+            hprintln!("[boot] first_partition={:?}", first_partition);
 
             // SAFETY: single-core Cortex-M — boot() is called exactly once
             // before SysTick/PendSV are enabled, so exclusive access is
@@ -637,12 +661,18 @@ macro_rules! define_unified_harness {
                 );
             }
 
+            #[cfg(feature = "qemu")]
+            hprintln!("[boot] triggering PendSV");
+
             peripherals.SYST.set_clock_source(SystClkSource::Core);
             peripherals.SYST.set_reload(120_000 - 1);
             peripherals.SYST.clear_current();
             peripherals.SYST.enable_counter();
             peripherals.SYST.enable_interrupt();
             SCB::set_pendsv();
+
+            #[cfg(feature = "qemu")]
+            hprintln!("[boot] entering idle loop");
 
             loop {
                 cortex_m::asm::wfi();

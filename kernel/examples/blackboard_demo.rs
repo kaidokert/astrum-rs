@@ -17,8 +17,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    kernel::KernelState,
-    partition::PartitionConfig,
+    partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     semaphore::Semaphore,
     svc,
@@ -34,7 +33,6 @@ use panic_semihosting as _;
 // ---------------------------------------------------------------------------
 // Kernel sizing constants and config (tuned to this example's resource needs)
 // ---------------------------------------------------------------------------
-const MAX_SCHEDULE_ENTRIES: usize = 4;
 const NUM_PARTITIONS: usize = 3;
 const STACK_WORDS: usize = 256;
 
@@ -45,6 +43,7 @@ const STACK_WORDS: usize = 256;
 struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 3;
+    const SCHED: usize = 8;
     const S: usize = 1;
     const SW: usize = 3;
     const MS: usize = 1;
@@ -75,12 +74,8 @@ const fn pack_r0(partition_id: u32, sem: u32, bb: u32) -> u32 {
     (partition_id << 24) | (sem << 16) | bb
 }
 
-kernel::define_harness!(
-    DemoConfig,
-    NUM_PARTITIONS,
-    MAX_SCHEDULE_ENTRIES,
-    STACK_WORDS
-);
+// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
+kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS);
 
 // ---------------------------------------------------------------------------
 // Config partition: displays config on blackboard, waits for worker acks
@@ -145,40 +140,41 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
     hprintln!("blackboard_demo: start");
 
-    let (bb, sem);
-    // SAFETY: accessing static-mut KS; single-core, interrupts not yet
-    // enabled so there is no data race.
-    unsafe {
-        // TODO: register devices in the registry at init time (backlog item 195).
-        #[cfg(feature = "dynamic-mpu")]
-        let mut k = Kernel::<DemoConfig>::new(kernel::virtual_device::DeviceRegistry::new());
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let mut k = Kernel::<DemoConfig>::new();
+    // Build schedule: each partition runs for 2 ticks per slot.
+    let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();
+    for i in 0..NUM_PARTITIONS as u8 {
+        sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
+    }
 
-        bb = k.blackboards.create().unwrap() as u32;
-        k.semaphores.add(Semaphore::new(1, 1)).unwrap();
-        sem = 0u32; // first (and only) semaphore in the pool
-
-        store_kernel(k);
-
-        let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
-        for i in 0..NUM_PARTITIONS as u8 {
-            sched.add(ScheduleEntry::new(i, 2)).unwrap();
-        }
-        sched.start();
-
-        let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| {
-            let b = 0x2000_0000 + (i as u32) * 0x2000;
+    // Build partition configs using the STACKS addresses.
+    // SAFETY: single-core, interrupts disabled — exclusive access.
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
+        core::array::from_fn(|i| {
+            let b = STACKS[i].0.as_ptr() as u32;
             PartitionConfig {
                 id: i as u8,
                 entry_point: 0,
                 stack_base: b,
-                stack_size: 1024,
-                mpu_region: kernel::partition::MpuRegion::new(b, 1024, 0),
+                stack_size: (STACK_WORDS * 4) as u32,
+                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
             }
-        });
-        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
-    }
+        })
+    };
+
+    // Create the unified kernel with schedule and partitions.
+    #[cfg(feature = "dynamic-mpu")]
+    let mut k =
+        Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+            .expect("kernel creation");
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let mut k = Kernel::<DemoConfig>::new(sched, &cfgs).expect("kernel creation");
+
+    // Create blackboard and semaphore resources.
+    let bb = k.blackboards.create().unwrap() as u32;
+    k.semaphores.add(Semaphore::new(1, 1)).unwrap();
+    let sem = 0u32; // first (and only) semaphore in the pool
+
+    store_kernel(k);
 
     // Pack per-partition R0 values:
     //   config_main (partition 0): only needs blackboard ID

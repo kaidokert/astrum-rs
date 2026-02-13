@@ -17,8 +17,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    kernel::KernelState,
-    partition::PartitionConfig,
+    partition::{MpuRegion, PartitionConfig},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
@@ -40,7 +39,6 @@ const TEST_NAME: &str = "syscall_other_ptr";
 // Kernel configuration
 // ---------------------------------------------------------------------------
 
-const MAX_SCHEDULE_ENTRIES: usize = 4;
 const NUM_PARTITIONS: usize = 2;
 const STACK_WORDS: usize = 256;
 
@@ -50,6 +48,7 @@ const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 struct TestConfig;
 impl KernelConfig for TestConfig {
     const N: usize = 2; // Two partitions
+    const SCHED: usize = 4;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -71,23 +70,8 @@ impl KernelConfig for TestConfig {
     const DR: usize = 4;
 }
 
-// Use the standard harness for partition scheduling.
-kernel::define_harness!(
-    TestConfig,
-    NUM_PARTITIONS,
-    MAX_SCHEDULE_ENTRIES,
-    STACK_WORDS
-);
-
-// ---------------------------------------------------------------------------
-// Memory layout constants (must match main() configuration)
-// ---------------------------------------------------------------------------
-
-/// Base address of partition 0's data region.
-const P0_BASE: u32 = 0x2000_0000;
-
-/// Base address of partition 1's data region (immediately follows P0).
-const P1_BASE: u32 = P0_BASE + STACK_SIZE;
+// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
+kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
 
 // ---------------------------------------------------------------------------
 // Partition entry points
@@ -95,12 +79,15 @@ const P1_BASE: u32 = P0_BASE + STACK_SIZE;
 
 /// Partition 0 entry: invoke SYS_SAMPLING_WRITE with pointer into P1's region.
 extern "C" fn p0_main() -> ! {
-    // Retrieve port_id passed via r0.
-    let port_id = kernel::unpack_r0!();
+    // Retrieve packed argument: upper 16 bits = port_id, lower 16 bits = P1 offset index.
+    // Actually, we pack: port_id in bits [31:16], p1_base high bits in [15:0].
+    // For simplicity, we pass the full p1_base as a second word via a static.
+    let packed = kernel::unpack_r0!();
+    let port_id = packed >> 16;
+    let p1_base = (packed & 0xFFFF) << 16; // Reconstruct upper half (lower half is 0 for aligned stacks)
 
     // Target address: middle of partition 1's MPU region.
-    // Uses hardcoded constants to avoid fragile argument packing.
-    let target_in_p1 = P1_BASE + STACK_SIZE / 2;
+    let target_in_p1 = p1_base + STACK_SIZE / 2;
 
     // Issue SYS_SAMPLING_WRITE with:
     //   r1 = port_id (valid sampling port)
@@ -148,56 +135,46 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
     hprintln!("{}: start", TEST_NAME);
 
-    // Partition data region bases use the constants defined above.
-    let p0_base: u32 = P0_BASE;
-    let p1_base: u32 = P1_BASE;
+    // Build schedule: only partition 0 runs (partition 1 just owns a region).
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
+    sched
+        .add(ScheduleEntry::new(0, 2))
+        .expect("schedule entry must fit");
 
-    // Create a sampling port for the test partition.
-    let port_id;
-    // SAFETY: single-core, interrupts not yet enabled — exclusive access.
-    unsafe {
-        #[cfg(feature = "dynamic-mpu")]
-        let mut k = Kernel::<TestConfig>::new(kernel::virtual_device::DeviceRegistry::new());
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let mut k = Kernel::<TestConfig>::new();
-
-        // Create a source port (partition will "write" to it).
-        port_id = k
-            .sampling
-            .create_port(PortDirection::Source, 10)
-            .expect("create port");
-
-        store_kernel(k);
-
-        // Set up schedule: only partition 0 runs (partition 1 just owns a region).
-        let mut sched = ScheduleTable::<MAX_SCHEDULE_ENTRIES>::new();
-        sched
-            .add(ScheduleEntry::new(0, 2))
-            .expect("schedule entry must fit");
-        sched.start();
-
-        // Build partition configs with separate MPU regions.
-        let cfgs: [PartitionConfig; NUM_PARTITIONS] = [
-            // Partition 0
+    // Build partition configs with separate MPU regions.
+    // SAFETY: single-core, interrupts disabled — exclusive access.
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
+        core::array::from_fn(|i| {
+            let b = STACKS[i].0.as_ptr() as u32;
             PartitionConfig {
-                id: 0,
+                id: i as u8,
                 entry_point: 0,
-                stack_base: p0_base,
+                stack_base: b,
                 stack_size: STACK_SIZE,
-                mpu_region: kernel::partition::MpuRegion::new(p0_base, STACK_SIZE, 0),
-            },
-            // Partition 1 (separate region)
-            PartitionConfig {
-                id: 1,
-                entry_point: 0,
-                stack_base: p1_base,
-                stack_size: STACK_SIZE,
-                mpu_region: kernel::partition::MpuRegion::new(p1_base, STACK_SIZE, 0),
-            },
-        ];
+                mpu_region: MpuRegion::new(b, STACK_SIZE, 0),
+            }
+        })
+    };
 
-        KS = Some(KernelState::new(sched, &cfgs).expect("invalid kernel config"));
-    }
+    // Create the unified kernel with schedule and partitions.
+    #[cfg(feature = "dynamic-mpu")]
+    let mut k =
+        Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+            .expect("kernel creation");
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let mut k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel creation");
+
+    // Create a source port (partition will "write" to it).
+    let port_id = k
+        .sampling
+        .create_port(PortDirection::Source, 10)
+        .expect("create port");
+
+    store_kernel(k);
+
+    // Compute the P1 region base for logging (same as STACKS[1]).
+    let p0_base = unsafe { STACKS[0].0.as_ptr() as u32 };
+    let p1_base = unsafe { STACKS[1].0.as_ptr() as u32 };
 
     hprintln!("  port_id: {}", port_id);
     hprintln!(
@@ -210,11 +187,13 @@ fn main() -> ! {
         p1_base,
         p1_base + STACK_SIZE
     );
-    hprintln!("  target (in P1): {:#010x}", P1_BASE + STACK_SIZE / 2);
+    hprintln!("  target (in P1): {:#010x}", p1_base + STACK_SIZE / 2);
     hprintln!("  expected error: {:#010x}", EXPECTED_ERROR);
 
-    // Pass port_id to partition 0 via r0.
-    let p0_arg = port_id as u32;
+    // Pass port_id and P1 base to partition 0 via r0.
+    // Pack: port_id in bits [31:16], p1_base upper 16 bits in [15:0].
+    // (Stack bases are 64KB aligned, so lower 16 bits are always 0.)
+    let p0_arg = ((port_id as u32) << 16) | ((p1_base >> 16) & 0xFFFF);
 
     // Build partition array for boot().
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [
