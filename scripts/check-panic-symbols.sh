@@ -62,21 +62,31 @@ ERROR_LIST=""
 
 # ── Check the kernel library first ──────────────────────────────────
 echo "=== Kernel library (release) ==="
-if LIB_OUTPUT=$(cargo nm --target "$TARGET" --lib --release -- --demangle 2>&1); then
-    LIB_SYMBOLS=$(echo "$LIB_OUTPUT" | grep -ciE 'panic|unwind' || true)
-    if [ "$LIB_SYMBOLS" -gt 0 ]; then
-        echo "  WARN: $LIB_SYMBOLS panic/unwind symbol(s) in kernel library!"
-        echo "$LIB_OUTPUT" | grep -iE 'panic|unwind' | sed 's/^/    /'
-        TAINTED=$((TAINTED + 1))
-        TAINTED_LIST="$TAINTED_LIST lib"
-    else
-        echo "  CLEAN (no panic/unwind symbols)"
-        CLEAN=$((CLEAN + 1))
-    fi
-else
-    echo "  ERROR: cargo nm failed for library"
+# Build the library first to ensure the rlib exists
+if ! cargo build --target "$TARGET" --lib --release 2>/dev/null; then
+    echo "  ERROR: cargo build failed for library"
     ERRORS=$((ERRORS + 1))
     ERROR_LIST="$ERROR_LIST lib"
+else
+    # Find the rlib file and use nm directly (cargo nm has issues with multiple artifacts)
+    RLIB_PATH="$REPO_ROOT/target/$TARGET/release/libkernel.rlib"
+    if [ -f "$RLIB_PATH" ]; then
+        LIB_OUTPUT=$(nm --demangle "$RLIB_PATH" 2>&1 || true)
+        LIB_SYMBOLS=$(echo "$LIB_OUTPUT" | grep -ciE 'panic|unwind' || true)
+        if [ "$LIB_SYMBOLS" -gt 0 ]; then
+            echo "  WARN: $LIB_SYMBOLS panic/unwind symbol(s) in kernel library!"
+            echo "$LIB_OUTPUT" | grep -iE 'panic|unwind' | sed 's/^/    /'
+            TAINTED=$((TAINTED + 1))
+            TAINTED_LIST="$TAINTED_LIST lib"
+        else
+            echo "  CLEAN (no panic/unwind symbols)"
+            CLEAN=$((CLEAN + 1))
+        fi
+    else
+        echo "  ERROR: rlib not found at $RLIB_PATH"
+        ERRORS=$((ERRORS + 1))
+        ERROR_LIST="$ERROR_LIST lib"
+    fi
 fi
 
 # ── Helper: check one example ───────────────────────────────────────
