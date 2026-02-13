@@ -58,7 +58,16 @@ fn main() -> ! {
     // with NUM_PARTITIONS elements, so indexing [0..NUM_PARTITIONS) is valid.
     // The stack addresses are aligned and sized per the harness contract.
     let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
-        core::array::from_fn(|i| build_partition_config(i, &STACKS[i]))
+        core::array::from_fn(|i| {
+            let b = STACKS[i].0.as_ptr() as u32;
+            PartitionConfig {
+                id: i as u8,
+                entry_point: 0,
+                stack_base: b,
+                stack_size: (STACK_WORDS * 4) as u32,
+                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
+            }
+        })
     };
 
     // Create the unified kernel. Kernel::new() only fails if the schedule
@@ -643,7 +652,7 @@ buffer_pool_test: all checks passed -- PASS
 - **Blocking device reads** via `SYS_DEV_READ_TIMED` with timeout
   (replaces earlier yield-poll loops)
 - `SYS_DEV_OPEN` / `SYS_DEV_READ_TIMED` / `SYS_DEV_WRITE` /
-  `SYS_YIELD` syscalls via the `define_harness!` macro
+  `SYS_YIELD` syscalls via the `define_unified_harness!` macro
 
 <!-- TODO: reviewer asked about SYS_DEV_CLOSE and buffer revocation
      coverage.  This demo does not use either — it exercises blocking
@@ -731,7 +740,7 @@ for the blocking-read wakeup protocol.
 - Multi-message transmit/receive verification across two partitions
 - Edge-case coverage: read-when-empty and write-when-TX-full
 - `SYS_DEV_OPEN` / `SYS_DEV_READ` / `SYS_DEV_WRITE` / `SYS_YIELD`
-  syscalls via the `define_dispatch_hook!` macro
+  syscalls via a custom SVC/SysTick harness
 - `DeviceRegistry` integration (three backends registered: UART-A,
   UART-B, and the HwUartBackend)
 - System window bottom-half processing with `run_bottom_half` for
