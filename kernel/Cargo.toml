@@ -131,6 +131,11 @@ name = "stack_guard"
 path = "examples/adversarial/stack_guard.rs"
 required-features = ["qemu"]
 
+[[example]]
+name = "write_mpu_regs"
+path = "examples/adversarial/write_mpu_regs.rs"
+required-features = ["qemu"]
+
 [features]
 qemu = []
 dynamic-mpu = []
