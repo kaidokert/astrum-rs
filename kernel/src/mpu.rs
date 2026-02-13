@@ -71,6 +71,15 @@ pub fn build_rasr(size_field: u32, ap: u32, xn: bool, scb: (bool, bool, bool)) -
 
 /// Write RBAR and RASR to configure a single MPU region.
 pub fn configure_region(mpu: &cortex_m::peripheral::MPU, rbar: u32, rasr: u32) {
+    // SAFETY: Writing to MPU RBAR and RASR registers is safe when:
+    // 1. The MPU is disabled (CTRL.ENABLE=0), OR the caller holds exclusive
+    //    access to the MPU peripheral (guaranteed by the `&MPU` reference).
+    // 2. The RBAR value has the VALID bit set (bit 4) with a region number
+    //    in bits [3:0], selecting the region to configure.
+    // 3. The caller is responsible for issuing DSB/ISB barriers after all
+    //    region writes and before re-enabling the MPU.
+    // These invariants are upheld by `apply_partition_mpu`, which disables
+    // the MPU before calling this function and issues barriers afterward.
     unsafe {
         mpu.rbar.write(rbar);
         mpu.rasr.write(rasr);
