@@ -116,6 +116,11 @@ name = "read_kernel_mem"
 path = "examples/adversarial/read_kernel_mem.rs"
 required-features = ["qemu"]
 
+[[example]]
+name = "read_other_stack"
+path = "examples/adversarial/read_other_stack.rs"
+required-features = ["qemu"]
+
 [features]
 qemu = []
 dynamic-mpu = []
