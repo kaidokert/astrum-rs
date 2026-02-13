@@ -136,6 +136,11 @@ name = "write_mpu_regs"
 path = "examples/adversarial/write_mpu_regs.rs"
 required-features = ["qemu"]
 
+[[example]]
+name = "syscall_other_ptr"
+path = "examples/adversarial/syscall_other_ptr.rs"
+required-features = ["qemu"]
+
 [features]
 qemu = []
 dynamic-mpu = []
