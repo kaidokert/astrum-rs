@@ -1,4 +1,21 @@
 //! Static schedule table for ARINC 653-style partition scheduling.
+//!
+//! # State-Agnostic Scheduling
+//!
+//! The [`ScheduleTable`] returns partition IDs unconditionally, without
+//! checking [`PartitionState`](crate::partition::PartitionState). This is
+//! intentional: state checking happens in the harness/tick handler, not here.
+//!
+//! When a partition is in `Waiting` state:
+//! - The schedule table still returns that partition's ID on its slot
+//! - The harness triggers PendSV, which switches context to the partition
+//! - The partition immediately re-enters the kernel (yields) because it's
+//!   blocked on an IPC primitive
+//! - This "busy yield" continues until the blocking condition clears or
+//!   the slot expires
+//!
+//! This design keeps the scheduler simple and stateless. The harness and
+//! IPC primitives handle the complexity of blocked partitions.
 
 /// A single slot in the schedule table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,6 +354,121 @@ mod tests {
         assert_eq!(t2.force_advance(), None);
     }
 
+    // -------------------------------------------------------------------------
+    // State-agnostic scheduling tests
+    //
+    // These tests document that ScheduleTable returns partition IDs without
+    // checking PartitionState. The schedule table has no concept of partition
+    // state — it only knows partition indices and durations.
+    //
+    // State checking happens in the harness/tick handler, not here. When a
+    // partition is Waiting, the harness still switches to it; the partition
+    // immediately yields, creating a "busy yield" loop until unblocked or
+    // the slot expires.
+    //
+    // The macro below generates identical test logic for both the base case
+    // (Option<u8>) and dynamic-mpu (ScheduleEvent) return types.
+    // -------------------------------------------------------------------------
+
+    /// Generates state-agnostic scheduling tests parameterized by return type.
+    ///
+    /// - `$no_switch`: the "no context switch" value (None or ScheduleEvent::None)
+    /// - `$switch`: a macro-like pattern that takes a partition index and produces
+    ///   the "switch to partition N" value (Some(n) or ScheduleEvent::PartitionSwitch(n))
+    macro_rules! state_agnostic_tests {
+        ($no_switch:expr, $switch:ident) => {
+            /// Documents that ScheduleTable returns partition IDs unconditionally.
+            /// The table has no knowledge of partition state (Ready/Running/Waiting).
+            #[test]
+            fn schedule_returns_id_regardless_of_external_state() {
+                // Setup: 3 partitions, each gets 2 ticks
+                let mut t = table(&[(0, 2), (1, 2), (2, 2)]);
+
+                // Even if we imagine partition 1 is "Waiting", the schedule table
+                // doesn't know or care — it returns partition 1 when its slot comes.
+                assert_eq!(t.advance_tick(), $no_switch); // tick 1 of P0
+                assert_eq!(t.advance_tick(), $switch!(1)); // switch to P1 regardless of state
+                assert_eq!(t.current_partition(), Some(1));
+
+                // Continue: P1's slot runs to completion even if "Waiting"
+                assert_eq!(t.advance_tick(), $no_switch); // tick 1 of P1
+                assert_eq!(t.advance_tick(), $switch!(2)); // switch to P2
+
+                // And P2, then wrap back to P0
+                assert_eq!(t.advance_tick(), $no_switch);
+                assert_eq!(t.advance_tick(), $switch!(0));
+            }
+
+            /// Documents behavior when all partitions would be "Waiting" (hypothetically).
+            /// The schedule table continues cycling through slots, returning each
+            /// partition ID in turn. The harness handles the idle loop scenario.
+            #[test]
+            fn all_partitions_waiting_cycles_through_slots() {
+                // Setup: 2 partitions with 1-tick slots (fast cycling)
+                let mut t = table(&[(0, 1), (1, 1)]);
+
+                // Imagine both partitions are "Waiting". The schedule table doesn't
+                // know this — it just cycles: P0 -> P1 -> P0 -> P1 -> ...
+                // In the real harness, each switch triggers PendSV, the partition
+                // yields immediately (because it's blocked), and the cycle continues.
+                for _ in 0..10 {
+                    assert_eq!(t.advance_tick(), $switch!(1)); // P0 -> P1
+                    assert_eq!(t.advance_tick(), $switch!(0)); // P1 -> P0
+                }
+            }
+
+            /// Documents that force_advance (yield) also returns partition ID
+            /// unconditionally, without state checks.
+            #[test]
+            fn force_advance_returns_id_regardless_of_state() {
+                let mut t = table(&[(0, 5), (1, 5), (2, 5)]);
+
+                // Yield from P0 -> P1 (even if P1 is "Waiting")
+                assert_eq!(t.force_advance(), $switch!(1));
+
+                // Yield from P1 -> P2 (even if P2 is "Waiting")
+                assert_eq!(t.force_advance(), $switch!(2));
+
+                // Yield from P2 -> P0 (wraps around)
+                assert_eq!(t.force_advance(), $switch!(0));
+            }
+
+            /// Documents slot advancement behavior: ticks_remaining decrements
+            /// each tick, switch happens when exhausted, regardless of what the
+            /// harness does with the returned partition ID.
+            #[test]
+            fn slot_advancement_is_deterministic() {
+                let mut t = table(&[(0, 3), (1, 2)]);
+
+                // P0: 3 ticks
+                assert_eq!(t.advance_tick(), $no_switch); // tick 1
+                assert_eq!(t.advance_tick(), $no_switch); // tick 2
+                assert_eq!(t.advance_tick(), $switch!(1)); // tick 3, switch
+
+                // P1: 2 ticks
+                assert_eq!(t.advance_tick(), $no_switch); // tick 1
+                assert_eq!(t.advance_tick(), $switch!(0)); // tick 2, switch
+
+                // Back to P0, same pattern repeats forever
+                assert_eq!(t.advance_tick(), $no_switch);
+                assert_eq!(t.advance_tick(), $no_switch);
+                assert_eq!(t.advance_tick(), $switch!(1));
+            }
+        };
+    }
+
+    // Base case: advance_tick/force_advance return Option<u8>
+    #[cfg(not(feature = "dynamic-mpu"))]
+    mod state_agnostic {
+        use super::*;
+        macro_rules! switch {
+            ($n:expr) => {
+                Some($n)
+            };
+        }
+        state_agnostic_tests!(None, switch);
+    }
+
     #[cfg(feature = "dynamic-mpu")]
     mod dynamic_mpu_tests {
         use super::*;
@@ -492,6 +624,17 @@ mod tests {
             // ticks_remaining should be 2
             assert_eq!(t.advance_tick(), ScheduleEvent::None);
             assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
+        }
+
+        // State-agnostic tests via shared macro (see module-level comment)
+        mod state_agnostic {
+            use super::*;
+            macro_rules! switch {
+                ($n:expr) => {
+                    ScheduleEvent::PartitionSwitch($n)
+                };
+            }
+            state_agnostic_tests!(ScheduleEvent::None, switch);
         }
     }
 }
