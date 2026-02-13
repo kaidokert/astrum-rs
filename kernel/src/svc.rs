@@ -1015,7 +1015,7 @@ where
                         }
                         Ok(SendQueuingOutcome::SenderBlocked { .. }) => {
                             try_transition(pt, self.current_partition, PartitionState::Waiting);
-                            0
+                            self.trigger_deschedule()
                         }
                         Err(_) => SvcError::InvalidResource.to_u32(),
                     }
@@ -2603,6 +2603,31 @@ mod tests {
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
         // Partition should NOT be in Waiting (no blocking with original handler)
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Running);
+    }
+
+    #[test]
+    fn queuing_send_timed_blocks_sets_yield_requested() {
+        use crate::syscall::SYS_QUEUING_SEND_TIMED;
+        let (mut k, mut t) = kernel(0, 0, 0);
+        let (s, d) = connected_send_pair(&mut k);
+        // Fill the destination queue to capacity (QD=4)
+        for _ in 0..4 {
+            k.queuing.get_mut(d).unwrap().inject_message(1, &[0x42]);
+        }
+        let ptr = low32_buf(0);
+        let r2 = pack_r2(50, 1);
+        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
+        assert!(
+            !k.yield_requested,
+            "yield_requested should be false before blocking send"
+        );
+        unsafe { k.dispatch(&mut ef, &mut t) };
+        assert_eq!(ef.r0, 0);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert!(
+            k.yield_requested,
+            "yield_requested should be true after blocking send"
+        );
     }
 
     // ---- hw_uart integration tests ----
