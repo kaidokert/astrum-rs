@@ -953,7 +953,7 @@ where
                                     match self.dev_wait_queue.block_reader(pid, expiry) {
                                         Ok(()) => {
                                             try_transition(pt, pid, PartitionState::Waiting);
-                                            0
+                                            self.trigger_deschedule()
                                         }
                                         Err(_) => SvcError::WaitQueueFull.to_u32(),
                                     }
@@ -2032,6 +2032,29 @@ mod tests {
         assert_eq!(ef.r0, 0);
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
         assert_eq!(k.dev_wait_queue.len(), 1);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_read_timed_blocking_sets_yield_requested() {
+        use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
+        let (registry, _, _) = default_registry();
+        let (mut k, mut t) = kernel_with_registry(0, 0, 0, registry);
+        // Open device 0
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        unsafe { k.dispatch(&mut ef, &mut t) };
+        assert_eq!(ef.r0, 0);
+        let ptr = low32_buf(0);
+        // No RX data; timeout>0 should block and trigger deschedule.
+        assert!(!k.yield_requested);
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 50, ptr as u32);
+        unsafe { k.dispatch(&mut ef, &mut t) };
+        assert_eq!(ef.r0, 0);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert!(
+            k.yield_requested,
+            "yield_requested should be true after blocking read"
+        );
     }
 
     #[cfg(feature = "dynamic-mpu")]
