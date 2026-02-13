@@ -524,6 +524,19 @@ where
         self.hw_uart = Some(backend);
     }
 
+    /// Trigger a deschedule by setting `yield_requested` and invoking PendSV.
+    ///
+    /// This centralizes the deschedule logic that both `SYS_YIELD` and
+    /// blocking syscalls need. Sets `self.yield_requested = true` so the
+    /// harness can force-advance the schedule, then calls `handle_yield()`
+    /// to pend the PendSV exception.
+    ///
+    /// Returns 0 on success (matching `handle_yield` semantics).
+    pub fn trigger_deschedule(&mut self) -> u32 {
+        self.yield_requested = true;
+        handle_yield()
+    }
+
     /// Look up a virtual device by `device_id` and invoke `f` with a mutable
     /// reference to the device (as a trait object) and the current partition.
     ///
@@ -613,10 +626,7 @@ where
         pt: &mut PartitionTable<{ C::N }>,
     ) {
         frame.r0 = match SyscallId::from_u32(frame.r0) {
-            Some(SyscallId::Yield) => {
-                self.yield_requested = true;
-                handle_yield()
-            }
+            Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::EventWait) => events::event_wait(pt, frame.r1 as usize, frame.r2),
             Some(SyscallId::EventSet) => events::event_set(pt, frame.r1 as usize, frame.r2),
             Some(SyscallId::EventClear) => events::event_clear(pt, frame.r1 as usize, frame.r2),
@@ -1299,6 +1309,15 @@ mod tests {
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         unsafe { k.dispatch(&mut ef, &mut t) };
         assert!(!k.yield_requested);
+    }
+
+    #[test]
+    fn trigger_deschedule_sets_yield_requested() {
+        let (mut k, _t) = kernel(0, 0, 0);
+        assert!(!k.yield_requested);
+        let ret = k.trigger_deschedule();
+        assert_eq!(ret, 0);
+        assert!(k.yield_requested);
     }
 
     #[test]
