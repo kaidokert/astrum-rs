@@ -459,6 +459,119 @@ macro_rules! define_unified_kernel {
             });
             $crate::svc::set_dispatch_hook(dispatch_hook);
         }
+
+        /// Helper to access KERNEL within an interrupt-free critical section.
+        ///
+        /// Consolidates the repeated pattern of `interrupt::free` + `borrow` +
+        /// `as_ref`/`as_mut` into a single abstraction for PendSV accessor functions.
+        ///
+        /// Returns `None` if KERNEL is not initialized; otherwise passes a reference
+        /// to the closure and returns its result wrapped in `Some`.
+        // TODO: Reviewer feedback suggests a cleaner abstraction layer for all
+        // C-ABI shims that return raw pointers to kernel state (issue #3).
+        #[inline]
+        fn with_kernel<T, F: FnOnce(&$crate::svc::Kernel<$Config>) -> T>(f: F) -> Option<T> {
+            ::cortex_m::interrupt::free(|cs| {
+                KERNEL.borrow(cs).borrow().as_ref().map(f)
+            })
+        }
+
+        /// Mutable variant of [`with_kernel`] for accessors that need `&mut`.
+        #[inline]
+        fn with_kernel_mut<T, F: FnOnce(&mut $crate::svc::Kernel<$Config>) -> T>(f: F) -> Option<T> {
+            ::cortex_m::interrupt::free(|cs| {
+                KERNEL.borrow(cs).borrow_mut().as_mut().map(f)
+            })
+        }
+
+        /// Returns the current partition index from the Kernel struct.
+        ///
+        /// Called by the Rust shim from PendSV assembly to read context-switch
+        /// state. Uses `interrupt::free` to safely access KERNEL.
+        ///
+        /// Returns `u32::MAX` if KERNEL is not initialized.
+        #[cfg_attr(not(test), no_mangle)]
+        #[allow(dead_code)] // Called from assembly, not Rust
+        extern "C" fn get_current_partition() -> u32 {
+            with_kernel(|k| k.current_partition as u32).unwrap_or(u32::MAX)
+        }
+
+        /// Returns the next partition index from the Kernel struct.
+        ///
+        /// Called by the Rust shim from PendSV assembly to read context-switch
+        /// state. Uses `interrupt::free` to safely access KERNEL.
+        ///
+        /// Returns `u32::MAX` if KERNEL is not initialized.
+        #[cfg_attr(not(test), no_mangle)]
+        #[allow(dead_code)] // Called from assembly, not Rust
+        extern "C" fn get_next_partition() -> u32 {
+            with_kernel(|k| k.next_partition as u32).unwrap_or(u32::MAX)
+        }
+
+        /// Returns a pointer to the partition_sp array in the Kernel struct.
+        ///
+        /// Called by the Rust shim from PendSV assembly to read/write saved
+        /// stack pointers during context switch. Uses `interrupt::free` to
+        /// safely access KERNEL.
+        ///
+        /// Returns null pointer if KERNEL is not initialized.
+        ///
+        /// # Safety
+        ///
+        /// The caller must ensure that:
+        /// - The pointer is only used while interrupts are disabled or from
+        ///   PendSV (lowest priority exception that cannot be preempted).
+        /// - Array access is within bounds (0..N where N is the partition count).
+        #[cfg_attr(not(test), no_mangle)]
+        #[allow(dead_code)] // Called from assembly, not Rust
+        extern "C" fn get_partition_sp_ptr() -> *mut u32 {
+            with_kernel_mut(|k| k.partition_sp.as_mut_ptr()).unwrap_or(::core::ptr::null_mut())
+        }
+
+        /// Returns the current partition index from the Kernel struct.
+        /// Called by PendSV shim. Returns u32::MAX if uninitialized.
+        #[cfg_attr(not(test), no_mangle)]
+        #[allow(dead_code)]
+        extern "C" fn get_current_partition() -> u32 {
+            ::cortex_m::interrupt::free(|cs| {
+                KERNEL
+                    .borrow(cs)
+                    .borrow()
+                    .as_ref()
+                    .map(|k| k.current_partition as u32)
+                    .unwrap_or(u32::MAX)
+            })
+        }
+
+        /// Returns the next partition index from the Kernel struct.
+        /// Called by PendSV shim. Returns u32::MAX if uninitialized.
+        #[cfg_attr(not(test), no_mangle)]
+        #[allow(dead_code)]
+        extern "C" fn get_next_partition() -> u32 {
+            ::cortex_m::interrupt::free(|cs| {
+                KERNEL
+                    .borrow(cs)
+                    .borrow()
+                    .as_ref()
+                    .map(|k| k.next_partition as u32)
+                    .unwrap_or(u32::MAX)
+            })
+        }
+
+        /// Returns a pointer to the partition_sp array.
+        /// Called by PendSV shim. Returns null if uninitialized.
+        #[cfg_attr(not(test), no_mangle)]
+        #[allow(dead_code)]
+        extern "C" fn get_partition_sp_ptr() -> *mut u32 {
+            ::cortex_m::interrupt::free(|cs| {
+                KERNEL
+                    .borrow(cs)
+                    .borrow_mut()
+                    .as_mut()
+                    .map(|k| k.partition_sp.as_mut_ptr())
+                    .unwrap_or(::core::ptr::null_mut())
+            })
+        }
     };
 }
 
@@ -4374,6 +4487,94 @@ mod tests {
                 let _: &cortex_m::interrupt::Mutex<
                     core::cell::RefCell<Option<Kernel<UnifiedTestConfig>>>,
                 > = &KERNEL;
+            }
+
+            #[test]
+            fn macro_generates_get_current_partition() {
+                // Verify get_current_partition exists with extern "C" ABI
+                // and returns u32.
+                let _: extern "C" fn() -> u32 = get_current_partition;
+            }
+
+            #[test]
+            fn macro_generates_get_next_partition() {
+                // Verify get_next_partition exists with extern "C" ABI
+                // and returns u32.
+                let _: extern "C" fn() -> u32 = get_next_partition;
+            }
+
+            #[test]
+            fn macro_generates_get_partition_sp_ptr() {
+                // Verify get_partition_sp_ptr exists with extern "C" ABI
+                // and returns *mut u32.
+                let _: extern "C" fn() -> *mut u32 = get_partition_sp_ptr;
+            }
+
+            #[test]
+            fn get_current_partition_returns_max_when_uninitialized() {
+                // When KERNEL is None, should return u32::MAX as sentinel.
+                // Note: KERNEL starts as None (RefCell<Option<...>>), so
+                // without calling store_kernel, it remains uninitialized.
+                // We use a fresh module scope, so KERNEL is None.
+                let result = get_current_partition();
+                assert_eq!(result, u32::MAX);
+            }
+
+            #[test]
+            fn get_next_partition_returns_max_when_uninitialized() {
+                let result = get_next_partition();
+                assert_eq!(result, u32::MAX);
+            }
+
+            #[test]
+            fn get_partition_sp_ptr_returns_null_when_uninitialized() {
+                let result = get_partition_sp_ptr();
+                assert!(result.is_null());
+            }
+        }
+
+        /// Functional tests for PendSV accessor functions with initialized kernel.
+        mod pendsv_accessor_functional_tests {
+            use super::*;
+
+            // Separate module to get a fresh KERNEL static.
+            crate::define_unified_kernel!(UnifiedTestConfig);
+
+            #[test]
+            fn accessors_return_correct_values_after_initialization() {
+                // Create a kernel with known partition state.
+                let mut kernel = Kernel::<UnifiedTestConfig>::default();
+
+                // Set known values for the fields accessed by PendSV.
+                kernel.current_partition = 1;
+                kernel.next_partition = 0;
+                kernel.partition_sp[0] = 0x2000_1000;
+                kernel.partition_sp[1] = 0x2000_2000;
+
+                // Store the kernel (initializes KERNEL static).
+                cortex_m::interrupt::free(|cs| {
+                    KERNEL.borrow(cs).replace(Some(kernel));
+                });
+
+                // Now test that accessors return the expected values.
+                assert_eq!(get_current_partition(), 1);
+                assert_eq!(get_next_partition(), 0);
+
+                // Verify partition_sp pointer is valid and points to correct data.
+                let sp_ptr = get_partition_sp_ptr();
+                assert!(!sp_ptr.is_null());
+
+                // SAFETY: We just verified the pointer is non-null and we know
+                // the kernel is initialized with our test data.
+                unsafe {
+                    assert_eq!(*sp_ptr, 0x2000_1000); // partition_sp[0]
+                    assert_eq!(*sp_ptr.add(1), 0x2000_2000); // partition_sp[1]
+                }
+
+                // Clean up: reset KERNEL to None for other tests.
+                cortex_m::interrupt::free(|cs| {
+                    KERNEL.borrow(cs).replace(None);
+                });
             }
         }
 
