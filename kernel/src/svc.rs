@@ -591,6 +591,8 @@ where
     /// pointers against both static MPU regions and dynamic windows.
     #[cfg(feature = "dynamic-mpu")]
     pub dynamic_strategy: crate::mpu_strategy::DynamicStrategy,
+    /// Saved stack pointers for each partition, initialized from stack addresses.
+    pub partition_sp: [u32; C::N],
 }
 
 /// Helper function to align an address down to an 8-byte boundary.
@@ -701,6 +703,11 @@ where
                 return Err(ConfigError::PartitionTableFull);
             }
         }
+        // Build partition_sp array from partition stack pointers.
+        let mut partition_sp = [0u32; C::N];
+        for (i, pcb) in partitions.iter().enumerate() {
+            partition_sp[i] = pcb.stack_pointer();
+        }
         Ok(Self {
             partitions,
             schedule,
@@ -728,6 +735,7 @@ where
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
+            partition_sp,
         })
     }
 
@@ -768,6 +776,7 @@ where
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
+            partition_sp: [0u32; C::N],
         }
     }
 
@@ -1688,6 +1697,7 @@ mod tests {
             registry,
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
+            partition_sp: [0u32; 4],
         };
         for _ in 0..sem_count {
             k.semaphores.add(Semaphore::new(1, 2)).unwrap();
@@ -1735,6 +1745,7 @@ mod tests {
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
+            partition_sp: [0u32; 4],
         };
         // Add semaphores
         for _ in 0..sem_count {
@@ -1782,6 +1793,46 @@ mod tests {
         let ret = k.trigger_deschedule();
         assert_eq!(ret, 0);
         assert!(k.yield_requested);
+    }
+
+    #[test]
+    fn partition_sp_initialized_from_stack_pointers() {
+        use crate::partition::PartitionConfig;
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 10)).unwrap();
+        schedule.add(ScheduleEntry::new(1, 10)).unwrap();
+        let configs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0000,
+                stack_base: 0x2000_0000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            },
+            PartitionConfig {
+                id: 1,
+                entry_point: 0x0800_1000,
+                stack_base: 0x2000_1000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+            },
+        ];
+        #[cfg(feature = "dynamic-mpu")]
+        let registry = crate::virtual_device::DeviceRegistry::new();
+        let k = Kernel::<TestConfig>::new(
+            schedule,
+            &configs,
+            #[cfg(feature = "dynamic-mpu")]
+            registry,
+        )
+        .unwrap();
+        // Verify partition_sp is initialized from PCB stack pointers.
+        // stack_pointer = align_down_8(stack_base + stack_size).
+        assert_eq!(k.partition_sp[0], 0x2000_0000 + 1024);
+        assert_eq!(k.partition_sp[1], 0x2000_1000 + 1024);
+        // Unused slots are zero-initialized.
+        assert_eq!(k.partition_sp[2], 0);
+        assert_eq!(k.partition_sp[3], 0);
     }
 
     #[test]
@@ -2209,6 +2260,10 @@ mod tests {
 
     // ---- set_dispatch_hook / Mutex-based hook tests ----
 
+    /// Mutex to serialize tests that manipulate the global `SVC_DISPATCH_HOOK`.
+    /// Without this, parallel test execution can cause `RefCell` borrow conflicts.
+    static HOOK_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Reset the hook to `None` inside a critical section (test helper).
     fn clear_dispatch_hook() {
         with_cs(|cs| {
@@ -2223,12 +2278,14 @@ mod tests {
 
     #[test]
     fn dispatch_hook_initially_none() {
+        let _guard = HOOK_TEST_MUTEX.lock().unwrap();
         clear_dispatch_hook();
         assert!(read_dispatch_hook().is_none());
     }
 
     #[test]
     fn set_dispatch_hook_installs_hook() {
+        let _guard = HOOK_TEST_MUTEX.lock().unwrap();
         unsafe extern "C" fn my_hook(_: &mut ExceptionFrame) {}
         clear_dispatch_hook();
         set_dispatch_hook(my_hook);
@@ -2238,6 +2295,7 @@ mod tests {
 
     #[test]
     fn dispatch_svc_uses_hook_when_set() {
+        let _guard = HOOK_TEST_MUTEX.lock().unwrap();
         /// A hook that sets r0 to a sentinel value (0xCAFE).
         unsafe extern "C" fn sentinel_hook(frame: &mut ExceptionFrame) {
             frame.r0 = 0xCAFE;
@@ -2253,6 +2311,7 @@ mod tests {
 
     #[test]
     fn dispatch_svc_falls_through_without_hook() {
+        let _guard = HOOK_TEST_MUTEX.lock().unwrap();
         clear_dispatch_hook();
         let mut ef = frame(SYS_YIELD, 0, 0);
         // SAFETY: ef is a valid ExceptionFrame on the stack.
