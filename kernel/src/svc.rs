@@ -68,18 +68,21 @@ impl SvcError {
     }
 }
 /// Check that a user-space pointer `[ptr, ptr+len)` lies entirely within the
-/// MPU data region of partition `pid`.
+/// MPU data region OR the stack region of partition `pid`.
 ///
 /// Returns `true` when **all** of the following hold:
 /// 1. `pid` refers to an existing partition in `partitions`.
-/// 2. `ptr >= region_base`.
-/// 3. `ptr + len <= region_base + region_size` (the end is inclusive of the
-///    last valid byte, so `ptr + len` may equal `base + size`).
-/// 4. `ptr + len` does not overflow `u32`.
+/// 2. `ptr + len` does not overflow `u32`.
+/// 3. The pointer range `[ptr, ptr+len)` lies entirely within EITHER:
+///    - The MPU data region (`mpu_region.base()`, `mpu_region.size()`), OR
+///    - The stack region (`stack_base`, `stack_size`).
+///
+/// A pointer that spans across both regions (partially in data, partially in
+/// stack) is **invalid** — the entire range must fit within a single region.
 ///
 /// A zero-length range (`len == 0`) is considered valid as long as `ptr`
-/// itself falls within `[base, base + size]`, but the caller should avoid
-/// dereferencing such a pointer.
+/// itself falls within `[base, base + size]` of either region, but the caller
+/// should avoid dereferencing such a pointer.
 pub fn validate_user_ptr<const N: usize>(
     partitions: &PartitionTable<N>,
     pid: u8,
@@ -90,9 +93,6 @@ pub fn validate_user_ptr<const N: usize>(
         Some(p) => p,
         None => return false,
     };
-    let region = pcb.mpu_region();
-    let base = region.base();
-    let size = region.size();
 
     // Compute end of the user range with overflow check.
     let end = match ptr.checked_add(len as u32) {
@@ -100,11 +100,22 @@ pub fn validate_user_ptr<const N: usize>(
         None => return false,
     };
 
-    // MPU region validity (base + size not overflowing) is enforced at
-    // region creation time, so a simple add is correct here.
-    let region_end = base + size;
+    // Helper: check if [ptr, end) lies entirely within [base, base+size].
+    // Region validity (base + size not overflowing) is enforced at creation time.
+    let in_region = |base: u32, size: u32| -> bool {
+        let region_end = base + size;
+        ptr >= base && end <= region_end
+    };
 
-    ptr >= base && end <= region_end
+    // Check MPU data region.
+    let data_region = pcb.mpu_region();
+    let in_data = in_region(data_region.base(), data_region.size());
+
+    // Check stack region.
+    let (stack_base, stack_size) = pcb.stack_region();
+    let in_stack = in_region(stack_base, stack_size);
+
+    in_data || in_stack
 }
 
 /// Validate a user pointer and, on success, execute the body expression.
@@ -2596,6 +2607,73 @@ mod tests {
         let t = ptr_table(0x2000_0000, 4096);
         // Starts inside but extends 1 byte past the region.
         assert!(!validate_user_ptr(&t, 0, 0x2000_0FF0, 17));
+    }
+
+    /// Build a partition table with separate (non-overlapping) data and stack regions.
+    /// - Stack region: [stack_base, stack_base + stack_size)
+    /// - Data region:  [data_base, data_base + data_size)
+    fn ptr_table_separate_regions(
+        stack_base: u32,
+        stack_size: u32,
+        data_base: u32,
+        data_size: u32,
+    ) -> PartitionTable<4> {
+        let mut t = PartitionTable::new();
+        t.add(PartitionControlBlock::new(
+            0,
+            0x0800_0000,             // entry_point
+            stack_base,              // stack_base
+            stack_base + stack_size, // stack_pointer (top of stack)
+            MpuRegion::new(data_base, data_size, 0),
+        ))
+        .unwrap();
+        t
+    }
+
+    #[test]
+    fn validate_ptr_in_stack_region_passes() {
+        // Stack at 0x2000_0000..0x2000_0400 (1KB)
+        // Data at  0x2000_1000..0x2000_2000 (4KB, non-overlapping)
+        let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_1000, 0x1000);
+        // Pointer entirely within stack region should pass.
+        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 16));
+        assert!(validate_user_ptr(&t, 0, 0x2000_0100, 64));
+        // Exact end of stack region.
+        assert!(validate_user_ptr(&t, 0, 0x2000_03F0, 16));
+    }
+
+    #[test]
+    fn validate_ptr_spanning_stack_and_data_fails() {
+        // Stack at 0x2000_0000..0x2000_0400
+        // Data at  0x2000_0400..0x2000_0800 (adjacent, no overlap)
+        let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_0400, 0x400);
+        // Pointer starts in stack, ends in data region — must fail.
+        assert!(!validate_user_ptr(&t, 0, 0x2000_0300, 0x200));
+        // Pointer starts in data, ends past data — must fail.
+        assert!(!validate_user_ptr(&t, 0, 0x2000_0700, 0x200));
+    }
+
+    #[test]
+    fn validate_ptr_in_data_region_with_separate_stack() {
+        // Stack at 0x2000_0000..0x2000_0400
+        // Data at  0x2000_1000..0x2000_2000 (non-overlapping)
+        let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_1000, 0x1000);
+        // Pointer entirely within data region should pass.
+        assert!(validate_user_ptr(&t, 0, 0x2000_1000, 16));
+        assert!(validate_user_ptr(&t, 0, 0x2000_1800, 64));
+    }
+
+    #[test]
+    fn validate_ptr_outside_both_regions_fails() {
+        // Stack at 0x2000_0000..0x2000_0400
+        // Data at  0x2000_1000..0x2000_2000
+        let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_1000, 0x1000);
+        // Gap between stack and data (0x2000_0400..0x2000_1000).
+        assert!(!validate_user_ptr(&t, 0, 0x2000_0500, 16));
+        // Before stack.
+        assert!(!validate_user_ptr(&t, 0, 0x1FFF_FF00, 16));
+        // After data.
+        assert!(!validate_user_ptr(&t, 0, 0x2000_2000, 16));
     }
 
     // ---- Pointer validation rejection via Kernel::dispatch ----
