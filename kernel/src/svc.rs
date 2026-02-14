@@ -568,7 +568,15 @@ where
             }
         }
         let mut partitions = PartitionTable::new();
-        for c in configs {
+        for (i, c) in configs.iter().enumerate() {
+            // Enforce contiguous, zero-based IDs that match array indices.
+            if c.id as usize != i {
+                return Err(ConfigError::PartitionIdMismatch {
+                    index: i,
+                    expected_id: i as u8,
+                    actual_id: c.id,
+                });
+            }
             c.validate()?;
             let sp = align_down_8(c.stack_base.wrapping_add(c.stack_size));
             let pcb =
@@ -3462,6 +3470,114 @@ mod tests {
             .unwrap();
         assert_eq!(k.partitions.len(), 1);
         assert_eq!(k.active_partition, None);
+    }
+
+    /// Helper to call `Kernel::new` with correct feature-flag arguments.
+    fn try_kernel_new(
+        schedule: ScheduleTable<4>,
+        configs: &[PartitionConfig],
+    ) -> Result<Kernel<TestConfig>, ConfigError> {
+        #[cfg(not(feature = "dynamic-mpu"))]
+        {
+            Kernel::<TestConfig>::new(schedule, configs)
+        }
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            Kernel::<TestConfig>::new(
+                schedule,
+                configs,
+                crate::virtual_device::DeviceRegistry::new(),
+            )
+        }
+    }
+
+    #[test]
+    fn kernel_new_rejects_partition_id_mismatch() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+
+        // Config where id=5 is at index 0 (mismatch)
+        let bad_cfg = PartitionConfig {
+            id: 5, // should be 0
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+        };
+
+        let result = try_kernel_new(s, &[bad_cfg]);
+
+        assert!(matches!(
+            result,
+            Err(ConfigError::PartitionIdMismatch {
+                index: 0,
+                expected_id: 0,
+                actual_id: 5,
+            })
+        ));
+    }
+
+    #[test]
+    fn kernel_new_rejects_second_partition_id_mismatch() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        s.add(ScheduleEntry::new(1, 100)).unwrap();
+
+        let cfg0 = PartitionConfig {
+            id: 0, // correct
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+        };
+        let cfg1 = PartitionConfig {
+            id: 3, // should be 1
+            entry_point: 0x0800_1000,
+            stack_base: 0x2000_1000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+        };
+
+        let result = try_kernel_new(s, &[cfg0, cfg1]);
+
+        assert!(matches!(
+            result,
+            Err(ConfigError::PartitionIdMismatch {
+                index: 1,
+                expected_id: 1,
+                actual_id: 3,
+            })
+        ));
+    }
+
+    #[test]
+    fn kernel_new_accepts_matching_partition_ids() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        s.add(ScheduleEntry::new(1, 100)).unwrap();
+
+        let cfgs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0000,
+                stack_base: 0x2000_0000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            },
+            PartitionConfig {
+                id: 1,
+                entry_point: 0x0800_1000,
+                stack_base: 0x2000_1000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+            },
+        ];
+
+        let k = try_kernel_new(s, &cfgs).unwrap();
+
+        assert_eq!(k.partitions.len(), 2);
+        assert_eq!(k.partitions.get(0).unwrap().id(), 0);
+        assert_eq!(k.partitions.get(1).unwrap().id(), 1);
     }
 
     // -------------------------------------------------------------------------
