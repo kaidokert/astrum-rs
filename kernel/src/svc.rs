@@ -3603,6 +3603,127 @@ mod tests {
         assert_eq!(k.partitions.get(1).unwrap().id(), 1);
     }
 
+    #[test]
+    fn kernel_new_empty_configs_with_schedule_fails() {
+        // Schedule references partition 0, but no partitions provided
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+
+        let result = try_kernel_new(s, &[]);
+
+        assert!(matches!(
+            result,
+            Err(ConfigError::ScheduleIndexOutOfBounds {
+                entry_index: 0,
+                partition_index: 0,
+                num_partitions: 0,
+            })
+        ));
+    }
+
+    #[test]
+    fn kernel_new_single_partition_id_zero_succeeds() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+
+        let cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+        };
+
+        let k = try_kernel_new(s, &[cfg]).unwrap();
+
+        assert_eq!(k.partitions.len(), 1);
+        assert_eq!(k.partitions.get(0).unwrap().id(), 0);
+    }
+
+    #[test]
+    fn kernel_new_three_contiguous_partitions_succeeds() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        s.add(ScheduleEntry::new(1, 100)).unwrap();
+        s.add(ScheduleEntry::new(2, 100)).unwrap();
+
+        let cfgs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0000,
+                stack_base: 0x2000_0000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            },
+            PartitionConfig {
+                id: 1,
+                entry_point: 0x0800_1000,
+                stack_base: 0x2000_1000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+            },
+            PartitionConfig {
+                id: 2,
+                entry_point: 0x0800_2000,
+                stack_base: 0x2000_2000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
+            },
+        ];
+
+        let k = try_kernel_new(s, &cfgs).unwrap();
+
+        assert_eq!(k.partitions.len(), 3);
+        assert_eq!(k.partitions.get(0).unwrap().id(), 0);
+        assert_eq!(k.partitions.get(1).unwrap().id(), 1);
+        assert_eq!(k.partitions.get(2).unwrap().id(), 2);
+    }
+
+    #[test]
+    fn kernel_new_swapped_partition_ids_fails() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        s.add(ScheduleEntry::new(1, 100)).unwrap();
+        s.add(ScheduleEntry::new(2, 100)).unwrap();
+
+        // Three partitions with non-sequential ID in middle: [id:0, id:2, id:1]
+        let cfgs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0000,
+                stack_base: 0x2000_0000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            },
+            PartitionConfig {
+                id: 2, // should be 1
+                entry_point: 0x0800_1000,
+                stack_base: 0x2000_1000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+            },
+            PartitionConfig {
+                id: 1, // should be 2
+                entry_point: 0x0800_2000,
+                stack_base: 0x2000_2000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
+            },
+        ];
+
+        let result = try_kernel_new(s, &cfgs);
+
+        // Mismatch at index 1: config[1].id=2 but expected 1
+        assert!(matches!(
+            result,
+            Err(ConfigError::PartitionIdMismatch {
+                index: 1,
+                expected_id: 1,
+                actual_id: 2,
+            })
+        ));
+    }
+
     // -------------------------------------------------------------------------
     // Schedule advance and accessor tests
     // -------------------------------------------------------------------------
