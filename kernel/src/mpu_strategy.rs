@@ -171,6 +171,25 @@ impl DynamicStrategy {
         }
     }
 
+    /// Return (base, size) pairs for all MPU windows currently assigned to
+    /// the given partition.
+    ///
+    /// Iterates over all four dynamic slots (R4–R7) and collects descriptors
+    /// where `owner == partition_id`. Returns an empty vector for partitions
+    /// with no assigned windows.
+    pub fn accessible_regions(&self, partition_id: u8) -> heapless::Vec<(u32, u32), 4> {
+        with_cs(|cs| {
+            let slots = self.slots.borrow(cs);
+            let slots = slots.borrow();
+            slots
+                .iter()
+                .flatten()
+                .filter(|desc| desc.owner == partition_id)
+                .map(|desc| (desc.base, desc.size))
+                .collect()
+        })
+    }
+
     /// Program regions R4-R7 into the MPU hardware.
     ///
     /// Uses [`mpu::configure_region`] to write each of the four dynamic
@@ -1092,5 +1111,55 @@ mod tests {
             ds.add_window(0x2004_0000, 256, 0, 1),
             Err(MpuError::SlotExhausted)
         );
+    }
+
+    // ------------------------------------------------------------------
+    // accessible_regions
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn accessible_regions_multiple_slots_same_owner() {
+        let ds = DynamicStrategy::new();
+        let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(1, &[(rbar, rasr)]).unwrap();
+        ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
+        ds.add_window(0x2002_0000, 512, 0, 1).unwrap();
+
+        let result = ds.accessible_regions(1);
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&(0x2000_0000, 4096)));
+        assert!(result.contains(&(0x2001_0000, 256)));
+        assert!(result.contains(&(0x2002_0000, 512)));
+    }
+
+    #[test]
+    fn accessible_regions_mixed_owners() {
+        let ds = DynamicStrategy::new();
+        let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rbar, rasr)]).unwrap();
+        ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
+        ds.add_window(0x2002_0000, 512, 0, 0).unwrap();
+        ds.add_window(0x2003_0000, 1024, 0, 2).unwrap();
+
+        let p0 = ds.accessible_regions(0);
+        assert_eq!(p0.len(), 2);
+        assert!(p0.contains(&(0x2000_0000, 4096)));
+        assert!(p0.contains(&(0x2002_0000, 512)));
+
+        assert_eq!(ds.accessible_regions(1).len(), 1);
+        assert_eq!(ds.accessible_regions(2).len(), 1);
+    }
+
+    #[test]
+    fn accessible_regions_no_owners_returns_empty() {
+        let ds = DynamicStrategy::new();
+        // Empty strategy returns empty for any partition.
+        assert!(ds.accessible_regions(0).is_empty());
+        assert!(ds.accessible_regions(255).is_empty());
+
+        // With windows present but different owner.
+        ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
+        assert!(ds.accessible_regions(0).is_empty());
+        assert!(ds.accessible_regions(2).is_empty());
     }
 }
