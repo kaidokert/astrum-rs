@@ -1416,6 +1416,29 @@ fn handle_yield() -> u32 {
 
 #[cfg(test)]
 mod tests {
+    //! # Safety
+    //!
+    //! All `unsafe { k.dispatch(&mut ef) }` calls in this test module share the
+    //! same safety justification:
+    //!
+    //! 1. **ExceptionFrame construction**: The `frame()` test helper constructs
+    //!    `ExceptionFrame` instances with valid register values. Unlike hardware
+    //!    exception entry, these are not actual stacked registers, but the
+    //!    dispatch logic only reads/writes the r0-r3 fields which are always
+    //!    initialized.
+    //!
+    //! 2. **Kernel construction**: The `kernel()` and `kernel_with_registry()`
+    //!    helpers construct `Kernel` instances with properly initialized
+    //!    partition tables (via `tbl()`), schedule tables, and resource pools.
+    //!    All partitions have valid MPU regions and are transitioned to Running
+    //!    state before dispatch.
+    //!
+    //! 3. **Host-mode pointer validation**: Tests run on the host (not target
+    //!    hardware) where `validate_user_ptr` checks pass for any pointer within
+    //!    the partition's configured MPU region. Tests that exercise pointer
+    //!    validation use `mmap` to allocate memory at addresses matching the
+    //!    partition's MPU region, ensuring the kernel's bounds checks succeed.
+
     use super::*;
     use crate::config::KernelConfig;
     use crate::message::MessageQueue;
