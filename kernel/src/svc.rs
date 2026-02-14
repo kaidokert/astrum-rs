@@ -593,6 +593,12 @@ where
     pub dynamic_strategy: crate::mpu_strategy::DynamicStrategy,
     /// Saved stack pointers for each partition, initialized from stack addresses.
     pub partition_sp: [u32; C::N],
+    /// Next partition to switch to, set by `advance_schedule_tick`.
+    ///
+    /// The harness macros currently write to the static `NEXT_PARTITION` symbol
+    /// for PendSV to read. This field allows Rust code to track the value
+    /// without relying on the assembly-level static.
+    pub next_partition: u8,
 }
 
 /// Helper function to align an address down to an 8-byte boundary.
@@ -736,6 +742,7 @@ where
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
             partition_sp,
+            next_partition: 0,
         })
     }
 
@@ -777,6 +784,7 @@ where
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
             partition_sp: [0u32; C::N],
+            next_partition: 0,
         }
     }
 
@@ -1380,25 +1388,28 @@ where
     // -------------------------------------------------------------------------
 
     /// Advance the schedule table by one tick. If a partition switch occurs,
-    /// updates `active_partition` and returns `Some(partition_id)`.
+    /// updates `active_partition` and `next_partition`, returns `Some(partition_id)`.
     #[cfg(not(feature = "dynamic-mpu"))]
     pub fn advance_schedule_tick(&mut self) -> Option<u8> {
         self.tick.increment();
         let next = self.schedule.advance_tick();
         if let Some(pid) = next {
             self.active_partition = Some(pid);
+            self.next_partition = pid;
         }
         next
     }
 
     /// Advance the schedule table by one tick. Returns a [`ScheduleEvent`]
     /// that distinguishes partition switches from system window slots.
+    /// Updates `next_partition` on partition switches.
     #[cfg(feature = "dynamic-mpu")]
     pub fn advance_schedule_tick(&mut self) -> ScheduleEvent {
         self.tick.increment();
         let event = self.schedule.advance_tick();
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             self.active_partition = Some(pid);
+            self.next_partition = pid;
         }
         event
     }
@@ -1698,6 +1709,7 @@ mod tests {
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
             partition_sp: [0u32; 4],
+            next_partition: 0,
         };
         for _ in 0..sem_count {
             k.semaphores.add(Semaphore::new(1, 2)).unwrap();
@@ -1746,6 +1758,7 @@ mod tests {
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
             partition_sp: [0u32; 4],
+            next_partition: 0,
         };
         // Add semaphores
         for _ in 0..sem_count {
@@ -4071,6 +4084,12 @@ mod tests {
         assert_eq!(k.schedule().len(), 2);
     }
 
+    #[test]
+    fn next_partition_initialized_to_zero() {
+        let k = kernel_with_schedule();
+        assert_eq!(k.next_partition, 0);
+    }
+
     #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn advance_schedule_tick_updates_active_partition() {
@@ -4084,6 +4103,30 @@ mod tests {
         // 5th tick triggers switch to P1
         assert_eq!(k.advance_schedule_tick(), Some(1));
         assert_eq!(k.active_partition, Some(1));
+    }
+
+    #[cfg(not(feature = "dynamic-mpu"))]
+    #[test]
+    fn advance_schedule_tick_updates_next_partition() {
+        let mut k = kernel_with_schedule();
+        // Initially next_partition is 0 (default)
+        assert_eq!(k.next_partition, 0);
+        // Advance 4 ticks within slot 0 - no switch, next_partition unchanged
+        for _ in 0..4 {
+            k.advance_schedule_tick();
+            assert_eq!(k.next_partition, 0);
+        }
+        // 5th tick triggers switch to P1, next_partition updated
+        assert_eq!(k.advance_schedule_tick(), Some(1));
+        assert_eq!(k.next_partition, 1);
+        // Continue through P1's slot (3 ticks), then wrap to P0
+        for _ in 0..2 {
+            k.advance_schedule_tick();
+            assert_eq!(k.next_partition, 1);
+        }
+        // 3rd tick of P1's slot triggers switch back to P0
+        assert_eq!(k.advance_schedule_tick(), Some(0));
+        assert_eq!(k.next_partition, 0);
     }
 
     #[cfg(not(feature = "dynamic-mpu"))]
@@ -4143,6 +4186,23 @@ mod tests {
         }
         assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
         assert_eq!(k.active_partition, Some(1));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn advance_schedule_tick_updates_next_partition_dynamic() {
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+        // Initially next_partition is 0 (default)
+        assert_eq!(k.next_partition, 0);
+        // Advance 4 ticks within slot 0 - no switch, next_partition unchanged
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(k.next_partition, 0);
+        }
+        // 5th tick triggers switch to P1, next_partition updated
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(k.next_partition, 1);
     }
 
     #[cfg(feature = "dynamic-mpu")]
