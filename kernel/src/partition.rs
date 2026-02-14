@@ -99,6 +99,14 @@ impl PartitionControlBlock {
         self.stack_size
     }
 
+    /// Returns the stack region bounds as (stack_base, stack_size).
+    ///
+    /// This is useful for pointer validation to check if an address
+    /// falls within the partition's stack region.
+    pub fn stack_region(&self) -> (u32, u32) {
+        (self.stack_base, self.stack_size)
+    }
+
     pub fn mpu_region(&self) -> &MpuRegion {
         &self.mpu_region
     }
@@ -331,6 +339,18 @@ mod tests {
         assert_eq!(pcb.mpu_region().size(), 4096);
         assert_eq!(pcb.mpu_region().permissions(), 0x0306_0000);
         assert_eq!(pcb.event_flags(), 0);
+    }
+
+    #[test]
+    fn stack_region_returns_base_and_size() {
+        let pcb = make_pcb();
+        let (base, size) = pcb.stack_region();
+        assert_eq!(base, 0x2000_0000);
+        // stack_size is computed as stack_pointer - stack_base = 0x2000_0400 - 0x2000_0000 = 1024
+        assert_eq!(size, 1024);
+        // Verify consistency with individual accessors
+        assert_eq!(base, pcb.stack_base());
+        assert_eq!(size, pcb.stack_size());
     }
 
     #[test]
