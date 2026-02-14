@@ -198,6 +198,41 @@ macro_rules! validated_ptr {
     };
 }
 
+/// Validate a user pointer for syscalls that may involve dynamically-mapped buffers.
+///
+/// When `dynamic-mpu` feature is enabled, uses [`validate_user_ptr_dynamic`] which
+/// checks both static MPU regions and dynamic MPU windows assigned to the partition.
+/// When `dynamic-mpu` is disabled, falls back to standard [`validate_user_ptr`].
+///
+/// Same interface as [`validated_ptr!`]: returns `SvcError::InvalidPointer`
+/// when validation fails; otherwise evaluates `$body`.
+#[cfg(feature = "dynamic-mpu")]
+macro_rules! validated_ptr_dynamic {
+    ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
+        if !validate_user_ptr_dynamic(
+            &$self.partitions,
+            &$self.dynamic_strategy,
+            $self.current_partition,
+            $ptr,
+            $len,
+        ) {
+            SvcError::InvalidPointer.to_u32()
+        } else {
+            $body
+        }
+    };
+}
+
+/// Fallback implementation when `dynamic-mpu` is disabled.
+/// Uses standard pointer validation (same as `validated_ptr!`).
+#[cfg(not(feature = "dynamic-mpu"))]
+#[allow(unused_macros)]
+macro_rules! validated_ptr_dynamic {
+    ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
+        validated_ptr!($self, $ptr, $len, $body)
+    };
+}
+
 use crate::events;
 #[cfg(feature = "dynamic-mpu")]
 use crate::scheduler::ScheduleEvent;
@@ -548,6 +583,14 @@ where
     /// Wait queue for partitions blocked on device reads.
     #[cfg(feature = "dynamic-mpu")]
     pub dev_wait_queue: crate::waitqueue::DeviceWaitQueue<{ C::N }>,
+    /// Dynamic MPU strategy for managing runtime memory windows.
+    ///
+    /// Tracks dynamic MPU windows for all partitions. When a buffer is lent
+    /// to a partition via the buffer pool, it should be registered here.
+    /// The `validated_ptr_dynamic!` macro queries this strategy to validate
+    /// pointers against both static MPU regions and dynamic windows.
+    #[cfg(feature = "dynamic-mpu")]
+    pub dynamic_strategy: crate::mpu_strategy::DynamicStrategy,
 }
 
 /// Helper function to align an address down to an 8-byte boundary.
@@ -683,6 +726,8 @@ where
             registry,
             #[cfg(feature = "dynamic-mpu")]
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
         })
     }
 
@@ -721,6 +766,8 @@ where
             registry,
             #[cfg(feature = "dynamic-mpu")]
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
         }
     }
 
@@ -1088,7 +1135,7 @@ where
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferWrite) => {
-                validated_ptr!(self, frame.r3, frame.r2 as usize, {
+                validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
                     use crate::buffer_pool::BorrowState;
                     let slot_idx = frame.r1 as usize;
                     let len = frame.r2 as usize;
@@ -1124,12 +1171,12 @@ where
             }),
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevRead) => {
-                validated_ptr!(self, frame.r3, frame.r2 as usize, {
+                validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
                     let len = frame.r2 as usize;
                     let buf_ptr = frame.r3 as *mut u8;
                     self.dev_dispatch(frame.r1 as u8, |dev, pid| {
-                        // SAFETY: validated_ptr confirmed [r3, r3+r2) lies
-                        // within the calling partition's MPU data region.
+                        // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2) lies
+                        // within the calling partition's accessible memory regions.
                         let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, len) };
                         Ok(dev.read(pid, buf)? as u32)
                     })
@@ -1137,12 +1184,12 @@ where
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevWrite) => {
-                validated_ptr!(self, frame.r3, frame.r2 as usize, {
+                validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
                     let len = frame.r2 as usize;
                     let data_ptr = frame.r3 as *const u8;
                     self.dev_dispatch(frame.r1 as u8, |dev, pid| {
-                        // SAFETY: validated_ptr confirmed [r3, r3+r2) lies
-                        // within the calling partition's MPU data region.
+                        // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2) lies
+                        // within the calling partition's accessible memory regions.
                         let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
                         Ok(dev.write(pid, data)? as u32)
                     })
@@ -1640,6 +1687,7 @@ mod tests {
             hw_uart: None,
             registry,
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
+            dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
         };
         for _ in 0..sem_count {
             k.semaphores.add(Semaphore::new(1, 2)).unwrap();
@@ -1685,6 +1733,8 @@ mod tests {
             registry: default_registry().0,
             #[cfg(feature = "dynamic-mpu")]
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
         };
         // Add semaphores
         for _ in 0..sem_count {
