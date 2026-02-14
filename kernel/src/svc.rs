@@ -118,6 +118,68 @@ pub fn validate_user_ptr<const N: usize>(
     in_data || in_stack
 }
 
+/// Check that a user-space pointer `[ptr, ptr+len)` lies entirely within one
+/// of the dynamic MPU windows assigned to partition `pid`, OR within the
+/// static regions (data + stack).
+///
+/// This is the dynamic-MPU variant of [`validate_user_ptr`] that additionally
+/// queries `strategy.accessible_regions(pid)` and validates against each
+/// dynamically-assigned MPU window.
+///
+/// Returns `true` when **all** of the following hold:
+/// 1. `pid` refers to an existing partition in `partitions`.
+/// 2. `ptr + len` does not overflow `u32`.
+/// 3. The pointer range `[ptr, ptr+len)` lies entirely within EITHER:
+///    - One of the dynamic MPU windows returned by `strategy.accessible_regions(pid)`, OR
+///    - The static MPU data region (`mpu_region.base()`, `mpu_region.size()`), OR
+///    - The static stack region (`stack_base`, `stack_size`).
+///
+/// A pointer that spans across multiple regions is **invalid** — the entire
+/// range must fit within a single region.
+#[cfg(feature = "dynamic-mpu")]
+pub fn validate_user_ptr_dynamic<const N: usize>(
+    partitions: &PartitionTable<N>,
+    strategy: &crate::mpu_strategy::DynamicStrategy,
+    pid: u8,
+    ptr: u32,
+    len: usize,
+) -> bool {
+    let pcb = match partitions.get(pid as usize) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    // Compute end of the user range with overflow check.
+    let end = match ptr.checked_add(len as u32) {
+        Some(e) => e,
+        None => return false,
+    };
+
+    // Helper: check if [ptr, end) lies entirely within [base, base+size].
+    // Uses saturating_add to handle regions that extend to or past 0xFFFF_FFFF.
+    let in_region = |base: u32, size: u32| -> bool {
+        let region_end = base.saturating_add(size);
+        ptr >= base && end <= region_end
+    };
+
+    // First, check dynamic MPU windows assigned to this partition.
+    let windows = strategy.accessible_regions(pid);
+    for (base, size) in windows {
+        if in_region(base, size) {
+            return true;
+        }
+    }
+
+    // Fall back to static regions (data + stack).
+    let data_region = pcb.mpu_region();
+    if in_region(data_region.base(), data_region.size()) {
+        return true;
+    }
+
+    let (stack_base, stack_size) = pcb.stack_region();
+    in_region(stack_base, stack_size)
+}
+
 /// Validate a user pointer and, on success, execute the body expression.
 ///
 /// Returns `SvcError::InvalidPointer` when `validate_user_ptr` fails;
@@ -2674,6 +2736,42 @@ mod tests {
         assert!(!validate_user_ptr(&t, 0, 0x1FFF_FF00, 16));
         // After data.
         assert!(!validate_user_ptr(&t, 0, 0x2000_2000, 16));
+    }
+
+    // ---- validate_user_ptr_dynamic tests (dynamic-mpu feature) ----
+
+    /// Comprehensive test for validate_user_ptr_dynamic covering dynamic windows,
+    /// static region fallback, partition isolation, multiple windows, and edge cases.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn validate_ptr_dynamic_comprehensive() {
+        use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
+        // Stack: 0x2000_0000..0x2000_0400, Data: 0x2000_1000..0x2000_2000
+        let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_1000, 0x1000);
+        let s = DynamicStrategy::new();
+
+        // Add 3 windows: one for P0, two more for P0, none for P1
+        s.add_window(0x2001_0000, 256, 0, 0).unwrap(); // R5: P0
+        s.add_window(0x2002_0000, 512, 0, 0).unwrap(); // R6: P0
+        s.add_window(0x2003_0000, 1024, 0, 1).unwrap(); // R7: P1
+
+        // Pointer in dynamic windows passes
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2001_0000, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2002_0100, 64));
+        // Fallback to static data region
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_1000, 16));
+        // Fallback to static stack region
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0000, 16));
+        // Outside all regions fails
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0500, 16));
+        // Spanning window boundary fails
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x2001_00F0, 32));
+        // Nonexistent partition fails
+        assert!(!validate_user_ptr_dynamic(&t, &s, 99, 0x2000_0000, 16));
+        // Overflow fails
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0xFFFF_FFF0, 0x20));
+        // Partition isolation: P0 cannot access P1's window
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x2003_0000, 16));
     }
 
     // ---- Pointer validation rejection via Kernel::dispatch ----
