@@ -388,6 +388,89 @@ macro_rules! define_unified_kernel {
     ($Config:ty, |$k:ident| $yield_body:block) => {
         $crate::define_unified_kernel!(@impl $Config, |$k| $yield_body);
     };
+    // Variant that generates a complete KernelConfig struct and impl with
+    // associated types wired up. Use this to reduce boilerplate when defining
+    // new kernel configurations.
+    //
+    // Usage:
+    // ```ignore
+    // define_unified_kernel!(MyConfig {
+    //     N: 4, SCHED: 8, S: 4, SW: 4, MS: 4, MW: 4,
+    //     QS: 4, QD: 4, QM: 64, QW: 4, SP: 8, SM: 32, BS: 4, BM: 32, BW: 4
+    // });
+    // ```
+    ($Name:ident {
+        N: $n:expr, SCHED: $sched:expr,
+        S: $s:expr, SW: $sw:expr, MS: $ms:expr, MW: $mw:expr,
+        QS: $qs:expr, QD: $qd:expr, QM: $qm:expr, QW: $qw:expr,
+        SP: $sp:expr, SM: $sm:expr, BS: $bs:expr, BM: $bm:expr, BW: $bw:expr
+        $(, BP: $bp:expr, BZ: $bz:expr)?
+    }) => {
+        $crate::define_unified_kernel!(@config $Name {
+            N: $n, SCHED: $sched,
+            S: $s, SW: $sw, MS: $ms, MW: $mw,
+            QS: $qs, QD: $qd, QM: $qm, QW: $qw,
+            SP: $sp, SM: $sm, BS: $bs, BM: $bm, BW: $bw
+            $(, BP: $bp, BZ: $bz)?
+        });
+        $crate::define_unified_kernel!(@impl $Name, |_k| {});
+    };
+    // Variant that generates KernelConfig with custom yield handler.
+    ($Name:ident {
+        N: $n:expr, SCHED: $sched:expr,
+        S: $s:expr, SW: $sw:expr, MS: $ms:expr, MW: $mw:expr,
+        QS: $qs:expr, QD: $qd:expr, QM: $qm:expr, QW: $qw:expr,
+        SP: $sp:expr, SM: $sm:expr, BS: $bs:expr, BM: $bm:expr, BW: $bw:expr
+        $(, BP: $bp:expr, BZ: $bz:expr)?
+    }, |$k:ident| $yield_body:block) => {
+        $crate::define_unified_kernel!(@config $Name {
+            N: $n, SCHED: $sched,
+            S: $s, SW: $sw, MS: $ms, MW: $mw,
+            QS: $qs, QD: $qd, QM: $qm, QW: $qw,
+            SP: $sp, SM: $sm, BS: $bs, BM: $bm, BW: $bw
+            $(, BP: $bp, BZ: $bz)?
+        });
+        $crate::define_unified_kernel!(@impl $Name, |$k| $yield_body);
+    };
+    // Private rule: generates the KernelConfig struct and impl.
+    // Called by the public-facing rules to avoid code duplication.
+    (@config $Name:ident {
+        N: $n:expr, SCHED: $sched:expr,
+        S: $s:expr, SW: $sw:expr, MS: $ms:expr, MW: $mw:expr,
+        QS: $qs:expr, QD: $qd:expr, QM: $qm:expr, QW: $qw:expr,
+        SP: $sp:expr, SM: $sm:expr, BS: $bs:expr, BM: $bm:expr, BW: $bw:expr
+        $(, BP: $bp:expr, BZ: $bz:expr)?
+    }) => {
+        struct $Name;
+        impl $crate::config::KernelConfig for $Name {
+            const N: usize = $n;
+            const SCHED: usize = $sched;
+            const S: usize = $s;
+            const SW: usize = $sw;
+            const MS: usize = $ms;
+            const MW: usize = $mw;
+            const QS: usize = $qs;
+            const QD: usize = $qd;
+            const QM: usize = $qm;
+            const QW: usize = $qw;
+            const SP: usize = $sp;
+            const SM: usize = $sm;
+            const BS: usize = $bs;
+            const BM: usize = $bm;
+            const BW: usize = $bw;
+            $(
+                #[cfg(feature = "dynamic-mpu")]
+                const BP: usize = $bp;
+                #[cfg(feature = "dynamic-mpu")]
+                const BZ: usize = $bz;
+            )?
+
+            type Core = $crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }>;
+            type Sync = $crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+            type Msg = $crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+            type Ports = $crate::port_pools::PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+        }
+    };
     // Internal implementation rule using @impl token as private pattern.
     // NOTE: The @impl pattern below is valid Rust macro syntax. If a code review tool
     // reports a "file path as matcher token" error, that is a false positive from the
