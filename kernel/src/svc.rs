@@ -2079,6 +2079,7 @@ mod tests {
     impl KernelConfig for TestConfig {
         const N: usize = 4;
         const SCHED: usize = 4;
+        const STACK_WORDS: usize = 256;
         const S: usize = 4;
         const SW: usize = 4;
         const MS: usize = 4;
@@ -2097,7 +2098,11 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         const BZ: usize = 32;
 
-        type Core = crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }>;
+        type Core = crate::partition_core::PartitionCore<
+            { Self::N },
+            { Self::SCHED },
+            { Self::STACK_WORDS },
+        >;
         type Sync =
             crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
         type Msg =

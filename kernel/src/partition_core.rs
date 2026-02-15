@@ -4,6 +4,19 @@ use crate::partition::{PartitionControlBlock, PartitionTable};
 use crate::scheduler::{ScheduleTable, ScheduleTableOps, ScheduleTableOpsMut};
 use crate::tick::TickCounter;
 
+/// Stack storage wrapper aligned to 1024 bytes for MPU region compatibility.
+///
+/// The MPU on Cortex-M requires that region base addresses be aligned to the
+/// region size. For 1024-byte stacks (256 words), the base must be 1024-byte
+/// aligned. This wrapper enforces that alignment at compile time.
+///
+/// # Type Parameters
+///
+/// - `SW`: Stack word count. Must be 256 for 1024-byte alignment (256 * 4 = 1024).
+#[repr(C, align(1024))]
+#[derive(Clone, Copy)]
+pub struct AlignedStack<const SW: usize>(pub [u32; SW]);
+
 /// Narrow interface for partition/schedule state access without const bounds.
 pub trait PartitionCoreOps {
     /// Returns a slice of partition control blocks.
@@ -43,16 +56,25 @@ pub trait PartitionCoreOps {
 }
 
 /// Groups partition and schedule management state.
-pub struct PartitionCore<const N: usize, const SCHED: usize>
+///
+/// # Type Parameters
+///
+/// - `N`: Maximum number of partitions
+/// - `SCHED`: Schedule table capacity (number of entries)
+/// - `SW`: Stack word count per partition (256 = 1024 bytes for MPU alignment)
+pub struct PartitionCore<const N: usize, const SCHED: usize, const SW: usize>
 where
     [(); N]:,
     [(); SCHED]:,
+    [(); SW]:,
 {
     partitions: PartitionTable<N>,
     schedule: ScheduleTable<SCHED>,
     current_partition: u8,
     next_partition: u8,
     partition_sp: [u32; N],
+    /// Per-partition stack storage, aligned for MPU region base requirements.
+    stacks: [AlignedStack<SW>; N],
     /// Currently active partition index, if any.
     active_partition: Option<u8>,
     /// Monotonic tick counter.
@@ -63,11 +85,15 @@ where
     yield_requested: bool,
 }
 
-impl<const N: usize, const SCHED: usize> PartitionCore<N, SCHED>
+impl<const N: usize, const SCHED: usize, const SW: usize> PartitionCore<N, SCHED, SW>
 where
     [(); N]:,
     [(); SCHED]:,
+    [(); SW]:,
 {
+    /// Zero-initialized stack constant for const array initialization.
+    const ZERO_STACK: AlignedStack<SW> = AlignedStack([0u32; SW]);
+
     pub const fn new() -> Self {
         Self {
             partitions: PartitionTable::new(),
@@ -75,6 +101,7 @@ where
             current_partition: 0,
             next_partition: 0,
             partition_sp: [0u32; N],
+            stacks: [Self::ZERO_STACK; N],
             active_partition: None,
             tick: TickCounter::new(),
             yield_requested: false,
@@ -124,6 +151,30 @@ where
         }
     }
 
+    /// Returns a reference to all partition stacks.
+    pub fn stacks(&self) -> &[AlignedStack<SW>; N] {
+        &self.stacks
+    }
+
+    /// Returns a mutable reference to all partition stacks.
+    pub fn stacks_mut(&mut self) -> &mut [AlignedStack<SW>; N] {
+        &mut self.stacks
+    }
+
+    /// Returns a mutable reference to a specific partition's stack array.
+    ///
+    /// Returns `None` if the index is out of bounds.
+    pub fn stack_mut(&mut self, index: usize) -> Option<&mut [u32; SW]> {
+        self.stacks.get_mut(index).map(|s| &mut s.0)
+    }
+
+    /// Returns the base address of a partition's stack.
+    ///
+    /// Returns `None` if the index is out of bounds.
+    pub fn stack_base(&self, index: usize) -> Option<u32> {
+        self.stacks.get(index).map(|s| s.0.as_ptr() as u32)
+    }
+
     /// Returns the currently active partition index, if any.
     pub fn active_partition(&self) -> Option<u8> {
         self.active_partition
@@ -163,20 +214,23 @@ where
     }
 }
 
-impl<const N: usize, const SCHED: usize> Default for PartitionCore<N, SCHED>
+impl<const N: usize, const SCHED: usize, const SW: usize> Default for PartitionCore<N, SCHED, SW>
 where
     [(); N]:,
     [(); SCHED]:,
+    [(); SW]:,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const N: usize, const SCHED: usize> crate::config::CoreOps for PartitionCore<N, SCHED>
+impl<const N: usize, const SCHED: usize, const SW: usize> crate::config::CoreOps
+    for PartitionCore<N, SCHED, SW>
 where
     [(); N]:,
     [(); SCHED]:,
+    [(); SW]:,
 {
     type PartTable = PartitionTable<N>;
     type SchedTable = ScheduleTable<SCHED>;
@@ -243,10 +297,12 @@ where
     }
 }
 
-impl<const N: usize, const SCHED: usize> PartitionCoreOps for PartitionCore<N, SCHED>
+impl<const N: usize, const SCHED: usize, const SW: usize> PartitionCoreOps
+    for PartitionCore<N, SCHED, SW>
 where
     [(); N]:,
     [(); SCHED]:,
+    [(); SW]:,
 {
     fn partitions(&self) -> &[PartitionControlBlock] {
         self.partitions.as_slice()
@@ -327,9 +383,12 @@ mod tests {
     use super::*;
     use crate::scheduler::ScheduleEntry;
 
+    /// Stack word count for tests (256 words = 1024 bytes).
+    const TEST_SW: usize = 256;
+
     #[test]
     fn construction_and_field_access() {
-        let mut core: PartitionCore<4, 8> = PartitionCore::new();
+        let mut core: PartitionCore<4, 8, TEST_SW> = PartitionCore::new();
         // Verify new() creates empty state
         assert!(core.partitions().is_empty());
         assert!(core.schedule().is_empty());
@@ -337,7 +396,7 @@ mod tests {
         assert_eq!(core.next_partition(), 0);
         assert_eq!(core.partition_sp(), &[0u32; 4]);
         // Verify default() matches new()
-        let dflt: PartitionCore<4, 8> = PartitionCore::default();
+        let dflt: PartitionCore<4, 8, TEST_SW> = PartitionCore::default();
         assert_eq!(core.partition_sp(), dflt.partition_sp());
         // Test partition index setters
         core.set_current_partition(2);
@@ -354,5 +413,88 @@ mod tests {
         // Test mutable schedule accessor
         assert!(core.schedule_mut().add(ScheduleEntry::new(0, 100)).is_ok());
         assert_eq!(core.schedule().len(), 1);
+    }
+
+    #[test]
+    fn stacks_initialized_to_zero() {
+        let core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        // All stack arrays should be zero-initialized
+        for i in 0..2 {
+            let stack = &core.stacks()[i].0;
+            assert!(stack.iter().all(|&w| w == 0));
+        }
+    }
+
+    #[test]
+    fn stacks_are_1024_byte_aligned() {
+        let core: PartitionCore<3, 4, TEST_SW> = PartitionCore::new();
+        // Each stack base must be 1024-byte aligned for MPU compatibility
+        for i in 0..3 {
+            let base = core.stack_base(i).unwrap();
+            assert_eq!(
+                base % 1024,
+                0,
+                "Stack {} base 0x{:08x} is not 1024-byte aligned",
+                i,
+                base
+            );
+        }
+    }
+
+    #[test]
+    fn stack_base_out_of_bounds_returns_none() {
+        let core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        assert!(core.stack_base(0).is_some());
+        assert!(core.stack_base(1).is_some());
+        assert!(core.stack_base(2).is_none());
+        assert!(core.stack_base(100).is_none());
+    }
+
+    #[test]
+    fn stack_mut_accessor() {
+        let mut core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        // Verify we can write to stack and read it back
+        {
+            let stack = core.stack_mut(0).unwrap();
+            stack[0] = 0xDEAD_BEEF;
+            stack[TEST_SW - 1] = 0xCAFE_BABE;
+        }
+        assert_eq!(core.stacks()[0].0[0], 0xDEAD_BEEF);
+        assert_eq!(core.stacks()[0].0[TEST_SW - 1], 0xCAFE_BABE);
+        // Out of bounds returns None
+        assert!(core.stack_mut(2).is_none());
+    }
+
+    #[test]
+    fn stacks_mut_accessor() {
+        let mut core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        // Write different values to each stack
+        core.stacks_mut()[0].0[0] = 0x1111_1111;
+        core.stacks_mut()[1].0[0] = 0x2222_2222;
+        assert_eq!(core.stacks()[0].0[0], 0x1111_1111);
+        assert_eq!(core.stacks()[1].0[0], 0x2222_2222);
+    }
+
+    #[test]
+    fn aligned_stack_size_matches_word_count() {
+        // Verify AlignedStack<256> has the expected size (256 * 4 = 1024 bytes)
+        assert_eq!(
+            core::mem::size_of::<AlignedStack<TEST_SW>>(),
+            TEST_SW * 4,
+            "AlignedStack<{}> size should be {} bytes",
+            TEST_SW,
+            TEST_SW * 4
+        );
+    }
+
+    #[test]
+    fn aligned_stack_alignment_is_1024() {
+        // Verify AlignedStack has the required 1024-byte alignment
+        assert_eq!(
+            core::mem::align_of::<AlignedStack<TEST_SW>>(),
+            1024,
+            "AlignedStack<{}> alignment should be 1024 bytes",
+            TEST_SW
+        );
     }
 }

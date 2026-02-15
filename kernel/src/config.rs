@@ -81,6 +81,8 @@ pub trait KernelConfig {
     const N: usize;
     /// Schedule table capacity (number of schedule entries).
     const SCHED: usize;
+    /// Stack word count per partition (256 = 1024 bytes for MPU alignment).
+    const STACK_WORDS: usize;
     /// Semaphore pool capacity.
     const S: usize;
     /// Semaphore wait-queue depth.
@@ -174,6 +176,7 @@ mod tests {
     impl KernelConfig for DefaultPriority {
         const N: usize = 2;
         const SCHED: usize = 4;
+        const STACK_WORDS: usize = 256;
         const S: usize = 1;
         const SW: usize = 1;
         const MS: usize = 1;
@@ -194,7 +197,7 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         const DR: usize = 4;
 
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
         type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
         type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
         type Ports =
@@ -206,6 +209,7 @@ mod tests {
     impl KernelConfig for CustomPriority {
         const N: usize = 2;
         const SCHED: usize = 4;
+        const STACK_WORDS: usize = 256;
         const S: usize = 1;
         const SW: usize = 1;
         const MS: usize = 1;
@@ -230,7 +234,7 @@ mod tests {
         const PENDSV_PRIORITY: u8 = 0xE0;
         const SYSTICK_PRIORITY: u8 = 0xC0;
 
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
         type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
         type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
         type Ports =
