@@ -1,8 +1,18 @@
 //! 3-partition sensor telemetry pipeline via sampling ports.
+//!
+//! Demonstrates sampling port communication between three partitions:
+//! - P0 (sensor): writes incrementing values to a sampling port
+//! - P1 (control): reads sensor values, writes status (alert if > 2)
+//! - P2 (display): reads status and tracks cycles
+//!
+//! Partitions run unprivileged and cannot use semihosting directly.
+//! Progress is tracked via atomics; the SysTick handler verifies state
+//! and prints results from privileged handler mode.
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
+use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
@@ -23,6 +33,16 @@ use panic_semihosting as _;
 
 const NUM_PARTITIONS: usize = 3;
 const STACK_WORDS: usize = 256;
+
+// Atomic state for partition progress tracking (handler mode reads these).
+/// Sensor: last value written (increments each cycle)
+static SENSOR_VALUE: AtomicU32 = AtomicU32::new(0);
+/// Control: last value read from sensor
+static CONTROL_READ: AtomicU32 = AtomicU32::new(0);
+/// Control: last status written (1 = alert, 0 = normal)
+static CONTROL_STATUS: AtomicU32 = AtomicU32::new(0);
+/// Display: cycle count (test passes when this reaches 4)
+static DISPLAY_CYCLES: AtomicU32 = AtomicU32::new(0);
 
 /// Kernel configuration for the sampling-port demo.
 ///
@@ -58,14 +78,44 @@ impl KernelConfig for DemoConfig {
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
-// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
-kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS);
+// Use the unified harness macro with SysTick hook for progress verification.
+// The hook runs in privileged handler mode and can use semihosting.
+kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+    // Check progress every 10 ticks
+    if tick.is_multiple_of(10) {
+        let sensor = SENSOR_VALUE.load(Ordering::Acquire);
+        let ctrl_read = CONTROL_READ.load(Ordering::Acquire);
+        let ctrl_status = CONTROL_STATUS.load(Ordering::Acquire);
+        let cycles = DISPLAY_CYCLES.load(Ordering::Acquire);
+
+        hprintln!(
+            "[tick {}] sensor={} ctrl_read={} status={} cycles={}",
+            tick,
+            sensor,
+            ctrl_read,
+            ctrl_status,
+            cycles
+        );
+
+        // Test passes when display has completed 4 cycles
+        if cycles >= 4 {
+            hprintln!("sampling_demo: all checks passed");
+            debug::exit(debug::EXIT_SUCCESS);
+        }
+
+        // Timeout after 200 ticks
+        if tick > 200 {
+            hprintln!("sampling_demo: FAIL - timeout");
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
+});
 
 extern "C" fn sensor_main() -> ! {
     let (src, mut v) = (unpack_r0!() >> 16, 0u8);
     loop {
         v = v.wrapping_add(1);
-        hprintln!("[sensor]  write val={}", v);
+        SENSOR_VALUE.store(v as u32, Ordering::Release);
         svc!(SYS_SAMPLING_WRITE, src, 1u32, [v].as_ptr() as u32);
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
@@ -82,14 +132,10 @@ extern "C" fn control_main() -> ! {
             buf.as_mut_ptr() as u32
         );
         let v = if sz > 0 && sz != u32::MAX { buf[0] } else { 0 };
-        let tag = if v > 2 { "ALERT" } else { "NORMAL" };
-        hprintln!("[control] val={} valid={} -> {}", v, sz != u32::MAX, tag);
-        svc!(
-            SYS_SAMPLING_WRITE,
-            src,
-            1u32,
-            [u8::from(v > 2)].as_ptr() as u32
-        );
+        let status = u8::from(v > 2); // 1 = alert, 0 = normal
+        CONTROL_READ.store(v as u32, Ordering::Release);
+        CONTROL_STATUS.store(status as u32, Ordering::Release);
+        svc!(SYS_SAMPLING_WRITE, src, 1u32, [status].as_ptr() as u32);
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
@@ -98,24 +144,15 @@ extern "C" fn display_main() -> ! {
     let mut cyc: u32 = 0;
     loop {
         let mut buf = [0u8; 1];
-        let sz = svc!(
+        let _sz = svc!(
             SYS_SAMPLING_READ,
             dst,
             buf.len() as u32,
             buf.as_mut_ptr() as u32
         );
-        let valid = sz > 0 && sz != u32::MAX;
-        let tag = if valid && buf[0] == 1 {
-            "ALERT"
-        } else {
-            "NORMAL"
-        };
-        hprintln!("[display] status={} valid={}", tag, valid);
+        // Track cycle count; SysTick handler checks this for completion
         cyc += 1;
-        if cyc >= 4 {
-            hprintln!("sampling_demo: all checks passed");
-            debug::exit(debug::EXIT_SUCCESS);
-        }
+        DISPLAY_CYCLES.store(cyc, Ordering::Release);
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
