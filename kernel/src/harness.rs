@@ -286,9 +286,12 @@ macro_rules! define_unified_harness {
                     let ix =
                         $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
                             .expect("init_stack_frame");
-                    partition_sp[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
+                    let sp = stk.as_ptr() as u32 + (ix as u32) * 4;
+                    partition_sp[i] = sp;
+                    // Sync SP to kernel's internal storage for PendSV shims.
+                    set_partition_sp(i as u32, sp);
                     #[cfg(feature = "qemu")]
-                    hprintln!("[boot] partition {} sp={:#010x}", i, partition_sp[i]);
+                    hprintln!("[boot] partition {} sp={:#010x}", i, sp);
                 }
 
                 const { $crate::config::assert_priority_order::<$Config>() }
