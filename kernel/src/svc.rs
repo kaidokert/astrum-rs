@@ -527,51 +527,6 @@ macro_rules! define_unified_kernel {
         extern "C" fn get_partition_sp_ptr() -> *mut u32 {
             with_kernel_mut(|k| k.partition_sp.as_mut_ptr()).unwrap_or(::core::ptr::null_mut())
         }
-
-        /// Returns the current partition index from the Kernel struct.
-        /// Called by PendSV shim. Returns u32::MAX if uninitialized.
-        #[cfg_attr(not(test), no_mangle)]
-        #[allow(dead_code)]
-        extern "C" fn get_current_partition() -> u32 {
-            ::cortex_m::interrupt::free(|cs| {
-                KERNEL
-                    .borrow(cs)
-                    .borrow()
-                    .as_ref()
-                    .map(|k| k.current_partition as u32)
-                    .unwrap_or(u32::MAX)
-            })
-        }
-
-        /// Returns the next partition index from the Kernel struct.
-        /// Called by PendSV shim. Returns u32::MAX if uninitialized.
-        #[cfg_attr(not(test), no_mangle)]
-        #[allow(dead_code)]
-        extern "C" fn get_next_partition() -> u32 {
-            ::cortex_m::interrupt::free(|cs| {
-                KERNEL
-                    .borrow(cs)
-                    .borrow()
-                    .as_ref()
-                    .map(|k| k.next_partition as u32)
-                    .unwrap_or(u32::MAX)
-            })
-        }
-
-        /// Returns a pointer to the partition_sp array.
-        /// Called by PendSV shim. Returns null if uninitialized.
-        #[cfg_attr(not(test), no_mangle)]
-        #[allow(dead_code)]
-        extern "C" fn get_partition_sp_ptr() -> *mut u32 {
-            ::cortex_m::interrupt::free(|cs| {
-                KERNEL
-                    .borrow(cs)
-                    .borrow_mut()
-                    .as_mut()
-                    .map(|k| k.partition_sp.as_mut_ptr())
-                    .unwrap_or(::core::ptr::null_mut())
-            })
-        }
     };
 }
 
@@ -1722,6 +1677,11 @@ mod tests {
         const BP: usize = 4;
         #[cfg(feature = "dynamic-mpu")]
         const BZ: usize = 32;
+
+        type Core = ();
+        type Sync = ();
+        type Msg = ();
+        type Ports = ();
     }
 
     fn frame(r0: u32, r1: u32, r2: u32) -> ExceptionFrame {
@@ -4460,6 +4420,11 @@ mod tests {
             const BP: usize = 2;
             #[cfg(feature = "dynamic-mpu")]
             const BZ: usize = 32;
+
+            type Core = ();
+            type Sync = ();
+            type Msg = ();
+            type Ports = ();
         }
 
         // Module to test basic macro invocation compiles.

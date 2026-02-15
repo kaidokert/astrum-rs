@@ -55,6 +55,19 @@ pub trait KernelConfig {
     /// higher priority than PendSV; on Cortex-M a *larger* number means
     /// *lower* priority).
     const SYSTICK_PRIORITY: u8 = 0xFE;
+
+    /// Partition/schedule state operations. Will be constrained by `CoreOps`
+    /// in a subsequent subtask.
+    type Core;
+    /// Synchronization primitive operations (semaphores, mutexes). Will be
+    /// constrained by `SyncOps` in a subsequent subtask.
+    type Sync;
+    /// Message-passing primitive operations (message queues, queuing ports).
+    /// Will be constrained by `MsgOps` in a subsequent subtask.
+    type Msg;
+    /// Sampling ports and blackboards operations. Will be constrained by
+    /// `PortsOps` in a subsequent subtask.
+    type Ports;
 }
 
 /// Compile-time assertion that the three exception priorities are
@@ -105,6 +118,11 @@ mod tests {
         const BZ: usize = 32;
         #[cfg(feature = "dynamic-mpu")]
         const DR: usize = 4;
+
+        type Core = ();
+        type Sync = ();
+        type Msg = ();
+        type Ports = ();
     }
 
     /// Config that overrides priorities but keeps valid ordering.
@@ -135,6 +153,11 @@ mod tests {
         const SVCALL_PRIORITY: u8 = 0x00;
         const PENDSV_PRIORITY: u8 = 0xE0;
         const SYSTICK_PRIORITY: u8 = 0xC0;
+
+        type Core = ();
+        type Sync = ();
+        type Msg = ();
+        type Ports = ();
     }
 
     #[test]
