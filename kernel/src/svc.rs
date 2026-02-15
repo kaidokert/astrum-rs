@@ -364,6 +364,24 @@ pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
 /// - `static KERNEL: Mutex<RefCell<Option<Kernel<$Config>>>>` — the unified kernel storage
 /// - `unsafe extern "C" fn dispatch_hook(f: &mut ExceptionFrame)` — the SVC dispatch hook
 /// - `fn store_kernel(k: Kernel<$Config>)` — stores the kernel and installs the hook
+/// - PendSV accessors: `get_current_partition`, `get_next_partition`, `get_partition_sp_ptr`
+///
+/// # Where Bounds
+///
+/// The macro uses `Kernel<$Config>` which requires only essential const bounds:
+/// - `[(); C::N]:` and `[(); C::SCHED]:` (always required)
+/// - `[(); C::BP]:`, `[(); C::BZ]:`, `[(); C::DR]:` (with `dynamic-mpu` feature)
+///
+/// Sub-struct-owned constants (S, SW, MS, MW, QS, QD, QM, QW, SP, SM, BS, BM, BW)
+/// do NOT require explicit `[(); C::X]:` bounds - these are encapsulated within
+/// the associated types (`C::Sync`, `C::Msg`, `C::Ports`) and satisfied implicitly.
+///
+/// # Variants
+///
+/// 1. Basic: `define_unified_kernel!(MyConfig);`
+/// 2. With yield handler: `define_unified_kernel!(MyConfig, |k| { ... });`
+/// 3. Config-generating: `define_unified_kernel!(MyConfig { N: 4, ... });`
+/// 4. Config-generating with yield: `define_unified_kernel!(MyConfig { ... }, |k| { ... });`
 ///
 /// # Usage
 ///
@@ -379,8 +397,6 @@ pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
 ///     k.yield_requested = false;
 /// });
 /// ```
-///
-/// This macro consolidates kernel storage under a single `KERNEL` static.
 #[macro_export]
 macro_rules! define_unified_kernel {
     // Basic variant with no custom yield handler.
@@ -4929,6 +4945,119 @@ mod tests {
                 let _: &cortex_m::interrupt::Mutex<
                     core::cell::RefCell<Option<Kernel<UnifiedTestConfig>>>,
                 > = &KERNEL;
+            }
+        }
+
+        /// Tests for the config-generating variant of define_unified_kernel!.
+        ///
+        /// This variant generates both the KernelConfig struct/impl AND the
+        /// KERNEL static/functions in one macro invocation. It should work
+        /// without explicit where bounds for sub-struct-owned constants
+        /// (S, SW, MS, MW, QS, QD, QM, QW, SP, SM, BS, BM, BW).
+        mod config_generating_variant {
+            use super::*;
+
+            // Test the config-generating variant without yield handler.
+            // This generates GeneratedConfig struct + impl and KERNEL static.
+            mod basic_config_generating {
+                crate::define_unified_kernel!(GeneratedConfig {
+                    N: 2,
+                    SCHED: 4,
+                    S: 2,
+                    SW: 2,
+                    MS: 2,
+                    MW: 2,
+                    QS: 2,
+                    QD: 2,
+                    QM: 32,
+                    QW: 2,
+                    SP: 2,
+                    SM: 32,
+                    BS: 2,
+                    BM: 32,
+                    BW: 2
+                });
+
+                #[test]
+                fn config_generating_variant_compiles() {
+                    // Verify that the macro generates a valid KernelConfig impl
+                    // by checking we can create a Kernel<GeneratedConfig>.
+                    use crate::svc::Kernel;
+                    let _: fn(Kernel<GeneratedConfig>) = store_kernel;
+                }
+
+                #[test]
+                fn generated_config_has_correct_constants() {
+                    use crate::config::KernelConfig;
+                    assert_eq!(GeneratedConfig::N, 2);
+                    assert_eq!(GeneratedConfig::SCHED, 4);
+                    assert_eq!(GeneratedConfig::S, 2);
+                    assert_eq!(GeneratedConfig::SW, 2);
+                    assert_eq!(GeneratedConfig::MS, 2);
+                    assert_eq!(GeneratedConfig::MW, 2);
+                    assert_eq!(GeneratedConfig::QS, 2);
+                    assert_eq!(GeneratedConfig::QD, 2);
+                    assert_eq!(GeneratedConfig::QM, 32);
+                    assert_eq!(GeneratedConfig::QW, 2);
+                    assert_eq!(GeneratedConfig::SP, 2);
+                    assert_eq!(GeneratedConfig::SM, 32);
+                    assert_eq!(GeneratedConfig::BS, 2);
+                    assert_eq!(GeneratedConfig::BM, 32);
+                    assert_eq!(GeneratedConfig::BW, 2);
+                }
+
+                #[test]
+                fn generated_kernel_static_exists() {
+                    use crate::svc::Kernel;
+                    let _: &cortex_m::interrupt::Mutex<
+                        core::cell::RefCell<Option<Kernel<GeneratedConfig>>>,
+                    > = &KERNEL;
+                }
+            }
+
+            // Test config-generating variant with custom yield handler.
+            mod config_generating_with_yield {
+                use core::sync::atomic::{AtomicBool, Ordering};
+
+                static YIELD_FLAG: AtomicBool = AtomicBool::new(false);
+
+                crate::define_unified_kernel!(
+                    GeneratedConfigYield {
+                        N: 2,
+                        SCHED: 4,
+                        S: 2,
+                        SW: 2,
+                        MS: 2,
+                        MW: 2,
+                        QS: 2,
+                        QD: 2,
+                        QM: 32,
+                        QW: 2,
+                        SP: 2,
+                        SM: 32,
+                        BS: 2,
+                        BM: 32,
+                        BW: 2
+                    },
+                    |k| {
+                        let _ = k;
+                        YIELD_FLAG.store(true, Ordering::SeqCst);
+                    }
+                );
+
+                #[test]
+                fn config_generating_with_yield_compiles() {
+                    use crate::svc::Kernel;
+                    let _: fn(Kernel<GeneratedConfigYield>) = store_kernel;
+                }
+
+                #[test]
+                fn generated_kernel_static_with_yield_exists() {
+                    use crate::svc::Kernel;
+                    let _: &cortex_m::interrupt::Mutex<
+                        core::cell::RefCell<Option<Kernel<GeneratedConfigYield>>>,
+                    > = &KERNEL;
+                }
             }
         }
     }
