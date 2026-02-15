@@ -37,6 +37,8 @@ pub trait CoreOps {
     fn yield_requested(&self) -> bool;
     /// Sets the yield_requested flag.
     fn set_yield_requested(&mut self, requested: bool);
+    /// Returns a mutable reference to a partition's stack array.
+    fn stack_mut(&mut self, index: usize) -> Option<&mut [u32]>;
 }
 
 /// Trait for synchronization primitive sub-structs (semaphores, mutexes).

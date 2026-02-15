@@ -48,6 +48,7 @@ struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
+    const STACK_WORDS: usize = 256;
     const S: usize = 4;
     const SW: usize = 4;
     const MS: usize = 4;
@@ -68,7 +69,7 @@ impl KernelConfig for DemoConfig {
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
     type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
@@ -439,5 +440,5 @@ fn main() -> ! {
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
         core::array::from_fn(|i| (eps[i], hints[i]));
 
-    boot(&parts, &mut p)
+    match boot(&parts, &mut p).expect("queuing_demo: boot failed") {}
 }

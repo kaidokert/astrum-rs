@@ -204,6 +204,10 @@ macro_rules! define_unified_harness {
             "define_unified_harness! requires $SW == 256 (1024-byte stacks) for correct MPU alignment"
         );
 
+        #[repr(C, align(1024))] #[derive(Copy, Clone)]
+        struct _HarnessStack(pub [u32; $SW]);
+        static mut STACKS: [_HarnessStack; $NP] = [_HarnessStack([0u32; $SW]); $NP];
+
         // NOTE: CURRENT_PARTITION, NEXT_PARTITION, and PARTITION_SP statics are
         // no longer needed. PendSV reads/writes these values via Rust shims:
         // get_current_partition(), set_current_partition(), get_next_partition(),

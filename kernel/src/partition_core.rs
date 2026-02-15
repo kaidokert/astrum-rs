@@ -313,6 +313,9 @@ where
     fn set_yield_requested(&mut self, requested: bool) {
         self.yield_requested = requested;
     }
+    fn stack_mut(&mut self, index: usize) -> Option<&mut [u32]> {
+        self.stacks.get_mut(index).map(|s| s.0.as_mut_slice())
+    }
 }
 
 impl<const N: usize, const SCHED: usize, const SW: usize> PartitionCoreOps

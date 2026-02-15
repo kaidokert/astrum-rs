@@ -48,6 +48,7 @@ struct TestConfig;
 impl KernelConfig for TestConfig {
     const N: usize = 1;
     const SCHED: usize = 4;
+    const STACK_WORDS: usize = 256;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -68,7 +69,7 @@ impl KernelConfig for TestConfig {
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
     type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
@@ -176,5 +177,5 @@ fn main() -> ! {
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
         [(test_partition_main, port_id as u32)];
 
-    boot(&parts, &mut p)
+    match boot(&parts, &mut p).expect("syscall_bad_ptrs: boot failed") {}
 }

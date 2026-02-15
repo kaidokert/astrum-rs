@@ -55,6 +55,7 @@ struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
+    const STACK_WORDS: usize = 256;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -72,7 +73,7 @@ impl KernelConfig for DemoConfig {
     const BZ: usize = 32;
     const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
     type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
@@ -254,5 +255,5 @@ fn main() -> ! {
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
 
-    boot(&parts, &mut p)
+    match boot(&parts, &mut p).expect("virtual_uart_demo: boot failed") {}
 }

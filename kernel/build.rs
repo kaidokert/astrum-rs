@@ -15,15 +15,22 @@ fn main() {
         .write_all(include_bytes!("memory.x"))
         .unwrap();
 
-    // cortex-m-rt's link.x uses EXTERN(__INTERRUPTS) which requires
-    // the symbol to be defined (not just PROVIDEd). PAC crates normally
-    // define this via svd2rust. Without a PAC, we define it as an
-    // empty section at address 0.
+    // cortex-m-rt 0.7 asserts SIZEOF(.vector_table) > 0x40, requiring at least
+    // one interrupt vector. Without a device PAC, we provide a single dummy entry.
     File::create(out.join("device.x"))
         .unwrap()
-        .write_all(b"__INTERRUPTS = 0;\n")
+        .write_all(
+            b"PROVIDE(__INTERRUPTS = __interrupts);\n\
+              SECTIONS {\n\
+                .vector_table.interrupts : {\n\
+                  __interrupts = .;\n\
+                  LONG(0);\n\
+                } > FLASH\n\
+              }\n",
+        )
         .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
+    println!("cargo:rustc-link-arg=-Tdevice.x");
     println!("cargo:rustc-link-arg=-Tlink.x");
     println!("cargo:rerun-if-changed=memory.x");
     println!("cargo:rerun-if-changed=build.rs");

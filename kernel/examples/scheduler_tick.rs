@@ -24,6 +24,7 @@ struct TestConfig;
 impl KernelConfig for TestConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
+    const STACK_WORDS: usize = 256;
     const S: usize = 4;
     const SW: usize = 4;
     const MS: usize = 1;
@@ -44,7 +45,7 @@ impl KernelConfig for TestConfig {
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
     type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
@@ -60,12 +61,6 @@ fn SysTick() {
     cortex_m::interrupt::free(|cs| {
         if let Some(ref mut k) = *KERNEL.borrow(cs).borrow_mut() {
             let event = k.advance_schedule_tick();
-            #[cfg(not(feature = "dynamic-mpu"))]
-            if let Some(pid) = event {
-                hprintln!("switch -> partition {}", pid);
-                SWITCH_COUNT.fetch_add(1, Ordering::Relaxed);
-            }
-            #[cfg(feature = "dynamic-mpu")]
             if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
                 hprintln!("switch -> partition {}", pid);
                 SWITCH_COUNT.fetch_add(1, Ordering::Relaxed);

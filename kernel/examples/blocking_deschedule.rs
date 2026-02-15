@@ -40,6 +40,7 @@ struct Cfg;
 impl KernelConfig for Cfg {
     const N: usize = 1;
     const SCHED: usize = 4;
+    const STACK_WORDS: usize = 256;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -60,7 +61,7 @@ impl KernelConfig for Cfg {
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
     type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
@@ -135,14 +136,6 @@ fn SysTick() {
         };
 
         let event = k.advance_schedule_tick();
-        #[cfg(not(feature = "dynamic-mpu"))]
-        if let Some(pid) = event {
-            // Transition incoming partition to Running so syscalls can block it
-            let _ = try_transition(k.partitions_mut(), pid, PartitionState::Running);
-            k.set_next_partition(pid);
-            cortex_m::peripheral::SCB::set_pendsv();
-        }
-        #[cfg(feature = "dynamic-mpu")]
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             // Transition incoming partition to Running so syscalls can block it
             let _ = try_transition(k.partitions_mut(), pid, PartitionState::Running);
