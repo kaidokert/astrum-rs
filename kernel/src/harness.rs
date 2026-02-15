@@ -16,7 +16,6 @@
 //! | Item | Description |
 //! |------|-------------|
 //! | `static mut STACKS` | Per-partition stack arrays (`$SW` words each) |
-//! | `static mut PARTITION_SP` | Saved stack pointers for PendSV |
 //! | `KERNEL` | `Mutex<RefCell<Option<Kernel<…>>>>` for SVC dispatch and SysTick |
 //! | `static _SVC` | Forces linker to include the SVC assembly trampoline |
 //! | `SysTick` exception handler | Drives the round-robin scheduler |
@@ -132,7 +131,7 @@ macro_rules! _unified_handle_yield {
 }
 
 /// Unified harness: single `KERNEL` global for SVC dispatch and SysTick scheduling.
-/// Generates STACKS, PARTITION_SP, KERNEL, PendSV, SysTick, boot().
+/// Generates STACKS, KERNEL, PendSV, SysTick, boot().
 ///
 /// # Usage
 ///
@@ -189,12 +188,11 @@ macro_rules! define_unified_harness {
             [ZERO; $NP]
         };
 
-        #[no_mangle]
-        static mut PARTITION_SP: [u32; $NP] = [0; $NP];
-
-        // NOTE: CURRENT_PARTITION and NEXT_PARTITION statics are no longer
-        // needed. PendSV now reads/writes these values via the Rust shims:
-        // get_current_partition(), set_current_partition(), get_next_partition()
+        // NOTE: CURRENT_PARTITION, NEXT_PARTITION, and PARTITION_SP statics are
+        // no longer needed. PendSV reads/writes these values via Rust shims:
+        // get_current_partition(), set_current_partition(), get_next_partition(),
+        // get_partition_sp(), set_partition_sp(). The partition_sp array now
+        // lives inside PartitionCore within the Kernel struct.
 
         #[cfg(feature = "dynamic-mpu")]
         static HARNESS_STRATEGY: $crate::mpu_strategy::DynamicStrategy =
@@ -269,11 +267,10 @@ macro_rules! define_unified_harness {
 
             // SAFETY: called exactly once from main() with interrupts
             // disabled (before the scheduler has started). Single-core
-            // Cortex-M guarantees exclusive access to these statics and
+            // Cortex-M guarantees exclusive access to this static and
             // to the exception priority registers.
             unsafe {
                 let stacks = &mut *(&raw mut STACKS);
-                let partition_sp = &mut *(&raw mut PARTITION_SP);
 
                 #[cfg(feature = "qemu")]
                 hprintln!("[boot] init stacks for {} partitions", partitions.len());
@@ -287,8 +284,7 @@ macro_rules! define_unified_harness {
                         $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
                             .expect("init_stack_frame");
                     let sp = stk.as_ptr() as u32 + (ix as u32) * 4;
-                    partition_sp[i] = sp;
-                    // Sync SP to kernel's internal storage for PendSV shims.
+                    // Store SP in kernel's internal partition_sp array for PendSV shims.
                     set_partition_sp(i as u32, sp);
                     #[cfg(feature = "qemu")]
                     hprintln!("[boot] partition {} sp={:#010x}", i, sp);
