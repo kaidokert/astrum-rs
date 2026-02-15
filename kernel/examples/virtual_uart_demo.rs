@@ -22,10 +22,14 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
+    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
+    partition_core::PartitionCore,
+    port_pools::PortPools,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc,
     svc::{Kernel, SvcError},
+    sync_pools::SyncPools,
     syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED, SYS_DEV_WRITE, SYS_YIELD},
     virtual_device::VirtualDevice,
 };
@@ -67,6 +71,11 @@ impl KernelConfig for DemoConfig {
     const BP: usize = 1;
     const BZ: usize = 32;
     const DR: usize = 4;
+
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
 // Use the unified harness: single KERNEL global, no separate KS/KERN.

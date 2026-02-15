@@ -18,10 +18,14 @@ use kernel::{
     config::KernelConfig,
     hw_uart::HwUartBackend,
     mpu_strategy::DynamicStrategy,
+    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
+    partition_core::PartitionCore,
+    port_pools::PortPools,
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc,
     svc::{Kernel, SvcError, YieldResult},
+    sync_pools::SyncPools,
     syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE, SYS_YIELD},
     uart_hal::UartRegs,
     virtual_device::VirtualDevice,
@@ -61,6 +65,11 @@ impl KernelConfig for DemoConfig {
     const BP: usize = 1;
     const BZ: usize = 32;
     const DR: usize = 4;
+
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
 #[repr(C, align(1024))]

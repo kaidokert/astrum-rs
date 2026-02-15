@@ -10,9 +10,13 @@ use cortex_m::interrupt::Mutex;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::config::KernelConfig;
+use kernel::msg_pools::MsgPools;
 use kernel::partition::{MpuRegion, PartitionConfig};
+use kernel::partition_core::PartitionCore;
+use kernel::port_pools::PortPools;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
+use kernel::sync_pools::SyncPools;
 use kernel::tick::configure_systick;
 use panic_semihosting as _;
 
@@ -39,6 +43,11 @@ impl KernelConfig for TestConfig {
     const BZ: usize = 32;
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
+
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
 static KERNEL: Mutex<RefCell<Option<Kernel<TestConfig>>>> = Mutex::new(RefCell::new(None));

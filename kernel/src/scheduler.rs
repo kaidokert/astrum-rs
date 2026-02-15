@@ -47,6 +47,28 @@ pub enum ScheduleEvent {
     None,
 }
 
+/// Narrow interface for schedule table access without const bounds.
+pub trait ScheduleTableOps {
+    /// Returns a slice of schedule entries.
+    fn entries(&self) -> &[ScheduleEntry];
+    /// Returns the number of entries in the schedule table.
+    fn len(&self) -> usize;
+    /// Returns `true` if the schedule table has no entries.
+    fn is_empty(&self) -> bool;
+    /// Returns the major frame duration in ticks.
+    fn major_frame_ticks(&self) -> u32;
+    /// Returns the current partition index, if any.
+    fn current_partition(&self) -> Option<u8>;
+}
+
+/// Mutable interface for schedule table manipulation without const bounds.
+pub trait ScheduleTableOpsMut: ScheduleTableOps {
+    /// Add a schedule entry. Returns `Err` if table is full or duration is zero.
+    fn add(&mut self, entry: ScheduleEntry) -> Result<(), ScheduleEntry>;
+    /// Reset to the first slot. Call after adding all entries.
+    fn start(&mut self);
+}
+
 /// Fixed-size schedule table with major frame wraparound.
 pub struct ScheduleTable<const N: usize> {
     entries: heapless::Vec<ScheduleEntry, N>,
@@ -194,6 +216,38 @@ impl<const N: usize> ScheduleTable<N> {
             return ScheduleEvent::PartitionSwitch(entry.partition_index);
         }
         ScheduleEvent::None
+    }
+}
+
+impl<const N: usize> ScheduleTableOps for ScheduleTable<N> {
+    fn entries(&self) -> &[ScheduleEntry] {
+        self.entries()
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn major_frame_ticks(&self) -> u32 {
+        self.major_frame_ticks
+    }
+
+    fn current_partition(&self) -> Option<u8> {
+        self.current_partition()
+    }
+}
+
+impl<const N: usize> ScheduleTableOpsMut for ScheduleTable<N> {
+    fn add(&mut self, entry: ScheduleEntry) -> Result<(), ScheduleEntry> {
+        self.add(entry)
+    }
+
+    fn start(&mut self) {
+        self.start()
     }
 }
 

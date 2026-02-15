@@ -312,6 +312,11 @@ impl<const N: usize> PartitionTable<N> {
     pub fn iter(&self) -> impl Iterator<Item = &PartitionControlBlock> {
         self.partitions.iter()
     }
+
+    /// Returns a slice of all partition control blocks.
+    pub fn as_slice(&self) -> &[PartitionControlBlock] {
+        &self.partitions
+    }
 }
 
 #[cfg(test)]
