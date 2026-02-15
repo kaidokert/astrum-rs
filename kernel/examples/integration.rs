@@ -19,9 +19,13 @@ use kernel::context::init_stack_frame;
 use kernel::events;
 use kernel::message::SendOutcome;
 use kernel::mpu;
+use kernel::msg_pools::MsgPools;
 use kernel::partition::{MpuRegion, PartitionConfig, PartitionState};
+use kernel::partition_core::PartitionCore;
+use kernel::port_pools::PortPools;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
+use kernel::sync_pools::SyncPools;
 use panic_semihosting as _;
 
 struct IntegrationConfig;
@@ -47,6 +51,11 @@ impl KernelConfig for IntegrationConfig {
     const BZ: usize = 32;
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
+
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
 static mut STACK_P0: [u32; 256] = [0; 256];
@@ -130,13 +139,13 @@ fn SysTick() {
         s.start();
         let cfgs = [pcfg(0, 0x2000_0000), pcfg(1, 0x2000_2000)];
         #[cfg(not(feature = "dynamic-mpu"))]
-        let mut kernel = Kernel::new(s, &cfgs).expect("kernel config");
+        let mut kernel: Kernel<IntegrationConfig> = Kernel::new(s, &cfgs).expect("kernel config");
         #[cfg(feature = "dynamic-mpu")]
-        let mut kernel =
+        let mut kernel: Kernel<IntegrationConfig> =
             Kernel::new(s, &cfgs, kernel::virtual_device::DeviceRegistry::new()).expect("kernel");
         // Add a message queue for IPC testing.
         let _ = kernel
-            .messages
+            .messages_mut()
             .add(kernel::message::MessageQueue::<4, 4, 4>::new());
         *K = Some(kernel);
     }
@@ -151,7 +160,7 @@ fn SysTick() {
         _ => None,
     };
     if let Some(pid) = switch_pid {
-        let pcb = k.partitions.get(pid as usize).unwrap();
+        let pcb = k.partitions().get(pid as usize).unwrap();
         assert!(mpu::partition_mpu_regions(pcb).is_some());
         hprintln!("[PASS] MPU + switch {} -> P{}", *SW + 1, pid);
         unsafe {
@@ -163,24 +172,24 @@ fn SysTick() {
     if *T == 4 && !*IPC {
         let msg = [0xCA, 0xFE, 0xBA, 0xBE];
         assert!(matches!(
-            k.messages.send(0, 0, &msg),
+            k.messages_mut().send(0, 0, &msg),
             Ok(SendOutcome::Delivered { .. })
         ));
         let mut buf = [0u8; 4];
-        assert!(k.messages.recv(0, 1, &mut buf).is_ok() && buf == msg);
+        assert!(k.messages_mut().recv(0, 1, &mut buf).is_ok() && buf == msg);
         hprintln!("[PASS] msg_send + msg_recv");
         let _ = k
-            .partitions
+            .partitions_mut()
             .get_mut(0)
             .unwrap()
             .transition(PartitionState::Running);
         let _ = k
-            .partitions
+            .partitions_mut()
             .get_mut(1)
             .unwrap()
             .transition(PartitionState::Running);
-        events::event_set(&mut k.partitions, 0, 0x01);
-        assert!(k.partitions.get(0).unwrap().event_flags() & 0x01 != 0);
+        events::event_set(k.partitions_mut(), 0, 0x01);
+        assert!(k.partitions().get(0).unwrap().event_flags() & 0x01 != 0);
         hprintln!("[PASS] event_flag ack");
         *IPC = true;
     }

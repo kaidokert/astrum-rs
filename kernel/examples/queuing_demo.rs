@@ -13,11 +13,15 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
+    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
+    partition_core::PartitionCore,
+    port_pools::PortPools,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc,
     svc::Kernel,
+    sync_pools::SyncPools,
     syscall::{SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_YIELD},
     unpack_r0,
 };
@@ -58,6 +62,11 @@ impl KernelConfig for DemoConfig {
     const BZ: usize = 32;
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
+
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -350,25 +359,29 @@ fn main() -> ! {
 
     // Command channel: commander (Source cs) -> worker (Destination cd)
     let cs = k
-        .queuing
+        .queuing_mut()
         .create_port(PortDirection::Source)
         .expect("cs port");
     let cd = k
-        .queuing
+        .queuing_mut()
         .create_port(PortDirection::Destination)
         .expect("cd port");
-    k.queuing.connect_ports(cs, cd).expect("connect cs->cd");
+    k.queuing_mut()
+        .connect_ports(cs, cd)
+        .expect("connect cs->cd");
 
     // Response channel: worker (Source rs) -> commander (Destination rd)
     let rs = k
-        .queuing
+        .queuing_mut()
         .create_port(PortDirection::Source)
         .expect("rs port");
     let rd = k
-        .queuing
+        .queuing_mut()
         .create_port(PortDirection::Destination)
         .expect("rd port");
-    k.queuing.connect_ports(rs, rd).expect("connect rs->rd");
+    k.queuing_mut()
+        .connect_ports(rs, rd)
+        .expect("connect rs->rd");
 
     store_kernel(k);
 

@@ -179,7 +179,7 @@ fn main() -> ! {
     let mut k = Kernel::<DemoConfig>::new(sched, &cfgs).expect("kernel creation");
 
     // Create blackboard and semaphore resources.
-    let bb = k.blackboards.create().unwrap() as u32;
+    let bb = k.blackboards_mut().create().unwrap() as u32;
     k.semaphores_mut().add(Semaphore::new(1, 1)).unwrap();
     let sem = 0u32; // first (and only) semaphore in the pool
 

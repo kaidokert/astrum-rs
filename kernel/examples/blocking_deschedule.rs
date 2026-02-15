@@ -20,10 +20,14 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
+    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig, PartitionState},
+    partition_core::PartitionCore,
+    port_pools::PortPools,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{try_transition, Kernel},
+    sync_pools::SyncPools,
     syscall::{SYS_GET_TIME, SYS_QUEUING_RECV_TIMED, SYS_YIELD},
     unpack_r0,
 };
@@ -55,6 +59,11 @@ impl KernelConfig for Cfg {
     const BZ: usize = 32;
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
+
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
 // Use define_unified_kernel! which generates KERNEL static, dispatch_hook, and store_kernel
@@ -224,7 +233,10 @@ fn main() -> ! {
     let mut k = Kernel::<Cfg>::new(sched, &cfgs).expect("kernel creation");
 
     // Create queuing port for the test
-    let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+    let dst = k
+        .queuing_mut()
+        .create_port(PortDirection::Destination)
+        .unwrap();
 
     // Transition partition 0 to Running before the first context switch
     // so that blocking syscalls can transition it to Waiting.

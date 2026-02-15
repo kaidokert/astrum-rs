@@ -699,8 +699,6 @@ where
     /// Currently active partition index, if any.
     pub active_partition: Option<u8>,
     pub tick: TickCounter,
-    pub sampling: SamplingPortPool<{ C::SP }, { C::SM }>,
-    pub blackboards: BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     /// The partition index of the currently executing partition, set by the
     /// scheduler before entering user code. Used as the trusted caller identity
     /// for syscalls, rather than reading from a user-controlled register.
@@ -888,8 +886,6 @@ where
         Ok(Self {
             active_partition: None,
             tick: TickCounter::new(),
-            sampling: SamplingPortPool::new(),
-            blackboards: BlackboardPool::new(),
             current_partition: 0,
             yield_requested: false,
             #[cfg(feature = "dynamic-mpu")]
@@ -926,8 +922,6 @@ where
         Self {
             active_partition: None,
             tick: TickCounter::new(),
-            sampling: SamplingPortPool::new(),
-            blackboards: BlackboardPool::new(),
             current_partition: 0,
             yield_requested: false,
             #[cfg(feature = "dynamic-mpu")]
@@ -1001,6 +995,34 @@ where
     #[inline(always)]
     pub fn queuing_mut(&mut self) -> &mut <C::Msg as MsgOps>::QueuingPool {
         self.msg.queuing_mut()
+    }
+
+    // -------------------------------------------------------------------------
+    // Facade methods delegating to self.ports (PortPools)
+    // -------------------------------------------------------------------------
+
+    /// Returns a shared reference to the sampling port pool.
+    #[inline(always)]
+    pub fn sampling(&self) -> &<C::Ports as PortsOps>::SamplingPool {
+        self.ports.sampling()
+    }
+
+    /// Returns a mutable reference to the sampling port pool.
+    #[inline(always)]
+    pub fn sampling_mut(&mut self) -> &mut <C::Ports as PortsOps>::SamplingPool {
+        self.ports.sampling_mut()
+    }
+
+    /// Returns a shared reference to the blackboard pool.
+    #[inline(always)]
+    pub fn blackboards(&self) -> &<C::Ports as PortsOps>::BlackboardPool {
+        self.ports.blackboards()
+    }
+
+    /// Returns a mutable reference to the blackboard pool.
+    #[inline(always)]
+    pub fn blackboards_mut(&mut self) -> &mut <C::Ports as PortsOps>::BlackboardPool {
+        self.ports.blackboards_mut()
     }
 
     /// Install an optional hardware UART backend.
