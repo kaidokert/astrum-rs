@@ -524,21 +524,8 @@ macro_rules! define_unified_kernel {
             // `cortex_m::interrupt::free` masks interrupts, ensuring exclusive access.
             ::cortex_m::interrupt::free(|cs| {
                 if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
-                    // Synchronise the kernel's caller identity from the
-                    // assembly-level CURRENT_PARTITION written by PendSV.
-                    extern "C" {
-                        static CURRENT_PARTITION: u32;
-                    }
-                    // SAFETY: CURRENT_PARTITION is an extern static u32 defined in
-                    // assembly (context.s) and written by PendSV. Accessing it is safe
-                    // because: (1) interrupts are masked by `interrupt::free`, preventing
-                    // concurrent writes from PendSV on this single-core Cortex-M, and
-                    // (2) read_volatile is used since the value may change between SVC
-                    // calls (written by PendSV from NEXT_PARTITION). The value is always
-                    // a valid partition index in range 0..num_partitions.
-                    k.current_partition = unsafe {
-                        core::ptr::read_volatile(core::ptr::addr_of!(CURRENT_PARTITION))
-                    } as u8;
+                    // NOTE: current_partition is now maintained by PendSV via the
+                    // set_current_partition() shim. No sync from static needed.
 
                     // SAFETY: `k.dispatch(f)` requires: (1) `f` is a valid pointer to the
                     // exception frame on the process stack — guaranteed by the SVC assembly
@@ -639,6 +626,19 @@ macro_rules! define_unified_kernel {
         #[allow(dead_code)] // Called from assembly, not Rust
         extern "C" fn get_partition_sp_ptr() -> *mut u32 {
             with_kernel_mut(|k| k.partition_sp_mut().as_mut_ptr()).unwrap_or(::core::ptr::null_mut())
+        }
+
+        /// Sets the current partition index in the Kernel struct.
+        ///
+        /// Called by PendSV assembly after context switch to update the
+        /// kernel's current partition. Uses `interrupt::free` to safely
+        /// access KERNEL.
+        ///
+        /// Does nothing if KERNEL is not initialized.
+        #[cfg_attr(not(test), no_mangle)]
+        #[allow(dead_code)] // Called from assembly, not Rust
+        extern "C" fn set_current_partition(pid: u32) {
+            with_kernel_mut(|k| k.set_current_partition(pid as u8));
         }
     };
 }
@@ -877,7 +877,7 @@ where
         Ok(Self {
             active_partition: None,
             tick: TickCounter::new(),
-            current_partition: 0,
+            current_partition: 255, // sentinel for "no partition running yet"
             yield_requested: false,
             #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
@@ -917,7 +917,7 @@ where
         Self {
             active_partition: None,
             tick: TickCounter::new(),
-            current_partition: 0,
+            current_partition: 255, // sentinel for "no partition running yet"
             yield_requested: false,
             #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),

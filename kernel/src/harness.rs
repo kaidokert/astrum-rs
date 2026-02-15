@@ -17,7 +17,6 @@
 //! |------|-------------|
 //! | `static mut STACKS` | Per-partition stack arrays (`$SW` words each) |
 //! | `static mut PARTITION_SP` | Saved stack pointers for PendSV |
-//! | `static mut CURRENT_PARTITION` | Index of currently running partition |
 //! | `static mut NEXT_PARTITION` | Index of next partition to switch to |
 //! | `KERNEL` | `Mutex<RefCell<Option<Kernel<…>>>>` for SVC dispatch and SysTick |
 //! | `static _SVC` | Forces linker to include the SVC assembly trampoline |
@@ -202,8 +201,9 @@ macro_rules! define_unified_harness {
         #[no_mangle]
         static mut PARTITION_SP: [u32; $NP] = [0; $NP];
 
-        #[no_mangle]
-        static mut CURRENT_PARTITION: u32 = u32::MAX;
+        // NOTE: CURRENT_PARTITION static is no longer needed. PendSV now
+        // reads/writes the kernel's current_partition field via the
+        // get_current_partition() and set_current_partition() shims.
 
         #[no_mangle]
         static mut NEXT_PARTITION: u32 = 0;

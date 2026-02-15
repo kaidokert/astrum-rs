@@ -11,12 +11,10 @@
 //!
 //! # Requirements
 //!
-//! The binary must define the following `#[no_mangle] static mut` symbols:
-//!
-//! - `CURRENT_PARTITION: u32` — index of the currently running partition
-//!   (initialise to `u32::MAX` to indicate "no partition yet").
-//! - `NEXT_PARTITION: u32` — index of the partition to switch to next.
-//! - `PARTITION_SP: [u32; N]` — saved stack-pointer (PSP) for each partition.
+//! The binary must define `NEXT_PARTITION: u32` and `PARTITION_SP: [u32; N]`
+//! as `#[no_mangle] static mut`. The binary must also invoke
+//! [`define_unified_kernel!`] which provides the `get_current_partition()`
+//! and `set_current_partition()` shims for accessing kernel state.
 //!
 //! # Usage
 //!
@@ -35,31 +33,18 @@
 /// partition context switches.
 ///
 /// The handler:
-/// 1. Skips saving if `CURRENT_PARTITION == 0xFFFF_FFFF` (first switch).
-/// 2. Saves r4-r11 onto the current partition's stack via `stmdb`.
-/// 3. Stores the updated PSP into `PARTITION_SP[current]`.
-/// 4. Loads `NEXT_PARTITION`, sets `CURRENT_PARTITION = NEXT_PARTITION`.
-/// 5. Restores r4-r11 from the next partition's stack via `ldmia`.
-/// 6. Sets PSP.
-/// 7. Sets `CONTROL.nPRIV = 1` so the partition executes unprivileged,
-///    followed by an `ISB` to ensure the pipeline observes the new
-///    privilege level before the `bx lr`.
-/// 8. Returns with `EXC_RETURN = 0xFFFFFFFD` (Thread/PSP).
+/// 1. Calls `get_current_partition()` — skips save if 0xFF (first switch).
+/// 2. Saves r4-r11 via `stmdb`; stores PSP to `PARTITION_SP[current]`.
+/// 3. Loads `NEXT_PARTITION`, calls `set_current_partition(next)`.
+/// 4. Restores r4-r11 via `ldmia`; sets PSP.
+/// 5. Sets `CONTROL.nPRIV = 1` + ISB; returns with EXC_RETURN=0xFFFFFFFD.
 #[macro_export]
 macro_rules! define_pendsv {
     () => {
         #[cfg(target_arch = "arm")]
-        // SAFETY: This inline assembly implements the PendSV exception handler,
-        // which is the sole context-switch path for partitions. It executes at
-        // exception priority and accesses only the global symbols
-        // CURRENT_PARTITION, NEXT_PARTITION, and PARTITION_SP — all of which
-        // are `#[no_mangle] static mut` owned by the binary crate and
-        // exclusively mutated inside this handler.  The handler saves/restores
-        // r4-r11 and PSP following the ARM calling convention for exception
-        // entry, and sets CONTROL.nPRIV before returning to Thread mode so the
-        // partition runs unprivileged.  No Rust aliasing rules are violated
-        // because PendSV cannot preempt itself and SysTick only writes
-        // NEXT_PARTITION (a plain u32 store, atomic on Cortex-M).
+        // SAFETY: PendSV exception handler — accesses kernel via Rust shims
+        // (interrupt::free) and static mut NEXT_PARTITION/PARTITION_SP owned
+        // by binary crate. No aliasing: PendSV cannot preempt itself.
         core::arch::global_asm!(
             r#"
             .syntax unified
@@ -69,10 +54,12 @@ macro_rules! define_pendsv {
             .type PendSV, %function
 
         PendSV:
-            ldr     r0, =CURRENT_PARTITION
-            ldr     r1, [r0]
-            ldr     r2, =0xFFFFFFFF
-            cmp     r1, r2
+            push    {{lr}}
+            bl      get_current_partition
+            pop     {{lr}}
+            mov     r1, r0
+
+            cmp     r1, #0xFF
             beq     .Lpendsv_skip_save
 
             mrs     r3, psp
@@ -86,8 +73,10 @@ macro_rules! define_pendsv {
             ldr     r0, =NEXT_PARTITION
             ldr     r1, [r0]
 
-            ldr     r0, =CURRENT_PARTITION
-            str     r1, [r0]
+            push    {{r1, lr}}
+            mov     r0, r1
+            bl      set_current_partition
+            pop     {{r1, lr}}
 
             ldr     r2, =PARTITION_SP
             lsl     r0, r1, #2
@@ -158,17 +147,9 @@ macro_rules! define_pendsv_dynamic {
         }
 
         #[cfg(target_arch = "arm")]
-        // SAFETY: This inline assembly implements the PendSV exception handler
-        // for the dynamic-MPU variant.  Same invariants as `define_pendsv!`
-        // apply: it runs at exception priority, exclusively accesses the
-        // `#[no_mangle] static mut` symbols CURRENT_PARTITION,
-        // NEXT_PARTITION, and PARTITION_SP, and saves/restores r4-r11 and PSP
-        // per the ARM exception-entry convention.  Additionally, it calls the
-        // Rust shim `__pendsv_program_mpu` (defined above) to reconfigure MPU
-        // regions while still in handler mode, which is safe because PendSV is
-        // the lowest-priority exception and holds exclusive access to the MPU
-        // peripheral.  CONTROL.nPRIV is set before returning to Thread mode so
-        // the partition runs unprivileged.
+        // SAFETY: PendSV exception handler (dynamic-MPU) — accesses kernel via
+        // Rust shims, static mut symbols, and __pendsv_program_mpu for MPU.
+        // No aliasing: PendSV is lowest priority and cannot preempt itself.
         core::arch::global_asm!(
             r#"
             .syntax unified
@@ -178,10 +159,12 @@ macro_rules! define_pendsv_dynamic {
             .type PendSV, %function
 
         PendSV:
-            ldr     r0, =CURRENT_PARTITION
-            ldr     r1, [r0]
-            ldr     r2, =0xFFFFFFFF
-            cmp     r1, r2
+            push    {{lr}}
+            bl      get_current_partition
+            pop     {{lr}}
+            mov     r1, r0
+
+            cmp     r1, #0xFF
             beq     .Lpendsv_dyn_skip_save
 
             mrs     r3, psp
@@ -192,7 +175,6 @@ macro_rules! define_pendsv_dynamic {
             str     r3, [r2, r0]
 
         .Lpendsv_dyn_skip_save:
-            /* Program dynamic MPU regions for the incoming partition. */
             push    {{lr}}
             bl      __pendsv_program_mpu
             pop     {{lr}}
@@ -200,8 +182,10 @@ macro_rules! define_pendsv_dynamic {
             ldr     r0, =NEXT_PARTITION
             ldr     r1, [r0]
 
-            ldr     r0, =CURRENT_PARTITION
-            str     r1, [r0]
+            push    {{r1, lr}}
+            mov     r0, r1
+            bl      set_current_partition
+            pop     {{r1, lr}}
 
             ldr     r2, =PARTITION_SP
             lsl     r0, r1, #2
