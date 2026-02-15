@@ -22,6 +22,7 @@ pub mod mpu;
 pub mod mpu_strategy;
 pub mod mutex;
 pub mod partition;
+pub mod partition_core;
 pub mod pendsv;
 pub mod queuing;
 pub mod sampling;
