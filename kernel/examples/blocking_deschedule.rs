@@ -72,11 +72,7 @@ kernel::define_unified_kernel!(Cfg, |k| {
     use kernel::svc::YieldResult;
     let result = k.yield_current_slot();
     if let Some(pid) = result.partition_id() {
-        // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
-        // exclusive access; PendSV (priority 0xFF) cannot preempt.
-        unsafe {
-            core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32);
-        }
+        k.set_next_partition(pid);
         cortex_m::peripheral::SCB::set_pendsv();
     }
 });
@@ -91,12 +87,6 @@ static mut STACKS: [Stack; NP] = {
     const Z: Stack = Stack([0; SW]);
     [Z; NP]
 };
-#[no_mangle]
-static mut PARTITION_SP: [u32; NP] = [0; NP];
-#[no_mangle]
-static mut CURRENT_PARTITION: u32 = u32::MAX;
-#[no_mangle]
-static mut NEXT_PARTITION: u32 = 0;
 
 /// Tick when partition called blocking recv
 static BLOCK_TICK: AtomicU32 = AtomicU32::new(0);
@@ -149,18 +139,14 @@ fn SysTick() {
         if let Some(pid) = event {
             // Transition incoming partition to Running so syscalls can block it
             let _ = try_transition(k.partitions_mut(), pid, PartitionState::Running);
-            // SAFETY: single-core Cortex-M — SysTick has exclusive access to
-            // NEXT_PARTITION; PendSV (lower priority) cannot preempt us.
-            unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
+            k.set_next_partition(pid);
             cortex_m::peripheral::SCB::set_pendsv();
         }
         #[cfg(feature = "dynamic-mpu")]
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             // Transition incoming partition to Running so syscalls can block it
             let _ = try_transition(k.partitions_mut(), pid, PartitionState::Running);
-            // SAFETY: single-core Cortex-M — SysTick has exclusive access to
-            // NEXT_PARTITION; PendSV (lower priority) cannot preempt us.
-            unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
+            k.set_next_partition(pid);
             cortex_m::peripheral::SCB::set_pendsv();
         }
 
@@ -254,7 +240,8 @@ fn main() -> ! {
             Some(dst as u32),
         )
         .unwrap();
-        PARTITION_SP[0] = stk.as_ptr() as u32 + (ix as u32) * 4;
+        let sp = stk.as_ptr() as u32 + (ix as u32) * 4;
+        set_partition_sp(0, sp);
 
         cp.SCB.set_priority(SystemHandler::SVCall, 0x00);
         cp.SCB.set_priority(SystemHandler::PendSV, 0xFF);

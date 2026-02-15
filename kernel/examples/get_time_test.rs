@@ -88,12 +88,6 @@ static mut STACKS: [AlignedStack; NP] = {
     const ZERO: AlignedStack = AlignedStack([0; STACK_WORDS]);
     [ZERO; NP]
 };
-#[no_mangle]
-static mut PARTITION_SP: [u32; NP] = [0; NP];
-#[no_mangle]
-static mut CURRENT_PARTITION: u32 = u32::MAX;
-#[no_mangle]
-static mut NEXT_PARTITION: u32 = 0;
 
 /// Latest SYS_GET_TIME reading from the partition (0 = not yet read).
 static TIME_READING: AtomicU32 = AtomicU32::new(0);
@@ -123,13 +117,12 @@ fn SysTick() {
         let event = k.advance_schedule_tick();
         #[cfg(not(feature = "dynamic-mpu"))]
         if let Some(pid) = event {
-            // SAFETY: single-core; PendSV cannot preempt SysTick.
-            unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
+            k.set_next_partition(pid);
             cortex_m::peripheral::SCB::set_pendsv();
         }
         #[cfg(feature = "dynamic-mpu")]
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
-            unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
+            k.set_next_partition(pid);
             cortex_m::peripheral::SCB::set_pendsv();
         }
     });
@@ -206,7 +199,8 @@ fn main() -> ! {
         let stk = &mut STACKS[0].0;
         let ix = kernel::context::init_stack_frame(stk, partition_main as *const () as u32, None)
             .expect("init_stack_frame");
-        PARTITION_SP[0] = stk.as_ptr() as u32 + (ix as u32) * 4;
+        let sp = stk.as_ptr() as u32 + (ix as u32) * 4;
+        set_partition_sp(0, sp);
 
         cp.SCB.set_priority(SystemHandler::SVCall, 0x00);
         cp.SCB.set_priority(SystemHandler::PendSV, 0xFF);

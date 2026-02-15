@@ -15,14 +15,14 @@ fn main() {
         .write_all(include_bytes!("memory.x"))
         .unwrap();
 
-    // TODO: reviewer noted this device.x fix is an unrelated build-system
-    // change that should be in a separate commit.  It is kept here because
-    // without it all examples (including get_time_test) fail to link.
-    //
-    // cortex-m-rt's link.x INCLUDEs device.x for interrupt vector
-    // definitions.  Without a PAC crate providing one, supply an empty
-    // file so the linker resolves the include.
-    File::create(out.join("device.x")).unwrap();
+    // cortex-m-rt's link.x uses EXTERN(__INTERRUPTS) which requires
+    // the symbol to be defined (not just PROVIDEd). PAC crates normally
+    // define this via svd2rust. Without a PAC, we define it as an
+    // empty section at address 0.
+    File::create(out.join("device.x"))
+        .unwrap()
+        .write_all(b"__INTERRUPTS = 0;\n")
+        .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rustc-link-arg=-Tlink.x");
     println!("cargo:rerun-if-changed=memory.x");
