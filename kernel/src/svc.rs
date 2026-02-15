@@ -698,10 +698,8 @@ where
 {
     /// Currently active partition index, if any.
     pub active_partition: Option<u8>,
-    pub messages: MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
     pub tick: TickCounter,
     pub sampling: SamplingPortPool<{ C::SP }, { C::SM }>,
-    pub queuing: QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
     pub blackboards: BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     /// The partition index of the currently executing partition, set by the
     /// scheduler before entering user code. Used as the trusted caller identity
@@ -889,10 +887,8 @@ where
         }
         Ok(Self {
             active_partition: None,
-            messages: MessagePool::new(),
             tick: TickCounter::new(),
             sampling: SamplingPortPool::new(),
-            queuing: QueuingPortPool::new(),
             blackboards: BlackboardPool::new(),
             current_partition: 0,
             yield_requested: false,
@@ -929,10 +925,8 @@ where
     ) -> Self {
         Self {
             active_partition: None,
-            messages: MessagePool::new(),
             tick: TickCounter::new(),
             sampling: SamplingPortPool::new(),
-            queuing: QueuingPortPool::new(),
             blackboards: BlackboardPool::new(),
             current_partition: 0,
             yield_requested: false,
@@ -983,6 +977,30 @@ where
     #[inline(always)]
     pub fn mutexes_mut(&mut self) -> &mut <C::Sync as SyncOps>::MutPool {
         self.sync.mutexes_mut()
+    }
+
+    /// Returns a shared reference to the message pool.
+    #[inline(always)]
+    pub fn messages(&self) -> &<C::Msg as MsgOps>::MsgPool {
+        self.msg.messages()
+    }
+
+    /// Returns a mutable reference to the message pool.
+    #[inline(always)]
+    pub fn messages_mut(&mut self) -> &mut <C::Msg as MsgOps>::MsgPool {
+        self.msg.messages_mut()
+    }
+
+    /// Returns a shared reference to the queuing port pool.
+    #[inline(always)]
+    pub fn queuing(&self) -> &<C::Msg as MsgOps>::QueuingPool {
+        self.msg.queuing()
+    }
+
+    /// Returns a mutable reference to the queuing port pool.
+    #[inline(always)]
+    pub fn queuing_mut(&mut self) -> &mut <C::Msg as MsgOps>::QueuingPool {
+        self.msg.queuing_mut()
     }
 
     /// Install an optional hardware UART backend.
@@ -2263,12 +2281,12 @@ mod tests {
         let mut k = kernel(0, 0, 2);
         // Send to queue 0 from partition 0
         let data: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
-        let outcome = k.messages.send(0, 0, &data).unwrap();
+        let outcome = k.messages_mut().send(0, 0, &data).unwrap();
         assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
 
         // Receive from queue 0 into partition 1's buffer
         let mut recv_buf = [0u8; 4];
-        let outcome = k.messages.recv(0, 1, &mut recv_buf).unwrap();
+        let outcome = k.messages_mut().recv(0, 1, &mut recv_buf).unwrap();
         assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(None));
         assert_eq!(recv_buf, [0xDE, 0xAD, 0xBE, 0xEF]);
     }
@@ -2280,21 +2298,21 @@ mod tests {
         let data_q0: [u8; 4] = [1, 2, 3, 4];
         let data_q1: [u8; 4] = [5, 6, 7, 8];
 
-        let outcome = k.messages.send(0, 0, &data_q0).unwrap();
+        let outcome = k.messages_mut().send(0, 0, &data_q0).unwrap();
         assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
 
-        let outcome = k.messages.send(1, 0, &data_q1).unwrap();
+        let outcome = k.messages_mut().send(1, 0, &data_q1).unwrap();
         assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
 
         // Recv from queue 1 first
         let mut buf = [0u8; 4];
-        let outcome = k.messages.recv(1, 1, &mut buf).unwrap();
+        let outcome = k.messages_mut().recv(1, 1, &mut buf).unwrap();
         assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(None));
         assert_eq!(buf, [5, 6, 7, 8]);
 
         // Recv from queue 0
         let mut buf = [0u8; 4];
-        let outcome = k.messages.recv(0, 1, &mut buf).unwrap();
+        let outcome = k.messages_mut().recv(0, 1, &mut buf).unwrap();
         assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(None));
         assert_eq!(buf, [1, 2, 3, 4]);
     }
@@ -2302,8 +2320,8 @@ mod tests {
     #[test]
     fn msg_invalid_queue_id_returns_max() {
         let mut k = kernel(0, 0, 1);
-        assert!(k.messages.send(99, 0, &[1; 4]).is_err());
-        assert!(k.messages.recv(99, 0, &mut [0; 4]).is_err());
+        assert!(k.messages_mut().send(99, 0, &[1; 4]).is_err());
+        assert!(k.messages_mut().recv(99, 0, &mut [0; 4]).is_err());
     }
 
     #[test]
@@ -2311,12 +2329,12 @@ mod tests {
         let mut k = kernel(0, 0, 1);
         // Fill the depth-4 queue to capacity
         for i in 0..4u8 {
-            let outcome = k.messages.send(0, 0, &[i; 4]).unwrap();
+            let outcome = k.messages_mut().send(0, 0, &[i; 4]).unwrap();
             assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
         }
 
         // Next send blocks partition 1
-        let outcome = k.messages.send(0, 1, &[99; 4]).unwrap();
+        let outcome = k.messages_mut().send(0, 1, &[99; 4]).unwrap();
         assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: 1 });
         assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(Some(1)));
         assert_eq!(
@@ -2326,7 +2344,7 @@ mod tests {
 
         // Recv should wake partition 1
         let mut buf = [0u8; 4];
-        let outcome = k.messages.recv(0, 0, &mut buf).unwrap();
+        let outcome = k.messages_mut().recv(0, 0, &mut buf).unwrap();
         assert_eq!(
             outcome,
             RecvOutcome::Received {
@@ -2346,7 +2364,7 @@ mod tests {
         let mut k = kernel(0, 0, 1);
         // Recv on empty queue blocks partition 0
         let mut buf = [0u8; 4];
-        let outcome = k.messages.recv(0, 0, &mut buf).unwrap();
+        let outcome = k.messages_mut().recv(0, 0, &mut buf).unwrap();
         assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: 0 });
         assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(Some(0)));
         assert_eq!(
@@ -2355,7 +2373,7 @@ mod tests {
         );
 
         // Send should wake partition 0
-        let outcome = k.messages.send(0, 1, &[9; 4]).unwrap();
+        let outcome = k.messages_mut().send(0, 1, &[9; 4]).unwrap();
         assert_eq!(
             outcome,
             SendOutcome::Delivered {
@@ -2374,14 +2392,14 @@ mod tests {
         let mut k = kernel(0, 0, 1);
         // Fill the depth-4 queue to capacity
         for i in 0..4u8 {
-            let outcome = k.messages.send(0, 0, &[i; 4]).unwrap();
+            let outcome = k.messages_mut().send(0, 0, &[i; 4]).unwrap();
             assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
         }
         // yield_requested should still be false after successful sends
         assert!(!k.yield_requested);
 
         // Next send blocks partition 1
-        let outcome = k.messages.send(0, 1, &[99; 4]).unwrap();
+        let outcome = k.messages_mut().send(0, 1, &[99; 4]).unwrap();
         assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: 1 });
         assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(Some(1)));
         // Caller is responsible for triggering deschedule
@@ -2403,7 +2421,7 @@ mod tests {
 
         // Recv on empty queue blocks partition 0
         let mut buf = [0u8; 4];
-        let outcome = k.messages.recv(0, 0, &mut buf).unwrap();
+        let outcome = k.messages_mut().recv(0, 0, &mut buf).unwrap();
         assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: 0 });
 
         // apply_recv_outcome calls trigger_deschedule internally
@@ -3313,7 +3331,7 @@ mod tests {
 
         for &(sys_id, r1, r2, r3, dir) in cases {
             let mut k = kernel(0, 0, 0);
-            k.queuing.create_port(dir).unwrap();
+            k.queuing_mut().create_port(dir).unwrap();
             let mut ef = frame4(sys_id, r1, r2, r3);
             unsafe { k.dispatch(&mut ef) };
             assert_eq!(
@@ -3403,12 +3421,15 @@ mod tests {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
         let mut k = kernel(0, 0, 0);
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
-        k.queuing
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
+        k.queuing_mut()
             .get_mut(dst)
             .unwrap()
             .inject_message(2, &[0xAA, 0xBB]);
-        k.queuing
+        k.queuing_mut()
             .get_mut(dst)
             .unwrap()
             .enqueue_blocked_sender(1, u64::MAX);
@@ -3436,7 +3457,10 @@ mod tests {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
         let mut k = kernel(0, 0, 0);
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 50, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
@@ -3445,7 +3469,7 @@ mod tests {
             k.partitions().get(0).unwrap().state(),
             PartitionState::Waiting
         );
-        assert_eq!(k.queuing.get(dst).unwrap().pending_receivers(), 1);
+        assert_eq!(k.queuing().get(dst).unwrap().pending_receivers(), 1);
     }
 
     #[test]
@@ -3453,7 +3477,10 @@ mod tests {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
         let mut k = kernel(0, 0, 0);
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 50, ptr as u32);
         assert!(
@@ -3477,7 +3504,10 @@ mod tests {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
         let mut k = kernel(0, 0, 0);
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 0, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
@@ -3499,7 +3529,9 @@ mod tests {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
         let mut k = kernel(0, 0, 0);
-        k.queuing.create_port(PortDirection::Destination).unwrap();
+        k.queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, 0, 50, 0xDEAD_0000);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
@@ -3510,8 +3542,14 @@ mod tests {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
         let mut k = kernel(0, 0, 0);
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
-        k.queuing.get_mut(dst).unwrap().inject_message(1, &[42]);
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
+        k.queuing_mut()
+            .get_mut(dst)
+            .unwrap()
+            .inject_message(1, &[42]);
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 100, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
@@ -3531,7 +3569,10 @@ mod tests {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_RECV;
         let mut k = kernel(0, 0, 0);
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
         let ptr = low32_buf(0);
         // Empty queue with original QueuingRecv (timeout=0) → QueueEmpty → InvalidResource
         let mut ef = frame4(SYS_QUEUING_RECV, dst as u32, 0, ptr as u32);
@@ -3549,9 +3590,12 @@ mod tests {
     /// Helper: create a connected Source→Destination pair, return (src_id, dst_id).
     fn connected_send_pair(k: &mut Kernel<TestConfig>) -> (usize, usize) {
         use crate::sampling::PortDirection;
-        let s = k.queuing.create_port(PortDirection::Source).unwrap();
-        let d = k.queuing.create_port(PortDirection::Destination).unwrap();
-        k.queuing.connect_ports(s, d).unwrap();
+        let s = k.queuing_mut().create_port(PortDirection::Source).unwrap();
+        let d = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
+        k.queuing_mut().connect_ports(s, d).unwrap();
         (s, d)
     }
 
@@ -3564,13 +3608,13 @@ mod tests {
     /// content match `expected_data`.
     fn assert_queued_message(k: &mut Kernel<TestConfig>, d: usize, expected_data: &[u8]) {
         assert_eq!(
-            k.queuing.get(d).unwrap().nb_messages(),
+            k.queuing().get(d).unwrap().nb_messages(),
             1,
             "destination should have 1 queued message"
         );
         let mut recv_buf = [0u8; 4];
         let outcome = k
-            .queuing
+            .queuing_mut()
             .get_mut(d)
             .unwrap()
             .receive_queuing_message(1, &mut recv_buf, 0, 0)
@@ -3594,7 +3638,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         let (s, d) = connected_send_pair(&mut k);
         // Enqueue a blocked receiver on the destination port
-        k.queuing
+        k.queuing_mut()
             .get_mut(d)
             .unwrap()
             .enqueue_blocked_receiver(1, u64::MAX);
@@ -3626,7 +3670,10 @@ mod tests {
         let (s, d) = connected_send_pair(&mut k);
         // Fill the destination queue to capacity (QD=4)
         for _ in 0..4 {
-            k.queuing.get_mut(d).unwrap().inject_message(1, &[0x42]);
+            k.queuing_mut()
+                .get_mut(d)
+                .unwrap()
+                .inject_message(1, &[0x42]);
         }
         let ptr = low32_buf(0);
         let r2 = pack_r2(50, 1);
@@ -3638,7 +3685,7 @@ mod tests {
             k.partitions().get(0).unwrap().state(),
             PartitionState::Waiting
         );
-        assert_eq!(k.queuing.get(d).unwrap().pending_senders(), 1);
+        assert_eq!(k.queuing().get(d).unwrap().pending_senders(), 1);
     }
 
     // TODO: reviewer false positive – this test (full queue, timeout=0) already
@@ -3650,7 +3697,10 @@ mod tests {
         let (s, d) = connected_send_pair(&mut k);
         // Fill destination queue
         for _ in 0..4 {
-            k.queuing.get_mut(d).unwrap().inject_message(1, &[0x42]);
+            k.queuing_mut()
+                .get_mut(d)
+                .unwrap()
+                .inject_message(1, &[0x42]);
         }
         let ptr = low32_buf(0);
         let r2 = pack_r2(0, 1);
@@ -3711,12 +3761,18 @@ mod tests {
         use crate::sampling::PortDirection;
         use crate::syscall::SYS_QUEUING_SEND;
         let mut k = kernel(0, 0, 0);
-        let s = k.queuing.create_port(PortDirection::Source).unwrap();
-        let d = k.queuing.create_port(PortDirection::Destination).unwrap();
-        k.queuing.connect_ports(s, d).unwrap();
+        let s = k.queuing_mut().create_port(PortDirection::Source).unwrap();
+        let d = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
+        k.queuing_mut().connect_ports(s, d).unwrap();
         // Fill destination queue
         for _ in 0..4 {
-            k.queuing.get_mut(d).unwrap().inject_message(1, &[0x42]);
+            k.queuing_mut()
+                .get_mut(d)
+                .unwrap()
+                .inject_message(1, &[0x42]);
         }
         let ptr = low32_buf(0);
         // Original QueuingSend: r2=data_len (used as raw len), timeout=0
@@ -3738,7 +3794,10 @@ mod tests {
         let (s, d) = connected_send_pair(&mut k);
         // Fill the destination queue to capacity (QD=4)
         for _ in 0..4 {
-            k.queuing.get_mut(d).unwrap().inject_message(1, &[0x42]);
+            k.queuing_mut()
+                .get_mut(d)
+                .unwrap()
+                .inject_message(1, &[0x42]);
         }
         let ptr = low32_buf(0);
         let r2 = pack_r2(50, 1);
@@ -3873,13 +3932,16 @@ mod tests {
 
         let mut k = kernel(0, 0, 0);
         // Create a destination queuing port (empty queue → recv blocks).
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
 
         // Partition 0 attempts a timed receive with timeout=50 at tick=100.
         // Queue is empty so the receiver gets blocked with expiry=150.
         let mut buf = [0u8; 4];
         let outcome = k
-            .queuing
+            .queuing_mut()
             .receive_queuing_message(dst, 0, &mut buf, 50, 100)
             .unwrap();
         assert_eq!(
@@ -3913,19 +3975,25 @@ mod tests {
 
         let mut k = kernel(0, 0, 0);
         // Create a source port and a connected destination port.
-        let src = k.queuing.create_port(PortDirection::Source).unwrap();
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
-        k.queuing.connect_ports(src, dst).unwrap();
+        let src = k.queuing_mut().create_port(PortDirection::Source).unwrap();
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
+        k.queuing_mut().connect_ports(src, dst).unwrap();
 
         // Fill the destination queue (depth=4).
         for i in 0..4u8 {
-            let outcome = k.queuing.send_routed(src, 0, &[i; 4], 0, 0).unwrap();
+            let outcome = k.queuing_mut().send_routed(src, 0, &[i; 4], 0, 0).unwrap();
             assert!(matches!(outcome, SendQueuingOutcome::Delivered { .. }));
         }
 
         // Partition 1 attempts a timed send with timeout=100 at tick=50.
         // Queue is full so the sender blocks with expiry=150.
-        let outcome = k.queuing.send_routed(src, 1, &[0xFF; 4], 100, 50).unwrap();
+        let outcome = k
+            .queuing_mut()
+            .send_routed(src, 1, &[0xFF; 4], 100, 50)
+            .unwrap();
         assert_eq!(
             outcome,
             SendQueuingOutcome::SenderBlocked { expiry_tick: 150 }
@@ -3956,12 +4024,15 @@ mod tests {
         use crate::sampling::PortDirection;
 
         let mut k = kernel(0, 0, 0);
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
 
         // Block partition 0 as receiver with expiry at tick 200.
         let mut buf = [0u8; 4];
         let outcome = k
-            .queuing
+            .queuing_mut()
             .receive_queuing_message(dst, 0, &mut buf, 100, 100)
             .unwrap();
         assert_eq!(
@@ -4067,7 +4138,10 @@ mod tests {
         use crate::syscall::SYS_QUEUING_RECV_TIMED;
 
         let mut k = kernel(0, 0, 0);
-        let dst = k.queuing.create_port(PortDirection::Destination).unwrap();
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
 
         // Sync tick to 100, then dispatch a timed recv with timeout=50.
         // The dispatch handler reads self.tick.get() (100) as current_tick,
@@ -4082,7 +4156,7 @@ mod tests {
             k.partitions().get(0).unwrap().state(),
             PartitionState::Waiting
         );
-        assert_eq!(k.queuing.get(dst).unwrap().pending_receivers(), 1);
+        assert_eq!(k.queuing().get(dst).unwrap().pending_receivers(), 1);
 
         // Expire at the synced deadline tick.
         k.expire_timed_waits::<8>(150);
