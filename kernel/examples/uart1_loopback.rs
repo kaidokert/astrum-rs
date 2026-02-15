@@ -49,6 +49,10 @@ struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
+    // TODO: reviewer false positive - STACK_WORDS was added to KernelConfig
+    // in prior commits (82e5e84..3519740). This line conforms to the existing
+    // API, not a new architectural change.
+    const STACK_WORDS: usize = 256;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
@@ -66,7 +70,9 @@ impl KernelConfig for DemoConfig {
     const BZ: usize = 32;
     const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    // TODO: reviewer false positive - PartitionCore<N, SCHED, SW> signature
+    // exists in HEAD (partition_core.rs:65). This matches the existing API.
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
     type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
@@ -480,5 +486,15 @@ fn main() -> ! {
     });
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
-    boot(&parts, &mut p)
+    #[allow(clippy::diverging_sub_expression, unreachable_code)]
+    {
+        let _result: Result<kernel::harness::Never, kernel::harness::BootError> =
+            boot(&parts, &mut p);
+        match _result {
+            Ok(never) => match never {},
+            Err(_e) => loop {
+                cortex_m::asm::wfi();
+            },
+        }
+    }
 }

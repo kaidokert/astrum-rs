@@ -27,7 +27,32 @@
 //! After invoking the macro, call the generated `boot()` from `main()`
 //! to perform the common startup sequence (partition stack init,
 //! exception priorities, SysTick configuration, and first PendSV
-//! trigger).
+//! trigger). Returns `Result<Never, BootError>` for panic-free init.
+
+/// Errors that can occur during kernel boot initialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootError {
+    /// Stack frame init failed (index out of bounds or stack too small).
+    StackInitFailed { partition_index: usize },
+    /// No partition is ready to run at boot time.
+    NoReadyPartition,
+}
+
+/// Uninhabited type representing a function that never returns on success.
+/// Use in `Result<Never, E>` for fallible divergent functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Never {}
+
+impl core::fmt::Display for BootError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::StackInitFailed { partition_index } => {
+                write!(f, "stack init failed: partition {partition_index}")
+            }
+            Self::NoReadyPartition => write!(f, "no partition ready at boot"),
+        }
+    }
+}
 
 #[cfg(not(feature = "dynamic-mpu"))]
 #[macro_export]
@@ -237,10 +262,11 @@ macro_rules! define_unified_harness {
         }
 
         /// Initialize stacks, priorities, start schedule, enable SysTick, enter idle loop.
+        /// Returns `Err(BootError)` on stack init or schedule failure.
         fn boot(
             partitions: &[(extern "C" fn() -> !, u32)],
             peripherals: &mut cortex_m::Peripherals,
-        ) -> ! {
+        ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
             use cortex_m::peripheral::scb::SystemHandler;
             use cortex_m::peripheral::syst::SystClkSource;
             use cortex_m::peripheral::SCB;
@@ -250,22 +276,20 @@ macro_rules! define_unified_harness {
             #[cfg(feature = "qemu")]
             hprintln!("[boot] entered");
 
-            ::cortex_m::interrupt::free(|cs| {
+            let stack_init_result: Result<(), $crate::harness::BootError> = ::cortex_m::interrupt::free(|cs| {
                 if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
                     for (i, &(ep, hint)) in partitions.iter().enumerate() {
-                        // TODO(panic-free): expect() can panic if partition index is out of
-                        // bounds. At boot time there is no recovery path, but a panic-free
-                        // design would propagate the error to the caller.
-                        let stk = k.core_stack_mut(i).expect("partition index out of bounds");
+                        let stk = k.core_stack_mut(i)
+                            .ok_or($crate::harness::BootError::StackInitFailed { partition_index: i })?;
                         let base = stk.as_ptr() as u32;
-                        // TODO(panic-free): expect() can panic if stack is too small for
-                        // the exception frame. At boot time there is no recovery path, but
-                        // a panic-free design would propagate the error to the caller.
-                        let ix = $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint)).expect("init_stack_frame");
+                        let ix = $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
+                            .ok_or($crate::harness::BootError::StackInitFailed { partition_index: i })?;
                         k.set_sp(i, base + (ix as u32) * 4);
                     }
                 }
+                Ok(())
             });
+            stack_init_result?;
 
             const { $crate::config::assert_priority_order::<$Config>() }
             // SAFETY: Called exactly once from main() before the scheduler
@@ -306,10 +330,7 @@ macro_rules! define_unified_harness {
             #[cfg(feature = "qemu")]
             hprintln!("[boot] first_partition={:?}", first_partition);
 
-            // TODO(panic-free): expect() can panic if no partition is ready.
-            // At boot time there is no recovery path, but a panic-free design
-            // would return an error from boot() instead of diverging.
-            let _ = first_partition.expect("no partition ready at boot");
+            let _ = first_partition.ok_or($crate::harness::BootError::NoReadyPartition)?;
 
             #[cfg(feature = "qemu")]
             hprintln!("[boot] triggering PendSV");
@@ -335,3 +356,52 @@ macro_rules! define_unified_harness {
 // define_pendsv!) and an #[exception] handler, which are only
 // meaningful on ARM targets. Correctness is verified by the QEMU
 // integration tests (sampling_demo, queuing_demo, blackboard_demo).
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::fmt::Write;
+
+    /// Fixed-size buffer for formatting in no_std tests.
+    struct FmtBuf {
+        buf: [u8; 64],
+        len: usize,
+    }
+
+    impl FmtBuf {
+        const fn new() -> Self {
+            Self {
+                buf: [0u8; 64],
+                len: 0,
+            }
+        }
+
+        fn as_str(&self) -> &str {
+            core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+        }
+    }
+
+    impl Write for FmtBuf {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let bytes = s.as_bytes();
+            let remaining = self.buf.len() - self.len;
+            let to_copy = bytes.len().min(remaining);
+            self.buf[self.len..self.len + to_copy].copy_from_slice(&bytes[..to_copy]);
+            self.len += to_copy;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn boot_error_construction_and_traits() {
+        let err = BootError::StackInitFailed { partition_index: 2 };
+        assert_eq!(err, BootError::StackInitFailed { partition_index: 2 });
+        assert_ne!(err, BootError::NoReadyPartition);
+        assert_eq!(BootError::NoReadyPartition, BootError::NoReadyPartition);
+
+        // Test Display impl using core::fmt::Write (no std dependency)
+        let mut buf = FmtBuf::new();
+        write!(&mut buf, "{}", err).unwrap();
+        assert!(buf.as_str().contains("2"));
+    }
+}
