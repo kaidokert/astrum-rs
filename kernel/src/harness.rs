@@ -224,17 +224,11 @@ macro_rules! define_unified_harness {
                     Some(k) => k,
                     None => return,
                 };
+                // Delegate to standalone handle_systick function
                 #[cfg(not(feature = "dynamic-mpu"))]
-                $crate::_unified_handle_tick!(_systick_kernel);
+                $crate::tick::handle_systick(_systick_kernel);
                 #[cfg(feature = "dynamic-mpu")]
-                {
-                    let tick_val = _systick_kernel.tick().get();
-                    $crate::_unified_handle_tick!(_systick_kernel, tick_val, &HARNESS_STRATEGY);
-                }
-                let current_tick = _systick_kernel.tick().get();
-                _systick_kernel.expire_timed_waits::<{ <$Config as $crate::config::KernelConfig>::N }>(
-                    current_tick,
-                );
+                $crate::tick::handle_systick(_systick_kernel, &HARNESS_STRATEGY);
                 // Call user-provided SysTick hook
                 let $tick = _systick_tick;
                 let $k = _systick_kernel;

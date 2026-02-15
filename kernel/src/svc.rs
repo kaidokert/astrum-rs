@@ -234,7 +234,6 @@ macro_rules! validated_ptr_dynamic {
 }
 
 use crate::events;
-#[cfg(feature = "dynamic-mpu")]
 use crate::scheduler::ScheduleEvent;
 
 /// Abstracts over schedule advance return type for feature-gated code.
@@ -246,17 +245,6 @@ pub trait YieldResult {
     fn is_system_window(&self) -> bool;
 }
 
-#[cfg(not(feature = "dynamic-mpu"))]
-impl YieldResult for Option<u8> {
-    fn partition_id(&self) -> Option<u8> {
-        *self
-    }
-    fn is_system_window(&self) -> bool {
-        false
-    }
-}
-
-#[cfg(feature = "dynamic-mpu")]
 impl YieldResult for ScheduleEvent {
     fn partition_id(&self) -> Option<u8> {
         if let Self::PartitionSwitch(p) = self {
@@ -266,7 +254,11 @@ impl YieldResult for ScheduleEvent {
         }
     }
     fn is_system_window(&self) -> bool {
-        matches!(self, Self::SystemWindow)
+        #[cfg(feature = "dynamic-mpu")]
+        if matches!(self, Self::SystemWindow) {
+            return true;
+        }
+        false
     }
 }
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
@@ -1802,23 +1794,9 @@ where
     // Schedule advance methods
     // -------------------------------------------------------------------------
 
-    /// Advance the schedule table by one tick. If a partition switch occurs,
-    /// updates `active_partition` and `next_partition`, returns `Some(partition_id)`.
-    #[cfg(not(feature = "dynamic-mpu"))]
-    pub fn advance_schedule_tick(&mut self) -> Option<u8> {
-        self.tick.increment();
-        let next = self.schedule_mut().advance_tick();
-        if let Some(pid) = next {
-            self.active_partition = Some(pid);
-            self.set_next_partition(pid);
-        }
-        next
-    }
-
     /// Advance the schedule table by one tick. Returns a [`ScheduleEvent`]
-    /// that distinguishes partition switches from system window slots.
-    /// Updates `next_partition` on partition switches.
-    #[cfg(feature = "dynamic-mpu")]
+    /// indicating whether a partition switch or system window occurred.
+    /// Updates `active_partition` and `next_partition` on partition switches.
     pub fn advance_schedule_tick(&mut self) -> ScheduleEvent {
         self.tick.increment();
         let event = self.schedule_mut().advance_tick();
@@ -1832,10 +1810,6 @@ where
     /// Force-advance the schedule to the next slot, forfeiting remaining
     /// ticks. Updates `active_partition` and returns the schedule result.
     /// Called by the harness when a partition yields.
-    ///
-    /// The concrete return type depends on the feature gate
-    /// (`Option<u8>` or `ScheduleEvent`), but both implement
-    /// [`YieldResult`] so callers can extract the partition id uniformly.
     pub fn yield_current_slot(&mut self) -> impl YieldResult {
         let result = self.schedule_mut().force_advance();
         if let Some(pid) = result.partition_id() {
@@ -4654,34 +4628,34 @@ mod tests {
         assert_eq!(k.next_partition(), 0);
     }
 
-    #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn advance_schedule_tick_updates_active_partition() {
+        use crate::scheduler::ScheduleEvent;
         let mut k = kernel_with_schedule();
         // Initially no active partition
         assert_eq!(k.active_partition(), None);
         // Advance 4 ticks within slot 0 - no switch
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), None);
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
         }
         // 5th tick triggers switch to P1
-        assert_eq!(k.advance_schedule_tick(), Some(1));
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
         assert_eq!(k.active_partition(), Some(1));
     }
 
-    #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn advance_schedule_tick_updates_next_partition() {
+        use crate::scheduler::ScheduleEvent;
         let mut k = kernel_with_schedule();
         // Initially next_partition is 0 (default)
         assert_eq!(k.next_partition(), 0);
         // Advance 4 ticks within slot 0 - no switch, next_partition unchanged
         for _ in 0..4 {
-            k.advance_schedule_tick();
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
             assert_eq!(k.next_partition(), 0);
         }
         // 5th tick triggers switch to P1, next_partition updated
-        assert_eq!(k.advance_schedule_tick(), Some(1));
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
         assert_eq!(k.next_partition(), 1);
         // Continue through P1's slot (3 ticks), then wrap to P0
         for _ in 0..2 {
@@ -4689,11 +4663,10 @@ mod tests {
             assert_eq!(k.next_partition(), 1);
         }
         // 3rd tick of P1's slot triggers switch back to P0
-        assert_eq!(k.advance_schedule_tick(), Some(0));
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(0));
         assert_eq!(k.next_partition(), 0);
     }
 
-    #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn advance_schedule_tick_increments_tick_counter() {
         let mut k = kernel_with_schedule();
@@ -4704,7 +4677,6 @@ mod tests {
         assert_eq!(k.tick().get(), 2);
     }
 
-    #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn yield_current_slot_advances_to_next_partition() {
         let mut k = kernel_with_schedule();
@@ -4717,7 +4689,6 @@ mod tests {
         assert_eq!(k.active_partition(), Some(1));
     }
 
-    #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn yield_current_slot_wraps_around() {
         let mut k = kernel_with_schedule();
@@ -4730,7 +4701,6 @@ mod tests {
         assert_eq!(k.active_partition(), Some(0));
     }
 
-    #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn yield_does_not_increment_tick_counter() {
         let mut k = kernel_with_schedule();
@@ -4739,37 +4709,6 @@ mod tests {
         assert_eq!(k.tick().get(), tick_before);
     }
 
-    #[cfg(feature = "dynamic-mpu")]
-    #[test]
-    fn advance_schedule_tick_returns_schedule_event() {
-        use crate::scheduler::ScheduleEvent;
-        let mut k = kernel_with_schedule();
-        // Advance through P0's 5-tick slot
-        for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
-        }
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
-        assert_eq!(k.active_partition(), Some(1));
-    }
-
-    #[cfg(feature = "dynamic-mpu")]
-    #[test]
-    fn advance_schedule_tick_updates_next_partition_dynamic() {
-        use crate::scheduler::ScheduleEvent;
-        let mut k = kernel_with_schedule();
-        // Initially next_partition is 0 (default)
-        assert_eq!(k.next_partition(), 0);
-        // Advance 4 ticks within slot 0 - no switch, next_partition unchanged
-        for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
-            assert_eq!(k.next_partition(), 0);
-        }
-        // 5th tick triggers switch to P1, next_partition updated
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
-        assert_eq!(k.next_partition(), 1);
-    }
-
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn yield_current_slot_returns_schedule_event() {
         let mut k = kernel_with_schedule();
@@ -4845,6 +4784,7 @@ mod tests {
     #[cfg(not(feature = "dynamic-mpu"))]
     #[test]
     fn start_schedule_allows_advance_tick() {
+        use crate::scheduler::ScheduleEvent;
         let mut k = kernel_unstarted_schedule();
         // Start the schedule
         let initial = k.start_schedule();
@@ -4853,10 +4793,10 @@ mod tests {
         // Now advance ticks - schedule should work normally
         // P0 has 5 ticks, so 4 advances should return None
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), None);
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
         }
         // 5th tick triggers switch to P1
-        assert_eq!(k.advance_schedule_tick(), Some(1));
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
         assert_eq!(k.active_partition, Some(1));
     }
 

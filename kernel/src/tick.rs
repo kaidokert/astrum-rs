@@ -75,6 +75,113 @@ pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
     syst.enable_interrupt();
 }
 
+// TODO: The two handle_systick variants have different signatures (the dynamic-mpu
+// version requires an additional `strategy` parameter and extra const bounds).
+// A future refactor could use a trait-based approach to unify the API, but this
+// would require changes to how the harness invokes handle_systick. For now,
+// we keep two feature-gated variants with consistent internal logic.
+
+/// Handle SysTick: increment tick, advance schedule, trigger PendSV, expire waits.
+#[cfg(not(feature = "dynamic-mpu"))]
+pub fn handle_systick<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<C>)
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    C::Core: crate::config::CoreOps<
+        PartTable = crate::partition::PartitionTable<{ C::N }>,
+        SchedTable = crate::scheduler::ScheduleTable<{ C::SCHED }>,
+    >,
+    C::Sync: crate::config::SyncOps<
+        SemPool = crate::semaphore::SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = crate::mutex::MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: crate::config::MsgOps<
+        MsgPool = crate::message::MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = crate::queuing::QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: crate::config::PortsOps<
+        SamplingPool = crate::sampling::SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    use crate::scheduler::ScheduleEvent;
+
+    let event = kernel.advance_schedule_tick();
+    if let ScheduleEvent::PartitionSwitch(pid) = event {
+        kernel.set_next_partition(pid);
+        #[cfg(not(test))]
+        cortex_m::peripheral::SCB::set_pendsv();
+    }
+    let current_tick = kernel.tick().get();
+    kernel.expire_timed_waits::<{ C::N }>(current_tick);
+}
+
+/// Handle SysTick: increment tick, advance schedule, trigger PendSV, expire waits.
+///
+/// With `dynamic-mpu`, also handles system window processing (bottom-half for
+/// UART transfers, buffer expiry, etc.).
+#[cfg(feature = "dynamic-mpu")]
+pub fn handle_systick<C: crate::config::KernelConfig>(
+    kernel: &mut crate::svc::Kernel<C>,
+    strategy: &crate::mpu_strategy::DynamicStrategy,
+) where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    [(); C::BP]:,
+    [(); C::BZ]:,
+    [(); C::DR]:,
+    C::Core: crate::config::CoreOps<
+        PartTable = crate::partition::PartitionTable<{ C::N }>,
+        SchedTable = crate::scheduler::ScheduleTable<{ C::SCHED }>,
+    >,
+    C::Sync: crate::config::SyncOps<
+        SemPool = crate::semaphore::SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = crate::mutex::MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: crate::config::MsgOps<
+        MsgPool = crate::message::MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = crate::queuing::QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: crate::config::PortsOps<
+        SamplingPool = crate::sampling::SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    use crate::partition::PartitionState;
+    use crate::scheduler::ScheduleEvent;
+
+    let event = kernel.advance_schedule_tick();
+    let current_tick = kernel.tick().get();
+    match event {
+        ScheduleEvent::PartitionSwitch(pid) => {
+            kernel.set_next_partition(pid);
+            #[cfg(not(test))]
+            cortex_m::peripheral::SCB::set_pendsv();
+        }
+        ScheduleEvent::SystemWindow => {
+            let bh = run_bottom_half(
+                &mut kernel.uart_pair,
+                &mut kernel.isr_ring,
+                &mut kernel.buffers,
+                &mut kernel.hw_uart,
+                current_tick,
+                strategy,
+            );
+            if bh.has_rx_data {
+                if let Some(woken) = kernel.dev_wait_queue.wake_one_reader() {
+                    crate::svc::try_transition(
+                        kernel.partitions_mut(),
+                        woken,
+                        PartitionState::Ready,
+                    );
+                }
+            }
+        }
+        ScheduleEvent::None => {}
+    }
+    kernel.expire_timed_waits::<{ C::N }>(current_tick);
+}
+
 /// Result of bottom-half processing.
 #[cfg(feature = "dynamic-mpu")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
