@@ -57,17 +57,20 @@ pub trait KernelConfig {
     const SYSTICK_PRIORITY: u8 = 0xFE;
 
     /// Partition/schedule state operations. Will be constrained by `CoreOps`
-    /// in a subsequent subtask.
-    type Core;
+    /// in a subsequent subtask. Must implement `Default` for `Kernel::new_empty()`.
+    type Core: Default;
     /// Synchronization primitive operations (semaphores, mutexes). Will be
-    /// constrained by `SyncOps` in a subsequent subtask.
-    type Sync;
+    /// constrained by `SyncOps` in a subsequent subtask. Must implement `Default`
+    /// for `Kernel::new_empty()`.
+    type Sync: Default;
     /// Message-passing primitive operations (message queues, queuing ports).
-    /// Will be constrained by `MsgOps` in a subsequent subtask.
-    type Msg;
+    /// Will be constrained by `MsgOps` in a subsequent subtask. Must implement
+    /// `Default` for `Kernel::new_empty()`.
+    type Msg: Default;
     /// Sampling ports and blackboards operations. Will be constrained by
-    /// `PortsOps` in a subsequent subtask.
-    type Ports;
+    /// `PortsOps` in a subsequent subtask. Must implement `Default` for
+    /// `Kernel::new_empty()`.
+    type Ports: Default;
 }
 
 /// Compile-time assertion that the three exception priorities are

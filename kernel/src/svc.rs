@@ -667,6 +667,14 @@ where
     /// for PendSV to read. This field allows Rust code to track the value
     /// without relying on the assembly-level static.
     pub next_partition: u8,
+    /// Partition/schedule state sub-struct (will replace individual fields).
+    pub core: C::Core,
+    /// Synchronization primitives sub-struct (will replace individual fields).
+    pub sync: C::Sync,
+    /// Message-passing primitives sub-struct (will replace individual fields).
+    pub msg: C::Msg,
+    /// Port primitives sub-struct (will replace individual fields).
+    pub ports: C::Ports,
 }
 
 /// Helper function to align an address down to an 8-byte boundary.
@@ -811,6 +819,10 @@ where
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
             partition_sp,
             next_partition: 0,
+            core: C::Core::default(),
+            sync: C::Sync::default(),
+            msg: C::Msg::default(),
+            ports: C::Ports::default(),
         })
     }
 
@@ -853,6 +865,10 @@ where
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
             partition_sp: [0u32; C::N],
             next_partition: 0,
+            core: C::Core::default(),
+            sync: C::Sync::default(),
+            msg: C::Msg::default(),
+            ports: C::Ports::default(),
         }
     }
 
