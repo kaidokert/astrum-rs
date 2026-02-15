@@ -20,6 +20,7 @@ pub mod message;
 pub mod mpu;
 #[cfg(feature = "dynamic-mpu")]
 pub mod mpu_strategy;
+pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
 pub mod partition_core;
