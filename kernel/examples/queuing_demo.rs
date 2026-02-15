@@ -5,10 +5,15 @@
 //! the queue depth and verifies that the overflow is reported), and
 //! **timed receive** (`SYS_QUEUING_RECV_TIMED` with a non-zero timeout
 //! to block until a message arrives).
+//!
+//! Partitions run unprivileged and cannot use semihosting directly.
+//! Progress is tracked via atomics; the SysTick handler verifies state
+//! and prints results from privileged handler mode.
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
+use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
@@ -107,8 +112,83 @@ const EXPECTED_RSPS: [u8; QUEUE_DEPTH] = [
     RSP_EXTRA_1_ACK,
 ];
 
-// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
-kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS);
+// ---------------------------------------------------------------------------
+// Atomic state for partition progress tracking (handler mode reads these)
+// ---------------------------------------------------------------------------
+
+/// Commander: number of commands successfully delivered
+static CMD_DELIVERED: AtomicU32 = AtomicU32::new(0);
+/// Commander: set to 1 when queue-full was detected
+static QUEUE_FULL_SEEN: AtomicU32 = AtomicU32::new(0);
+/// Commander: number of responses received
+static RSP_RECEIVED: AtomicU32 = AtomicU32::new(0);
+/// Commander: set to non-zero if a response mismatch was detected (stores 0x100 + expected)
+static RSP_MISMATCH: AtomicU32 = AtomicU32::new(0);
+/// Commander: set to 1 when timed response was received and matched
+static TIMED_RSP_OK: AtomicU32 = AtomicU32::new(0);
+/// Commander: set to 1 when timed command was sent
+static TIMED_CMD_SENT: AtomicU32 = AtomicU32::new(0);
+
+/// Worker: number of commands processed
+static WORKER_PROCESSED: AtomicU32 = AtomicU32::new(0);
+/// Worker: set to 1 when timed recv started
+static WORKER_TIMED_RECV: AtomicU32 = AtomicU32::new(0);
+/// Worker: set to 1 when timed command was received
+static WORKER_TIMED_OK: AtomicU32 = AtomicU32::new(0);
+
+// Use the unified harness macro with SysTick hook for progress verification.
+// The hook runs in privileged handler mode and can use semihosting.
+kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+    // Check progress every 10 ticks
+    if tick.is_multiple_of(10) {
+        let delivered = CMD_DELIVERED.load(Ordering::Acquire);
+        let qf_seen = QUEUE_FULL_SEEN.load(Ordering::Acquire);
+        let rsp_recv = RSP_RECEIVED.load(Ordering::Acquire);
+        let mismatch = RSP_MISMATCH.load(Ordering::Acquire);
+        let timed_sent = TIMED_CMD_SENT.load(Ordering::Acquire);
+        let timed_ok = TIMED_RSP_OK.load(Ordering::Acquire);
+        let worker_proc = WORKER_PROCESSED.load(Ordering::Acquire);
+        let worker_timed = WORKER_TIMED_OK.load(Ordering::Acquire);
+
+        hprintln!(
+            "[tick {}] del={} qf={} rsp={} w_proc={} timed_sent={} timed_ok={}",
+            tick,
+            delivered,
+            qf_seen,
+            rsp_recv,
+            worker_proc,
+            timed_sent,
+            timed_ok
+        );
+
+        // Check for failures
+        if mismatch != 0 {
+            hprintln!("queuing_demo: FAIL - response mismatch (code={})", mismatch);
+            debug::exit(debug::EXIT_FAILURE);
+        }
+
+        // Test passes when:
+        // 1. Queue full was detected (qf_seen == 1)
+        // 2. All expected responses received (rsp_recv >= delivered)
+        // 3. Timed response received and matched (timed_ok == 1)
+        // 4. Worker processed all commands and timed command
+        if qf_seen == 1
+            && rsp_recv >= delivered
+            && delivered >= QUEUE_DEPTH as u32
+            && timed_ok == 1
+            && worker_timed == 1
+        {
+            hprintln!("queuing_demo: all checks passed");
+            debug::exit(debug::EXIT_SUCCESS);
+        }
+
+        // Timeout after 200 ticks
+        if tick > 200 {
+            hprintln!("queuing_demo: FAIL - timeout");
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
+});
 
 // ---------------------------------------------------------------------------
 // Commander partition: sends commands, detects queue-full, receives responses
@@ -120,33 +200,23 @@ extern "C" fn commander_main() -> ! {
 
     // Phase 1: Flood the command queue to demonstrate queue-full detection.
     // QUEUE_DEPTH is 4, so the 5th send must fail with a kernel error.
-    let mut queue_full_seen = false;
-    let mut delivered: usize = 0;
+    let mut delivered: u32 = 0;
     for &cmd in &CMDS {
         let rc = svc!(SYS_QUEUING_SEND, cmd_port, 1u32, [cmd].as_ptr() as u32);
         if rc & SVC_ERROR_BIT != 0 {
-            hprintln!("[commander] send cmd={} -> QUEUE FULL (expected)", cmd);
-            queue_full_seen = true;
+            QUEUE_FULL_SEEN.store(1, Ordering::Release);
         } else {
             delivered += 1;
-            hprintln!("[commander] sent cmd={} depth={}", cmd, delivered);
+            CMD_DELIVERED.store(delivered, Ordering::Release);
         }
     }
-    if !queue_full_seen {
-        hprintln!("queuing_demo: FAIL – queue-full was never detected");
-        debug::exit(debug::EXIT_FAILURE);
-    }
-    hprintln!(
-        "[commander] queue-full correctly detected, {} delivered",
-        delivered
-    );
 
     // Yield to let the worker drain and respond.
     svc!(SYS_YIELD, 0u32, 0u32, 0u32);
 
     // Phase 2: Collect responses for the commands that were successfully delivered.
     let mut n: usize = 0;
-    loop {
+    while n < delivered as usize && n < EXPECTED_RSPS.len() {
         let mut buf = [0u8; QUEUE_MSG_SIZE];
         let sz = svc!(
             SYS_QUEUING_RECV,
@@ -159,37 +229,25 @@ extern "C" fn commander_main() -> ! {
             continue;
         }
         let (got, exp) = (buf[0], EXPECTED_RSPS[n]);
-        hprintln!(
-            "[commander] recv rsp=0x{:02X} (expected 0x{:02X})",
-            got,
-            exp
-        );
         if got != exp {
-            hprintln!("queuing_demo: FAIL at response {}", n);
-            debug::exit(debug::EXIT_FAILURE);
+            RSP_MISMATCH.store(0x100 | exp as u32, Ordering::Release);
         }
         n += 1;
-        if n >= delivered {
-            break;
-        }
+        RSP_RECEIVED.store(n as u32, Ordering::Release);
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 
-    // Phase 3: Timed receive – the worker will use SYS_QUEUING_RECV_TIMED
-    // to block waiting for a command. We yield first so the worker enters
-    // the timed-recv wait, then send a late command to wake it.
-    hprintln!("[commander] phase 3: timed receive test");
+    // Phase 3: Timed receive test.
+    // Yield first so the worker enters the timed-recv wait.
     svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     svc!(SYS_YIELD, 0u32, 0u32, 0u32);
 
     // Send a late command – this wakes the blocked worker.
     let cmd = [CMD_TIMED];
     let rc = svc!(SYS_QUEUING_SEND, cmd_port, 1u32, cmd.as_ptr() as u32);
-    if rc & SVC_ERROR_BIT != 0 {
-        hprintln!("queuing_demo: FAIL – could not send timed command");
-        debug::exit(debug::EXIT_FAILURE);
+    if rc & SVC_ERROR_BIT == 0 {
+        TIMED_CMD_SENT.store(1, Ordering::Release);
     }
-    hprintln!("[commander] sent CMD_TIMED");
 
     // Yield to let the worker process and respond.
     svc!(SYS_YIELD, 0u32, 0u32, 0u32);
@@ -207,22 +265,19 @@ extern "C" fn commander_main() -> ! {
             svc!(SYS_YIELD, 0u32, 0u32, 0u32);
             continue;
         }
-        hprintln!(
-            "[commander] timed rsp=0x{:02X} (expected 0x{:02X})",
-            buf[0],
-            RSP_TIMED_ACK
-        );
-        if buf[0] != RSP_TIMED_ACK {
-            hprintln!("queuing_demo: FAIL – timed response mismatch");
-            debug::exit(debug::EXIT_FAILURE);
+        if buf[0] == RSP_TIMED_ACK {
+            TIMED_RSP_OK.store(1, Ordering::Release);
+        } else {
+            RSP_MISMATCH.store(0x200 | RSP_TIMED_ACK as u32, Ordering::Release);
         }
         break;
     }
 
-    hprintln!("queuing_demo: all checks passed");
-    debug::exit(debug::EXIT_SUCCESS);
+    // Done – keep yielding forever.
     #[allow(clippy::empty_loop)]
-    loop {}
+    loop {
+        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -234,8 +289,8 @@ extern "C" fn worker_main() -> ! {
     let (rsp_port, cmd_port) = (packed >> 16, packed & 0xFFFF);
 
     // Phase 1-2: Process the initial batch of commands using non-blocking recv.
-    let mut processed: usize = 0;
-    while processed < QUEUE_DEPTH {
+    let mut processed: u32 = 0;
+    while processed < QUEUE_DEPTH as u32 {
         let mut buf = [0u8; QUEUE_MSG_SIZE];
         let sz = svc!(
             SYS_QUEUING_RECV,
@@ -254,24 +309,14 @@ extern "C" fn worker_main() -> ! {
             CMD_EXTRA_1 => RSP_EXTRA_1_ACK,
             _ => RSP_UNKNOWN,
         };
-        hprintln!("[worker]    cmd={} -> rsp=0x{:02X}", buf[0], rsp);
         svc!(SYS_QUEUING_SEND, rsp_port, 1u32, [rsp].as_ptr() as u32);
         processed += 1;
+        WORKER_PROCESSED.store(processed, Ordering::Release);
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 
     // Phase 3: Use timed receive to block waiting for the next command.
-    // The queue is empty; SYS_QUEUING_RECV_TIMED with timeout > 0
-    // registers this partition in the receiver wait queue and transitions
-    // us to Waiting.  When the commander later enqueues CMD_TIMED, the
-    // kernel wakes us (Ready) and we yield to trigger PendSV.
-    //
-    // The kernel's two-phase handoff:
-    //   1. The timed recv returns 0 (ReceiverBlocked, now Waiting).
-    //   2. We yield so PendSV context-switches away.
-    //   3. The commander sends; the kernel transitions us to Ready.
-    //   4. The scheduler gives us a slot; we retry the recv to dequeue.
-    hprintln!("[worker]    phase 3: timed recv (blocking)");
+    WORKER_TIMED_RECV.store(1, Ordering::Release);
     let mut buf = [0u8; QUEUE_MSG_SIZE];
 
     // Step 1: register in the receiver wait queue with a timeout.
@@ -301,17 +346,16 @@ extern "C" fn worker_main() -> ! {
         sz
     };
 
-    if sz & SVC_ERROR_BIT != 0 {
-        hprintln!("queuing_demo: FAIL – timed receive failed or timed out");
-        debug::exit(debug::EXIT_FAILURE);
+    if sz & SVC_ERROR_BIT == 0 {
+        let rsp = match buf[0] {
+            CMD_TIMED => RSP_TIMED_ACK,
+            _ => RSP_UNKNOWN,
+        };
+        svc!(SYS_QUEUING_SEND, rsp_port, 1u32, [rsp].as_ptr() as u32);
+        if buf[0] == CMD_TIMED {
+            WORKER_TIMED_OK.store(1, Ordering::Release);
+        }
     }
-
-    let rsp = match buf[0] {
-        CMD_TIMED => RSP_TIMED_ACK,
-        _ => RSP_UNKNOWN,
-    };
-    hprintln!("[worker]    timed cmd={} -> rsp=0x{:02X}", buf[0], rsp);
-    svc!(SYS_QUEUING_SEND, rsp_port, 1u32, [rsp].as_ptr() as u32);
 
     // Done – keep yielding forever.
     #[allow(clippy::empty_loop)]
