@@ -453,6 +453,11 @@ macro_rules! define_unified_kernel {
     };
     // Private rule: generates the KernelConfig struct and impl.
     // Called by the public-facing rules to avoid code duplication.
+    //
+    // BOUNDS: The generated impl provides associated types (Core, Sync, Msg, Ports) that
+    // encapsulate sub-struct-owned constants. This allows Kernel<$Name> to compile without
+    // explicit `[(); C::X]:` bounds for S, SW, MS, MW, etc. - those bounds are satisfied
+    // implicitly through the associated type definitions.
     (@config $Name:ident {
         N: $n:expr, SCHED: $sched:expr,
         S: $s:expr, SW: $sw:expr, MS: $ms:expr, MW: $mw:expr,
@@ -495,6 +500,12 @@ macro_rules! define_unified_kernel {
     // reports a "file path as matcher token" error, that is a false positive from the
     // tool - verify by running `cargo check` which succeeds. The @impl idiom is standard
     // for private macro rules (see std::vec!, lazy_static!, etc.).
+    //
+    // BOUNDS: This rule uses `Kernel<$Config>` which inherits its where clause from the
+    // Kernel struct definition. The struct was updated to remove sub-struct-owned const
+    // bounds (S, SW, MS, MW, QS, QD, QM, QW, SP, SM, BS, BM, BW) - see commit b1e8222.
+    // The macro itself does not need explicit where clauses; reduced bounds are achieved
+    // through the struct definition.
     (@impl $Config:ty, |$k:ident| $yield_body:block) => {
         /// Unified kernel storage: holds the `Kernel` struct containing partitions,
         /// schedule, resource pools, and dispatch state.
@@ -1994,9 +2005,17 @@ mod tests {
         const BZ: usize = 32;
 
         type Core = crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }>;
-        type Sync = ();
-        type Msg = ();
-        type Ports = ();
+        type Sync =
+            crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+        type Msg =
+            crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+        type Ports = crate::port_pools::PortPools<
+            { Self::SP },
+            { Self::SM },
+            { Self::BS },
+            { Self::BM },
+            { Self::BW },
+        >;
     }
 
     fn frame(r0: u32, r1: u32, r2: u32) -> ExceptionFrame {
@@ -2070,45 +2089,7 @@ mod tests {
         msg_queue_count: usize,
         registry: crate::virtual_device::DeviceRegistry<'static, 4>,
     ) -> Kernel<TestConfig> {
-        let s = SemaphorePool::<4, 4>::new();
-        let m = MutexPool::<4, 4>::new(mtx_count);
-        let mut msgs = MessagePool::<4, 4, 4, 4>::new();
-        for _ in 0..msg_queue_count {
-            msgs.add(MessageQueue::new()).unwrap();
-        }
-        // Build the core with pre-populated partitions.
-        let mut core = <TestConfig as KernelConfig>::Core::default();
-        let pt = tbl();
-        for pcb in pt.iter() {
-            core.partitions_mut().add(*pcb).unwrap();
-        }
-        let mut k = Kernel {
-            active_partition: None,
-            semaphores: s,
-            mutexes: m,
-            messages: msgs,
-            tick: TickCounter::new(),
-            sampling: SamplingPortPool::new(),
-            queuing: QueuingPortPool::new(),
-            blackboards: BlackboardPool::new(),
-            current_partition: 0,
-            yield_requested: false,
-            buffers: crate::buffer_pool::BufferPool::new(),
-            uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
-            isr_ring: crate::split_isr::IsrRingBuffer::new(),
-            hw_uart: None,
-            registry,
-            dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
-            dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
-            core,
-            sync: <TestConfig as KernelConfig>::Sync::default(),
-            msg: <TestConfig as KernelConfig>::Msg::default(),
-            ports: <TestConfig as KernelConfig>::Ports::default(),
-        };
-        for _ in 0..sem_count {
-            k.semaphores_mut().add(Semaphore::new(1, 2)).unwrap();
-        }
-        k
+        kernel_impl(sem_count, mtx_count, msg_queue_count, registry)
     }
 
     /// Build a Kernel with 2 running partitions, the given semaphore count,
@@ -2118,27 +2099,33 @@ mod tests {
     /// [`DeviceRegistry`] pre-populated with virtual UART backends for
     /// device IDs 0 and 1.
     fn kernel(sem_count: usize, mtx_count: usize, msg_queue_count: usize) -> Kernel<TestConfig> {
-        let s = SemaphorePool::<4, 4>::new();
-        let m = MutexPool::<4, 4>::new(mtx_count);
-        let mut msgs = MessagePool::<4, 4, 4, 4>::new();
-        for _ in 0..msg_queue_count {
-            msgs.add(MessageQueue::new()).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            kernel_impl(sem_count, mtx_count, msg_queue_count, default_registry().0)
         }
+        #[cfg(not(feature = "dynamic-mpu"))]
+        {
+            kernel_impl(sem_count, mtx_count, msg_queue_count)
+        }
+    }
+
+    /// Common implementation for building a Kernel with 2 running partitions.
+    /// Extracted to avoid code duplication between `kernel()` and `kernel_with_registry()`.
+    fn kernel_impl(
+        sem_count: usize,
+        mtx_count: usize,
+        msg_queue_count: usize,
+        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<'static, 4>,
+    ) -> Kernel<TestConfig> {
         // Build the core with pre-populated partitions.
         let mut core = <TestConfig as KernelConfig>::Core::default();
         let pt = tbl();
         for pcb in pt.iter() {
             core.partitions_mut().add(*pcb).unwrap();
         }
-        let mut k = Kernel {
+        let mut k: Kernel<TestConfig> = Kernel {
             active_partition: None,
-            semaphores: s,
-            mutexes: m,
-            messages: msgs,
             tick: TickCounter::new(),
-            sampling: SamplingPortPool::new(),
-            queuing: QueuingPortPool::new(),
-            blackboards: BlackboardPool::new(),
             current_partition: 0,
             yield_requested: false,
             #[cfg(feature = "dynamic-mpu")]
@@ -2150,7 +2137,7 @@ mod tests {
             #[cfg(feature = "dynamic-mpu")]
             hw_uart: None,
             #[cfg(feature = "dynamic-mpu")]
-            registry: default_registry().0,
+            registry,
             #[cfg(feature = "dynamic-mpu")]
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             #[cfg(feature = "dynamic-mpu")]
@@ -2160,9 +2147,15 @@ mod tests {
             msg: <TestConfig as KernelConfig>::Msg::default(),
             ports: <TestConfig as KernelConfig>::Ports::default(),
         };
-        // Add semaphores
+        // Add semaphores via facade method
         for _ in 0..sem_count {
             k.semaphores_mut().add(Semaphore::new(1, 2)).unwrap();
+        }
+        // Mutexes are pre-allocated at capacity in SyncPools::default()
+        let _ = mtx_count;
+        // Add message queues via facade method
+        for _ in 0..msg_queue_count {
+            k.messages_mut().add(MessageQueue::new()).unwrap();
         }
         k
     }
@@ -2558,13 +2551,15 @@ mod tests {
             .unwrap();
         k.sampling_mut().connect_ports(src, dst).unwrap();
         // Write + read via pool (avoids 64-bit pointer truncation issue).
+        let tick = k.tick().get();
         k.sampling_mut()
-            .write_sampling_message(src, &[0xAA, 0xBB], k.tick().get())
+            .write_sampling_message(src, &[0xAA, 0xBB], tick)
             .unwrap();
         let mut buf = [0u8; 64];
+        let tick = k.tick().get();
         let (n, _) = k
             .sampling_mut()
-            .read_sampling_message(dst, &mut buf, k.tick().get())
+            .read_sampling_message(dst, &mut buf, tick)
             .unwrap();
         assert_eq!((n, &buf[..n]), (2, &[0xAA, 0xBB][..]));
         // Invalid port → InvalidResource error for both write and read.
@@ -4814,9 +4809,17 @@ mod tests {
             const BZ: usize = 32;
 
             type Core = crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }>;
-            type Sync = ();
-            type Msg = ();
-            type Ports = ();
+            type Sync =
+                crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+            type Msg =
+                crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+            type Ports = crate::port_pools::PortPools<
+                { Self::SP },
+                { Self::SM },
+                { Self::BS },
+                { Self::BM },
+                { Self::BW },
+            >;
         }
 
         // Module to test basic macro invocation compiles.
