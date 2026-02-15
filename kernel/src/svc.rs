@@ -185,12 +185,12 @@ pub fn validate_user_ptr_dynamic<const N: usize>(
 /// Returns `SvcError::InvalidPointer` when `validate_user_ptr` fails;
 /// otherwise evaluates `$body` (which must produce `u32`).
 ///
-/// Uses `$self.core.partitions()` (immutable borrow) for validation, then
+/// Uses `$self.partitions()` (immutable borrow) for validation, then
 /// releases the borrow before executing `$body` so that `$body` may
 /// freely call `$self.partitions_mut()`.
 macro_rules! validated_ptr {
     ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
-        if !validate_user_ptr($self.core.partitions(), $self.current_partition, $ptr, $len) {
+        if !validate_user_ptr($self.partitions(), $self.current_partition, $ptr, $len) {
             SvcError::InvalidPointer.to_u32()
         } else {
             $body
@@ -210,7 +210,7 @@ macro_rules! validated_ptr {
 macro_rules! validated_ptr_dynamic {
     ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
         if !validate_user_ptr_dynamic(
-            $self.core.partitions(),
+            $self.partitions(),
             &$self.dynamic_strategy,
             $self.current_partition,
             $ptr,
@@ -1145,13 +1145,13 @@ where
         frame.r0 = match SyscallId::from_u32(frame.r0) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::EventWait) => {
-                events::event_wait(self.core.partitions_mut(), frame.r1 as usize, frame.r2)
+                events::event_wait(self.partitions_mut(), frame.r1 as usize, frame.r2)
             }
             Some(SyscallId::EventSet) => {
-                events::event_set(self.core.partitions_mut(), frame.r1 as usize, frame.r2)
+                events::event_set(self.partitions_mut(), frame.r1 as usize, frame.r2)
             }
             Some(SyscallId::EventClear) => {
-                events::event_clear(self.core.partitions_mut(), frame.r1 as usize, frame.r2)
+                events::event_clear(self.partitions_mut(), frame.r1 as usize, frame.r2)
             }
             Some(SyscallId::SemWait) => {
                 let pt = self.core.partitions_mut();
@@ -1202,7 +1202,7 @@ where
                     .messages_mut()
                     .send(frame.r1 as usize, frame.r2 as usize, data)
                 {
-                    Ok(outcome) => match apply_send_outcome(self.core.partitions_mut(), outcome) {
+                    Ok(outcome) => match apply_send_outcome(self.partitions_mut(), outcome) {
                         Ok(Some(_blocked)) => {
                             self.trigger_deschedule();
                             0
@@ -1237,10 +1237,11 @@ where
                     let d = unsafe {
                         core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                     };
+                    let tick = self.tick.get();
                     match self.ports.sampling_mut().write_sampling_message(
                         frame.r1 as usize,
                         d,
-                        self.tick.get(),
+                        tick,
                     ) {
                         Ok(()) => 0,
                         Err(_) => SvcError::InvalidResource.to_u32(),
@@ -1251,11 +1252,12 @@ where
                 // SAFETY: validated_ptr confirmed [r3, r3+SM) lies within
                 // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::SM) };
-                match self.ports.sampling_mut().read_sampling_message(
-                    frame.r1 as usize,
-                    b,
-                    self.tick.get(),
-                ) {
+                let tick = self.tick.get();
+                match self
+                    .ports
+                    .sampling_mut()
+                    .read_sampling_message(frame.r1 as usize, b, tick)
+                {
                     Ok((sz, _)) => sz as u32,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
@@ -1267,18 +1269,18 @@ where
                     let d = unsafe {
                         core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                     };
-                    match self.msg.queuing_mut().send_routed(
-                        frame.r1 as usize,
-                        self.current_partition,
-                        d,
-                        0,
-                        self.tick.get(),
-                    ) {
+                    let pid = self.current_partition;
+                    let tick = self.tick.get();
+                    match self
+                        .msg
+                        .queuing_mut()
+                        .send_routed(frame.r1 as usize, pid, d, 0, tick)
+                    {
                         Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
-                            if let Some(pid) = w {
+                            if let Some(wpid) = w {
                                 try_transition(
                                     self.core.partitions_mut(),
-                                    pid,
+                                    wpid,
                                     PartitionState::Ready,
                                 );
                             }
@@ -1293,19 +1295,21 @@ where
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
+                let pid = self.current_partition;
+                let tick = self.tick.get();
                 match self.msg.queuing_mut().receive_queuing_message(
                     frame.r1 as usize,
-                    self.current_partition,
+                    pid,
                     b,
                     0,
-                    self.tick.get(),
+                    tick,
                 ) {
                     Ok(crate::queuing::RecvQueuingOutcome::Received {
                         msg_len,
                         wake_sender: w,
                     }) => {
-                        if let Some(pid) = w {
-                            try_transition(self.core.partitions_mut(), pid, PartitionState::Ready);
+                        if let Some(wpid) = w {
+                            try_transition(self.core.partitions_mut(), wpid, PartitionState::Ready);
                         }
                         msg_len as u32
                     }
@@ -1344,10 +1348,10 @@ where
                         .display_blackboard(frame.r1 as usize, d)
                     {
                         Ok(woken) => {
-                            for &pid in woken.iter() {
+                            for &wpid in woken.iter() {
                                 try_transition(
                                     self.core.partitions_mut(),
-                                    pid,
+                                    wpid,
                                     PartitionState::Ready,
                                 );
                             }
@@ -1362,18 +1366,19 @@ where
                     // SAFETY: validated_ptr confirmed [r3, r3+BM) lies within
                     // the calling partition's MPU data region.
                     let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
+                    let pid = self.current_partition;
+                    let tick = self.tick.get();
                     match self.ports.blackboards_mut().read_blackboard_timed(
                         frame.r1 as usize,
-                        self.current_partition,
+                        pid,
                         b,
                         frame.r2,
-                        self.tick.get(),
+                        tick,
                     ) {
                         Ok(crate::blackboard::ReadBlackboardOutcome::Read { msg_len }) => {
                             msg_len as u32
                         }
                         Ok(crate::blackboard::ReadBlackboardOutcome::ReaderBlocked) => {
-                            let pid = self.current_partition;
                             try_transition(
                                 self.core.partitions_mut(),
                                 pid,
@@ -1521,7 +1526,7 @@ where
                                     match self.dev_wait_queue.block_reader(pid, expiry) {
                                         Ok(()) => {
                                             try_transition(
-                                                self.core.partitions_mut(),
+                                                self.partitions_mut(),
                                                 pid,
                                                 PartitionState::Waiting,
                                             );
@@ -1542,24 +1547,25 @@ where
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
+                let pid = self.current_partition;
+                let tick = self.tick.get();
                 match self.msg.queuing_mut().receive_queuing_message(
                     frame.r1 as usize,
-                    self.current_partition,
+                    pid,
                     b,
                     frame.r2 as u64,
-                    self.tick.get(),
+                    tick,
                 ) {
                     Ok(crate::queuing::RecvQueuingOutcome::Received {
                         msg_len,
                         wake_sender: w,
                     }) => {
-                        if let Some(pid) = w {
-                            try_transition(self.core.partitions_mut(), pid, PartitionState::Ready);
+                        if let Some(wpid) = w {
+                            try_transition(self.core.partitions_mut(), wpid, PartitionState::Ready);
                         }
                         msg_len as u32
                     }
                     Ok(crate::queuing::RecvQueuingOutcome::ReceiverBlocked { .. }) => {
-                        let pid = self.current_partition;
                         try_transition(self.core.partitions_mut(), pid, PartitionState::Waiting);
                         self.trigger_deschedule()
                     }
@@ -1573,25 +1579,26 @@ where
                     // SAFETY: validated_ptr confirmed [r3, r3+data_len) lies within
                     // the calling partition's MPU data region.
                     let d = unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, data_len) };
+                    let pid = self.current_partition;
+                    let tick = self.tick.get();
                     match self.msg.queuing_mut().send_routed(
                         frame.r1 as usize,
-                        self.current_partition,
+                        pid,
                         d,
                         timeout,
-                        self.tick.get(),
+                        tick,
                     ) {
                         Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
-                            if let Some(pid) = w {
+                            if let Some(wpid) = w {
                                 try_transition(
                                     self.core.partitions_mut(),
-                                    pid,
+                                    wpid,
                                     PartitionState::Ready,
                                 );
                             }
                             0
                         }
                         Ok(SendQueuingOutcome::SenderBlocked { .. }) => {
-                            let pid = self.current_partition;
                             try_transition(
                                 self.core.partitions_mut(),
                                 pid,
@@ -1735,7 +1742,7 @@ where
     #[cfg(not(feature = "dynamic-mpu"))]
     pub fn advance_schedule_tick(&mut self) -> Option<u8> {
         self.tick.increment();
-        let next = self.core.schedule_mut().advance_tick();
+        let next = self.schedule_mut().advance_tick();
         if let Some(pid) = next {
             self.active_partition = Some(pid);
             self.set_next_partition(pid);
@@ -1749,7 +1756,7 @@ where
     #[cfg(feature = "dynamic-mpu")]
     pub fn advance_schedule_tick(&mut self) -> ScheduleEvent {
         self.tick.increment();
-        let event = self.core.schedule_mut().advance_tick();
+        let event = self.schedule_mut().advance_tick();
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             self.active_partition = Some(pid);
             self.set_next_partition(pid);
@@ -1765,7 +1772,7 @@ where
     /// (`Option<u8>` or `ScheduleEvent`), but both implement
     /// [`YieldResult`] so callers can extract the partition id uniformly.
     pub fn yield_current_slot(&mut self) -> impl YieldResult {
-        let result = self.core.schedule_mut().force_advance();
+        let result = self.schedule_mut().force_advance();
         if let Some(pid) = result.partition_id() {
             self.active_partition = Some(pid);
         }
@@ -1774,7 +1781,7 @@ where
 
     /// Start the schedule and return the initial partition ID.
     ///
-    /// Calls `self.core.schedule_mut().start()` to initialize the schedule table's
+    /// Calls `self.schedule_mut().start()` to initialize the schedule table's
     /// internal state (resetting to the first slot). Returns the partition
     /// ID of the first schedule entry, or `None` if the schedule is empty.
     ///
@@ -1782,8 +1789,8 @@ where
     /// to call `kernel.start_schedule()` instead of managing schedule state
     /// separately.
     pub fn start_schedule(&mut self) -> Option<u8> {
-        self.core.schedule_mut().start();
-        let first_pid = self.core.schedule().current_partition();
+        self.schedule_mut().start();
+        let first_pid = self.schedule().current_partition();
         if let Some(pid) = first_pid {
             self.active_partition = Some(pid);
         }
