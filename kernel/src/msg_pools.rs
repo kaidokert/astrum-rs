@@ -1,5 +1,6 @@
 //! Message primitive pools.
 
+use crate::config::MsgOps;
 use crate::message::MessagePool;
 use crate::queuing::QueuingPortPool;
 
@@ -57,6 +58,23 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<const QS: usize, const QD: usize, const QM: usize, const QW: usize> MsgOps
+    for MsgPools<QS, QD, QM, QW>
+where
+    [(); QS]:,
+    [(); QD]:,
+    [(); QM]:,
+    [(); QW]:,
+{
+    type MsgPool = MessagePool<QS, QD, QM, QW>;
+    fn messages(&self) -> &Self::MsgPool {
+        &self.messages
+    }
+    fn messages_mut(&mut self) -> &mut Self::MsgPool {
+        &mut self.messages
     }
 }
 

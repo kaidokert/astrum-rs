@@ -1,3 +1,20 @@
+/// Trait for synchronization primitive sub-structs (semaphores, mutexes).
+pub trait SyncOps {
+    type SemPool;
+    type MutPool;
+    fn semaphores(&self) -> &Self::SemPool;
+    fn semaphores_mut(&mut self) -> &mut Self::SemPool;
+    fn mutexes(&self) -> &Self::MutPool;
+    fn mutexes_mut(&mut self) -> &mut Self::MutPool;
+}
+
+/// Trait for message-passing primitive sub-structs (message queues).
+pub trait MsgOps {
+    type MsgPool;
+    fn messages(&self) -> &Self::MsgPool;
+    fn messages_mut(&mut self) -> &mut Self::MsgPool;
+}
+
 /// Trait that bundles every const-generic parameter the [`Kernel`] needs.
 ///
 /// Implement this trait on a zero-sized struct to configure a kernel
@@ -59,13 +76,11 @@ pub trait KernelConfig {
     /// Partition/schedule state operations. Will be constrained by `CoreOps`
     /// in a subsequent subtask. Must implement `Default` for `Kernel::new_empty()`.
     type Core: Default;
-    /// Synchronization primitive operations (semaphores, mutexes). Will be
-    /// constrained by `SyncOps` in a subsequent subtask. Must implement `Default`
-    /// for `Kernel::new_empty()`.
+    /// Synchronization primitive operations (semaphores, mutexes).
+    /// Must implement `SyncOps` when using semaphore/mutex syscalls.
     type Sync: Default;
     /// Message-passing primitive operations (message queues, queuing ports).
-    /// Will be constrained by `MsgOps` in a subsequent subtask. Must implement
-    /// `Default` for `Kernel::new_empty()`.
+    /// Must implement `MsgOps` when using message syscalls.
     type Msg: Default;
     /// Sampling ports and blackboards operations. Will be constrained by
     /// `PortsOps` in a subsequent subtask. Must implement `Default` for

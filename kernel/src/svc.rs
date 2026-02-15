@@ -3,7 +3,7 @@ use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
 
 use crate::blackboard::BlackboardPool;
-use crate::config::KernelConfig;
+use crate::config::{KernelConfig, MsgOps, SyncOps};
 use crate::context::ExceptionFrame;
 
 /// Typed SVC error codes returned to user-space via r0.
@@ -705,6 +705,11 @@ where
     [(); C::BZ]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
+    C::Sync: SyncOps<
+        SemPool = SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: MsgOps<MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>>,
 {
     fn default() -> Self {
         Self::new_empty(
@@ -737,6 +742,11 @@ where
     [(); C::BZ]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
+    C::Sync: SyncOps<
+        SemPool = SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: MsgOps<MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>>,
 {
     /// Create a new `Kernel` with the given schedule and partition configs.
     ///
@@ -995,7 +1005,8 @@ where
             Some(SyscallId::SemWait) => {
                 let pt = &mut self.partitions;
                 match self
-                    .semaphores
+                    .sync
+                    .semaphores_mut()
                     .wait(pt, frame.r1 as usize, frame.r2 as usize)
                 {
                     Ok(()) => 0,
@@ -1004,14 +1015,18 @@ where
             }
             Some(SyscallId::SemSignal) => {
                 let pt = &mut self.partitions;
-                match self.semaphores.signal(pt, frame.r1 as usize) {
+                match self.sync.semaphores_mut().signal(pt, frame.r1 as usize) {
                     Ok(()) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::MutexLock) => {
                 let pt = &mut self.partitions;
-                match self.mutexes.lock(pt, frame.r1 as usize, frame.r2 as usize) {
+                match self
+                    .sync
+                    .mutexes_mut()
+                    .lock(pt, frame.r1 as usize, frame.r2 as usize)
+                {
                     Ok(()) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
@@ -1019,7 +1034,8 @@ where
             Some(SyscallId::MutexUnlock) => {
                 let pt = &mut self.partitions;
                 match self
-                    .mutexes
+                    .sync
+                    .mutexes_mut()
                     .unlock(pt, frame.r1 as usize, frame.r2 as usize)
                 {
                     Ok(()) => 0,
@@ -1031,7 +1047,8 @@ where
                 // the calling partition's MPU data region.
                 let data = unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, C::QM) };
                 match self
-                    .messages
+                    .msg
+                    .messages_mut()
                     .send(frame.r1 as usize, frame.r2 as usize, data)
                 {
                     Ok(outcome) => match apply_send_outcome(self.partitions_mut(), outcome) {
@@ -1050,7 +1067,8 @@ where
                 // the calling partition's MPU data region.
                 let buf = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
                 match self
-                    .messages
+                    .msg
+                    .messages_mut()
                     .recv(frame.r1 as usize, frame.r2 as usize, buf)
                 {
                     Ok(outcome) => match apply_recv_outcome(self, outcome) {
@@ -1609,6 +1627,11 @@ where
     [(); C::BZ]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
+    C::Sync: SyncOps<
+        SemPool = SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: MsgOps<MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>>,
 {
     match outcome {
         RecvOutcome::Received {

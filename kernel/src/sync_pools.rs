@@ -1,5 +1,6 @@
 //! Synchronization primitives pools.
 
+use crate::config::SyncOps;
 use crate::mutex::MutexPool;
 use crate::semaphore::SemaphorePool;
 
@@ -57,6 +58,30 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<const S: usize, const SW: usize, const MS: usize, const MW: usize> SyncOps
+    for SyncPools<S, SW, MS, MW>
+where
+    [(); S]:,
+    [(); SW]:,
+    [(); MS]:,
+    [(); MW]:,
+{
+    type SemPool = SemaphorePool<S, SW>;
+    type MutPool = MutexPool<MS, MW>;
+    fn semaphores(&self) -> &Self::SemPool {
+        &self.semaphores
+    }
+    fn semaphores_mut(&mut self) -> &mut Self::SemPool {
+        &mut self.semaphores
+    }
+    fn mutexes(&self) -> &Self::MutPool {
+        &self.mutexes
+    }
+    fn mutexes_mut(&mut self) -> &mut Self::MutPool {
+        &mut self.mutexes
     }
 }
 
