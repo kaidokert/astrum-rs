@@ -676,19 +676,6 @@ pub struct Kernel<C: KernelConfig>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    [(); C::S]:,
-    [(); C::SW]:,
-    [(); C::MS]:,
-    [(); C::MW]:,
-    [(); C::QS]:,
-    [(); C::QD]:,
-    [(); C::QM]:,
-    [(); C::QW]:,
-    [(); C::SP]:,
-    [(); C::SM]:,
-    [(); C::BS]:,
-    [(); C::BM]:,
-    [(); C::BW]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
     #[cfg(feature = "dynamic-mpu")]
@@ -752,25 +739,14 @@ impl<C: KernelConfig> Default for Kernel<C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    [(); C::S]:,
-    [(); C::SW]:,
-    [(); C::MS]:,
-    [(); C::MW]:,
-    [(); C::QS]:,
-    [(); C::QD]:,
-    [(); C::QM]:,
-    [(); C::QW]:,
-    [(); C::SP]:,
-    [(); C::SM]:,
-    [(); C::BS]:,
-    [(); C::BM]:,
-    [(); C::BW]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
+    C::Core:
+        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
     C::Sync: SyncOps<
         SemPool = SemaphorePool<{ C::S }, { C::SW }>,
         MutPool = MutexPool<{ C::MS }, { C::MW }>,
@@ -779,8 +755,6 @@ where
         MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
         QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
     >,
-    C::Core:
-        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
     C::Ports: PortsOps<
         SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
         BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
@@ -798,19 +772,6 @@ impl<C: KernelConfig> Kernel<C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    [(); C::S]:,
-    [(); C::SW]:,
-    [(); C::MS]:,
-    [(); C::MW]:,
-    [(); C::QS]:,
-    [(); C::QD]:,
-    [(); C::QM]:,
-    [(); C::QW]:,
-    [(); C::SP]:,
-    [(); C::SM]:,
-    [(); C::BS]:,
-    [(); C::BM]:,
-    [(); C::BW]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
     #[cfg(feature = "dynamic-mpu")]
@@ -1856,19 +1817,6 @@ fn apply_recv_outcome<C: KernelConfig>(
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    [(); C::S]:,
-    [(); C::SW]:,
-    [(); C::MS]:,
-    [(); C::MW]:,
-    [(); C::QS]:,
-    [(); C::QD]:,
-    [(); C::QM]:,
-    [(); C::QW]:,
-    [(); C::SP]:,
-    [(); C::SM]:,
-    [(); C::BS]:,
-    [(); C::BM]:,
-    [(); C::BW]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
     #[cfg(feature = "dynamic-mpu")]
