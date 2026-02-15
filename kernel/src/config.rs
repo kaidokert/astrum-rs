@@ -1,3 +1,13 @@
+/// Trait for core partition/schedule sub-structs.
+pub trait CoreOps {
+    type PartTable;
+    type SchedTable;
+    fn partitions(&self) -> &Self::PartTable;
+    fn partitions_mut(&mut self) -> &mut Self::PartTable;
+    fn schedule(&self) -> &Self::SchedTable;
+    fn schedule_mut(&mut self) -> &mut Self::SchedTable;
+}
+
 /// Trait for synchronization primitive sub-structs (semaphores, mutexes).
 pub trait SyncOps {
     type SemPool;

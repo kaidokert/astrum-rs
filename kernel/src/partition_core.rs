@@ -1,7 +1,33 @@
 //! Partition and schedule management state.
 
-use crate::partition::PartitionTable;
-use crate::scheduler::ScheduleTable;
+use crate::partition::{PartitionControlBlock, PartitionTable};
+use crate::scheduler::{ScheduleTable, ScheduleTableOps, ScheduleTableOpsMut};
+
+/// Narrow interface for partition/schedule state access without const bounds.
+pub trait PartitionCoreOps {
+    /// Returns a slice of partition control blocks.
+    fn partitions(&self) -> &[PartitionControlBlock];
+    /// Returns a mutable reference to a partition by index.
+    fn partition_mut(&mut self, index: usize) -> Option<&mut PartitionControlBlock>;
+    /// Returns the number of partitions.
+    fn partition_count(&self) -> usize;
+    /// Returns the current partition index.
+    fn current_partition(&self) -> u8;
+    /// Sets the current partition index.
+    fn set_current_partition(&mut self, id: u8);
+    /// Returns the next partition index.
+    fn next_partition(&self) -> u8;
+    /// Sets the next partition index.
+    fn set_next_partition(&mut self, id: u8);
+    /// Gets the stack pointer for a partition by index.
+    fn get_sp(&self, index: usize) -> Option<u32>;
+    /// Sets the stack pointer for a partition by index. Returns true if valid.
+    fn set_sp(&mut self, index: usize, sp: u32) -> bool;
+    /// Returns a reference to the schedule table (via trait object).
+    fn schedule(&self) -> &dyn ScheduleTableOps;
+    /// Returns a mutable reference to the schedule table (via trait object).
+    fn schedule_mut(&mut self) -> &mut dyn ScheduleTableOpsMut;
+}
 
 /// Groups partition and schedule management state.
 pub struct PartitionCore<const N: usize, const SCHED: usize>
@@ -82,6 +108,83 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<const N: usize, const SCHED: usize> crate::config::CoreOps for PartitionCore<N, SCHED>
+where
+    [(); N]:,
+    [(); SCHED]:,
+{
+    type PartTable = PartitionTable<N>;
+    type SchedTable = ScheduleTable<SCHED>;
+
+    fn partitions(&self) -> &Self::PartTable {
+        &self.partitions
+    }
+    fn partitions_mut(&mut self) -> &mut Self::PartTable {
+        &mut self.partitions
+    }
+    fn schedule(&self) -> &Self::SchedTable {
+        &self.schedule
+    }
+    fn schedule_mut(&mut self) -> &mut Self::SchedTable {
+        &mut self.schedule
+    }
+}
+
+impl<const N: usize, const SCHED: usize> PartitionCoreOps for PartitionCore<N, SCHED>
+where
+    [(); N]:,
+    [(); SCHED]:,
+{
+    fn partitions(&self) -> &[PartitionControlBlock] {
+        self.partitions.as_slice()
+    }
+
+    fn partition_mut(&mut self, index: usize) -> Option<&mut PartitionControlBlock> {
+        self.partitions.get_mut(index)
+    }
+
+    fn partition_count(&self) -> usize {
+        self.partitions.len()
+    }
+
+    fn current_partition(&self) -> u8 {
+        self.current_partition
+    }
+
+    fn set_current_partition(&mut self, id: u8) {
+        self.current_partition = id;
+    }
+
+    fn next_partition(&self) -> u8 {
+        self.next_partition
+    }
+
+    fn set_next_partition(&mut self, id: u8) {
+        self.next_partition = id;
+    }
+
+    fn get_sp(&self, index: usize) -> Option<u32> {
+        self.partition_sp.get(index).copied()
+    }
+
+    fn set_sp(&mut self, index: usize, sp: u32) -> bool {
+        if let Some(slot) = self.partition_sp.get_mut(index) {
+            *slot = sp;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn schedule(&self) -> &dyn ScheduleTableOps {
+        &self.schedule
+    }
+
+    fn schedule_mut(&mut self) -> &mut dyn ScheduleTableOpsMut {
+        &mut self.schedule
     }
 }
 

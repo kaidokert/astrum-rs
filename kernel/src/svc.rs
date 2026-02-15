@@ -3,7 +3,7 @@ use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
 
 use crate::blackboard::BlackboardPool;
-use crate::config::{KernelConfig, MsgOps, PortsOps, SyncOps};
+use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
 
 /// Typed SVC error codes returned to user-space via r0.
@@ -185,12 +185,12 @@ pub fn validate_user_ptr_dynamic<const N: usize>(
 /// Returns `SvcError::InvalidPointer` when `validate_user_ptr` fails;
 /// otherwise evaluates `$body` (which must produce `u32`).
 ///
-/// Uses `$self.partitions` (immutable borrow) for validation, then
+/// Uses `$self.core.partitions()` (immutable borrow) for validation, then
 /// releases the borrow before executing `$body` so that `$body` may
 /// freely call `$self.partitions_mut()`.
 macro_rules! validated_ptr {
     ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
-        if !validate_user_ptr(&$self.partitions, $self.current_partition, $ptr, $len) {
+        if !validate_user_ptr($self.core.partitions(), $self.current_partition, $ptr, $len) {
             SvcError::InvalidPointer.to_u32()
         } else {
             $body
@@ -210,7 +210,7 @@ macro_rules! validated_ptr {
 macro_rules! validated_ptr_dynamic {
     ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
         if !validate_user_ptr_dynamic(
-            &$self.partitions,
+            $self.core.partitions(),
             &$self.dynamic_strategy,
             $self.current_partition,
             $ptr,
@@ -713,6 +713,8 @@ where
         MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
         QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
     >,
+    C::Core:
+        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
     C::Ports: PortsOps<
         SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
         BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
@@ -749,6 +751,8 @@ where
     [(); C::BZ]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
+    C::Core:
+        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
     C::Sync: SyncOps<
         SemPool = SemaphorePool<{ C::S }, { C::SW }>,
         MutPool = MutexPool<{ C::MS }, { C::MW }>,
@@ -971,7 +975,7 @@ where
         self.dev_wait_queue
             .drain_expired(current_tick, &mut expired);
         for &pid in expired.iter() {
-            try_transition(self.partitions_mut(), pid, PartitionState::Ready);
+            try_transition(self.core.partitions_mut(), pid, PartitionState::Ready);
         }
     }
 
@@ -1012,16 +1016,16 @@ where
         frame.r0 = match SyscallId::from_u32(frame.r0) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::EventWait) => {
-                events::event_wait(self.partitions_mut(), frame.r1 as usize, frame.r2)
+                events::event_wait(self.core.partitions_mut(), frame.r1 as usize, frame.r2)
             }
             Some(SyscallId::EventSet) => {
-                events::event_set(self.partitions_mut(), frame.r1 as usize, frame.r2)
+                events::event_set(self.core.partitions_mut(), frame.r1 as usize, frame.r2)
             }
             Some(SyscallId::EventClear) => {
-                events::event_clear(self.partitions_mut(), frame.r1 as usize, frame.r2)
+                events::event_clear(self.core.partitions_mut(), frame.r1 as usize, frame.r2)
             }
             Some(SyscallId::SemWait) => {
-                let pt = &mut self.partitions;
+                let pt = self.core.partitions_mut();
                 match self
                     .sync
                     .semaphores_mut()
@@ -1032,14 +1036,14 @@ where
                 }
             }
             Some(SyscallId::SemSignal) => {
-                let pt = &mut self.partitions;
+                let pt = self.core.partitions_mut();
                 match self.sync.semaphores_mut().signal(pt, frame.r1 as usize) {
                     Ok(()) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
             Some(SyscallId::MutexLock) => {
-                let pt = &mut self.partitions;
+                let pt = self.core.partitions_mut();
                 match self
                     .sync
                     .mutexes_mut()
@@ -1050,7 +1054,7 @@ where
                 }
             }
             Some(SyscallId::MutexUnlock) => {
-                let pt = &mut self.partitions;
+                let pt = self.core.partitions_mut();
                 match self
                     .sync
                     .mutexes_mut()
@@ -1069,7 +1073,7 @@ where
                     .messages_mut()
                     .send(frame.r1 as usize, frame.r2 as usize, data)
                 {
-                    Ok(outcome) => match apply_send_outcome(self.partitions_mut(), outcome) {
+                    Ok(outcome) => match apply_send_outcome(self.core.partitions_mut(), outcome) {
                         Ok(Some(_blocked)) => {
                             self.trigger_deschedule();
                             0
@@ -1143,7 +1147,11 @@ where
                     ) {
                         Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
                             if let Some(pid) = w {
-                                try_transition(self.partitions_mut(), pid, PartitionState::Ready);
+                                try_transition(
+                                    self.core.partitions_mut(),
+                                    pid,
+                                    PartitionState::Ready,
+                                );
                             }
                             0
                         }
@@ -1168,7 +1176,7 @@ where
                         wake_sender: w,
                     }) => {
                         if let Some(pid) = w {
-                            try_transition(self.partitions_mut(), pid, PartitionState::Ready);
+                            try_transition(self.core.partitions_mut(), pid, PartitionState::Ready);
                         }
                         msg_len as u32
                     }
@@ -1208,7 +1216,11 @@ where
                     {
                         Ok(woken) => {
                             for &pid in woken.iter() {
-                                try_transition(self.partitions_mut(), pid, PartitionState::Ready);
+                                try_transition(
+                                    self.core.partitions_mut(),
+                                    pid,
+                                    PartitionState::Ready,
+                                );
                             }
                             0
                         }
@@ -1233,7 +1245,11 @@ where
                         }
                         Ok(crate::blackboard::ReadBlackboardOutcome::ReaderBlocked) => {
                             let pid = self.current_partition;
-                            try_transition(self.partitions_mut(), pid, PartitionState::Waiting);
+                            try_transition(
+                                self.core.partitions_mut(),
+                                pid,
+                                PartitionState::Waiting,
+                            );
                             self.trigger_deschedule()
                         }
                         Err(_) => SvcError::InvalidResource.to_u32(),
@@ -1376,7 +1392,7 @@ where
                                     match self.dev_wait_queue.block_reader(pid, expiry) {
                                         Ok(()) => {
                                             try_transition(
-                                                self.partitions_mut(),
+                                                self.core.partitions_mut(),
                                                 pid,
                                                 PartitionState::Waiting,
                                             );
@@ -1409,13 +1425,13 @@ where
                         wake_sender: w,
                     }) => {
                         if let Some(pid) = w {
-                            try_transition(self.partitions_mut(), pid, PartitionState::Ready);
+                            try_transition(self.core.partitions_mut(), pid, PartitionState::Ready);
                         }
                         msg_len as u32
                     }
                     Ok(crate::queuing::RecvQueuingOutcome::ReceiverBlocked { .. }) => {
                         let pid = self.current_partition;
-                        try_transition(self.partitions_mut(), pid, PartitionState::Waiting);
+                        try_transition(self.core.partitions_mut(), pid, PartitionState::Waiting);
                         self.trigger_deschedule()
                     }
                     Err(_) => SvcError::InvalidResource.to_u32(),
@@ -1437,13 +1453,21 @@ where
                     ) {
                         Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
                             if let Some(pid) = w {
-                                try_transition(self.partitions_mut(), pid, PartitionState::Ready);
+                                try_transition(
+                                    self.core.partitions_mut(),
+                                    pid,
+                                    PartitionState::Ready,
+                                );
                             }
                             0
                         }
                         Ok(SendQueuingOutcome::SenderBlocked { .. }) => {
                             let pid = self.current_partition;
-                            try_transition(self.partitions_mut(), pid, PartitionState::Waiting);
+                            try_transition(
+                                self.core.partitions_mut(),
+                                pid,
+                                PartitionState::Waiting,
+                            );
                             self.trigger_deschedule()
                         }
                         Err(_) => SvcError::InvalidResource.to_u32(),
@@ -1503,17 +1527,17 @@ where
 
     /// Returns an immutable reference to the partition table.
     pub fn partitions(&self) -> &PartitionTable<{ C::N }> {
-        &self.partitions
+        self.core.partitions()
     }
 
     /// Returns a mutable reference to the partition table.
     pub fn partitions_mut(&mut self) -> &mut PartitionTable<{ C::N }> {
-        &mut self.partitions
+        self.core.partitions_mut()
     }
 
     /// Returns an immutable reference to the schedule table.
     pub fn schedule(&self) -> &ScheduleTable<{ C::SCHED }> {
-        &self.schedule
+        self.core.schedule()
     }
 
     // -------------------------------------------------------------------------
@@ -1525,7 +1549,7 @@ where
     #[cfg(not(feature = "dynamic-mpu"))]
     pub fn advance_schedule_tick(&mut self) -> Option<u8> {
         self.tick.increment();
-        let next = self.schedule.advance_tick();
+        let next = self.core.schedule_mut().advance_tick();
         if let Some(pid) = next {
             self.active_partition = Some(pid);
             self.next_partition = pid;
@@ -1539,7 +1563,7 @@ where
     #[cfg(feature = "dynamic-mpu")]
     pub fn advance_schedule_tick(&mut self) -> ScheduleEvent {
         self.tick.increment();
-        let event = self.schedule.advance_tick();
+        let event = self.core.schedule_mut().advance_tick();
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             self.active_partition = Some(pid);
             self.next_partition = pid;
@@ -1555,7 +1579,7 @@ where
     /// (`Option<u8>` or `ScheduleEvent`), but both implement
     /// [`YieldResult`] so callers can extract the partition id uniformly.
     pub fn yield_current_slot(&mut self) -> impl YieldResult {
-        let result = self.schedule.force_advance();
+        let result = self.core.schedule_mut().force_advance();
         if let Some(pid) = result.partition_id() {
             self.active_partition = Some(pid);
         }
@@ -1564,7 +1588,7 @@ where
 
     /// Start the schedule and return the initial partition ID.
     ///
-    /// Calls `self.schedule.start()` to initialize the schedule table's
+    /// Calls `self.core.schedule_mut().start()` to initialize the schedule table's
     /// internal state (resetting to the first slot). Returns the partition
     /// ID of the first schedule entry, or `None` if the schedule is empty.
     ///
@@ -1572,8 +1596,8 @@ where
     /// to call `kernel.start_schedule()` instead of managing schedule state
     /// separately.
     pub fn start_schedule(&mut self) -> Option<u8> {
-        self.schedule.start();
-        let first_pid = self.schedule.current_partition();
+        self.core.schedule_mut().start();
+        let first_pid = self.core.schedule().current_partition();
         if let Some(pid) = first_pid {
             self.active_partition = Some(pid);
         }
@@ -1658,6 +1682,8 @@ where
     [(); C::BZ]:,
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
+    C::Core:
+        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
     C::Sync: SyncOps<
         SemPool = SemaphorePool<{ C::S }, { C::SW }>,
         MutPool = MutexPool<{ C::MS }, { C::MW }>,
@@ -1675,14 +1701,18 @@ where
         RecvOutcome::Received {
             wake_sender: Some(pid),
         } => {
-            if !try_transition(kernel.partitions_mut(), pid, PartitionState::Ready) {
+            if !try_transition(kernel.core.partitions_mut(), pid, PartitionState::Ready) {
                 return Err(SvcError::TransitionFailed);
             }
             Ok(None)
         }
         RecvOutcome::Received { wake_sender: None } => Ok(None),
         RecvOutcome::ReceiverBlocked { blocked } => {
-            if !try_transition(kernel.partitions_mut(), blocked, PartitionState::Waiting) {
+            if !try_transition(
+                kernel.core.partitions_mut(),
+                blocked,
+                PartitionState::Waiting,
+            ) {
                 return Err(SvcError::TransitionFailed);
             }
             kernel.trigger_deschedule();
@@ -1755,7 +1785,7 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         const BZ: usize = 32;
 
-        type Core = ();
+        type Core = crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }>;
         type Sync = ();
         type Msg = ();
         type Ports = ();
@@ -4498,7 +4528,7 @@ mod tests {
             #[cfg(feature = "dynamic-mpu")]
             const BZ: usize = 32;
 
-            type Core = ();
+            type Core = crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }>;
             type Sync = ();
             type Msg = ();
             type Ports = ();
