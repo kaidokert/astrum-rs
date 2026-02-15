@@ -628,6 +628,30 @@ macro_rules! define_unified_kernel {
             with_kernel_mut(|k| k.partition_sp_mut().as_mut_ptr()).unwrap_or(::core::ptr::null_mut())
         }
 
+        /// Returns the stack pointer for a partition by index.
+        ///
+        /// Called by PendSV assembly to read saved stack pointers during
+        /// context switch. Uses `interrupt::free` to safely access KERNEL.
+        ///
+        /// Returns 0 if KERNEL is not initialized or index is out of bounds.
+        #[cfg_attr(not(test), no_mangle)]
+        #[allow(dead_code)] // Called from assembly, not Rust
+        extern "C" fn get_partition_sp(idx: u32) -> u32 {
+            with_kernel(|k| k.get_sp(idx as usize).unwrap_or(0)).unwrap_or(0)
+        }
+
+        /// Sets the stack pointer for a partition by index.
+        ///
+        /// Called by PendSV assembly to save stack pointers during context
+        /// switch. Uses `interrupt::free` to safely access KERNEL.
+        ///
+        /// No-op if KERNEL is not initialized or index is out of bounds.
+        #[cfg_attr(not(test), no_mangle)]
+        #[allow(dead_code)] // Called from assembly, not Rust
+        extern "C" fn set_partition_sp(idx: u32, sp: u32) {
+            with_kernel_mut(|k| { let _ = k.set_sp(idx as usize, sp); });
+        }
+
         /// Sets the current partition index in the Kernel struct.
         ///
         /// Called by PendSV assembly after context switch to update the
@@ -4941,6 +4965,20 @@ mod tests {
             }
 
             #[test]
+            fn macro_generates_get_partition_sp() {
+                // Verify get_partition_sp exists with extern "C" ABI,
+                // takes u32 index, and returns u32.
+                let _: extern "C" fn(u32) -> u32 = get_partition_sp;
+            }
+
+            #[test]
+            fn macro_generates_set_partition_sp() {
+                // Verify set_partition_sp exists with extern "C" ABI,
+                // takes u32 index and u32 value.
+                let _: extern "C" fn(u32, u32) = set_partition_sp;
+            }
+
+            #[test]
             fn get_current_partition_returns_max_when_uninitialized() {
                 // When KERNEL is None, should return u32::MAX as sentinel.
                 // Note: KERNEL starts as None (RefCell<Option<...>>), so
@@ -4960,6 +4998,20 @@ mod tests {
             fn get_partition_sp_ptr_returns_null_when_uninitialized() {
                 let result = get_partition_sp_ptr();
                 assert!(result.is_null());
+            }
+
+            #[test]
+            fn get_partition_sp_returns_zero_when_uninitialized() {
+                // When KERNEL is None, should return 0 as sentinel.
+                let result = get_partition_sp(0);
+                assert_eq!(result, 0);
+            }
+
+            #[test]
+            fn set_partition_sp_noop_when_uninitialized() {
+                // When KERNEL is None, should silently do nothing.
+                // This test just verifies no panic occurs.
+                set_partition_sp(0, 0x2000_0000);
             }
         }
 
@@ -5005,6 +5057,100 @@ mod tests {
                 }
 
                 // Clean up: reset KERNEL to None for other tests.
+                cortex_m::interrupt::free(|cs| {
+                    KERNEL.borrow(cs).replace(None);
+                });
+            }
+
+            #[test]
+            fn get_partition_sp_returns_correct_values() {
+                // Create a kernel with known stack pointer values.
+                let mut kernel = Kernel::<UnifiedTestConfig>::default();
+                kernel.set_sp(0, 0x2000_1000);
+                kernel.set_sp(1, 0x2000_2000);
+
+                // Store the kernel.
+                cortex_m::interrupt::free(|cs| {
+                    KERNEL.borrow(cs).replace(Some(kernel));
+                });
+
+                // Test indexed access returns correct values.
+                assert_eq!(get_partition_sp(0), 0x2000_1000);
+                assert_eq!(get_partition_sp(1), 0x2000_2000);
+
+                // Clean up.
+                cortex_m::interrupt::free(|cs| {
+                    KERNEL.borrow(cs).replace(None);
+                });
+            }
+
+            #[test]
+            fn get_partition_sp_returns_zero_for_out_of_bounds() {
+                // Create a kernel (N=2 partitions).
+                let kernel = Kernel::<UnifiedTestConfig>::default();
+
+                // Store the kernel.
+                cortex_m::interrupt::free(|cs| {
+                    KERNEL.borrow(cs).replace(Some(kernel));
+                });
+
+                // Out-of-bounds indices should return 0.
+                assert_eq!(get_partition_sp(2), 0);
+                assert_eq!(get_partition_sp(100), 0);
+                assert_eq!(get_partition_sp(u32::MAX), 0);
+
+                // Clean up.
+                cortex_m::interrupt::free(|cs| {
+                    KERNEL.borrow(cs).replace(None);
+                });
+            }
+
+            #[test]
+            fn set_partition_sp_writes_correct_values() {
+                // Create a kernel with initial values.
+                let kernel = Kernel::<UnifiedTestConfig>::default();
+
+                // Store the kernel.
+                cortex_m::interrupt::free(|cs| {
+                    KERNEL.borrow(cs).replace(Some(kernel));
+                });
+
+                // Write using set_partition_sp.
+                set_partition_sp(0, 0x2000_3000);
+                set_partition_sp(1, 0x2000_4000);
+
+                // Verify using get_partition_sp.
+                assert_eq!(get_partition_sp(0), 0x2000_3000);
+                assert_eq!(get_partition_sp(1), 0x2000_4000);
+
+                // Clean up.
+                cortex_m::interrupt::free(|cs| {
+                    KERNEL.borrow(cs).replace(None);
+                });
+            }
+
+            #[test]
+            fn set_partition_sp_noop_for_out_of_bounds() {
+                // Create a kernel with known values.
+                let mut kernel = Kernel::<UnifiedTestConfig>::default();
+                kernel.set_sp(0, 0x2000_1000);
+                kernel.set_sp(1, 0x2000_2000);
+
+                // Store the kernel.
+                cortex_m::interrupt::free(|cs| {
+                    KERNEL.borrow(cs).replace(Some(kernel));
+                });
+
+                // Out-of-bounds writes should be no-ops.
+                set_partition_sp(2, 0xDEAD_BEEF);
+                set_partition_sp(100, 0xDEAD_BEEF);
+                set_partition_sp(u32::MAX, 0xDEAD_BEEF);
+
+                // Original values should be unchanged.
+                assert_eq!(get_partition_sp(0), 0x2000_1000);
+                assert_eq!(get_partition_sp(1), 0x2000_2000);
+
+                // Clean up.
                 cortex_m::interrupt::free(|cs| {
                     KERNEL.borrow(cs).replace(None);
                 });
