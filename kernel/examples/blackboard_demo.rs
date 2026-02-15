@@ -17,11 +17,15 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
+    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
+    partition_core::PartitionCore,
+    port_pools::PortPools,
     scheduler::{ScheduleEntry, ScheduleTable},
     semaphore::Semaphore,
     svc,
     svc::Kernel,
+    sync_pools::SyncPools,
     syscall::{
         SYS_BB_DISPLAY, SYS_BB_READ, SYS_EVT_SET, SYS_EVT_WAIT, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
         SYS_YIELD,
@@ -63,6 +67,11 @@ impl KernelConfig for DemoConfig {
     const BZ: usize = 32;
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
+
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +180,7 @@ fn main() -> ! {
 
     // Create blackboard and semaphore resources.
     let bb = k.blackboards.create().unwrap() as u32;
-    k.semaphores.add(Semaphore::new(1, 1)).unwrap();
+    k.semaphores_mut().add(Semaphore::new(1, 1)).unwrap();
     let sem = 0u32; // first (and only) semaphore in the pool
 
     store_kernel(k);

@@ -698,8 +698,6 @@ where
 {
     /// Currently active partition index, if any.
     pub active_partition: Option<u8>,
-    pub semaphores: SemaphorePool<{ C::S }, { C::SW }>,
-    pub mutexes: MutexPool<{ C::MS }, { C::MW }>,
     pub messages: MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
     pub tick: TickCounter,
     pub sampling: SamplingPortPool<{ C::SP }, { C::SM }>,
@@ -891,8 +889,6 @@ where
         }
         Ok(Self {
             active_partition: None,
-            semaphores: SemaphorePool::new(),
-            mutexes: MutexPool::new(0),
             messages: MessagePool::new(),
             tick: TickCounter::new(),
             sampling: SamplingPortPool::new(),
@@ -933,8 +929,6 @@ where
     ) -> Self {
         Self {
             active_partition: None,
-            semaphores: SemaphorePool::new(),
-            mutexes: MutexPool::new(0),
             messages: MessagePool::new(),
             tick: TickCounter::new(),
             sampling: SamplingPortPool::new(),
@@ -961,6 +955,34 @@ where
             msg: C::Msg::default(),
             ports: C::Ports::default(),
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Facade methods delegating to self.sync (SyncPools)
+    // -------------------------------------------------------------------------
+
+    /// Returns a shared reference to the semaphore pool.
+    #[inline(always)]
+    pub fn semaphores(&self) -> &<C::Sync as SyncOps>::SemPool {
+        self.sync.semaphores()
+    }
+
+    /// Returns a mutable reference to the semaphore pool.
+    #[inline(always)]
+    pub fn semaphores_mut(&mut self) -> &mut <C::Sync as SyncOps>::SemPool {
+        self.sync.semaphores_mut()
+    }
+
+    /// Returns a shared reference to the mutex pool.
+    #[inline(always)]
+    pub fn mutexes(&self) -> &<C::Sync as SyncOps>::MutPool {
+        self.sync.mutexes()
+    }
+
+    /// Returns a mutable reference to the mutex pool.
+    #[inline(always)]
+    pub fn mutexes_mut(&mut self) -> &mut <C::Sync as SyncOps>::MutPool {
+        self.sync.mutexes_mut()
     }
 
     /// Install an optional hardware UART backend.
