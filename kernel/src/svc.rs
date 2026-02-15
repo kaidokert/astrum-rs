@@ -1836,6 +1836,75 @@ where
     pub fn tick(&self) -> &TickCounter {
         &self.tick
     }
+
+    // -------------------------------------------------------------------------
+    // Facade methods for kernel state (used by tests and harness)
+    // -------------------------------------------------------------------------
+
+    /// Returns whether a yield was requested (e.g., by a blocking syscall).
+    #[inline(always)]
+    pub fn yield_requested(&self) -> bool {
+        self.yield_requested
+    }
+
+    /// Sets the yield_requested flag.
+    #[inline(always)]
+    pub fn set_yield_requested(&mut self, value: bool) {
+        self.yield_requested = value;
+    }
+
+    /// Returns the current partition index.
+    #[inline(always)]
+    pub fn current_partition(&self) -> u8 {
+        self.current_partition
+    }
+
+    /// Sets the current partition index.
+    #[inline(always)]
+    pub fn set_current_partition(&mut self, pid: u8) {
+        self.current_partition = pid;
+    }
+
+    /// Returns the active partition (the one currently running in user mode).
+    #[inline(always)]
+    pub fn active_partition(&self) -> Option<u8> {
+        self.active_partition
+    }
+
+    /// Returns an immutable reference to the buffer pool.
+    #[cfg(feature = "dynamic-mpu")]
+    #[inline(always)]
+    pub fn buffers(&self) -> &crate::buffer_pool::BufferPool<{ C::BP }, { C::BZ }> {
+        &self.buffers
+    }
+
+    /// Returns a mutable reference to the buffer pool.
+    #[cfg(feature = "dynamic-mpu")]
+    #[inline(always)]
+    pub fn buffers_mut(&mut self) -> &mut crate::buffer_pool::BufferPool<{ C::BP }, { C::BZ }> {
+        &mut self.buffers
+    }
+
+    /// Returns an immutable reference to the device wait queue.
+    #[cfg(feature = "dynamic-mpu")]
+    #[inline(always)]
+    pub fn dev_wait_queue(&self) -> &crate::waitqueue::DeviceWaitQueue<{ C::N }> {
+        &self.dev_wait_queue
+    }
+
+    /// Returns a mutable reference to the device wait queue.
+    #[cfg(feature = "dynamic-mpu")]
+    #[inline(always)]
+    pub fn dev_wait_queue_mut(&mut self) -> &mut crate::waitqueue::DeviceWaitQueue<{ C::N }> {
+        &mut self.dev_wait_queue
+    }
+
+    /// Returns an immutable reference to the hardware UART backend.
+    #[cfg(feature = "dynamic-mpu")]
+    #[inline(always)]
+    pub fn hw_uart(&self) -> &Option<crate::hw_uart::HwUartBackend> {
+        &self.hw_uart
+    }
 }
 
 /// Try to transition partition `pid` to `state`. Returns `true` on success.
@@ -1946,9 +2015,9 @@ fn handle_yield() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    // TODO: The following Kernel fields lack facade methods and must be accessed
-    // directly in tests: `active_partition`, `current_partition`, `yield_requested`.
-    // Consider adding facade methods if read-only access is needed more broadly.
+    // Facade methods for `active_partition`, `current_partition`, `yield_requested`,
+    // `buffers`, `dev_wait_queue`, and `hw_uart` are now available on Kernel.
+    // Tests should use these accessor methods instead of direct field access.
 
     //! # Safety
     //!
@@ -2171,11 +2240,11 @@ mod tests {
     #[test]
     fn yield_sets_yield_requested_flag() {
         let mut k = kernel(0, 0, 0);
-        assert!(!k.yield_requested);
+        assert!(!k.yield_requested());
         let mut ef = frame(SYS_YIELD, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        assert!(k.yield_requested);
+        assert!(k.yield_requested());
     }
 
     #[test]
@@ -2183,22 +2252,22 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         let mut ef = frame(SYS_YIELD, 0, 0);
         unsafe { k.dispatch(&mut ef) };
-        assert!(k.yield_requested);
-        k.yield_requested = false;
-        assert!(!k.yield_requested);
+        assert!(k.yield_requested());
+        k.set_yield_requested(false);
+        assert!(!k.yield_requested());
         // Non-yield syscall does not set the flag
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         unsafe { k.dispatch(&mut ef) };
-        assert!(!k.yield_requested);
+        assert!(!k.yield_requested());
     }
 
     #[test]
     fn trigger_deschedule_sets_yield_requested() {
         let mut k = kernel(0, 0, 0);
-        assert!(!k.yield_requested);
+        assert!(!k.yield_requested());
         let ret = k.trigger_deschedule();
         assert_eq!(ret, 0);
-        assert!(k.yield_requested);
+        assert!(k.yield_requested());
     }
 
     #[test]
@@ -2437,7 +2506,7 @@ mod tests {
             assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
         }
         // yield_requested should still be false after successful sends
-        assert!(!k.yield_requested);
+        assert!(!k.yield_requested());
 
         // Next send blocks partition 1
         let outcome = k.messages_mut().send(0, 1, &[99; 4]).unwrap();
@@ -2447,7 +2516,7 @@ mod tests {
         k.trigger_deschedule();
 
         // After blocking and triggering deschedule, yield_requested should be true
-        assert!(k.yield_requested);
+        assert!(k.yield_requested());
         assert_eq!(
             k.partitions().get(1).unwrap().state(),
             PartitionState::Waiting
@@ -2458,7 +2527,7 @@ mod tests {
     fn msg_recv_blocks_sets_yield_requested() {
         let mut k = kernel(0, 0, 1);
         // yield_requested should initially be false
-        assert!(!k.yield_requested);
+        assert!(!k.yield_requested());
 
         // Recv on empty queue blocks partition 0
         let mut buf = [0u8; 4];
@@ -2469,7 +2538,7 @@ mod tests {
         assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(Some(0)));
 
         // yield_requested should now be true after blocking
-        assert!(k.yield_requested);
+        assert!(k.yield_requested());
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Waiting
@@ -2790,7 +2859,7 @@ mod tests {
         assert_eq!(svc!(SYS_BUF_ALLOC, 0), 0); // re-alloc reuses 0
         assert_eq!(svc!(SYS_BUF_RELEASE, 0), 0); // release 0 again
         assert_eq!(svc!(SYS_BUF_RELEASE, 0), eres); // double-release
-        k.current_partition = 1; // switch to partition 1
+        k.set_current_partition(1); // switch to partition 1
         assert_eq!(svc!(SYS_BUF_RELEASE, 1), eres); // wrong owner
     }
 
@@ -2806,7 +2875,7 @@ mod tests {
         unsafe { k.dispatch(&mut ef) };
         let slot0 = ef.r0 as usize;
         assert_eq!(slot0, 0);
-        assert_eq!(k.buffers.deadline(slot0), None);
+        assert_eq!(k.buffers().deadline(slot0), None);
 
         // r2=100 → deadline = tick + 100; tick starts at 0 ⇒ deadline=100
         let mut ef = frame(SYS_BUF_ALLOC, 0, 100);
@@ -2814,7 +2883,7 @@ mod tests {
         unsafe { k.dispatch(&mut ef) };
         let slot1 = ef.r0 as usize;
         assert_eq!(slot1, 1);
-        assert_eq!(k.buffers.deadline(slot1), Some(100));
+        assert_eq!(k.buffers().deadline(slot1), Some(100));
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -3039,7 +3108,7 @@ mod tests {
             k.partitions().get(0).unwrap().state(),
             PartitionState::Waiting
         );
-        assert_eq!(k.dev_wait_queue.len(), 1);
+        assert_eq!(k.dev_wait_queue().len(), 1);
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -3054,7 +3123,7 @@ mod tests {
         assert_eq!(ef.r0, 0);
         let ptr = low32_buf(0);
         // No RX data; timeout>0 should block and trigger deschedule.
-        assert!(!k.yield_requested);
+        assert!(!k.yield_requested());
         let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 50, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
@@ -3063,7 +3132,7 @@ mod tests {
             PartitionState::Waiting
         );
         assert!(
-            k.yield_requested,
+            k.yield_requested(),
             "yield_requested should be true after blocking read"
         );
     }
@@ -3088,7 +3157,7 @@ mod tests {
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running
         );
-        assert_eq!(k.dev_wait_queue.len(), 0);
+        assert_eq!(k.dev_wait_queue().len(), 0);
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -3450,7 +3519,7 @@ mod tests {
         // BbRead with timeout > 0 on empty blackboard should block
         let mut ef = frame4(SYS_BB_READ, id as u32, 50, ptr as u32);
         assert!(
-            !k.yield_requested,
+            !k.yield_requested(),
             "yield_requested should be false before blocking read"
         );
         // SAFETY: test-only dispatch on a valid ExceptionFrame.
@@ -3461,7 +3530,7 @@ mod tests {
             PartitionState::Waiting
         );
         assert!(
-            k.yield_requested,
+            k.yield_requested(),
             "yield_requested should be true after blocking read"
         );
     }
@@ -3536,7 +3605,7 @@ mod tests {
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 50, ptr as u32);
         assert!(
-            !k.yield_requested,
+            !k.yield_requested(),
             "yield_requested should be false before blocking recv"
         );
         unsafe { k.dispatch(&mut ef) };
@@ -3546,7 +3615,7 @@ mod tests {
             PartitionState::Waiting
         );
         assert!(
-            k.yield_requested,
+            k.yield_requested(),
             "yield_requested should be true after blocking recv"
         );
     }
@@ -3855,7 +3924,7 @@ mod tests {
         let r2 = pack_r2(50, 1);
         let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
         assert!(
-            !k.yield_requested,
+            !k.yield_requested(),
             "yield_requested should be false before blocking send"
         );
         unsafe { k.dispatch(&mut ef) };
@@ -3865,7 +3934,7 @@ mod tests {
             PartitionState::Waiting
         );
         assert!(
-            k.yield_requested,
+            k.yield_requested(),
             "yield_requested should be true after blocking send"
         );
     }
@@ -3878,7 +3947,7 @@ mod tests {
     fn hw_uart_none_virtual_uarts_still_dispatch() {
         use crate::syscall::SYS_DEV_OPEN;
         let mut k = kernel(0, 0, 0);
-        assert!(k.hw_uart.is_none());
+        assert!(k.hw_uart().is_none());
         // Virtual UART-A (device 0) opens successfully.
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
         unsafe { k.dispatch(&mut ef) };
@@ -4119,7 +4188,7 @@ mod tests {
     #[test]
     fn expire_timed_waits_device_reader_expiry() {
         let mut k = kernel(0, 0, 0);
-        k.dev_wait_queue.block_reader(0, 100).unwrap();
+        k.dev_wait_queue_mut().block_reader(0, 100).unwrap();
         k.partitions_mut()
             .get_mut(0)
             .unwrap()
@@ -4131,14 +4200,14 @@ mod tests {
             k.partitions().get(0).unwrap().state(),
             PartitionState::Waiting
         );
-        assert_eq!(k.dev_wait_queue.len(), 1);
+        assert_eq!(k.dev_wait_queue().len(), 1);
         // At expiry: transitions Waiting→Ready.
         k.expire_timed_waits::<8>(100);
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Ready
         );
-        assert!(k.dev_wait_queue.is_empty());
+        assert!(k.dev_wait_queue().is_empty());
     }
 
     // --- sync_tick dispatch integration tests ---
@@ -4181,7 +4250,7 @@ mod tests {
         // SAFETY: test-only dispatch on a valid ExceptionFrame.
         unsafe { k.dispatch(&mut ef) };
         let slot = ef.r0 as usize;
-        assert_eq!(k.buffers.deadline(slot), Some(150));
+        assert_eq!(k.buffers().deadline(slot), Some(150));
     }
 
     #[test]
@@ -4250,7 +4319,7 @@ mod tests {
         let k = Kernel::<TestConfig>::new(s, &[cfg], crate::virtual_device::DeviceRegistry::new())
             .unwrap();
         assert_eq!(k.partitions().len(), 1);
-        assert_eq!(k.active_partition, None);
+        assert_eq!(k.active_partition(), None);
     }
 
     /// Helper to call `Kernel::new` with correct feature-flag arguments.
@@ -4555,14 +4624,14 @@ mod tests {
     fn advance_schedule_tick_updates_active_partition() {
         let mut k = kernel_with_schedule();
         // Initially no active partition
-        assert_eq!(k.active_partition, None);
+        assert_eq!(k.active_partition(), None);
         // Advance 4 ticks within slot 0 - no switch
         for _ in 0..4 {
             assert_eq!(k.advance_schedule_tick(), None);
         }
         // 5th tick triggers switch to P1
         assert_eq!(k.advance_schedule_tick(), Some(1));
-        assert_eq!(k.active_partition, Some(1));
+        assert_eq!(k.active_partition(), Some(1));
     }
 
     #[cfg(not(feature = "dynamic-mpu"))]
@@ -4610,7 +4679,7 @@ mod tests {
         // Yield: skip remaining 3 ticks, advance to P1
         let result = k.yield_current_slot();
         assert_eq!(result.partition_id(), Some(1));
-        assert_eq!(k.active_partition, Some(1));
+        assert_eq!(k.active_partition(), Some(1));
     }
 
     #[cfg(not(feature = "dynamic-mpu"))]
@@ -4623,7 +4692,7 @@ mod tests {
         // Yield again: wraps to P0
         let r2 = k.yield_current_slot();
         assert_eq!(r2.partition_id(), Some(0));
-        assert_eq!(k.active_partition, Some(0));
+        assert_eq!(k.active_partition(), Some(0));
     }
 
     #[cfg(not(feature = "dynamic-mpu"))]
@@ -4645,7 +4714,7 @@ mod tests {
             assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
         }
         assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
-        assert_eq!(k.active_partition, Some(1));
+        assert_eq!(k.active_partition(), Some(1));
     }
 
     #[cfg(feature = "dynamic-mpu")]
