@@ -913,6 +913,10 @@ where
     ///
     /// This is for backward compatibility with examples that manage
     /// partitions via `KernelState` separately.
+    ///
+    // NOTE: Subtask 285 (new_empty initialization cleanup) was completed as part of
+    // subtasks 281-284 which removed duplicated fields. The core, sync, msg, and ports
+    // sub-structs are now initialized via Default::default().
     pub fn new_empty(
         #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
             'static,
