@@ -2,6 +2,7 @@
 
 use crate::partition::{PartitionControlBlock, PartitionTable};
 use crate::scheduler::{ScheduleTable, ScheduleTableOps, ScheduleTableOpsMut};
+use crate::tick::TickCounter;
 
 /// Narrow interface for partition/schedule state access without const bounds.
 pub trait PartitionCoreOps {
@@ -27,6 +28,18 @@ pub trait PartitionCoreOps {
     fn schedule(&self) -> &dyn ScheduleTableOps;
     /// Returns a mutable reference to the schedule table (via trait object).
     fn schedule_mut(&mut self) -> &mut dyn ScheduleTableOpsMut;
+    /// Returns the currently active partition index, if any.
+    fn active_partition(&self) -> Option<u8>;
+    /// Sets the active partition index.
+    fn set_active_partition(&mut self, id: Option<u8>);
+    /// Returns a reference to the tick counter.
+    fn tick(&self) -> &TickCounter;
+    /// Returns a mutable reference to the tick counter.
+    fn tick_mut(&mut self) -> &mut TickCounter;
+    /// Returns whether a yield has been requested.
+    fn yield_requested(&self) -> bool;
+    /// Sets the yield_requested flag.
+    fn set_yield_requested(&mut self, requested: bool);
 }
 
 /// Groups partition and schedule management state.
@@ -40,6 +53,14 @@ where
     current_partition: u8,
     next_partition: u8,
     partition_sp: [u32; N],
+    /// Currently active partition index, if any.
+    active_partition: Option<u8>,
+    /// Monotonic tick counter.
+    tick: TickCounter,
+    /// Set to `true` by `SYS_YIELD` dispatch; checked and cleared by the
+    /// harness so it can force-advance the schedule and update
+    /// `NEXT_PARTITION` before PendSV fires.
+    yield_requested: bool,
 }
 
 impl<const N: usize, const SCHED: usize> PartitionCore<N, SCHED>
@@ -54,6 +75,9 @@ where
             current_partition: 0,
             next_partition: 0,
             partition_sp: [0u32; N],
+            active_partition: None,
+            tick: TickCounter::new(),
+            yield_requested: false,
         }
     }
 
@@ -100,6 +124,36 @@ where
         }
     }
 
+    /// Returns the currently active partition index, if any.
+    pub fn active_partition(&self) -> Option<u8> {
+        self.active_partition
+    }
+
+    /// Sets the active partition index.
+    pub fn set_active_partition(&mut self, id: Option<u8>) {
+        self.active_partition = id;
+    }
+
+    /// Returns a reference to the tick counter.
+    pub fn tick(&self) -> &TickCounter {
+        &self.tick
+    }
+
+    /// Returns a mutable reference to the tick counter.
+    pub fn tick_mut(&mut self) -> &mut TickCounter {
+        &mut self.tick
+    }
+
+    /// Returns whether a yield has been requested.
+    pub fn yield_requested(&self) -> bool {
+        self.yield_requested
+    }
+
+    /// Sets the yield_requested flag.
+    pub fn set_yield_requested(&mut self, requested: bool) {
+        self.yield_requested = requested;
+    }
+
     /// Replace the schedule table with the provided one.
     ///
     /// Used by `Kernel::new()` to initialize the core with a pre-built
@@ -126,6 +180,7 @@ where
 {
     type PartTable = PartitionTable<N>;
     type SchedTable = ScheduleTable<SCHED>;
+    type TickCounter = TickCounter;
 
     fn partitions(&self) -> &Self::PartTable {
         &self.partitions
@@ -167,6 +222,24 @@ where
     }
     fn partition_sp_mut(&mut self) -> &mut [u32] {
         &mut self.partition_sp
+    }
+    fn active_partition(&self) -> Option<u8> {
+        self.active_partition
+    }
+    fn set_active_partition(&mut self, id: Option<u8>) {
+        self.active_partition = id;
+    }
+    fn tick(&self) -> &Self::TickCounter {
+        &self.tick
+    }
+    fn tick_mut(&mut self) -> &mut Self::TickCounter {
+        &mut self.tick
+    }
+    fn yield_requested(&self) -> bool {
+        self.yield_requested
+    }
+    fn set_yield_requested(&mut self, requested: bool) {
+        self.yield_requested = requested;
     }
 }
 
@@ -222,6 +295,30 @@ where
 
     fn schedule_mut(&mut self) -> &mut dyn ScheduleTableOpsMut {
         &mut self.schedule
+    }
+
+    fn active_partition(&self) -> Option<u8> {
+        self.active_partition
+    }
+
+    fn set_active_partition(&mut self, id: Option<u8>) {
+        self.active_partition = id;
+    }
+
+    fn tick(&self) -> &TickCounter {
+        &self.tick
+    }
+
+    fn tick_mut(&mut self) -> &mut TickCounter {
+        &mut self.tick
+    }
+
+    fn yield_requested(&self) -> bool {
+        self.yield_requested
+    }
+
+    fn set_yield_requested(&mut self, requested: bool) {
+        self.yield_requested = requested;
     }
 }
 

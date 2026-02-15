@@ -4,6 +4,19 @@
 //! [`configure_systick`] for SysTick timer configuration. The schedule
 //! advancement is now handled directly via [`Kernel::advance_schedule_tick`](crate::svc::Kernel::advance_schedule_tick).
 
+/// Trait defining tick counter operations.
+///
+/// This trait is used as a bound on `CoreOps::TickCounter` so that
+/// generic code can call `get()`, `increment()`, and `sync()` methods.
+pub trait TickCounterOps {
+    /// Return the current tick count.
+    fn get(&self) -> u64;
+    /// Increment the counter by one tick.
+    fn increment(&mut self);
+    /// Synchronize the tick counter to the given value.
+    fn sync(&mut self, value: u64);
+}
+
 /// Monotonic tick counter incremented on every SysTick interrupt.
 pub struct TickCounter {
     ticks: u64,
@@ -33,6 +46,20 @@ impl TickCounter {
 
     /// Synchronize the tick counter to the given value.
     pub fn sync(&mut self, value: u64) {
+        self.ticks = value;
+    }
+}
+
+impl TickCounterOps for TickCounter {
+    fn get(&self) -> u64 {
+        self.ticks
+    }
+
+    fn increment(&mut self) {
+        self.ticks = self.ticks.wrapping_add(1);
+    }
+
+    fn sync(&mut self, value: u64) {
         self.ticks = value;
     }
 }

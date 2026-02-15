@@ -1,7 +1,10 @@
+use crate::tick::TickCounterOps;
+
 /// Trait for core partition/schedule sub-structs.
 pub trait CoreOps {
     type PartTable;
     type SchedTable;
+    type TickCounter: TickCounterOps;
     fn partitions(&self) -> &Self::PartTable;
     fn partitions_mut(&mut self) -> &mut Self::PartTable;
     fn schedule(&self) -> &Self::SchedTable;
@@ -22,6 +25,18 @@ pub trait CoreOps {
     fn partition_sp(&self) -> &[u32];
     /// Returns a mutable reference to the partition_sp array.
     fn partition_sp_mut(&mut self) -> &mut [u32];
+    /// Returns the currently active partition index, if any.
+    fn active_partition(&self) -> Option<u8>;
+    /// Sets the active partition index.
+    fn set_active_partition(&mut self, id: Option<u8>);
+    /// Returns a reference to the tick counter.
+    fn tick(&self) -> &Self::TickCounter;
+    /// Returns a mutable reference to the tick counter.
+    fn tick_mut(&mut self) -> &mut Self::TickCounter;
+    /// Returns whether a yield has been requested.
+    fn yield_requested(&self) -> bool;
+    /// Sets the yield_requested flag.
+    fn set_yield_requested(&mut self, requested: bool);
 }
 
 /// Trait for synchronization primitive sub-structs (semaphores, mutexes).

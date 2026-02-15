@@ -278,6 +278,9 @@ use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
 use crate::syscall::SyscallId;
 use crate::tick::TickCounter;
+// Re-export for callers who need to call methods on TickCounter from facade methods
+#[allow(unused_imports)]
+pub use crate::tick::TickCounterOps;
 #[cfg(feature = "dynamic-mpu")]
 use crate::virtual_device::VirtualDevice;
 
@@ -1692,6 +1695,50 @@ where
     #[inline(always)]
     pub fn partition_sp_mut(&mut self) -> &mut [u32] {
         self.core.partition_sp_mut()
+    }
+
+    // -------------------------------------------------------------------------
+    // Core state facade methods (active_partition, tick, yield_requested)
+    //
+    // These methods delegate to self.core for accessing the fields that were
+    // moved to PartitionCore. The direct fields on Kernel are retained for
+    // backward compatibility but will be removed in a follow-up.
+    // -------------------------------------------------------------------------
+
+    /// Returns the currently active partition index from core.
+    #[inline(always)]
+    pub fn core_active_partition(&self) -> Option<u8> {
+        self.core.active_partition()
+    }
+
+    /// Sets the active partition index in core.
+    #[inline(always)]
+    pub fn set_core_active_partition(&mut self, id: Option<u8>) {
+        self.core.set_active_partition(id);
+    }
+
+    /// Returns a reference to the tick counter in core.
+    #[inline(always)]
+    pub fn core_tick(&self) -> &<C::Core as CoreOps>::TickCounter {
+        self.core.tick()
+    }
+
+    /// Returns a mutable reference to the tick counter in core.
+    #[inline(always)]
+    pub fn core_tick_mut(&mut self) -> &mut <C::Core as CoreOps>::TickCounter {
+        self.core.tick_mut()
+    }
+
+    /// Returns whether a yield has been requested (from core).
+    #[inline(always)]
+    pub fn core_yield_requested(&self) -> bool {
+        self.core.yield_requested()
+    }
+
+    /// Sets the yield_requested flag in core.
+    #[inline(always)]
+    pub fn set_core_yield_requested(&mut self, requested: bool) {
+        self.core.set_yield_requested(requested);
     }
 
     // -------------------------------------------------------------------------
