@@ -6,6 +6,22 @@ pub trait CoreOps {
     fn partitions_mut(&mut self) -> &mut Self::PartTable;
     fn schedule(&self) -> &Self::SchedTable;
     fn schedule_mut(&mut self) -> &mut Self::SchedTable;
+    /// Returns the current partition index.
+    fn current_partition(&self) -> u8;
+    /// Sets the current partition index.
+    fn set_current_partition(&mut self, id: u8);
+    /// Returns the next partition index.
+    fn next_partition(&self) -> u8;
+    /// Sets the next partition index.
+    fn set_next_partition(&mut self, id: u8);
+    /// Gets the stack pointer for a partition by index.
+    fn get_sp(&self, index: usize) -> Option<u32>;
+    /// Sets the stack pointer for a partition by index. Returns true if valid.
+    fn set_sp(&mut self, index: usize, sp: u32) -> bool;
+    /// Returns a reference to the partition_sp array.
+    fn partition_sp(&self) -> &[u32];
+    /// Returns a mutable reference to the partition_sp array.
+    fn partition_sp_mut(&mut self) -> &mut [u32];
 }
 
 /// Trait for synchronization primitive sub-structs (semaphores, mutexes).

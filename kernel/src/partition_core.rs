@@ -99,6 +99,14 @@ where
             false
         }
     }
+
+    /// Replace the schedule table with the provided one.
+    ///
+    /// Used by `Kernel::new()` to initialize the core with a pre-built
+    /// and validated schedule.
+    pub fn set_schedule(&mut self, schedule: ScheduleTable<SCHED>) {
+        self.schedule = schedule;
+    }
 }
 
 impl<const N: usize, const SCHED: usize> Default for PartitionCore<N, SCHED>
@@ -130,6 +138,35 @@ where
     }
     fn schedule_mut(&mut self) -> &mut Self::SchedTable {
         &mut self.schedule
+    }
+    fn current_partition(&self) -> u8 {
+        self.current_partition
+    }
+    fn set_current_partition(&mut self, id: u8) {
+        self.current_partition = id;
+    }
+    fn next_partition(&self) -> u8 {
+        self.next_partition
+    }
+    fn set_next_partition(&mut self, id: u8) {
+        self.next_partition = id;
+    }
+    fn get_sp(&self, index: usize) -> Option<u32> {
+        self.partition_sp.get(index).copied()
+    }
+    fn set_sp(&mut self, index: usize, sp: u32) -> bool {
+        if let Some(slot) = self.partition_sp.get_mut(index) {
+            *slot = sp;
+            true
+        } else {
+            false
+        }
+    }
+    fn partition_sp(&self) -> &[u32] {
+        &self.partition_sp
+    }
+    fn partition_sp_mut(&mut self) -> &mut [u32] {
+        &mut self.partition_sp
     }
 }
 

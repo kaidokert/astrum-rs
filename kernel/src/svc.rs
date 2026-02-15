@@ -588,7 +588,7 @@ macro_rules! define_unified_kernel {
         #[cfg_attr(not(test), no_mangle)]
         #[allow(dead_code)] // Called from assembly, not Rust
         extern "C" fn get_next_partition() -> u32 {
-            with_kernel(|k| k.next_partition as u32).unwrap_or(u32::MAX)
+            with_kernel(|k| k.next_partition() as u32).unwrap_or(u32::MAX)
         }
 
         /// Returns a pointer to the partition_sp array in the Kernel struct.
@@ -608,7 +608,7 @@ macro_rules! define_unified_kernel {
         #[cfg_attr(not(test), no_mangle)]
         #[allow(dead_code)] // Called from assembly, not Rust
         extern "C" fn get_partition_sp_ptr() -> *mut u32 {
-            with_kernel_mut(|k| k.partition_sp.as_mut_ptr()).unwrap_or(::core::ptr::null_mut())
+            with_kernel_mut(|k| k.partition_sp_mut().as_mut_ptr()).unwrap_or(::core::ptr::null_mut())
         }
     };
 }
@@ -696,10 +696,6 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    /// Partition control blocks for all partitions.
-    pub partitions: PartitionTable<{ C::N }>,
-    /// Static schedule table.
-    pub schedule: ScheduleTable<{ C::SCHED }>,
     /// Currently active partition index, if any.
     pub active_partition: Option<u8>,
     pub semaphores: SemaphorePool<{ C::S }, { C::SW }>,
@@ -742,15 +738,8 @@ where
     /// pointers against both static MPU regions and dynamic windows.
     #[cfg(feature = "dynamic-mpu")]
     pub dynamic_strategy: crate::mpu_strategy::DynamicStrategy,
-    /// Saved stack pointers for each partition, initialized from stack addresses.
-    pub partition_sp: [u32; C::N],
-    /// Next partition to switch to, set by `advance_schedule_tick`.
-    ///
-    /// The harness macros currently write to the static `NEXT_PARTITION` symbol
-    /// for PendSV to read. This field allows Rust code to track the value
-    /// without relying on the assembly-level static.
-    pub next_partition: u8,
-    /// Partition/schedule state sub-struct (will replace individual fields).
+    /// Partition/schedule state sub-struct containing partitions, schedule,
+    /// current_partition, next_partition, and partition_sp.
     pub core: C::Core,
     /// Synchronization primitives sub-struct (will replace individual fields).
     pub sync: C::Sync,
@@ -878,7 +867,9 @@ where
                 });
             }
         }
-        let mut partitions = PartitionTable::new();
+        // Initialize core sub-struct with schedule and partitions.
+        let mut core = C::Core::default();
+        *core.schedule_mut() = schedule;
         for (i, c) in configs.iter().enumerate() {
             // Enforce contiguous, zero-based IDs that match array indices.
             if c.id as usize != i {
@@ -892,18 +883,13 @@ where
             let sp = align_down_8(c.stack_base.wrapping_add(c.stack_size));
             let pcb =
                 PartitionControlBlock::new(c.id, c.entry_point, c.stack_base, sp, c.mpu_region);
-            if partitions.add(pcb).is_err() {
+            if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
             }
-        }
-        // Build partition_sp array from partition stack pointers.
-        let mut partition_sp = [0u32; C::N];
-        for (i, pcb) in partitions.iter().enumerate() {
-            partition_sp[i] = pcb.stack_pointer();
+            // Initialize partition_sp from the PCB stack pointer.
+            core.set_sp(i, sp);
         }
         Ok(Self {
-            partitions,
-            schedule,
             active_partition: None,
             semaphores: SemaphorePool::new(),
             mutexes: MutexPool::new(0),
@@ -928,9 +914,7 @@ where
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
-            partition_sp,
-            next_partition: 0,
-            core: C::Core::default(),
+            core,
             sync: C::Sync::default(),
             msg: C::Msg::default(),
             ports: C::Ports::default(),
@@ -948,8 +932,6 @@ where
         >,
     ) -> Self {
         Self {
-            partitions: PartitionTable::new(),
-            schedule: ScheduleTable::new(),
             active_partition: None,
             semaphores: SemaphorePool::new(),
             mutexes: MutexPool::new(0),
@@ -974,8 +956,6 @@ where
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
-            partition_sp: [0u32; C::N],
-            next_partition: 0,
             core: C::Core::default(),
             sync: C::Sync::default(),
             msg: C::Msg::default(),
@@ -1609,18 +1589,75 @@ where
     // -------------------------------------------------------------------------
 
     /// Returns an immutable reference to the partition table.
+    #[inline(always)]
     pub fn partitions(&self) -> &PartitionTable<{ C::N }> {
         self.core.partitions()
     }
 
     /// Returns a mutable reference to the partition table.
+    #[inline(always)]
     pub fn partitions_mut(&mut self) -> &mut PartitionTable<{ C::N }> {
         self.core.partitions_mut()
     }
 
     /// Returns an immutable reference to the schedule table.
+    #[inline(always)]
     pub fn schedule(&self) -> &ScheduleTable<{ C::SCHED }> {
         self.core.schedule()
+    }
+
+    /// Returns a mutable reference to the schedule table.
+    #[inline(always)]
+    pub fn schedule_mut(&mut self) -> &mut ScheduleTable<{ C::SCHED }> {
+        self.core.schedule_mut()
+    }
+
+    /// Returns the current partition index stored in core.
+    #[inline(always)]
+    pub fn core_current_partition(&self) -> u8 {
+        self.core.current_partition()
+    }
+
+    /// Sets the current partition index in core.
+    #[inline(always)]
+    pub fn set_core_current_partition(&mut self, id: u8) {
+        self.core.set_current_partition(id);
+    }
+
+    /// Returns the next partition index.
+    #[inline(always)]
+    pub fn next_partition(&self) -> u8 {
+        self.core.next_partition()
+    }
+
+    /// Sets the next partition index.
+    #[inline(always)]
+    pub fn set_next_partition(&mut self, id: u8) {
+        self.core.set_next_partition(id);
+    }
+
+    /// Gets the stack pointer for a partition by index.
+    #[inline(always)]
+    pub fn get_sp(&self, index: usize) -> Option<u32> {
+        self.core.get_sp(index)
+    }
+
+    /// Sets the stack pointer for a partition by index. Returns true if valid.
+    #[inline(always)]
+    pub fn set_sp(&mut self, index: usize, sp: u32) -> bool {
+        self.core.set_sp(index, sp)
+    }
+
+    /// Returns a reference to the partition_sp array.
+    #[inline(always)]
+    pub fn partition_sp(&self) -> &[u32] {
+        self.core.partition_sp()
+    }
+
+    /// Returns a mutable reference to the partition_sp array.
+    #[inline(always)]
+    pub fn partition_sp_mut(&mut self) -> &mut [u32] {
+        self.core.partition_sp_mut()
     }
 
     // -------------------------------------------------------------------------
@@ -1635,7 +1672,7 @@ where
         let next = self.core.schedule_mut().advance_tick();
         if let Some(pid) = next {
             self.active_partition = Some(pid);
-            self.next_partition = pid;
+            self.set_next_partition(pid);
         }
         next
     }
@@ -1649,7 +1686,7 @@ where
         let event = self.core.schedule_mut().advance_tick();
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             self.active_partition = Some(pid);
-            self.next_partition = pid;
+            self.set_next_partition(pid);
         }
         event
     }
@@ -1951,9 +1988,13 @@ mod tests {
         for _ in 0..msg_queue_count {
             msgs.add(MessageQueue::new()).unwrap();
         }
+        // Build the core with pre-populated partitions.
+        let mut core = <TestConfig as KernelConfig>::Core::default();
+        let pt = tbl();
+        for pcb in pt.iter() {
+            core.partitions_mut().add(*pcb).unwrap();
+        }
         let mut k = Kernel {
-            partitions: tbl(),
-            schedule: ScheduleTable::new(),
             active_partition: None,
             semaphores: s,
             mutexes: m,
@@ -1971,8 +2012,10 @@ mod tests {
             registry,
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
-            partition_sp: [0u32; 4],
-            next_partition: 0,
+            core,
+            sync: <TestConfig as KernelConfig>::Sync::default(),
+            msg: <TestConfig as KernelConfig>::Msg::default(),
+            ports: <TestConfig as KernelConfig>::Ports::default(),
         };
         for _ in 0..sem_count {
             k.semaphores.add(Semaphore::new(1, 2)).unwrap();
@@ -1993,9 +2036,13 @@ mod tests {
         for _ in 0..msg_queue_count {
             msgs.add(MessageQueue::new()).unwrap();
         }
+        // Build the core with pre-populated partitions.
+        let mut core = <TestConfig as KernelConfig>::Core::default();
+        let pt = tbl();
+        for pcb in pt.iter() {
+            core.partitions_mut().add(*pcb).unwrap();
+        }
         let mut k = Kernel {
-            partitions: tbl(),
-            schedule: ScheduleTable::new(),
             active_partition: None,
             semaphores: s,
             mutexes: m,
@@ -2020,8 +2067,10 @@ mod tests {
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
-            partition_sp: [0u32; 4],
-            next_partition: 0,
+            core,
+            sync: <TestConfig as KernelConfig>::Sync::default(),
+            msg: <TestConfig as KernelConfig>::Msg::default(),
+            ports: <TestConfig as KernelConfig>::Ports::default(),
         };
         // Add semaphores
         for _ in 0..sem_count {
@@ -2104,11 +2153,11 @@ mod tests {
         .unwrap();
         // Verify partition_sp is initialized from PCB stack pointers.
         // stack_pointer = align_down_8(stack_base + stack_size).
-        assert_eq!(k.partition_sp[0], 0x2000_0000 + 1024);
-        assert_eq!(k.partition_sp[1], 0x2000_1000 + 1024);
+        assert_eq!(k.partition_sp()[0], 0x2000_0000 + 1024);
+        assert_eq!(k.partition_sp()[1], 0x2000_1000 + 1024);
         // Unused slots are zero-initialized.
-        assert_eq!(k.partition_sp[2], 0);
-        assert_eq!(k.partition_sp[3], 0);
+        assert_eq!(k.partition_sp()[2], 0);
+        assert_eq!(k.partition_sp()[3], 0);
     }
 
     #[test]
@@ -4350,7 +4399,7 @@ mod tests {
     #[test]
     fn next_partition_initialized_to_zero() {
         let k = kernel_with_schedule();
-        assert_eq!(k.next_partition, 0);
+        assert_eq!(k.next_partition(), 0);
     }
 
     #[cfg(not(feature = "dynamic-mpu"))]
@@ -4373,23 +4422,23 @@ mod tests {
     fn advance_schedule_tick_updates_next_partition() {
         let mut k = kernel_with_schedule();
         // Initially next_partition is 0 (default)
-        assert_eq!(k.next_partition, 0);
+        assert_eq!(k.next_partition(), 0);
         // Advance 4 ticks within slot 0 - no switch, next_partition unchanged
         for _ in 0..4 {
             k.advance_schedule_tick();
-            assert_eq!(k.next_partition, 0);
+            assert_eq!(k.next_partition(), 0);
         }
         // 5th tick triggers switch to P1, next_partition updated
         assert_eq!(k.advance_schedule_tick(), Some(1));
-        assert_eq!(k.next_partition, 1);
+        assert_eq!(k.next_partition(), 1);
         // Continue through P1's slot (3 ticks), then wrap to P0
         for _ in 0..2 {
             k.advance_schedule_tick();
-            assert_eq!(k.next_partition, 1);
+            assert_eq!(k.next_partition(), 1);
         }
         // 3rd tick of P1's slot triggers switch back to P0
         assert_eq!(k.advance_schedule_tick(), Some(0));
-        assert_eq!(k.next_partition, 0);
+        assert_eq!(k.next_partition(), 0);
     }
 
     #[cfg(not(feature = "dynamic-mpu"))]
@@ -4457,15 +4506,15 @@ mod tests {
         use crate::scheduler::ScheduleEvent;
         let mut k = kernel_with_schedule();
         // Initially next_partition is 0 (default)
-        assert_eq!(k.next_partition, 0);
+        assert_eq!(k.next_partition(), 0);
         // Advance 4 ticks within slot 0 - no switch, next_partition unchanged
         for _ in 0..4 {
             assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
-            assert_eq!(k.next_partition, 0);
+            assert_eq!(k.next_partition(), 0);
         }
         // 5th tick triggers switch to P1, next_partition updated
         assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
-        assert_eq!(k.next_partition, 1);
+        assert_eq!(k.next_partition(), 1);
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -4702,9 +4751,9 @@ mod tests {
 
                 // Set known values for the fields accessed by PendSV.
                 kernel.current_partition = 1;
-                kernel.next_partition = 0;
-                kernel.partition_sp[0] = 0x2000_1000;
-                kernel.partition_sp[1] = 0x2000_2000;
+                kernel.set_next_partition(0);
+                kernel.set_sp(0, 0x2000_1000);
+                kernel.set_sp(1, 0x2000_2000);
 
                 // Store the kernel (initializes KERNEL static).
                 cortex_m::interrupt::free(|cs| {
