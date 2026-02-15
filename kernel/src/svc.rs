@@ -1935,6 +1935,10 @@ fn handle_yield() -> u32 {
 
 #[cfg(test)]
 mod tests {
+    // TODO: The following Kernel fields lack facade methods and must be accessed
+    // directly in tests: `active_partition`, `current_partition`, `yield_requested`.
+    // Consider adding facade methods if read-only access is needed more broadly.
+
     //! # Safety
     //!
     //! All `unsafe { k.dispatch(&mut ef) }` calls in this test module share the
@@ -2102,7 +2106,7 @@ mod tests {
             ports: <TestConfig as KernelConfig>::Ports::default(),
         };
         for _ in 0..sem_count {
-            k.semaphores.add(Semaphore::new(1, 2)).unwrap();
+            k.semaphores_mut().add(Semaphore::new(1, 2)).unwrap();
         }
         k
     }
@@ -2158,7 +2162,7 @@ mod tests {
         };
         // Add semaphores
         for _ in 0..sem_count {
-            k.semaphores.add(Semaphore::new(1, 2)).unwrap();
+            k.semaphores_mut().add(Semaphore::new(1, 2)).unwrap();
         }
         k
     }
@@ -2313,11 +2317,11 @@ mod tests {
         let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        assert_eq!(k.mutexes.owner(0), Ok(Some(0)));
+        assert_eq!(k.mutexes().owner(0), Ok(Some(0)));
         let mut ef = frame(crate::syscall::SYS_MTX_UNLOCK, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
-        assert_eq!(k.mutexes.owner(0), Ok(None));
+        assert_eq!(k.mutexes().owner(0), Ok(None));
     }
 
     #[test]
@@ -2490,7 +2494,7 @@ mod tests {
     #[test]
     fn get_time_after_increments() {
         let mut k = kernel(0, 0, 0);
-        k.tick.sync(5);
+        k.sync_tick(5);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 5);
@@ -2499,7 +2503,7 @@ mod tests {
     #[test]
     fn get_time_preserves_other_registers() {
         let mut k = kernel(0, 0, 0);
-        k.tick.sync(1);
+        k.sync_tick(1);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0xAA, 0xBB);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 1);
@@ -2510,7 +2514,7 @@ mod tests {
     #[test]
     fn get_time_truncates_to_u32() {
         let mut k = kernel(0, 0, 0);
-        k.tick.sync((1u64 << 32) + 7);
+        k.sync_tick((1u64 << 32) + 7);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 7);
@@ -2519,11 +2523,11 @@ mod tests {
     #[test]
     fn sync_tick_updates_kernel_tick() {
         let mut k = kernel(0, 0, 0);
-        assert_eq!(k.tick.get(), 0);
+        assert_eq!(k.tick().get(), 0);
         k.sync_tick(42);
-        assert_eq!(k.tick.get(), 42);
+        assert_eq!(k.tick().get(), 42);
         k.sync_tick(1000);
-        assert_eq!(k.tick.get(), 1000);
+        assert_eq!(k.tick().get(), 1000);
     }
 
     fn frame4(r0: u32, r1: u32, r2: u32, r3: u32) -> ExceptionFrame {
@@ -2544,20 +2548,23 @@ mod tests {
         use crate::sampling::PortDirection;
         use crate::syscall::{SYS_SAMPLING_READ, SYS_SAMPLING_WRITE};
         let mut k = kernel(0, 0, 0);
-        let src = k.sampling.create_port(PortDirection::Source, 1000).unwrap();
+        let src = k
+            .sampling_mut()
+            .create_port(PortDirection::Source, 1000)
+            .unwrap();
         let dst = k
-            .sampling
+            .sampling_mut()
             .create_port(PortDirection::Destination, 1000)
             .unwrap();
-        k.sampling.connect_ports(src, dst).unwrap();
+        k.sampling_mut().connect_ports(src, dst).unwrap();
         // Write + read via pool (avoids 64-bit pointer truncation issue).
-        k.sampling
-            .write_sampling_message(src, &[0xAA, 0xBB], k.tick.get())
+        k.sampling_mut()
+            .write_sampling_message(src, &[0xAA, 0xBB], k.tick().get())
             .unwrap();
         let mut buf = [0u8; 64];
         let (n, _) = k
-            .sampling
-            .read_sampling_message(dst, &mut buf, k.tick.get())
+            .sampling_mut()
+            .read_sampling_message(dst, &mut buf, k.tick().get())
             .unwrap();
         assert_eq!((n, &buf[..n]), (2, &[0xAA, 0xBB][..]));
         // Invalid port → InvalidResource error for both write and read.
@@ -2576,34 +2583,40 @@ mod tests {
     fn bb_nonblocking_read_empty_returns_error_without_enqueue() {
         use crate::blackboard::BlackboardError;
         let mut k = kernel(0, 0, 0);
-        let id = k.blackboards.create().unwrap();
+        let id = k.blackboards_mut().create().unwrap();
         let mut buf = [0u8; 64];
         // Non-blocking read (timeout=0) on empty board returns error
         assert_eq!(
-            k.blackboards.read_blackboard(id, 0, &mut buf, 0),
+            k.blackboards_mut().read_blackboard(id, 0, &mut buf, 0),
             Err(BlackboardError::BoardEmpty)
         );
         // Caller was NOT enqueued
-        assert_eq!(k.blackboards.get(id).unwrap().waiting_readers(), 0);
+        assert_eq!(k.blackboards().get(id).unwrap().waiting_readers(), 0);
     }
 
     #[test]
     fn bb_blocking_read_and_display_wake() {
         use crate::blackboard::ReadBlackboardOutcome;
         let mut k = kernel(0, 0, 0);
-        let id = k.blackboards.create().unwrap();
+        let id = k.blackboards_mut().create().unwrap();
         let mut buf = [0u8; 64];
         // Blocking read (timeout>0) enqueues the caller
         assert_eq!(
-            k.blackboards.read_blackboard(id, 0, &mut buf, 1),
+            k.blackboards_mut().read_blackboard(id, 0, &mut buf, 1),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
-        assert_eq!(k.blackboards.get(id).unwrap().waiting_readers(), 1);
+        assert_eq!(k.blackboards().get(id).unwrap().waiting_readers(), 1);
         // Display wakes the blocked reader
-        let woken = k.blackboards.display_blackboard(id, &[0xAA, 0xBB]).unwrap();
+        let woken = k
+            .blackboards_mut()
+            .display_blackboard(id, &[0xAA, 0xBB])
+            .unwrap();
         assert_eq!(woken.as_slice(), &[0]);
         // Non-blocking read now succeeds
-        let outcome = k.blackboards.read_blackboard(id, 0, &mut buf, 0).unwrap();
+        let outcome = k
+            .blackboards_mut()
+            .read_blackboard(id, 0, &mut buf, 0)
+            .unwrap();
         assert_eq!(outcome, ReadBlackboardOutcome::Read { msg_len: 2 });
         assert_eq!(&buf[..2], &[0xAA, 0xBB]);
     }
@@ -2612,7 +2625,7 @@ mod tests {
     fn bb_blocking_read_wakes_partition() {
         use crate::blackboard::ReadBlackboardOutcome;
         let mut k = kernel(0, 0, 0);
-        let id = k.blackboards.create().unwrap();
+        let id = k.blackboards_mut().create().unwrap();
         let mut buf = [0u8; 64];
         // Transition partition 1 to Waiting and block it on the blackboard
         k.partitions_mut()
@@ -2621,11 +2634,11 @@ mod tests {
             .transition(PartitionState::Waiting)
             .unwrap();
         assert_eq!(
-            k.blackboards.read_blackboard(id, 1, &mut buf, 1),
+            k.blackboards_mut().read_blackboard(id, 1, &mut buf, 1),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
         // Display wakes partition 1
-        let woken = k.blackboards.display_blackboard(id, &[0x01]).unwrap();
+        let woken = k.blackboards_mut().display_blackboard(id, &[0x01]).unwrap();
         assert_eq!(woken.as_slice(), &[1]);
         for &pid in woken.iter() {
             try_transition(k.partitions_mut(), pid, PartitionState::Ready);
@@ -2640,7 +2653,7 @@ mod tests {
     fn bb_invalid_board_errors() {
         use crate::blackboard::BlackboardError;
         let mut k = kernel(0, 0, 0);
-        let r: Result<heapless::Vec<u8, 4>, _> = k.blackboards.display_blackboard(99, &[1]);
+        let r: Result<heapless::Vec<u8, 4>, _> = k.blackboards_mut().display_blackboard(99, &[1]);
         assert_eq!(r, Err(BlackboardError::InvalidBoard));
     }
 
@@ -2649,8 +2662,8 @@ mod tests {
         use crate::blackboard::BlackboardError;
         use crate::syscall::SYS_BB_CLEAR;
         let mut k = kernel(0, 0, 0);
-        let id = k.blackboards.create().unwrap();
-        let _ = k.blackboards.display_blackboard(id, &[42]).unwrap();
+        let id = k.blackboards_mut().create().unwrap();
+        let _ = k.blackboards_mut().display_blackboard(id, &[42]).unwrap();
         // Clear via SVC dispatch
         let mut ef = frame(SYS_BB_CLEAR, id as u32, 0);
         unsafe { k.dispatch(&mut ef) };
@@ -2658,7 +2671,7 @@ mod tests {
         // Non-blocking read after clear should fail
         let mut buf = [0u8; 64];
         assert_eq!(
-            k.blackboards.read_blackboard(id, 0, &mut buf, 0),
+            k.blackboards_mut().read_blackboard(id, 0, &mut buf, 0),
             Err(BlackboardError::BoardEmpty)
         );
         // Invalid board via SVC
@@ -3327,7 +3340,7 @@ mod tests {
         for &(sys_id, r1, r2, msg_queues, ref sampling_dir) in cases {
             let mut k = kernel(0, 0, msg_queues);
             if let Some(dir) = sampling_dir {
-                k.sampling.create_port(*dir, 1000).unwrap();
+                k.sampling_mut().create_port(*dir, 1000).unwrap();
             }
             let mut ef = frame4(sys_id, r1, r2, 0xDEAD_0000);
             unsafe { k.dispatch(&mut ef) };
@@ -3392,7 +3405,7 @@ mod tests {
     fn blackboard_syscalls_reject_out_of_bounds_pointer() {
         // BbDisplay: r1 = board id, r2 = data len, r3 = data ptr (out-of-bounds)
         let mut k = kernel(0, 0, 0);
-        k.blackboards.create().unwrap();
+        k.blackboards_mut().create().unwrap();
         let mut ef = frame4(crate::syscall::SYS_BB_DISPLAY, 0, 4, 0xDEAD_0000);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(
@@ -3403,7 +3416,7 @@ mod tests {
 
         // BbRead: r1 = board id, r2 = timeout, r3 = buf ptr (out-of-bounds)
         let mut k = kernel(0, 0, 0);
-        k.blackboards.create().unwrap();
+        k.blackboards_mut().create().unwrap();
         let mut ef = frame4(crate::syscall::SYS_BB_READ, 0, 0, 0xDEAD_0000);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(
@@ -3437,7 +3450,7 @@ mod tests {
     fn bb_read_blocks_sets_yield_requested() {
         use crate::syscall::SYS_BB_READ;
         let mut k = kernel(0, 0, 0);
-        let id = k.blackboards.create().unwrap();
+        let id = k.blackboards_mut().create().unwrap();
         let ptr = low32_buf(0);
         // BbRead with timeout > 0 on empty blackboard should block
         let mut ef = frame4(SYS_BB_READ, id as u32, 50, ptr as u32);
@@ -4241,7 +4254,7 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         let k = Kernel::<TestConfig>::new(s, &[cfg], crate::virtual_device::DeviceRegistry::new())
             .unwrap();
-        assert_eq!(k.partitions.len(), 1);
+        assert_eq!(k.partitions().len(), 1);
         assert_eq!(k.active_partition, None);
     }
 
@@ -4348,9 +4361,9 @@ mod tests {
 
         let k = try_kernel_new(s, &cfgs).unwrap();
 
-        assert_eq!(k.partitions.len(), 2);
-        assert_eq!(k.partitions.get(0).unwrap().id(), 0);
-        assert_eq!(k.partitions.get(1).unwrap().id(), 1);
+        assert_eq!(k.partitions().len(), 2);
+        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
+        assert_eq!(k.partitions().get(1).unwrap().id(), 1);
     }
 
     #[test]
@@ -4386,8 +4399,8 @@ mod tests {
 
         let k = try_kernel_new(s, &[cfg]).unwrap();
 
-        assert_eq!(k.partitions.len(), 1);
-        assert_eq!(k.partitions.get(0).unwrap().id(), 0);
+        assert_eq!(k.partitions().len(), 1);
+        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
     }
 
     #[test]
@@ -4423,10 +4436,10 @@ mod tests {
 
         let k = try_kernel_new(s, &cfgs).unwrap();
 
-        assert_eq!(k.partitions.len(), 3);
-        assert_eq!(k.partitions.get(0).unwrap().id(), 0);
-        assert_eq!(k.partitions.get(1).unwrap().id(), 1);
-        assert_eq!(k.partitions.get(2).unwrap().id(), 2);
+        assert_eq!(k.partitions().len(), 3);
+        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
+        assert_eq!(k.partitions().get(1).unwrap().id(), 1);
+        assert_eq!(k.partitions().get(2).unwrap().id(), 2);
     }
 
     #[test]
@@ -4585,11 +4598,11 @@ mod tests {
     #[test]
     fn advance_schedule_tick_increments_tick_counter() {
         let mut k = kernel_with_schedule();
-        assert_eq!(k.tick.get(), 0);
+        assert_eq!(k.tick().get(), 0);
         k.advance_schedule_tick();
-        assert_eq!(k.tick.get(), 1);
+        assert_eq!(k.tick().get(), 1);
         k.advance_schedule_tick();
-        assert_eq!(k.tick.get(), 2);
+        assert_eq!(k.tick().get(), 2);
     }
 
     #[cfg(not(feature = "dynamic-mpu"))]
@@ -4622,9 +4635,9 @@ mod tests {
     #[test]
     fn yield_does_not_increment_tick_counter() {
         let mut k = kernel_with_schedule();
-        let tick_before = k.tick.get();
+        let tick_before = k.tick().get();
         k.yield_current_slot();
-        assert_eq!(k.tick.get(), tick_before);
+        assert_eq!(k.tick().get(), tick_before);
     }
 
     #[cfg(feature = "dynamic-mpu")]
