@@ -58,8 +58,8 @@ where
     /// Monotonic tick counter.
     tick: TickCounter,
     /// Set to `true` by `SYS_YIELD` dispatch; checked and cleared by the
-    /// harness so it can force-advance the schedule and update
-    /// `NEXT_PARTITION` before PendSV fires.
+    /// harness so it can force-advance the schedule and call
+    /// `set_next_partition()` before PendSV fires.
     yield_requested: bool,
 }
 

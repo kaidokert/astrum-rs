@@ -17,7 +17,6 @@
 //! |------|-------------|
 //! | `static mut STACKS` | Per-partition stack arrays (`$SW` words each) |
 //! | `static mut PARTITION_SP` | Saved stack pointers for PendSV |
-//! | `static mut NEXT_PARTITION` | Index of next partition to switch to |
 //! | `KERNEL` | `Mutex<RefCell<Option<Kernel<…>>>>` for SVC dispatch and SysTick |
 //! | `static _SVC` | Forces linker to include the SVC assembly trampoline |
 //! | `SysTick` exception handler | Drives the round-robin scheduler |
@@ -33,12 +32,10 @@
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _unified_handle_tick {
-    ($kernel:expr, $next:ident) => {{
+    ($kernel:expr) => {{
         let event = $kernel.advance_schedule_tick();
         if let Some(pid) = event {
-            // SAFETY: single-core Cortex-M — SysTick has exclusive access to
-            // NEXT_PARTITION; PendSV (lower priority) cannot preempt us.
-            unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+            $kernel.set_next_partition(pid);
             cortex_m::peripheral::SCB::set_pendsv();
         }
     }};
@@ -48,9 +45,9 @@ macro_rules! _unified_handle_tick {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _unified_handle_tick {
-    ($kernel:expr, $next:ident, $tick:expr, $strategy:expr) => {{
+    ($kernel:expr, $tick:expr, $strategy:expr) => {{
         let event = $kernel.advance_schedule_tick();
-        $crate::_unified_handle_tick_event!($kernel, event, $next, $tick, $strategy);
+        $crate::_unified_handle_tick_event!($kernel, event, $tick, $strategy);
     }};
 }
 
@@ -86,12 +83,10 @@ macro_rules! _unified_run_system_window {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _unified_handle_tick_event {
-    ($kernel:expr, $event:expr, $next:ident, $tick:expr, $strategy:expr) => {{
+    ($kernel:expr, $event:expr, $tick:expr, $strategy:expr) => {{
         match $event {
             $crate::scheduler::ScheduleEvent::PartitionSwitch(pid) => {
-                // SAFETY: single-core Cortex-M — SysTick has exclusive access to
-                // NEXT_PARTITION; PendSV (lower priority) cannot preempt us.
-                unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+                $kernel.set_next_partition(pid);
                 cortex_m::peripheral::SCB::set_pendsv();
             }
             $crate::scheduler::ScheduleEvent::SystemWindow => {
@@ -106,13 +101,11 @@ macro_rules! _unified_handle_tick_event {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _unified_handle_yield {
-    ($kernel:expr, $next:ident) => {{
+    ($kernel:expr) => {{
         use $crate::svc::YieldResult;
         let result = $kernel.yield_current_slot();
         if let Some(pid) = result.partition_id() {
-            // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
-            // exclusive access; PendSV (priority 0xFF) cannot preempt.
-            unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+            $kernel.set_next_partition(pid);
         }
     }};
 }
@@ -121,14 +114,12 @@ macro_rules! _unified_handle_yield {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _unified_handle_yield {
-    ($kernel:expr, $next:ident, $tick:expr, $strategy:expr) => {{
+    ($kernel:expr, $tick:expr, $strategy:expr) => {{
         use $crate::svc::YieldResult;
         loop {
             let result = $kernel.yield_current_slot();
             if let Some(pid) = result.partition_id() {
-                // SAFETY: single-core Cortex-M — SVC (priority 0x00) has
-                // exclusive access; PendSV (priority 0xFF) cannot preempt.
-                unsafe { core::ptr::write_volatile(&raw mut $next, pid as u32) }
+                $kernel.set_next_partition(pid);
                 break;
             }
             if result.is_system_window() {
@@ -141,7 +132,7 @@ macro_rules! _unified_handle_yield {
 }
 
 /// Unified harness: single `KERNEL` global for SVC dispatch and SysTick scheduling.
-/// Generates STACKS, PARTITION_SP, CURRENT/NEXT_PARTITION, KERNEL, PendSV, SysTick, boot().
+/// Generates STACKS, PARTITION_SP, KERNEL, PendSV, SysTick, boot().
 ///
 /// # Usage
 ///
@@ -201,12 +192,9 @@ macro_rules! define_unified_harness {
         #[no_mangle]
         static mut PARTITION_SP: [u32; $NP] = [0; $NP];
 
-        // NOTE: CURRENT_PARTITION static is no longer needed. PendSV now
-        // reads/writes the kernel's current_partition field via the
-        // get_current_partition() and set_current_partition() shims.
-
-        #[no_mangle]
-        static mut NEXT_PARTITION: u32 = 0;
+        // NOTE: CURRENT_PARTITION and NEXT_PARTITION statics are no longer
+        // needed. PendSV now reads/writes these values via the Rust shims:
+        // get_current_partition(), set_current_partition(), get_next_partition()
 
         #[cfg(feature = "dynamic-mpu")]
         static HARNESS_STRATEGY: $crate::mpu_strategy::DynamicStrategy =
@@ -214,11 +202,11 @@ macro_rules! define_unified_harness {
 
         $crate::define_unified_kernel!($Config, |k| {
             #[cfg(not(feature = "dynamic-mpu"))]
-            $crate::_unified_handle_yield!(k, NEXT_PARTITION);
+            $crate::_unified_handle_yield!(k);
             #[cfg(feature = "dynamic-mpu")]
             {
                 let tick_val = k.tick().get();
-                $crate::_unified_handle_yield!(k, NEXT_PARTITION, tick_val, &HARNESS_STRATEGY);
+                $crate::_unified_handle_yield!(k, tick_val, &HARNESS_STRATEGY);
             }
         });
 
@@ -248,11 +236,11 @@ macro_rules! define_unified_harness {
                     None => return,
                 };
                 #[cfg(not(feature = "dynamic-mpu"))]
-                $crate::_unified_handle_tick!(_systick_kernel, NEXT_PARTITION);
+                $crate::_unified_handle_tick!(_systick_kernel);
                 #[cfg(feature = "dynamic-mpu")]
                 {
                     let tick_val = _systick_kernel.tick().get();
-                    $crate::_unified_handle_tick!(_systick_kernel, NEXT_PARTITION, tick_val, &HARNESS_STRATEGY);
+                    $crate::_unified_handle_tick!(_systick_kernel, tick_val, &HARNESS_STRATEGY);
                 }
                 let current_tick = _systick_kernel.tick().get();
                 _systick_kernel.expire_timed_waits::<{ <$Config as $crate::config::KernelConfig>::N }>(
@@ -327,24 +315,20 @@ macro_rules! define_unified_harness {
                     .borrow(cs)
                     .borrow_mut()
                     .as_mut()
-                    .and_then(|k| k.start_schedule())
+                    .and_then(|k| {
+                        let pid = k.start_schedule()?;
+                        k.set_next_partition(pid);
+                        Some(pid)
+                    })
             });
 
             #[cfg(feature = "qemu")]
             hprintln!("[boot] first_partition={:?}", first_partition);
 
-            // SAFETY: single-core Cortex-M — boot() is called exactly once
-            // before SysTick/PendSV are enabled, so exclusive access is
-            // guaranteed.
             // TODO(panic-free): expect() can panic if no partition is ready.
             // At boot time there is no recovery path, but a panic-free design
             // would return an error from boot() instead of diverging.
-            unsafe {
-                core::ptr::write_volatile(
-                    &raw mut NEXT_PARTITION,
-                    first_partition.expect("no partition ready at boot") as u32,
-                );
-            }
+            let _ = first_partition.expect("no partition ready at boot");
 
             #[cfg(feature = "qemu")]
             hprintln!("[boot] triggering PendSV");

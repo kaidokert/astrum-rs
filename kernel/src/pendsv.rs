@@ -11,10 +11,10 @@
 //!
 //! # Requirements
 //!
-//! The binary must define `NEXT_PARTITION: u32` and `PARTITION_SP: [u32; N]`
-//! as `#[no_mangle] static mut`. The binary must also invoke
-//! [`define_unified_kernel!`] which provides the `get_current_partition()`
-//! and `set_current_partition()` shims for accessing kernel state.
+//! The binary must define `PARTITION_SP: [u32; N]` as `#[no_mangle] static mut`.
+//! The binary must also invoke [`define_unified_kernel!`] which provides the
+//! `get_current_partition()`, `get_next_partition()`, and `set_current_partition()`
+//! shims for accessing kernel state.
 //!
 //! # Usage
 //!
@@ -35,7 +35,7 @@
 /// The handler:
 /// 1. Calls `get_current_partition()` — skips save if 0xFF (first switch).
 /// 2. Saves r4-r11 via `stmdb`; stores PSP to `PARTITION_SP[current]`.
-/// 3. Loads `NEXT_PARTITION`, calls `set_current_partition(next)`.
+/// 3. Calls `get_next_partition()`, then `set_current_partition(next)`.
 /// 4. Restores r4-r11 via `ldmia`; sets PSP.
 /// 5. Sets `CONTROL.nPRIV = 1` + ISB; returns with EXC_RETURN=0xFFFFFFFD.
 #[macro_export]
@@ -43,8 +43,8 @@ macro_rules! define_pendsv {
     () => {
         #[cfg(target_arch = "arm")]
         // SAFETY: PendSV exception handler — accesses kernel via Rust shims
-        // (interrupt::free) and static mut NEXT_PARTITION/PARTITION_SP owned
-        // by binary crate. No aliasing: PendSV cannot preempt itself.
+        // (interrupt::free) and static mut PARTITION_SP owned by binary crate.
+        // No aliasing: PendSV cannot preempt itself.
         core::arch::global_asm!(
             r#"
             .syntax unified
@@ -70,8 +70,10 @@ macro_rules! define_pendsv {
             str     r3, [r2, r0]
 
         .Lpendsv_skip_save:
-            ldr     r0, =NEXT_PARTITION
-            ldr     r1, [r0]
+            push    {{lr}}
+            bl      get_next_partition
+            pop     {{lr}}
+            mov     r1, r0
 
             push    {{r1, lr}}
             mov     r0, r1
@@ -148,7 +150,7 @@ macro_rules! define_pendsv_dynamic {
 
         #[cfg(target_arch = "arm")]
         // SAFETY: PendSV exception handler (dynamic-MPU) — accesses kernel via
-        // Rust shims, static mut symbols, and __pendsv_program_mpu for MPU.
+        // Rust shims, static mut PARTITION_SP, and __pendsv_program_mpu for MPU.
         // No aliasing: PendSV is lowest priority and cannot preempt itself.
         core::arch::global_asm!(
             r#"
@@ -177,10 +179,9 @@ macro_rules! define_pendsv_dynamic {
         .Lpendsv_dyn_skip_save:
             push    {{lr}}
             bl      __pendsv_program_mpu
+            bl      get_next_partition
             pop     {{lr}}
-
-            ldr     r0, =NEXT_PARTITION
-            ldr     r1, [r0]
+            mov     r1, r0
 
             push    {{r1, lr}}
             mov     r0, r1
