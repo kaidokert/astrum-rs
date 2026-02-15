@@ -168,11 +168,29 @@ where
         self.stacks.get_mut(index).map(|s| &mut s.0)
     }
 
-    /// Returns the base address of a partition's stack.
+    /// Returns the base address of a partition's stack as an integer.
     ///
     /// Returns `None` if the index is out of bounds.
     pub fn stack_base(&self, index: usize) -> Option<u32> {
         self.stacks.get(index).map(|s| s.0.as_ptr() as u32)
+    }
+
+    /// Returns the stack size in bytes for each partition.
+    ///
+    /// This is constant for all partitions and equals `SW * 4` where SW
+    /// is the stack word count.
+    pub const fn stack_size(&self) -> usize {
+        SW * 4
+    }
+
+    /// Returns the initial stack pointer for a partition.
+    ///
+    /// The initial SP points to the top of the stack (stack base + size)
+    /// since Cortex-M stacks grow downward. Returns `None` if the index
+    /// is out of bounds.
+    pub fn stack_ptr_init(&self, index: usize) -> Option<u32> {
+        self.stack_base(index)
+            .map(|base| base.wrapping_add(self.stack_size() as u32))
     }
 
     /// Returns the currently active partition index, if any.
@@ -496,5 +514,49 @@ mod tests {
             "AlignedStack<{}> alignment should be 1024 bytes",
             TEST_SW
         );
+    }
+
+    #[test]
+    fn stack_size_returns_bytes() {
+        let core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        // TEST_SW = 256 words * 4 bytes/word = 1024 bytes
+        assert_eq!(core.stack_size(), 1024);
+    }
+
+    #[test]
+    fn stack_size_different_word_counts() {
+        // Test with 128 words (512 bytes)
+        let core_small: PartitionCore<1, 1, 128> = PartitionCore::new();
+        assert_eq!(core_small.stack_size(), 512);
+
+        // Test with 512 words (2048 bytes)
+        let core_large: PartitionCore<1, 1, 512> = PartitionCore::new();
+        assert_eq!(core_large.stack_size(), 2048);
+    }
+
+    #[test]
+    fn stack_ptr_init_returns_top_of_stack() {
+        let core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        for i in 0..2 {
+            let init_sp = core.stack_ptr_init(i);
+            assert!(init_sp.is_some(), "stack_ptr_init({}) should be Some", i);
+            let init_sp = init_sp.unwrap();
+            let base = core.stack_base(i).unwrap();
+            // Initial SP should be at stack_base + stack_size
+            assert_eq!(
+                init_sp,
+                base + core.stack_size() as u32,
+                "Initial SP should point to top of stack"
+            );
+        }
+    }
+
+    #[test]
+    fn stack_ptr_init_out_of_bounds_returns_none() {
+        let core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        assert!(core.stack_ptr_init(0).is_some());
+        assert!(core.stack_ptr_init(1).is_some());
+        assert!(core.stack_ptr_init(2).is_none());
+        assert!(core.stack_ptr_init(100).is_none());
     }
 }
