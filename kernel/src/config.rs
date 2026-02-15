@@ -96,19 +96,18 @@ pub trait KernelConfig {
     /// *lower* priority).
     const SYSTICK_PRIORITY: u8 = 0xFE;
 
-    /// Partition/schedule state operations. Will be constrained by `CoreOps`
-    /// in a subsequent subtask. Must implement `Default` for `Kernel::new_empty()`.
-    type Core: Default;
+    /// Partition/schedule state operations. Must implement `CoreOps` to
+    /// allow dispatch() and other methods to call sub-struct methods.
+    type Core: Default + CoreOps;
     /// Synchronization primitive operations (semaphores, mutexes).
-    /// Must implement `SyncOps` when using semaphore/mutex syscalls.
-    type Sync: Default;
+    /// Must implement `SyncOps` for semaphore/mutex syscall dispatch.
+    type Sync: Default + SyncOps;
     /// Message-passing primitive operations (message queues, queuing ports).
-    /// Must implement `MsgOps` when using message syscalls.
-    type Msg: Default;
-    /// Sampling ports and blackboards operations. Will be constrained by
-    /// `PortsOps` in a subsequent subtask. Must implement `Default` for
-    /// `Kernel::new_empty()`.
-    type Ports: Default;
+    /// Must implement `MsgOps` for message syscall dispatch.
+    type Msg: Default + MsgOps;
+    /// Sampling ports and blackboards operations. Must implement `PortsOps`
+    /// for sampling port and blackboard syscall dispatch.
+    type Ports: Default + PortsOps;
 }
 
 /// Compile-time assertion that the three exception priorities are
@@ -134,6 +133,10 @@ pub const fn assert_priority_order<C: KernelConfig>() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::msg_pools::MsgPools;
+    use crate::partition_core::PartitionCore;
+    use crate::port_pools::PortPools;
+    use crate::sync_pools::SyncPools;
 
     /// Minimal config using all default priority values.
     struct DefaultPriority;
@@ -160,10 +163,11 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         const DR: usize = 4;
 
-        type Core = ();
-        type Sync = ();
-        type Msg = ();
-        type Ports = ();
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+        type Ports =
+            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
     }
 
     /// Config that overrides priorities but keeps valid ordering.
@@ -195,10 +199,11 @@ mod tests {
         const PENDSV_PRIORITY: u8 = 0xE0;
         const SYSTICK_PRIORITY: u8 = 0xC0;
 
-        type Core = ();
-        type Sync = ();
-        type Msg = ();
-        type Ports = ();
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }>;
+        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+        type Ports =
+            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
     }
 
     #[test]
