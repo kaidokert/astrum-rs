@@ -75,15 +75,19 @@ pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
     syst.enable_interrupt();
 }
 
-// TODO: The two handle_systick variants have different signatures (the dynamic-mpu
+// TODO: The two systick_handler variants have different signatures (the dynamic-mpu
 // version requires an additional `strategy` parameter and extra const bounds).
 // A future refactor could use a trait-based approach to unify the API, but this
-// would require changes to how the harness invokes handle_systick. For now,
+// would require changes to how the harness invokes systick_handler. For now,
 // we keep two feature-gated variants with consistent internal logic.
 
-/// Handle SysTick: increment tick, advance schedule, trigger PendSV, expire waits.
+/// SysTick handler: advance schedule, trigger PendSV, expire timed waits.
+///
+/// This function is called by the `define_unified_harness!` macro's SysTick
+/// exception handler. It advances the schedule, triggers PendSV on partition
+/// switches, and expires timed waits for blocking syscalls.
 #[cfg(not(feature = "dynamic-mpu"))]
-pub fn handle_systick<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<C>)
+pub fn systick_handler<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<C>)
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -116,12 +120,16 @@ where
     kernel.expire_timed_waits::<{ C::N }>(current_tick);
 }
 
-/// Handle SysTick: increment tick, advance schedule, trigger PendSV, expire waits.
+/// SysTick handler: advance schedule, trigger PendSV, expire timed waits.
+///
+/// This function is called by the `define_unified_harness!` macro's SysTick
+/// exception handler. It advances the schedule, triggers PendSV on partition
+/// switches, and expires timed waits for blocking syscalls.
 ///
 /// With `dynamic-mpu`, also handles system window processing (bottom-half for
 /// UART transfers, buffer expiry, etc.).
 #[cfg(feature = "dynamic-mpu")]
-pub fn handle_systick<C: crate::config::KernelConfig>(
+pub fn systick_handler<C: crate::config::KernelConfig>(
     kernel: &mut crate::svc::Kernel<C>,
     strategy: &crate::mpu_strategy::DynamicStrategy,
 ) where
