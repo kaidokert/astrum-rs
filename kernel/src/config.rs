@@ -8,11 +8,24 @@ pub trait SyncOps {
     fn mutexes_mut(&mut self) -> &mut Self::MutPool;
 }
 
-/// Trait for message-passing primitive sub-structs (message queues).
+/// Trait for message-passing primitive sub-structs (message queues, queuing ports).
 pub trait MsgOps {
     type MsgPool;
+    type QueuingPool;
     fn messages(&self) -> &Self::MsgPool;
     fn messages_mut(&mut self) -> &mut Self::MsgPool;
+    fn queuing(&self) -> &Self::QueuingPool;
+    fn queuing_mut(&mut self) -> &mut Self::QueuingPool;
+}
+
+/// Trait for port primitive sub-structs (sampling ports, blackboards).
+pub trait PortsOps {
+    type SamplingPool;
+    type BlackboardPool;
+    fn sampling(&self) -> &Self::SamplingPool;
+    fn sampling_mut(&mut self) -> &mut Self::SamplingPool;
+    fn blackboards(&self) -> &Self::BlackboardPool;
+    fn blackboards_mut(&mut self) -> &mut Self::BlackboardPool;
 }
 
 /// Trait that bundles every const-generic parameter the [`Kernel`] needs.

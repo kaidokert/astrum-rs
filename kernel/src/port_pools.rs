@@ -69,6 +69,31 @@ where
     }
 }
 
+impl<const SP: usize, const SM: usize, const BS: usize, const BM: usize, const BW: usize>
+    crate::config::PortsOps for PortPools<SP, SM, BS, BM, BW>
+where
+    [(); SP]:,
+    [(); SM]:,
+    [(); BS]:,
+    [(); BM]:,
+    [(); BW]:,
+{
+    type SamplingPool = SamplingPortPool<SP, SM>;
+    type BlackboardPool = BlackboardPool<BS, BM, BW>;
+    fn sampling(&self) -> &Self::SamplingPool {
+        &self.sampling
+    }
+    fn sampling_mut(&mut self) -> &mut Self::SamplingPool {
+        &mut self.sampling
+    }
+    fn blackboards(&self) -> &Self::BlackboardPool {
+        &self.blackboards
+    }
+    fn blackboards_mut(&mut self) -> &mut Self::BlackboardPool {
+        &mut self.blackboards
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -70,11 +70,18 @@ where
     [(); QW]:,
 {
     type MsgPool = MessagePool<QS, QD, QM, QW>;
+    type QueuingPool = QueuingPortPool<QS, QD, QM, QW>;
     fn messages(&self) -> &Self::MsgPool {
         &self.messages
     }
     fn messages_mut(&mut self) -> &mut Self::MsgPool {
         &mut self.messages
+    }
+    fn queuing(&self) -> &Self::QueuingPool {
+        &self.queuing
+    }
+    fn queuing_mut(&mut self) -> &mut Self::QueuingPool {
+        &mut self.queuing
     }
 }
 

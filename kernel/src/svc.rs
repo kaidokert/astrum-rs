@@ -3,7 +3,7 @@ use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
 
 use crate::blackboard::BlackboardPool;
-use crate::config::{KernelConfig, MsgOps, SyncOps};
+use crate::config::{KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
 
 /// Typed SVC error codes returned to user-space via r0.
@@ -709,7 +709,14 @@ where
         SemPool = SemaphorePool<{ C::S }, { C::SW }>,
         MutPool = MutexPool<{ C::MS }, { C::MW }>,
     >,
-    C::Msg: MsgOps<MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>>,
+    C::Msg: MsgOps<
+        MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: PortsOps<
+        SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
 {
     fn default() -> Self {
         Self::new_empty(
@@ -746,7 +753,14 @@ where
         SemPool = SemaphorePool<{ C::S }, { C::SW }>,
         MutPool = MutexPool<{ C::MS }, { C::MW }>,
     >,
-    C::Msg: MsgOps<MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>>,
+    C::Msg: MsgOps<
+        MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: PortsOps<
+        SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
 {
     /// Create a new `Kernel` with the given schedule and partition configs.
     ///
@@ -947,8 +961,12 @@ where
     /// IDs across all subsystems in a single tick.
     pub fn expire_timed_waits<const E: usize>(&mut self, current_tick: u64) {
         let mut expired: heapless::Vec<u8, E> = heapless::Vec::new();
-        self.queuing.tick_timeouts(current_tick, &mut expired);
-        self.blackboards.tick_timeouts(current_tick, &mut expired);
+        self.msg
+            .queuing_mut()
+            .tick_timeouts(current_tick, &mut expired);
+        self.ports
+            .blackboards_mut()
+            .tick_timeouts(current_tick, &mut expired);
         #[cfg(feature = "dynamic-mpu")]
         self.dev_wait_queue
             .drain_expired(current_tick, &mut expired);
@@ -1086,7 +1104,7 @@ where
                     let d = unsafe {
                         core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                     };
-                    match self.sampling.write_sampling_message(
+                    match self.ports.sampling_mut().write_sampling_message(
                         frame.r1 as usize,
                         d,
                         self.tick.get(),
@@ -1100,10 +1118,11 @@ where
                 // SAFETY: validated_ptr confirmed [r3, r3+SM) lies within
                 // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::SM) };
-                match self
-                    .sampling
-                    .read_sampling_message(frame.r1 as usize, b, self.tick.get())
-                {
+                match self.ports.sampling_mut().read_sampling_message(
+                    frame.r1 as usize,
+                    b,
+                    self.tick.get(),
+                ) {
                     Ok((sz, _)) => sz as u32,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
@@ -1115,7 +1134,7 @@ where
                     let d = unsafe {
                         core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                     };
-                    match self.queuing.send_routed(
+                    match self.msg.queuing_mut().send_routed(
                         frame.r1 as usize,
                         self.current_partition,
                         d,
@@ -1137,7 +1156,7 @@ where
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
-                match self.queuing.receive_queuing_message(
+                match self.msg.queuing_mut().receive_queuing_message(
                     frame.r1 as usize,
                     self.current_partition,
                     b,
@@ -1162,7 +1181,11 @@ where
                     // SAFETY: validated_ptr confirmed [r2, r2+size_of QueuingPortStatus)
                     // lies within the calling partition's MPU data region.
                     let status_ptr = frame.r2 as *mut QueuingPortStatus;
-                    match self.queuing.get_queuing_port_status(frame.r1 as usize) {
+                    match self
+                        .msg
+                        .queuing()
+                        .get_queuing_port_status(frame.r1 as usize)
+                    {
                         Ok(status) => {
                             unsafe { core::ptr::write(status_ptr, status) };
                             0
@@ -1178,7 +1201,11 @@ where
                     let d = unsafe {
                         core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                     };
-                    match self.blackboards.display_blackboard(frame.r1 as usize, d) {
+                    match self
+                        .ports
+                        .blackboards_mut()
+                        .display_blackboard(frame.r1 as usize, d)
+                    {
                         Ok(woken) => {
                             for &pid in woken.iter() {
                                 try_transition(self.partitions_mut(), pid, PartitionState::Ready);
@@ -1194,7 +1221,7 @@ where
                     // SAFETY: validated_ptr confirmed [r3, r3+BM) lies within
                     // the calling partition's MPU data region.
                     let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
-                    match self.blackboards.read_blackboard_timed(
+                    match self.ports.blackboards_mut().read_blackboard_timed(
                         frame.r1 as usize,
                         self.current_partition,
                         b,
@@ -1214,7 +1241,11 @@ where
                 })
             }
             Some(SyscallId::BbClear) => {
-                match self.blackboards.clear_blackboard(frame.r1 as usize) {
+                match self
+                    .ports
+                    .blackboards_mut()
+                    .clear_blackboard(frame.r1 as usize)
+                {
                     Ok(()) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
@@ -1366,7 +1397,7 @@ where
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
-                match self.queuing.receive_queuing_message(
+                match self.msg.queuing_mut().receive_queuing_message(
                     frame.r1 as usize,
                     self.current_partition,
                     b,
@@ -1397,7 +1428,7 @@ where
                     // SAFETY: validated_ptr confirmed [r3, r3+data_len) lies within
                     // the calling partition's MPU data region.
                     let d = unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, data_len) };
-                    match self.queuing.send_routed(
+                    match self.msg.queuing_mut().send_routed(
                         frame.r1 as usize,
                         self.current_partition,
                         d,
@@ -1631,7 +1662,14 @@ where
         SemPool = SemaphorePool<{ C::S }, { C::SW }>,
         MutPool = MutexPool<{ C::MS }, { C::MW }>,
     >,
-    C::Msg: MsgOps<MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>>,
+    C::Msg: MsgOps<
+        MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: PortsOps<
+        SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
 {
     match outcome {
         RecvOutcome::Received {
