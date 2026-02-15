@@ -15,12 +15,14 @@
 //!
 //! | Item | Description |
 //! |------|-------------|
-//! | `static mut STACKS` | Per-partition stack arrays (`$SW` words each) |
 //! | `KERNEL` | `Mutex<RefCell<Option<Kernel<…>>>>` for SVC dispatch and SysTick |
 //! | `static _SVC` | Forces linker to include the SVC assembly trampoline |
 //! | `SysTick` exception handler | Drives the round-robin scheduler |
 //! | `PendSV` handler | Via [`define_pendsv!`] |
 //! | `boot()` | Safe function: inits stacks, configures exceptions, starts OS |
+//!
+//! Note: Per-partition stacks are stored in [`PartitionCore`] within the `Kernel`
+//! struct, not as a separate static array.
 //!
 //! After invoking the macro, call the generated `boot()` from `main()`
 //! to perform the common startup sequence (partition stack init,
@@ -131,7 +133,7 @@ macro_rules! _unified_handle_yield {
 }
 
 /// Unified harness: single `KERNEL` global for SVC dispatch and SysTick scheduling.
-/// Generates STACKS, KERNEL, PendSV, SysTick, boot().
+/// Generates KERNEL, PendSV, SysTick, boot(). Stacks are in `PartitionCore`.
 ///
 /// # Usage
 ///
@@ -176,17 +178,6 @@ macro_rules! define_unified_harness {
             $SW == 256,
             "define_unified_harness! requires $SW == 256 (1024-byte stacks) for correct MPU alignment"
         );
-
-        /// Wrapper that aligns each partition stack to 1024 bytes so
-        /// that the address is valid as an MPU region base.
-        /// Note: alignment is hardcoded; see MPU Alignment Constraint above.
-        #[repr(C, align(1024))]
-        struct AlignedStack([u32; $SW]);
-
-        static mut STACKS: [AlignedStack; $NP] = {
-            const ZERO: AlignedStack = AlignedStack([0; $SW]);
-            [ZERO; $NP]
-        };
 
         // NOTE: CURRENT_PARTITION, NEXT_PARTITION, and PARTITION_SP statics are
         // no longer needed. PendSV reads/writes these values via Rust shims:
@@ -265,33 +256,30 @@ macro_rules! define_unified_harness {
             #[cfg(feature = "qemu")]
             hprintln!("[boot] entered");
 
-            // SAFETY: called exactly once from main() with interrupts
-            // disabled (before the scheduler has started). Single-core
-            // Cortex-M guarantees exclusive access to this static and
-            // to the exception priority registers.
-            unsafe {
-                let stacks = &mut *(&raw mut STACKS);
-
-                #[cfg(feature = "qemu")]
-                hprintln!("[boot] init stacks for {} partitions", partitions.len());
-
-                for (i, &(ep, hint)) in partitions.iter().enumerate() {
-                    let stk = &mut stacks[i].0;
-                    // TODO(panic-free): expect() can panic if stack is too small for
-                    // the exception frame. At boot time there is no recovery path, but
-                    // a panic-free design would propagate the error to the caller.
-                    let ix =
-                        $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
-                            .expect("init_stack_frame");
-                    let sp = stk.as_ptr() as u32 + (ix as u32) * 4;
-                    // Store SP in kernel's internal partition_sp array for PendSV shims.
-                    set_partition_sp(i as u32, sp);
-                    #[cfg(feature = "qemu")]
-                    hprintln!("[boot] partition {} sp={:#010x}", i, sp);
+            ::cortex_m::interrupt::free(|cs| {
+                if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
+                    for (i, &(ep, hint)) in partitions.iter().enumerate() {
+                        // TODO(panic-free): expect() can panic if partition index is out of
+                        // bounds. At boot time there is no recovery path, but a panic-free
+                        // design would propagate the error to the caller.
+                        let stk = k.core_stack_mut(i).expect("partition index out of bounds");
+                        let base = stk.as_ptr() as u32;
+                        // TODO(panic-free): expect() can panic if stack is too small for
+                        // the exception frame. At boot time there is no recovery path, but
+                        // a panic-free design would propagate the error to the caller.
+                        let ix = $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint)).expect("init_stack_frame");
+                        k.set_sp(i, base + (ix as u32) * 4);
+                    }
                 }
+            });
 
-                const { $crate::config::assert_priority_order::<$Config>() }
-
+            const { $crate::config::assert_priority_order::<$Config>() }
+            // SAFETY: Called exactly once from main() before the scheduler
+            // has started. Interrupts are disabled at this point (we just
+            // exited interrupt::free and no interrupt sources are enabled
+            // yet). Single-core Cortex-M guarantees exclusive access to
+            // the SCB priority registers.
+            unsafe {
                 peripherals.SCB.set_priority(
                     SystemHandler::SVCall,
                     <$Config as $crate::config::KernelConfig>::SVCALL_PRIORITY,

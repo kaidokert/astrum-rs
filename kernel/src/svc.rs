@@ -1792,6 +1792,12 @@ where
         self.core.set_yield_requested(requested);
     }
 
+    /// Returns a mutable reference to a partition's stack array.
+    #[inline(always)]
+    pub fn core_stack_mut(&mut self, index: usize) -> Option<&mut [u32]> {
+        self.core.stack_mut(index)
+    }
+
     // -------------------------------------------------------------------------
     // Schedule advance methods
     // -------------------------------------------------------------------------
