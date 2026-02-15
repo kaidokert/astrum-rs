@@ -4849,8 +4849,9 @@ mod tests {
     /// - `fn store_kernel(k: Kernel<$Config>)`
     ///
     /// Since these involve cortex-m intrinsics (interrupt::free, extern statics),
-    /// full runtime testing requires the QEMU integration tests. Here we verify
-    /// that the macro expansion compiles correctly on host targets.
+    /// these tests can only run on ARM targets. Full runtime testing is done
+    /// via QEMU integration tests.
+    #[cfg(target_arch = "arm")]
     mod unified_kernel_macro_tests {
         use super::*;
 
@@ -4963,19 +4964,22 @@ mod tests {
         }
 
         /// Functional tests for PendSV accessor functions with initialized kernel.
+        #[allow(dead_code)]
         mod pendsv_accessor_functional_tests {
             use super::*;
 
             // Separate module to get a fresh KERNEL static.
+            // Some generated items (dispatch_hook, store_kernel, CURRENT_PARTITION)
+            // are not used in tests but are needed for the macro expansion.
             crate::define_unified_kernel!(UnifiedTestConfig);
 
             #[test]
             fn accessors_return_correct_values_after_initialization() {
                 // Create a kernel with known partition state.
-                let mut kernel = Kernel::<UnifiedTestConfig>::default();
-
-                // Set known values for the fields accessed by PendSV.
-                kernel.current_partition = 1;
+                let mut kernel = Kernel::<UnifiedTestConfig> {
+                    current_partition: 1,
+                    ..Default::default()
+                };
                 kernel.set_next_partition(0);
                 kernel.set_sp(0, 0x2000_1000);
                 kernel.set_sp(1, 0x2000_2000);
@@ -5040,6 +5044,7 @@ mod tests {
         /// without explicit where bounds for sub-struct-owned constants
         /// (S, SW, MS, MW, QS, QD, QM, QW, SP, SM, BS, BM, BW).
         mod config_generating_variant {
+            #[allow(unused_imports)]
             use super::*;
 
             // Test the config-generating variant without yield handler.
@@ -5060,7 +5065,9 @@ mod tests {
                     SM: 32,
                     BS: 2,
                     BM: 32,
-                    BW: 2
+                    BW: 2,
+                    BP: 2,
+                    BZ: 64
                 });
 
                 #[test]
@@ -5122,7 +5129,9 @@ mod tests {
                         SM: 32,
                         BS: 2,
                         BM: 32,
-                        BW: 2
+                        BW: 2,
+                        BP: 2,
+                        BZ: 64
                     },
                     |k| {
                         let _ = k;
