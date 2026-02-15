@@ -24,11 +24,11 @@ pub struct MutexPool<const S: usize, const W: usize> {
 
 #[allow(clippy::new_without_default)]
 impl<const S: usize, const W: usize> MutexPool<S, W> {
-    pub fn new(count: usize) -> Self {
+    pub const fn new(count: usize) -> Self {
         Self {
             owners: [None; S],
-            queues: core::array::from_fn(|_| WaitQueue::new()),
-            len: count.min(S),
+            queues: [const { WaitQueue::new() }; S],
+            len: if count < S { count } else { S },
         }
     }
     fn slot(&self, id: usize) -> Result<Option<u8>, MutexError> {

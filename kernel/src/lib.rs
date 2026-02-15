@@ -31,6 +31,7 @@ pub mod semaphore;
 #[cfg(feature = "dynamic-mpu")]
 pub mod split_isr;
 pub mod svc;
+pub mod sync_pools;
 pub mod syscall;
 pub mod tick;
 #[cfg(feature = "dynamic-mpu")]
