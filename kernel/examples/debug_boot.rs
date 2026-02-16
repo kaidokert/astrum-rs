@@ -1,4 +1,38 @@
-//! Debug test to isolate unified harness boot issue.
+//! Debug test for the unified harness boot sequence.
+//!
+//! # Purpose
+//!
+//! This example isolates and validates the boot sequence used by the unified
+//! kernel harness. It manually constructs and initializes all boot components
+//! (stacks, kernel, schedule, partition configs) without relying on the
+//! `define_unified_harness!` macro. This allows debugging boot issues by
+//! providing detailed semihosting output at each step.
+//!
+//! # Static Mut Migration Status
+//!
+//! This example intentionally uses `static mut` for the following reasons:
+//!
+//! - **STACKS**: Raw stack storage must be mutable for `init_stack_frame` to
+//!   write the initial context. Using `Mutex<RefCell<>>` would add overhead
+//!   and complicate the low-level stack pointer arithmetic.
+//!
+//! - **PARTITION_SP**: Accessed by PendSV handler via `extern` linkage. The
+//!   `define_pendsv!` macro expects a `#[no_mangle] static mut` symbol.
+//!
+//! - **CURRENT_PARTITION / NEXT_PARTITION**: Also accessed by PendSV handler
+//!   via `extern` linkage for the same reason.
+//!
+//! These statics mirror the pattern used in the `define_unified_harness!` macro
+//! itself. Migration to safe abstractions would require redesigning the PendSV
+//! handler's data access model, which is out of scope for this debug test.
+//!
+//! # Test Behavior
+//!
+//! 1. Creates a minimal kernel with one partition
+//! 2. Initializes the partition stack with an entry point
+//! 3. Triggers PendSV to switch to the partition
+//! 4. The partition sets an atomic flag when it runs
+//! 5. SysTick checks the flag and reports PASS/FAIL
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
