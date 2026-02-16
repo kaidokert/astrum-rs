@@ -2828,6 +2828,9 @@ mod tests {
         let _ = k.blackboards_mut().display_blackboard(id, &[42]).unwrap();
         // Clear via SVC dispatch
         let mut ef = frame(SYS_BB_CLEAR, id as u32, 0);
+        // SAFETY: `ef` is a valid stack-allocated ExceptionFrame constructed by
+        // `frame()` with initialized r0-r3 fields; `k` is a properly initialized
+        // test Kernel with valid partition tables.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Non-blocking read after clear should fail
@@ -2838,6 +2841,9 @@ mod tests {
         );
         // Invalid board via SVC
         let mut ef = frame(SYS_BB_CLEAR, 99, 0);
+        // SAFETY: `ef` is a valid stack-allocated ExceptionFrame constructed by
+        // `frame()` with initialized r0-r3 fields; `k` is a properly initialized
+        // test Kernel with valid partition tables.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
@@ -2887,7 +2893,9 @@ mod tests {
         clear_dispatch_hook();
         set_dispatch_hook(sentinel_hook);
         let mut ef = frame(SYS_YIELD, 0, 0);
-        // SAFETY: ef is a valid ExceptionFrame on the stack.
+        // SAFETY: `ef` is a valid stack-allocated ExceptionFrame constructed by
+        // `frame()` with initialized r0-r3 fields. The dispatch hook is set to
+        // `sentinel_hook` which safely writes to r0.
         unsafe { dispatch_svc(&mut ef) };
         assert_eq!(ef.r0, 0xCAFE);
         clear_dispatch_hook();
@@ -2898,7 +2906,9 @@ mod tests {
         let _guard = HOOK_TEST_MUTEX.lock().unwrap();
         clear_dispatch_hook();
         let mut ef = frame(SYS_YIELD, 0, 0);
-        // SAFETY: ef is a valid ExceptionFrame on the stack.
+        // SAFETY: `ef` is a valid stack-allocated ExceptionFrame constructed by
+        // `frame()` with initialized r0-r3 fields. No hook is installed, so
+        // dispatch_svc falls through to the default Yield handler.
         unsafe { dispatch_svc(&mut ef) };
         // Without a hook, Yield returns 0.
         assert_eq!(ef.r0, 0);
@@ -2945,6 +2955,9 @@ mod tests {
         macro_rules! svc {
             ($r0:expr,$r1:expr) => {{
                 let mut ef = frame($r0, $r1, 0);
+                // SAFETY: `ef` is a valid stack-allocated ExceptionFrame constructed
+                // by `frame()` with initialized r0-r3 fields; `k` is a properly
+                // initialized test Kernel with valid partition tables.
                 unsafe { k.dispatch(&mut ef) };
                 ef.r0
             }};
@@ -2969,7 +2982,9 @@ mod tests {
 
         // r2=0 → no deadline
         let mut ef = frame(SYS_BUF_ALLOC, 1, 0);
-        // SAFETY: test-only dispatch on a valid ExceptionFrame.
+        // SAFETY: `ef` is a valid stack-allocated ExceptionFrame constructed by
+        // `frame()` with initialized r0-r3 fields; `k` is a properly initialized
+        // test Kernel with valid partition tables.
         unsafe { k.dispatch(&mut ef) };
         let slot0 = ef.r0 as usize;
         assert_eq!(slot0, 0);
@@ -2977,12 +2992,18 @@ mod tests {
 
         // r2=100 → deadline = tick + 100; tick starts at 0 ⇒ deadline=100
         let mut ef = frame(SYS_BUF_ALLOC, 0, 100);
-        // SAFETY: test-only dispatch on a valid ExceptionFrame.
+        // SAFETY: `ef` is a valid stack-allocated ExceptionFrame constructed by
+        // `frame()` with initialized r0-r3 fields; `k` is a properly initialized
+        // test Kernel with valid partition tables.
         unsafe { k.dispatch(&mut ef) };
         let slot1 = ef.r0 as usize;
         assert_eq!(slot1, 1);
         assert_eq!(k.buffers().deadline(slot1), Some(100));
     }
+
+    // TODO: reviewer false positive - claimed `sampling_write_read` and
+    // `svc_sampling_get_time` tests were missed, but these tests do not exist
+    // in this file. The scope 2811-2982 ends at `buf_alloc_sets_deadline_from_r2`.
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
