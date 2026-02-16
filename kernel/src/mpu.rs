@@ -71,15 +71,23 @@ pub fn build_rasr(size_field: u32, ap: u32, xn: bool, scb: (bool, bool, bool)) -
 
 /// Write RBAR and RASR to configure a single MPU region.
 pub fn configure_region(mpu: &cortex_m::peripheral::MPU, rbar: u32, rasr: u32) {
-    // SAFETY: Writing to MPU RBAR and RASR registers is sound when:
-    // 1. The MPU is disabled (CTRL.ENABLE=0), OR the caller holds exclusive
-    //    access to the MPU peripheral (guaranteed by the `&MPU` reference).
-    // 2. The RBAR value has the VALID bit set (bit 4) with a region number
-    //    in bits [3:0], selecting the region to configure.
-    // 3. The caller is responsible for issuing DSB/ISB barriers after all
-    //    region writes and before re-enabling the MPU.
-    // These invariants are upheld by `apply_partition_mpu`, which disables
-    // the MPU before calling this function and issues barriers afterward.
+    // SAFETY: Writing to the MPU RBAR (0xE000_ED9C) and RASR (0xE000_EDA0)
+    // registers is sound because:
+    //
+    // 1. Valid MPU register addresses: RBAR and RASR are memory-mapped
+    //    registers in the System Control Space at fixed addresses defined
+    //    by the ARMv7-M architecture (B3.5.6, B3.5.7).
+    //
+    // 2. Single-core exclusivity: The `&MPU` reference guarantees exclusive
+    //    access to the MPU peripheral on this core.  On single-core Cortex-M
+    //    systems, no other execution context can concurrently modify these
+    //    registers while we hold the reference.
+    //
+    // 3. MMIO soundness: The cortex-m crate's `write()` method performs a
+    //    volatile write, ensuring the compiler does not reorder or elide
+    //    the store.  The caller (`apply_partition_mpu`) disables the MPU
+    //    before calling this function and issues DSB/ISB barriers after
+    //    all region writes, satisfying the ARMv7-M barrier requirements.
     unsafe {
         mpu.rbar.write(rbar);
         mpu.rasr.write(rasr);
