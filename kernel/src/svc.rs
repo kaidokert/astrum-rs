@@ -174,6 +174,62 @@ pub fn validate_user_ptr_dynamic<const N: usize>(
     in_region(stack_base, stack_size)
 }
 
+/// Return all memory regions accessible to a partition, combining static and dynamic regions.
+///
+/// This function provides a unified view of all memory a partition can access,
+/// useful for comprehensive pointer validation or memory map introspection.
+///
+/// # Regions Returned
+///
+/// 1. **Static regions** from [`PartitionControlBlock::accessible_static_regions`]:
+///    - Data region (`mpu_region.base()`, `mpu_region.size()`)
+///    - Stack region (`stack_base`, `stack_size`)
+///    - Peripheral regions (up to 2)
+///
+/// 2. **Dynamic windows** from [`DynamicStrategy::accessible_regions`]:
+///    - MPU windows (R4–R7) currently assigned to this partition
+///
+/// Static regions appear first in the returned vector, followed by dynamic windows.
+///
+/// # Returns
+///
+/// A `heapless::Vec<(u32, u32), 8>` containing `(base, size)` pairs for each region.
+/// Returns an empty vector if the partition does not exist.
+///
+/// # Example
+///
+/// ```ignore
+/// let regions = all_accessible_regions(&partitions, &strategy, pid);
+/// for (base, size) in regions {
+///     // Process region...
+/// }
+/// ```
+#[cfg(feature = "dynamic-mpu")]
+pub fn all_accessible_regions<const N: usize>(
+    partitions: &PartitionTable<N>,
+    strategy: &crate::mpu_strategy::DynamicStrategy,
+    pid: u8,
+) -> heapless::Vec<(u32, u32), 8> {
+    let mut result = heapless::Vec::new();
+
+    let pcb = match partitions.get(pid as usize) {
+        Some(p) => p,
+        None => return result,
+    };
+
+    // Add static regions first (up to 4: data, stack, 2 peripheral).
+    for region in pcb.accessible_static_regions() {
+        result.push(region).unwrap();
+    }
+
+    // Add dynamic windows (up to 4: R4–R7 assigned to this partition).
+    for region in strategy.accessible_regions(pid) {
+        result.push(region).unwrap();
+    }
+
+    result
+}
+
 /// Validate a user pointer and, on success, execute the body expression.
 ///
 /// Returns `SvcError::InvalidPointer` when `validate_user_ptr` fails;
@@ -3389,6 +3445,46 @@ mod tests {
         assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0xFFFF_FFF0, 0x20));
         // Partition isolation: P0 cannot access P1's window
         assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x2003_0000, 16));
+    }
+
+    // ---- all_accessible_regions tests (dynamic-mpu feature) ----
+
+    /// Comprehensive test for all_accessible_regions covering static/dynamic
+    /// combination, ordering, partition isolation, and edge cases.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn all_accessible_regions_comprehensive() {
+        use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
+
+        // Stack: 0x2000_0000..0x2000_0400, Data: 0x2000_1000..0x2000_2000
+        let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_1000, 0x1000);
+        let s = DynamicStrategy::new();
+
+        // Nonexistent partition returns empty
+        assert!(all_accessible_regions(&t, &s, 99).is_empty());
+
+        // No dynamic windows: only static (data + stack)
+        let r = all_accessible_regions(&t, &s, 0);
+        assert_eq!(r.len(), 2);
+        assert!(r.contains(&(0x2000_1000, 0x1000)) && r.contains(&(0x2000_0000, 0x400)));
+
+        // Add windows: P0 gets 2, P1 gets 1
+        s.add_window(0x3000_0000, 256, 0, 0).unwrap();
+        s.add_window(0x3001_0000, 512, 0, 0).unwrap();
+        s.add_window(0x4000_0000, 1024, 0, 1).unwrap();
+
+        // P0: 2 static + 2 dynamic = 4
+        let r0 = all_accessible_regions(&t, &s, 0);
+        assert_eq!(r0.len(), 4);
+        assert!(r0.contains(&(0x3000_0000, 256)) && r0.contains(&(0x3001_0000, 512)));
+        assert!(!r0.contains(&(0x4000_0000, 1024))); // P1's window excluded
+
+        // Static first, dynamic last: first 2 are static bases
+        let static_bases: heapless::Vec<u32, 2> = r0.iter().take(2).map(|&(b, _)| b).collect();
+        assert!(static_bases.contains(&0x2000_1000) && static_bases.contains(&0x2000_0000));
+
+        // P1 not in partition table → empty
+        assert!(all_accessible_regions(&t, &s, 1).is_empty());
     }
 
     // ---- Pointer validation rejection via Kernel::dispatch ----
