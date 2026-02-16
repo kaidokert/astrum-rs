@@ -1404,6 +1404,9 @@ where
                         .get_queuing_port_status(frame.r1 as usize)
                     {
                         Ok(status) => {
+                            // SAFETY: validated_ptr confirmed the pointer lies within
+                            // the partition's MPU region. We are in Handler mode after
+                            // validation, so the write is sound.
                             unsafe { core::ptr::write(status_ptr, status) };
                             0
                         }
