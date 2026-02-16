@@ -100,22 +100,16 @@ pub fn validate_user_ptr<const N: usize>(
         None => return false,
     };
 
-    // Helper: check if [ptr, end) lies entirely within [base, base+size].
+    // Check each accessible static region (data and stack).
     // Region validity (base + size not overflowing) is enforced at creation time.
-    let in_region = |base: u32, size: u32| -> bool {
+    for (base, size) in pcb.accessible_static_regions() {
         let region_end = base + size;
-        ptr >= base && end <= region_end
-    };
+        if ptr >= base && end <= region_end {
+            return true;
+        }
+    }
 
-    // Check MPU data region.
-    let data_region = pcb.mpu_region();
-    let in_data = in_region(data_region.base(), data_region.size());
-
-    // Check stack region.
-    let (stack_base, stack_size) = pcb.stack_region();
-    let in_stack = in_region(stack_base, stack_size);
-
-    in_data || in_stack
+    false
 }
 
 /// Check that a user-space pointer `[ptr, ptr+len)` lies entirely within one
