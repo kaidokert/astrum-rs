@@ -229,6 +229,7 @@ fn main() -> ! {
                 stack_base: stk_base,
                 stack_size: STACK_SIZE,
                 mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SIZES[i], 0),
+                peripheral_regions: heapless::Vec::new(),
             }
         })
     };

@@ -124,6 +124,7 @@ fn pcfg(id: u8, base: u32) -> PartitionConfig {
         stack_base: base,
         stack_size: 1024,
         mpu_region: MpuRegion::new(base, 1024, 0),
+        peripheral_regions: heapless::Vec::new(),
     }
 }
 

@@ -82,6 +82,7 @@ fn main() -> ! {
             stack_base: 0x2000_2000,
             stack_size: 1024,
             mpu_region: MpuRegion::new(0x2000_2000, 1024, 0),
+            peripheral_regions: heapless::Vec::new(),
         },
         PartitionConfig {
             id: 1,
@@ -89,6 +90,7 @@ fn main() -> ! {
             stack_base: 0x2000_3000,
             stack_size: 1024,
             mpu_region: MpuRegion::new(0x2000_3000, 1024, 0),
+            peripheral_regions: heapless::Vec::new(),
         },
     ];
 

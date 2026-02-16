@@ -445,6 +445,7 @@ fn main() -> ! {
                 stack_base: base,
                 stack_size: STACK_BYTES,
                 mpu_region: MpuRegion::new(base, STACK_BYTES, 0),
+                peripheral_regions: heapless::Vec::new(),
             }
         })
     };

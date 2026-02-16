@@ -200,6 +200,7 @@ fn main() -> ! {
                 stack_base: b,
                 stack_size: (SW * 4) as u32,
                 mpu_region: MpuRegion::new(b, (SW * 4) as u32, 0),
+                peripheral_regions: heapless::Vec::new(),
             }
         }]
     };

@@ -185,13 +185,16 @@ impl PartitionControlBlock {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PartitionConfig {
     pub id: u8,
     pub entry_point: u32,
     pub stack_base: u32,
     pub stack_size: u32,
     pub mpu_region: MpuRegion,
+    /// Optional peripheral register block regions for user-space drivers.
+    /// Supports up to 2 peripheral regions (Approach D).
+    pub peripheral_regions: Vec<MpuRegion, 2>,
 }
 
 impl PartitionConfig {
@@ -202,6 +205,7 @@ impl PartitionConfig {
     /// 2. `stack_base` must be aligned to `stack_size`.
     /// 3. `stack_base + stack_size` must not overflow `u32`.
     /// 4. The MPU region `(base, size)` must pass [`validate_mpu_region`].
+    /// 5. Each peripheral region `(base, size)` must pass [`validate_mpu_region`].
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Stack size: power of two and >= 32
         if self.stack_size < 32 || !self.stack_size.is_power_of_two() {
@@ -231,6 +235,17 @@ impl PartitionConfig {
                 detail,
             }
         })?;
+
+        // Peripheral region validation
+        for (i, region) in self.peripheral_regions.iter().enumerate() {
+            validate_mpu_region(region.base(), region.size()).map_err(|detail| {
+                ConfigError::PeripheralRegionInvalid {
+                    partition_id: self.id,
+                    region_index: i,
+                    detail,
+                }
+            })?;
+        }
 
         Ok(())
     }
@@ -265,6 +280,12 @@ pub enum ConfigError {
     },
     /// Failed to access internal stack for a partition during initialization.
     StackInitFailed { partition_id: u8 },
+    /// A partition's peripheral region failed MPU validation.
+    PeripheralRegionInvalid {
+        partition_id: u8,
+        region_index: usize,
+        detail: MpuError,
+    },
 }
 
 impl core::fmt::Display for ConfigError {
@@ -312,6 +333,14 @@ impl core::fmt::Display for ConfigError {
                     "partition {partition_id}: failed to access internal stack"
                 )
             }
+            Self::PeripheralRegionInvalid {
+                partition_id,
+                region_index,
+                detail,
+            } => write!(
+                f,
+                "partition {partition_id}: peripheral region {region_index} invalid: {detail}"
+            ),
         }
     }
 }
@@ -808,6 +837,7 @@ mod tests {
             stack_base: 0x2000_0000,
             stack_size: 1024,
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+            peripheral_regions: Vec::new(),
         }
     }
 
@@ -910,5 +940,58 @@ mod tests {
             cfg.validate(),
             Err(ConfigError::StackSizeInvalid { partition_id: 7 })
         );
+    }
+
+    // ------------------------------------------------------------------
+    // PartitionConfig peripheral_regions validation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn validate_peripheral_regions_valid_and_invalid() {
+        // Valid: empty peripheral_regions
+        assert_eq!(valid_config().validate(), Ok(()));
+        // Valid: one peripheral region
+        let mut cfg = valid_config();
+        let _ = cfg
+            .peripheral_regions
+            .push(MpuRegion::new(0x4000_0000, 4096, 0x03));
+        assert_eq!(cfg.validate(), Ok(()));
+        // Invalid: size too small
+        let mut cfg = valid_config();
+        let _ = cfg
+            .peripheral_regions
+            .push(MpuRegion::new(0x4000_0000, 16, 0x03));
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::PeripheralRegionInvalid {
+                partition_id: 0,
+                region_index: 0,
+                detail: MpuError::SizeTooSmall,
+            })
+        );
+        // Invalid: second region has non-power-of-two size
+        let mut cfg = valid_config();
+        let _ = cfg
+            .peripheral_regions
+            .push(MpuRegion::new(0x4000_0000, 4096, 0x03));
+        let _ = cfg
+            .peripheral_regions
+            .push(MpuRegion::new(0x4000_1000, 100, 0x03));
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::PeripheralRegionInvalid {
+                partition_id: 0,
+                region_index: 1,
+                detail: MpuError::SizeNotPowerOfTwo,
+            })
+        );
+        // Display format check
+        let e = ConfigError::PeripheralRegionInvalid {
+            partition_id: 2,
+            region_index: 1,
+            detail: MpuError::BaseNotAligned,
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("partition 2") && msg.contains("peripheral region 1"));
     }
 }

@@ -172,6 +172,7 @@ fn main() -> ! {
             stack_base: STACKS[i].0.as_ptr() as u32,
             stack_size: DATA_SZ,
             mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SZ, 0),
+            peripheral_regions: heapless::Vec::new(),
         })
     };
 

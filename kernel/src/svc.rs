@@ -895,7 +895,8 @@ where
                 internal_stack_base,
                 sp,
                 mpu_region,
-            );
+            )
+            .with_peripheral_regions(&c.peripheral_regions);
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
             }
@@ -2305,6 +2306,7 @@ mod tests {
                 stack_base: 0x2000_0000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
             PartitionConfig {
                 id: 1,
@@ -2312,6 +2314,7 @@ mod tests {
                 stack_base: 0x2000_1000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
         ];
         #[cfg(feature = "dynamic-mpu")]
@@ -4318,25 +4321,34 @@ mod tests {
             stack_base: 0x2000_0000,
             stack_size: 1024,
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
         };
         #[cfg(not(feature = "dynamic-mpu"))]
         assert!(matches!(
-            Kernel::<TestConfig>::new(empty, &[cfg]),
+            Kernel::<TestConfig>::new(empty, core::slice::from_ref(&cfg)),
             Err(ConfigError::ScheduleEmpty)
         ));
         #[cfg(feature = "dynamic-mpu")]
         assert!(matches!(
-            Kernel::<TestConfig>::new(empty, &[cfg], crate::virtual_device::DeviceRegistry::new()),
+            Kernel::<TestConfig>::new(
+                empty,
+                core::slice::from_ref(&cfg),
+                crate::virtual_device::DeviceRegistry::new()
+            ),
             Err(ConfigError::ScheduleEmpty)
         ));
         // Test valid config succeeds
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
         #[cfg(not(feature = "dynamic-mpu"))]
-        let k = Kernel::<TestConfig>::new(s, &[cfg]).unwrap();
+        let k = Kernel::<TestConfig>::new(s, core::slice::from_ref(&cfg)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
-        let k = Kernel::<TestConfig>::new(s, &[cfg], crate::virtual_device::DeviceRegistry::new())
-            .unwrap();
+        let k = Kernel::<TestConfig>::new(
+            s,
+            core::slice::from_ref(&cfg),
+            crate::virtual_device::DeviceRegistry::new(),
+        )
+        .unwrap();
         assert_eq!(k.partitions().len(), 1);
         assert_eq!(k.active_partition(), None);
     }
@@ -4372,6 +4384,7 @@ mod tests {
             stack_base: 0x2000_0000,
             stack_size: 1024,
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
         };
 
         let result = try_kernel_new(s, &[bad_cfg]);
@@ -4398,6 +4411,7 @@ mod tests {
             stack_base: 0x2000_0000,
             stack_size: 1024,
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
         };
         let cfg1 = PartitionConfig {
             id: 3, // should be 1
@@ -4405,6 +4419,7 @@ mod tests {
             stack_base: 0x2000_1000,
             stack_size: 1024,
             mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
         };
 
         let result = try_kernel_new(s, &[cfg0, cfg1]);
@@ -4432,6 +4447,7 @@ mod tests {
                 stack_base: 0x2000_0000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
             PartitionConfig {
                 id: 1,
@@ -4439,6 +4455,7 @@ mod tests {
                 stack_base: 0x2000_1000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
         ];
 
@@ -4478,6 +4495,7 @@ mod tests {
             stack_base: 0x2000_0000,
             stack_size: 1024,
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
         };
 
         let k = try_kernel_new(s, &[cfg]).unwrap();
@@ -4500,6 +4518,7 @@ mod tests {
                 stack_base: 0x2000_0000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
             PartitionConfig {
                 id: 1,
@@ -4507,6 +4526,7 @@ mod tests {
                 stack_base: 0x2000_1000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
             PartitionConfig {
                 id: 2,
@@ -4514,6 +4534,7 @@ mod tests {
                 stack_base: 0x2000_2000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
         ];
 
@@ -4540,6 +4561,7 @@ mod tests {
                 stack_base: 0x2000_0000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
             PartitionConfig {
                 id: 2, // should be 1
@@ -4547,6 +4569,7 @@ mod tests {
                 stack_base: 0x2000_1000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
             PartitionConfig {
                 id: 1, // should be 2
@@ -4554,6 +4577,7 @@ mod tests {
                 stack_base: 0x2000_2000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
         ];
 
@@ -4588,6 +4612,7 @@ mod tests {
                 stack_base: 0x2000_0000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
             PartitionConfig {
                 id: 1,
@@ -4595,6 +4620,7 @@ mod tests {
                 stack_base: 0x2000_1000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
         ];
         #[cfg(not(feature = "dynamic-mpu"))]
@@ -4743,6 +4769,7 @@ mod tests {
                 stack_base: 0x2000_0000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
             PartitionConfig {
                 id: 1,
@@ -4750,6 +4777,7 @@ mod tests {
                 stack_base: 0x2000_1000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
             },
         ];
         #[cfg(not(feature = "dynamic-mpu"))]

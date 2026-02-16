@@ -72,20 +72,16 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched");
 
-    // SAFETY: Single-core, interrupts disabled before scheduler start — exclusive
-    // access to the global STACKS array. No other code references STACKS yet.
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
-        core::array::from_fn(|i| {
-            let b = STACKS[i].0.as_ptr() as u32;
-            PartitionConfig {
-                id: i as u8,
-                entry_point: 0,
-                stack_base: b,
-                stack_size: (STACK_WORDS * 4) as u32,
-                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
-            }
-        })
-    };
+    // Build partition configs. Stack bases are derived from internal
+    // PartitionCore stacks by Kernel::new(), so we use dummy values here.
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| PartitionConfig {
+        id: i as u8,
+        entry_point: 0, // Not used by Kernel::new
+        stack_base: 0,  // Ignored: internal stack used
+        stack_size: (STACK_WORDS * 4) as u32,
+        mpu_region: MpuRegion::new(0, 0, 0), // Base/size overridden by Kernel::new
+        peripheral_regions: heapless::Vec::new(),
+    });
 
     #[cfg(feature = "dynamic-mpu")]
     let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
@@ -95,14 +91,6 @@ fn main() -> ! {
 
     store_kernel(k);
     hprintln!("unified_minimal: kernel stored");
-
-    // Debug: print stack info before boot
-    // SAFETY: Single-core, interrupts disabled before scheduler start — exclusive
-    // access to the global STACKS array.
-    unsafe {
-        let stack_base = STACKS[0].0.as_ptr() as u32;
-        hprintln!("stack base = {:#010x}", stack_base);
-    }
 
     hprintln!("unified_minimal: calling boot");
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];

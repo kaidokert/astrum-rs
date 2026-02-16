@@ -124,20 +124,16 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 2))
         .expect("static schedule entry must fit");
 
-    // Build partition configs using the STACKS addresses.
-    // SAFETY: single-core, interrupts disabled — exclusive access.
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
-        [{
-            let b = STACKS[0].0.as_ptr() as u32;
-            PartitionConfig {
-                id: 0,
-                entry_point: 0,
-                stack_base: b,
-                stack_size: (STACK_WORDS * 4) as u32,
-                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
-            }
-        }]
-    };
+    // Build partition configs. Stack bases are derived from internal
+    // PartitionCore stacks by Kernel::new(), so we use dummy values here.
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = [PartitionConfig {
+        id: 0,
+        entry_point: 0, // Not used by Kernel::new
+        stack_base: 0,  // Ignored: internal stack used
+        stack_size: (STACK_WORDS * 4) as u32,
+        mpu_region: MpuRegion::new(0, 0, 0), // Base/size overridden by Kernel::new
+        peripheral_regions: heapless::Vec::new(),
+    }];
 
     // Create the unified kernel with schedule and partitions.
     #[cfg(feature = "dynamic-mpu")]
