@@ -25,6 +25,7 @@ pub mod mutex;
 pub mod partition;
 pub mod partition_core;
 pub mod pendsv;
+pub mod pendsv_asm;
 pub mod port_pools;
 pub mod queuing;
 pub mod sampling;

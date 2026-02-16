@@ -19,6 +19,12 @@
 //! - `get_partition_sp(idx)` — reads saved SP for partition
 //! - `set_partition_sp(idx, sp)` — saves SP for partition
 //!
+//! The context save/restore logic is implemented as linkable functions in
+//! [`pendsv_asm`](crate::pendsv_asm):
+//! - `pendsv_context_save(idx)` — saves r4-r11 and PSP
+//! - `pendsv_context_restore(idx)` — restores r4-r11 and PSP (with null-pointer check)
+//! - `pendsv_return_unprivileged()` — sets CONTROL.nPRIV=1 and returns
+//!
 //! # Usage
 //!
 //! ```ignore
@@ -37,19 +43,16 @@
 ///
 /// The handler:
 /// 1. Calls `get_current_partition()` — skips save if 0xFF (first switch).
-/// 2. Saves r4-r11 via `stmdb`; calls `get_partition_sp(idx)` to validate,
-///    then `set_partition_sp(idx, sp)` to store PSP.
+/// 2. Calls `pendsv_context_save(idx)` to save r4-r11 and PSP.
 /// 3. Calls `get_next_partition()`, then `set_current_partition(next)`.
-/// 4. Calls `get_partition_sp(idx)` to read saved SP; restores r4-r11 via `ldmia`.
-/// 5. Sets `CONTROL.nPRIV = 1` + ISB; returns with EXC_RETURN=0xFFFFFFFD.
+/// 4. Calls `pendsv_context_restore(idx)` to restore r4-r11 and PSP.
+/// 5. Calls `pendsv_return_unprivileged()` to set CONTROL.nPRIV=1 and return.
 ///
 /// # Implementation Note
 ///
-/// The context save/restore logic is shared with [`define_pendsv_dynamic!`]
-/// via the `pendsv_context_save`, `pendsv_context_restore`, and
-/// `pendsv_return_unprivileged` assembly macros defined inline. Any changes
-/// to the context-switch logic should be made in both macros to maintain
-/// consistency.
+/// The context save/restore logic is implemented as linkable functions in
+/// [`pendsv_asm`](crate::pendsv_asm). These functions are shared between
+/// `define_pendsv!` and `define_pendsv_dynamic!`.
 #[macro_export]
 macro_rules! define_pendsv {
     () => {
@@ -61,100 +64,31 @@ macro_rules! define_pendsv {
             .syntax unified
             .thumb
 
-            /* ================================================================
-             * Context Save Macro (shared with define_pendsv_dynamic!)
-             * ================================================================
-             * Expects: r1 = current partition index (not 0xFF)
-             * Uses: r0, r1, r2, r3
-             * Clobbers lr (caller must push/pop)
-             *
-             * The save path:
-             *   1. mrs r3, psp
-             *   2. stmdb r3!, {{r4-r11}}
-             *   3. mov r0, <current_idx>; bl get_partition_sp  (validate)
-             *   4. mov r0, <idx>; mov r1, <sp>; bl set_partition_sp
-             */
-            .macro pendsv_context_save
-            mrs     r3, psp
-            stmdb   r3!, {{r4-r11}}     /* r3 now points to saved context */
-            mov     r2, r3              /* r2 = sp to save (preserve across call) */
-
-            /* get_partition_sp(current_idx) — validation call */
-            mov     r0, r1              /* r0 = current partition index */
-            push    {{r1, r2, lr}}
-            bl      get_partition_sp
-            pop     {{r1, r2, lr}}
-            /* validation result in r0 (unused, but validates index) */
-
-            /* set_partition_sp(current_idx, sp) */
-            mov     r0, r1              /* r0 = current partition index */
-            mov     r1, r2              /* r1 = stack pointer to save */
-            push    {{lr}}
-            bl      set_partition_sp
-            pop     {{lr}}
-            .endm
-
-            /* ================================================================
-             * Context Restore Macro (shared with define_pendsv_dynamic!)
-             * ================================================================
-             * Expects: r1 = next partition index
-             * Uses: r0, r1, r3
-             * Clobbers lr (caller must push/pop)
-             * On exit: psp updated, r4-r11 restored
-             */
-            .macro pendsv_context_restore
-            /* get_partition_sp(next_idx) */
-            mov     r0, r1              /* r0 = next partition index */
-            push    {{lr}}
-            bl      get_partition_sp
-            pop     {{lr}}
-            mov     r3, r0              /* r3 = saved stack pointer */
-
-            ldmia   r3!, {{r4-r11}}
-            msr     psp, r3
-            .endm
-
-            /* ================================================================
-             * Unprivileged Return Macro (shared with define_pendsv_dynamic!)
-             * ================================================================
-             * Sets CONTROL.nPRIV = 1, issues ISB, returns via EXC_RETURN.
-             */
-            .macro pendsv_return_unprivileged
-            mrs     r0, CONTROL
-            orr     r0, r0, #1
-            msr     CONTROL, r0
-            isb
-            ldr     lr, =0xFFFFFFFD
-            bx      lr
-            .endm
-
             .global PendSV
             .type PendSV, %function
+            .thumb_func
 
         PendSV:
-            push    {{lr}}
             bl      get_current_partition
-            pop     {{lr}}
-            mov     r1, r0              /* r1 = current partition index */
+            mov     r4, r0              /* r4 = current partition index (callee-saved) */
 
-            cmp     r1, #0xFF
+            cmp     r4, #0xFF
             beq     .Lpendsv_skip_save
 
-            pendsv_context_save
+            mov     r0, r4
+            bl      pendsv_context_save
 
         .Lpendsv_skip_save:
-            push    {{lr}}
             bl      get_next_partition
-            pop     {{lr}}
-            mov     r1, r0              /* r1 = next partition index */
+            mov     r4, r0              /* r4 = next partition index */
 
-            push    {{r1, lr}}
-            mov     r0, r1
             bl      set_current_partition
-            pop     {{r1, lr}}
 
-            pendsv_context_restore
-            pendsv_return_unprivileged
+            mov     r0, r4
+            bl      pendsv_context_restore
+
+            /* pendsv_return_unprivileged does not return */
+            bl      pendsv_return_unprivileged
 
             .size PendSV, . - PendSV
         "#
@@ -186,11 +120,9 @@ macro_rules! define_pendsv {
 ///
 /// # Implementation Note
 ///
-/// The context save/restore logic is shared with [`define_pendsv!`]
-/// via the `pendsv_context_save`, `pendsv_context_restore`, and
-/// `pendsv_return_unprivileged` assembly macros defined inline. Any changes
-/// to the context-switch logic should be made in both macros to maintain
-/// consistency.
+/// The context save/restore logic is implemented as linkable functions in
+/// [`pendsv_asm`](crate::pendsv_asm). These functions are shared between
+/// `define_pendsv!` and `define_pendsv_dynamic!`.
 ///
 /// # Example
 ///
@@ -224,101 +156,32 @@ macro_rules! define_pendsv_dynamic {
             .syntax unified
             .thumb
 
-            /* ================================================================
-             * Context Save Macro (shared with define_pendsv!)
-             * ================================================================
-             * Expects: r1 = current partition index (not 0xFF)
-             * Uses: r0, r1, r2, r3
-             * Clobbers lr (caller must push/pop)
-             *
-             * The save path:
-             *   1. mrs r3, psp
-             *   2. stmdb r3!, {{r4-r11}}
-             *   3. mov r0, <current_idx>; bl get_partition_sp  (validate)
-             *   4. mov r0, <idx>; mov r1, <sp>; bl set_partition_sp
-             */
-            .macro pendsv_context_save
-            mrs     r3, psp
-            stmdb   r3!, {{r4-r11}}     /* r3 now points to saved context */
-            mov     r2, r3              /* r2 = sp to save (preserve across call) */
-
-            /* get_partition_sp(current_idx) — validation call */
-            mov     r0, r1              /* r0 = current partition index */
-            push    {{r1, r2, lr}}
-            bl      get_partition_sp
-            pop     {{r1, r2, lr}}
-            /* validation result in r0 (unused, but validates index) */
-
-            /* set_partition_sp(current_idx, sp) */
-            mov     r0, r1              /* r0 = current partition index */
-            mov     r1, r2              /* r1 = stack pointer to save */
-            push    {{lr}}
-            bl      set_partition_sp
-            pop     {{lr}}
-            .endm
-
-            /* ================================================================
-             * Context Restore Macro (shared with define_pendsv!)
-             * ================================================================
-             * Expects: r1 = next partition index
-             * Uses: r0, r1, r3
-             * Clobbers lr (caller must push/pop)
-             * On exit: psp updated, r4-r11 restored
-             */
-            .macro pendsv_context_restore
-            /* get_partition_sp(next_idx) */
-            mov     r0, r1              /* r0 = next partition index */
-            push    {{lr}}
-            bl      get_partition_sp
-            pop     {{lr}}
-            mov     r3, r0              /* r3 = saved stack pointer */
-
-            ldmia   r3!, {{r4-r11}}
-            msr     psp, r3
-            .endm
-
-            /* ================================================================
-             * Unprivileged Return Macro (shared with define_pendsv!)
-             * ================================================================
-             * Sets CONTROL.nPRIV = 1, issues ISB, returns via EXC_RETURN.
-             */
-            .macro pendsv_return_unprivileged
-            mrs     r0, CONTROL
-            orr     r0, r0, #1
-            msr     CONTROL, r0
-            isb
-            ldr     lr, =0xFFFFFFFD
-            bx      lr
-            .endm
-
             .global PendSV
             .type PendSV, %function
+            .thumb_func
 
         PendSV:
-            push    {{lr}}
             bl      get_current_partition
-            pop     {{lr}}
-            mov     r1, r0              /* r1 = current partition index */
+            mov     r4, r0              /* r4 = current partition index (callee-saved) */
 
-            cmp     r1, #0xFF
+            cmp     r4, #0xFF
             beq     .Lpendsv_dyn_skip_save
 
-            pendsv_context_save
+            mov     r0, r4
+            bl      pendsv_context_save
 
         .Lpendsv_dyn_skip_save:
-            push    {{lr}}
             bl      __pendsv_program_mpu
             bl      get_next_partition
-            pop     {{lr}}
-            mov     r1, r0              /* r1 = next partition index */
+            mov     r4, r0              /* r4 = next partition index */
 
-            push    {{r1, lr}}
-            mov     r0, r1
             bl      set_current_partition
-            pop     {{r1, lr}}
 
-            pendsv_context_restore
-            pendsv_return_unprivileged
+            mov     r0, r4
+            bl      pendsv_context_restore
+
+            /* pendsv_return_unprivileged does not return */
+            bl      pendsv_return_unprivileged
 
             .size PendSV, . - PendSV
         "#
