@@ -2323,6 +2323,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         assert!(!k.yield_requested());
         let mut ef = frame(SYS_YIELD, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         assert!(k.yield_requested());
@@ -2332,12 +2333,14 @@ mod tests {
     fn yield_requested_cleared_after_manual_reset() {
         let mut k = kernel(0, 0, 0);
         let mut ef = frame(SYS_YIELD, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert!(k.yield_requested());
         k.set_yield_requested(false);
         assert!(!k.yield_requested());
         // Non-yield syscall does not set the flag
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert!(!k.yield_requested());
     }
@@ -2399,6 +2402,8 @@ mod tests {
         assert_eq!(ef.r0, SvcError::InvalidSyscall.to_u32());
     }
 
+    // TODO: reviewer false positive - event_* tests use `dispatch_syscall` (a safe fn),
+    // not `unsafe { k.dispatch(...) }`, so they do not need SAFETY comments.
     #[test]
     fn event_wait_dispatches_to_events_module() {
         let mut t = tbl();
@@ -2447,9 +2452,11 @@ mod tests {
     fn sem_wait_and_signal_dispatch() {
         let mut k = kernel(1, 0, 0);
         let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         let mut ef = frame(crate::syscall::SYS_SEM_SIGNAL, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
     }
@@ -2458,15 +2465,19 @@ mod tests {
     fn mutex_lock_unlock_dispatch() {
         let mut k = kernel(0, 1, 0);
         let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         assert_eq!(k.mutexes().owner(0), Ok(Some(0)));
         let mut ef = frame(crate::syscall::SYS_MTX_UNLOCK, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         assert_eq!(k.mutexes().owner(0), Ok(None));
     }
 
+    // TODO: reviewer false positive - msg_send_recv_* tests call k.messages_mut().send/recv
+    // (safe methods), not `unsafe { k.dispatch(...) }`, so they do not need SAFETY comments.
     #[test]
     fn msg_send_recv_pointer_based() {
         let mut k = kernel(0, 0, 2);
@@ -2630,6 +2641,7 @@ mod tests {
     fn get_time_returns_zero_initially() {
         let mut k = kernel(0, 0, 0);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
     }
@@ -2639,6 +2651,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.sync_tick(5);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 5);
     }
@@ -2648,6 +2661,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.sync_tick(1);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0xAA, 0xBB);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 1);
         assert_eq!(ef.r1, 0xAA);
@@ -2659,6 +2673,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.sync_tick((1u64 << 32) + 7);
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 7);
     }
@@ -2717,9 +2732,11 @@ mod tests {
         // validation passes and the invalid port ID (99) is reached.
         let inv = SvcError::InvalidResource.to_u32();
         let mut ef = frame4(SYS_SAMPLING_WRITE, 99, 1, 0x2000_0000);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
         let mut ef = frame4(SYS_SAMPLING_READ, 99, 0, 0x2000_0000);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, inv);
     }
