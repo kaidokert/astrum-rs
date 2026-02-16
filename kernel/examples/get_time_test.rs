@@ -116,12 +116,6 @@ fn SysTick() {
         };
 
         let event = k.advance_schedule_tick();
-        #[cfg(not(feature = "dynamic-mpu"))]
-        if let Some(pid) = event {
-            k.set_next_partition(pid);
-            cortex_m::peripheral::SCB::set_pendsv();
-        }
-        #[cfg(feature = "dynamic-mpu")]
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             k.set_next_partition(pid);
             cortex_m::peripheral::SCB::set_pendsv();

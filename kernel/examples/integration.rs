@@ -152,11 +152,8 @@ fn SysTick() {
     }
     let k = K.as_mut().unwrap();
     *T += 1;
-    let _tick_result = k.advance_schedule_tick();
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let switch_pid: Option<u8> = _tick_result;
-    #[cfg(feature = "dynamic-mpu")]
-    let switch_pid: Option<u8> = match _tick_result {
+    let tick_result = k.advance_schedule_tick();
+    let switch_pid: Option<u8> = match tick_result {
         kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) => Some(pid),
         _ => None,
     };
