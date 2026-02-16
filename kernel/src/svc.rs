@@ -3900,8 +3900,6 @@ mod tests {
         );
     }
 
-    // TODO: reviewer false positive – this test (full queue, timeout>0) already
-    // exists from commit 7d10186; reviewer only inspected the incremental diff.
     #[test]
     fn queuing_send_timed_blocks_on_full_queue() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
@@ -3927,8 +3925,6 @@ mod tests {
         assert_eq!(k.queuing().get(d).unwrap().pending_senders(), 1);
     }
 
-    // TODO: reviewer false positive – this test (full queue, timeout=0) already
-    // exists from commit 7d10186; reviewer only inspected the incremental diff.
     #[test]
     fn queuing_send_timed_zero_timeout_full_returns_error() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
@@ -3960,8 +3956,6 @@ mod tests {
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
-    // TODO: reviewer false positive – this test (invalid pointer) already
-    // exists from commit 7d10186; reviewer only inspected the incremental diff.
     #[test]
     fn queuing_send_timed_rejects_out_of_bounds_pointer() {
         use crate::syscall::SYS_QUEUING_SEND_TIMED;
