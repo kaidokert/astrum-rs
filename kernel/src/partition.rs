@@ -107,6 +107,37 @@ impl PartitionControlBlock {
         (self.stack_base, self.stack_size)
     }
 
+    /// Returns all static memory regions accessible to this partition.
+    ///
+    /// Returns a vector of `(base, size)` pairs in a consistent order:
+    /// 1. Data region (from `mpu_region`)
+    /// 2. Stack region
+    ///
+    /// This provides a unified interface for querying all static memory
+    /// regions a partition can access, matching the format used by
+    /// `DynamicStrategy::accessible_regions()`.
+    ///
+    /// Returns an empty vector only if both regions have zero size.
+    pub fn accessible_static_regions(&self) -> Vec<(u32, u32), 2> {
+        let mut regions = Vec::new();
+
+        // Data region first (from MPU region)
+        let data_base = self.mpu_region.base();
+        let data_size = self.mpu_region.size();
+        if data_size > 0 {
+            // Cannot fail: capacity is 2, this is the first push
+            let _ = regions.push((data_base, data_size));
+        }
+
+        // Stack region second
+        if self.stack_size > 0 {
+            // Cannot fail: capacity is 2, this is at most the second push
+            let _ = regions.push((self.stack_base, self.stack_size));
+        }
+
+        regions
+    }
+
     pub fn mpu_region(&self) -> &MpuRegion {
         &self.mpu_region
     }
@@ -364,6 +395,99 @@ mod tests {
         // Verify consistency with individual accessors
         assert_eq!(base, pcb.stack_base());
         assert_eq!(size, pcb.stack_size());
+    }
+
+    // ------------------------------------------------------------------
+    // accessible_static_regions
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn accessible_static_regions_returns_data_then_stack() {
+        let pcb = make_pcb();
+        let regions = pcb.accessible_static_regions();
+        assert_eq!(regions.len(), 2);
+        // Data region first (from mpu_region)
+        assert_eq!(regions[0], (0x2000_0000, 4096));
+        // Stack region second
+        assert_eq!(regions[1], (0x2000_0000, 1024));
+    }
+
+    #[test]
+    fn accessible_static_regions_different_data_and_stack() {
+        // Create PCB with distinct data and stack regions
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_1000,                                    // stack_base
+            0x2000_1200, // stack_pointer (stack_size = 0x200 = 512)
+            MpuRegion::new(0x2000_0000, 2048, 0x0306_0000), // data region
+        );
+        let regions = pcb.accessible_static_regions();
+        assert_eq!(regions.len(), 2);
+        // Data region first
+        assert_eq!(regions[0], (0x2000_0000, 2048));
+        // Stack region second
+        assert_eq!(regions[1], (0x2000_1000, 512));
+    }
+
+    #[test]
+    fn accessible_static_regions_zero_data_size() {
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0400,
+            MpuRegion::new(0x2000_0000, 0, 0), // zero-size data region
+        );
+        let regions = pcb.accessible_static_regions();
+        // Only stack region returned when data size is zero
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0], (0x2000_0000, 1024));
+    }
+
+    #[test]
+    fn accessible_static_regions_zero_stack_size() {
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0000, // stack_pointer == stack_base => stack_size = 0
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        );
+        let regions = pcb.accessible_static_regions();
+        // Only data region returned when stack size is zero
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0], (0x2000_0000, 4096));
+    }
+
+    #[test]
+    fn accessible_static_regions_both_zero_size() {
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0000,                       // stack_size = 0
+            MpuRegion::new(0x2000_0000, 0, 0), // data_size = 0
+        );
+        let regions = pcb.accessible_static_regions();
+        // Empty vector when both sizes are zero
+        assert!(regions.is_empty());
+    }
+
+    #[test]
+    fn accessible_static_regions_format_matches_dynamic_strategy() {
+        // Verify the (base, size) format matches what DynamicStrategy uses
+        let pcb = make_pcb();
+        let regions = pcb.accessible_static_regions();
+        for (base, size) in regions.iter() {
+            // Each region should have non-zero size (function guarantees this)
+            assert!(*size > 0);
+            // Verify we can compute end address without overflow
+            assert!(
+                base.checked_add(*size).is_some(),
+                "Region end address must not overflow u32"
+            );
+        }
     }
 
     #[test]
