@@ -851,7 +851,7 @@ where
             { C::DR },
         >,
     ) -> Result<Self, ConfigError> {
-        use crate::partition::PartitionControlBlock;
+        use crate::partition::{MpuRegion, PartitionControlBlock};
         if schedule.is_empty() {
             return Err(ConfigError::ScheduleEmpty);
         }
@@ -881,9 +881,27 @@ where
                 });
             }
             c.validate()?;
-            let sp = align_down_8(c.stack_base.wrapping_add(c.stack_size));
-            let pcb =
-                PartitionControlBlock::new(c.id, c.entry_point, c.stack_base, sp, c.mpu_region);
+            // Use internal stack from PartitionCore instead of PartitionConfig.
+            // This ensures MPU regions protect the actual stack memory.
+            let internal_stack = core
+                .stack_mut(i)
+                .ok_or(ConfigError::StackInitFailed { partition_id: c.id })?;
+            let internal_stack_base = internal_stack.as_ptr() as u32;
+            let internal_stack_size = (internal_stack.len() * 4) as u32;
+            let sp = align_down_8(internal_stack_base.wrapping_add(internal_stack_size));
+            // Override MpuRegion base with internal stack base for correct MPU config.
+            let mpu_region = MpuRegion::new(
+                internal_stack_base,
+                internal_stack_size,
+                c.mpu_region.permissions(),
+            );
+            let pcb = PartitionControlBlock::new(
+                c.id,
+                c.entry_point,
+                internal_stack_base,
+                sp,
+                mpu_region,
+            );
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
             }
@@ -2280,11 +2298,12 @@ mod tests {
     }
 
     #[test]
-    fn partition_sp_initialized_from_stack_pointers() {
+    fn partition_sp_initialized_from_internal_stacks() {
         use crate::partition::PartitionConfig;
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         schedule.add(ScheduleEntry::new(1, 10)).unwrap();
+        // Config stack_base values are ignored; internal stacks are used instead.
         let configs = [
             PartitionConfig {
                 id: 0,
@@ -2310,13 +2329,10 @@ mod tests {
             registry,
         )
         .unwrap();
-        // Verify partition_sp is initialized from PCB stack pointers.
-        // stack_pointer = align_down_8(stack_base + stack_size).
-        assert_eq!(k.partition_sp()[0], 0x2000_0000 + 1024);
-        assert_eq!(k.partition_sp()[1], 0x2000_1000 + 1024);
-        // Unused slots are zero-initialized.
-        assert_eq!(k.partition_sp()[2], 0);
-        assert_eq!(k.partition_sp()[3], 0);
+        // Verify PCB uses internal stack (not config values).
+        let pcb0 = k.partitions().get(0).unwrap();
+        assert_ne!(pcb0.stack_base(), 0x2000_0000);
+        assert_eq!(k.partition_sp()[2], 0); // Unused slots zero-initialized.
     }
 
     #[test]

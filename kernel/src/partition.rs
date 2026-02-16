@@ -226,6 +226,8 @@ pub enum ConfigError {
         expected_id: u8,
         actual_id: u8,
     },
+    /// Failed to access internal stack for a partition during initialization.
+    StackInitFailed { partition_id: u8 },
 }
 
 impl core::fmt::Display for ConfigError {
@@ -267,6 +269,12 @@ impl core::fmt::Display for ConfigError {
                 "partition config[{index}] has id {actual_id}, expected {expected_id} \
                  — ids must match array index"
             ),
+            Self::StackInitFailed { partition_id } => {
+                write!(
+                    f,
+                    "partition {partition_id}: failed to access internal stack"
+                )
+            }
         }
     }
 }
