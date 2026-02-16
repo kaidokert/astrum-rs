@@ -57,8 +57,31 @@
 macro_rules! define_pendsv {
     () => {
         #[cfg(target_arch = "arm")]
-        // SAFETY: PendSV exception handler — accesses kernel via Rust shims
-        // (interrupt::free). No aliasing: PendSV cannot preempt itself.
+        // SAFETY: This assembly implements the PendSV exception handler which
+        // performs partition context switches. The operations are sound because:
+        //
+        // 1. Exception priority exclusivity: PendSV is configured as the
+        //    lowest-priority exception (priority 0xFF). It cannot preempt
+        //    itself, and higher-priority exceptions (SysTick, SVC) complete
+        //    before PendSV runs. This guarantees exclusive access to the
+        //    partition state being saved/restored.
+        //
+        // 2. Register convention compliance: The assembly follows ARM AAPCS.
+        //    - r0-r3 are caller-saved scratch registers used for arguments
+        //    - r4-r11 are callee-saved and explicitly preserved across calls
+        //    - lr is saved/restored around bl instructions
+        //    - The partition index is held in r4 (callee-saved) across calls
+        //
+        // 3. Shim usage pattern: All kernel state access goes through Rust
+        //    shims (get_current_partition, get_next_partition, set_current_partition,
+        //    get_partition_sp, set_partition_sp) defined by define_unified_kernel!.
+        //    These shims use cortex_m::interrupt::free to ensure atomic access
+        //    to the kernel's Mutex<RefCell<...>> protected state.
+        //
+        // 4. PSP/register save ordering: The outgoing partition's r4-r11 are
+        //    pushed to its process stack before any shim calls modify r4-r11.
+        //    The incoming partition's registers are restored after all shim
+        //    calls complete, ensuring no register corruption.
         core::arch::global_asm!(
             r#"
             .syntax unified
@@ -148,9 +171,34 @@ macro_rules! define_pendsv_dynamic {
         }
 
         #[cfg(target_arch = "arm")]
-        // SAFETY: PendSV exception handler (dynamic-MPU) — accesses kernel via
-        // Rust shims and __pendsv_program_mpu for MPU.
-        // No aliasing: PendSV is lowest priority and cannot preempt itself.
+        // SAFETY: This assembly implements the PendSV exception handler with
+        // dynamic MPU region programming. The operations are sound because:
+        //
+        // 1. Exception priority exclusivity: PendSV is configured as the
+        //    lowest-priority exception (priority 0xFF). It cannot preempt
+        //    itself, and higher-priority exceptions (SysTick, SVC) complete
+        //    before PendSV runs. This guarantees exclusive access to the
+        //    partition state and MPU registers being modified.
+        //
+        // 2. Register convention compliance: The assembly follows ARM AAPCS.
+        //    - r0-r3 are caller-saved scratch registers used for arguments
+        //    - r4-r11 are callee-saved and explicitly preserved across calls
+        //    - lr is saved/restored around bl instructions
+        //    - The partition index is held in r4 (callee-saved) across calls
+        //
+        // 3. Shim usage pattern: All kernel state access goes through Rust
+        //    shims (get_current_partition, get_next_partition, set_current_partition,
+        //    get_partition_sp, set_partition_sp, __pendsv_program_mpu) defined by
+        //    define_unified_kernel! and this macro. These shims use
+        //    cortex_m::interrupt::free or Peripherals::steal() (sound at PendSV
+        //    priority) to ensure safe access to kernel state and peripherals.
+        //
+        // 4. MPU programming timing: __pendsv_program_mpu is called AFTER saving
+        //    the outgoing context and BEFORE restoring the incoming context.
+        //    This ensures the MPU is reconfigured for the incoming partition
+        //    before any of its code executes, eliminating TOCTOU races.
+        //
+        // 5. PSP/register save ordering: Same guarantees as define_pendsv!.
         core::arch::global_asm!(
             r#"
             .syntax unified
