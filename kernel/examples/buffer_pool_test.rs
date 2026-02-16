@@ -1,3 +1,13 @@
+// Not migrated to define_unified_harness! — this test requires direct kernel
+// access in SysTick to call BufferPool::lend_to_partition and revoke_from_all,
+// verify MPU window state via DynamicStrategy, and coordinate the multi-phase
+// alloc→lend→read→revoke lifecycle using atomic flags. The test verifies
+// kernel-internal buffer pool state transitions that aren't exposed through
+// the standard harness's syscall-only interface.
+//
+// NOTE: integration.rs and context_switch.rs have equivalent headers committed
+// separately (commits d68b00f, earlier). All six legacy examples are documented.
+
 //! QEMU test: buffer pool zero-copy lending lifecycle.
 //!
 //! Two-partition demo exercising the full alloc → write → lend → read → revoke

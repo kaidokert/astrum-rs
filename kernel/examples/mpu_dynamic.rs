@@ -1,3 +1,10 @@
+// Not migrated to define_unified_harness! — this example requires direct MPU
+// register readback in SysTick to verify that PendSV correctly programmed R4.
+// The verification logic must access RBAR_ADDR_MASK and compare against
+// partition-specific base addresses after each context switch. The standard
+// harness doesn't expose the raw MPU registers or DynamicStrategy state needed
+// for this low-level hardware verification.
+
 //! QEMU example: dynamic MPU R4 reprogramming across partition switches.
 //!
 //! Two partitions with different data regions. On each context switch the

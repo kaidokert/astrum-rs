@@ -1,3 +1,10 @@
+// Not migrated to define_unified_harness! — this test requires direct access
+// to HwUartBackend in SysTick for software loopback transfer() calls and
+// multi-message verification with custom message patterns. The test also
+// exercises TX-full and RX-empty edge cases that require coordinated timing
+// between SysTick bottom-half processing and partition syscalls, which the
+// standard harness's fixed bottom-half sequence doesn't support.
+
 //! UART1 loopback integration test with two partitions on QEMU.
 //!
 //! P1 (writer) sends multiple messages of varying lengths via HwUartBackend

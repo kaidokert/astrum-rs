@@ -1,3 +1,10 @@
+// Not migrated to define_unified_harness! — this test requires reading MPU R4
+// RBAR and RASR registers directly in SysTick to verify partition-specific
+// values were programmed by PendSV. It uses distinct data region sizes per
+// partition (4 KiB vs 8 KiB) to confirm correct RASR encoding. The standard
+// harness encapsulates MPU state and doesn't expose raw register access for
+// hardware-level verification.
+
 //! QEMU test: dynamic MPU region verification across partition switches.
 //!
 //! Two partitions with distinct data-region bases and sizes. On each
