@@ -41,7 +41,7 @@ impl MpuRegion {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartitionControlBlock {
     id: u8,
     state: PartitionState,
@@ -52,6 +52,9 @@ pub struct PartitionControlBlock {
     mpu_region: MpuRegion,
     event_flags: u32,
     event_wait_mask: u32,
+    /// Optional peripheral register block regions for user-space drivers.
+    /// Supports up to 2 peripheral regions (Approach D).
+    peripheral_regions: Vec<MpuRegion, 2>,
 }
 
 impl PartitionControlBlock {
@@ -72,7 +75,24 @@ impl PartitionControlBlock {
             mpu_region,
             event_flags: 0,
             event_wait_mask: 0,
+            peripheral_regions: Vec::new(),
         }
+    }
+
+    /// Add up to 2 peripheral regions. Only non-zero-size regions are stored.
+    pub fn with_peripheral_regions(mut self, regions: &[MpuRegion]) -> Self {
+        self.peripheral_regions.clear();
+        for region in regions.iter().take(2) {
+            if region.size() > 0 {
+                let _ = self.peripheral_regions.push(*region);
+            }
+        }
+        self
+    }
+
+    /// Returns the peripheral regions configured for this partition.
+    pub fn peripheral_regions(&self) -> &[MpuRegion] {
+        &self.peripheral_regions
     }
 
     pub fn id(&self) -> u8 {
@@ -107,34 +127,20 @@ impl PartitionControlBlock {
         (self.stack_base, self.stack_size)
     }
 
-    /// Returns all static memory regions accessible to this partition.
-    ///
-    /// Returns a vector of `(base, size)` pairs in a consistent order:
-    /// 1. Data region (from `mpu_region`)
-    /// 2. Stack region
-    ///
-    /// This provides a unified interface for querying all static memory
-    /// regions a partition can access, matching the format used by
-    /// `DynamicStrategy::accessible_regions()`.
-    ///
-    /// Returns an empty vector only if both regions have zero size.
-    pub fn accessible_static_regions(&self) -> Vec<(u32, u32), 2> {
+    /// Returns (base, size) pairs: data region, stack, then peripheral regions.
+    /// Only non-zero-size regions are included. Capacity is 4.
+    pub fn accessible_static_regions(&self) -> Vec<(u32, u32), 4> {
         let mut regions = Vec::new();
-
-        // Data region first (from MPU region)
-        let data_base = self.mpu_region.base();
         let data_size = self.mpu_region.size();
         if data_size > 0 {
-            // Cannot fail: capacity is 2, this is the first push
-            let _ = regions.push((data_base, data_size));
+            let _ = regions.push((self.mpu_region.base(), data_size));
         }
-
-        // Stack region second
         if self.stack_size > 0 {
-            // Cannot fail: capacity is 2, this is at most the second push
             let _ = regions.push((self.stack_base, self.stack_size));
         }
-
+        for pr in self.peripheral_regions.iter() {
+            let _ = regions.push((pr.base(), pr.size()));
+        }
         regions
     }
 
@@ -491,6 +497,26 @@ mod tests {
     }
 
     #[test]
+    fn peripheral_regions_and_accessible_static_regions() {
+        assert!(make_pcb().peripheral_regions().is_empty());
+        let r = |b, s| MpuRegion::new(b, s, 0x03);
+        let pcb = make_pcb().with_peripheral_regions(&[r(0x4000_0000, 4096)]);
+        assert_eq!(pcb.peripheral_regions().len(), 1);
+        let pcb = make_pcb().with_peripheral_regions(&[r(0x4000_0000, 0), r(0x4000_1000, 256)]);
+        assert_eq!(pcb.peripheral_regions().len(), 1); // zero-size ignored
+        let pcb = make_pcb().with_peripheral_regions(&[
+            r(0x4000_0000, 4096),
+            r(0x4000_1000, 256),
+            r(0x4000_2000, 512),
+        ]);
+        assert_eq!(pcb.peripheral_regions().len(), 2); // limits to two
+        let regions = pcb.accessible_static_regions();
+        assert_eq!((regions.capacity(), regions.len()), (4, 4));
+        assert_eq!(regions[2], (0x4000_0000, 4096));
+        assert_eq!(regions[3], (0x4000_1000, 256));
+    }
+
+    #[test]
     fn valid_transitions() {
         let mut pcb = make_pcb();
         pcb.transition(PartitionState::Running).unwrap();
@@ -574,11 +600,11 @@ mod tests {
     }
 
     #[test]
-    fn pcb_is_copy() {
+    fn pcb_is_clone() {
         let pcb = make_pcb();
-        let copy = pcb;
-        // both are usable — proves Copy
-        assert_eq!(pcb.id(), copy.id());
+        let cloned = pcb.clone();
+        // both are usable — proves Clone
+        assert_eq!(pcb.id(), cloned.id());
     }
 
     // ------------------------------------------------------------------

@@ -2211,7 +2211,7 @@ mod tests {
         let mut core = <TestConfig as KernelConfig>::Core::default();
         let pt = tbl();
         for pcb in pt.iter() {
-            core.partitions_mut().add(*pcb).unwrap();
+            core.partitions_mut().add(pcb.clone()).unwrap();
         }
         let mut k: Kernel<TestConfig> = Kernel {
             active_partition: None,
