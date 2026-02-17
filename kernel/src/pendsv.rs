@@ -64,7 +64,6 @@ macro_rules! define_pendsv {
     };
 
     // Internal implementation: single assembly block with optional MPU call
-    // TODO: reviewer false positive - @impl token is already meaningful, not a file path
     (@impl $mpu_call:literal) => {
         #[cfg(target_arch = "arm")]
         // SAFETY: This assembly implements the PendSV exception handler which
@@ -98,7 +97,8 @@ macro_rules! define_pendsv {
         //    is reconfigured for the incoming partition before any of its code
         //    executes, eliminating TOCTOU races.
         core::arch::global_asm!(
-            r#"
+            concat!(
+                r#"
             .syntax unified
             .thumb
 
@@ -125,8 +125,9 @@ macro_rules! define_pendsv {
 
         .Lpendsv_skip_save:
             /* Dynamic mode: program MPU regions (empty string = no-op) */
-            {mpu_call}
-
+            "#,
+                $mpu_call,
+                r#"
             /* Load next_partition: kernel_base + KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET */
             ldr     r0, =KERNEL_CORE_OFFSET
             ldr     r0, [r0]            /* r0 = core offset */
@@ -149,8 +150,8 @@ macro_rules! define_pendsv {
             bl      pendsv_return_unprivileged
 
             .size PendSV, . - PendSV
-        "#,
-            mpu_call = $mpu_call,
+        "#
+            )
         );
     };
 }
