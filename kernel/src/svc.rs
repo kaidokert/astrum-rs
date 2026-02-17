@@ -1794,9 +1794,22 @@ where
         self.core.next_partition()
     }
 
-    /// Sets the next partition index.
-    #[inline(always)]
+    /// Sets the next partition index and transitions it to Running state.
+    ///
+    /// This is the single point where the scheduler "selects" a partition to run.
+    /// The state transition to Running is encapsulated here to ensure it happens
+    /// exactly once when a partition is scheduled, regardless of whether this is
+    /// called from boot, SysTick, or yield handling.
+    ///
+    /// If the partition cannot transition to Running (e.g., it's already Running
+    /// or in an incompatible state), the transition is silently skipped. This is
+    /// safe because:
+    /// - A partition already Running doesn't need a transition
+    /// - A Waiting partition will yield immediately and be rescheduled when ready
     pub fn set_next_partition(&mut self, id: u8) {
+        // Transition the incoming partition to Running so syscalls can block it.
+        // This is the authoritative location for this state transition.
+        let _ = try_transition(self.partitions_mut(), id, PartitionState::Running);
         self.core.set_next_partition(id);
     }
 
