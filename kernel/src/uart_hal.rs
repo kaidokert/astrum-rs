@@ -162,8 +162,11 @@ impl UartRegs {
     #[inline]
     fn read_reg(&self, offset: u32) -> u32 {
         #[cfg(not(test))]
-        // SAFETY: caller of the public method guarantees base points to a
-        // valid UART peripheral.
+        // SAFETY: The caller of the public method (e.g., `is_tx_full`, `init`)
+        // guarantees that `self.base` points to a valid, mapped UART peripheral
+        // as documented in the `UartRegs` struct-level safety requirements.
+        // The offset is a compile-time constant from this module's register
+        // definitions, ensuring a valid register within the UART block.
         unsafe {
             self.read(offset)
         }
@@ -175,8 +178,11 @@ impl UartRegs {
     #[inline]
     fn write_reg(&self, offset: u32, val: u32) {
         #[cfg(not(test))]
-        // SAFETY: caller of the public method guarantees base points to a
-        // valid UART peripheral.
+        // SAFETY: The caller of the public method (e.g., `init`, `write_byte`)
+        // guarantees that `self.base` points to a valid, mapped UART peripheral
+        // as documented in the `UartRegs` struct-level safety requirements.
+        // The offset is a compile-time constant from this module's register
+        // definitions, ensuring a valid register within the UART block.
         unsafe {
             self.write(offset, val)
         }
