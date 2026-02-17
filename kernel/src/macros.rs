@@ -71,6 +71,57 @@ macro_rules! unpack_r0 {
     }};
 }
 
+/// Complete kernel runtime setup macro.
+///
+/// Generates kernel storage, accessor functions, and PendSV handler in a
+/// single invocation. This macro wraps [`define_unified_kernel!`] to provide
+/// a complete, foolproof runtime setup.
+///
+/// # Syntax
+///
+/// ```ignore
+/// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>);
+/// ```
+///
+/// # Generated Items
+///
+/// | Item | Description |
+/// |------|-------------|
+/// | `KERNEL` static | Mutex-protected kernel storage |
+/// | `store_kernel()` | Stores kernel instance and installs SVC hook |
+/// | `with_kernel()` | Immutable access within critical section |
+/// | `with_kernel_mut()` | Mutable access within critical section |
+/// | `get_current_partition()` | C ABI accessor for PendSV |
+/// | `get_next_partition()` | C ABI accessor for PendSV |
+/// | `get_partition_sp()` | C ABI accessor for PendSV |
+/// | `set_partition_sp()` | C ABI accessor for PendSV |
+/// | `set_current_partition()` | C ABI accessor for PendSV |
+///
+/// # Example
+///
+/// ```ignore
+/// use kernel::config::KernelConfig;
+/// use kernel::svc::Kernel;
+///
+/// struct MyConfig;
+/// impl KernelConfig for MyConfig {
+///     // ... configuration constants ...
+/// }
+///
+/// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>);
+///
+/// fn main() {
+///     let k = Kernel::<MyConfig>::new_empty();
+///     store_kernel(k);
+/// }
+/// ```
+#[macro_export]
+macro_rules! define_kernel_runtime {
+    ($name:ident : Kernel<$Config:ty>) => {
+        $crate::define_unified_kernel!($name : Kernel<$Config>);
+    };
+}
+
 #[cfg(test)]
 mod tests {
     // On non-ARM test hosts both macros must compile and return 0.
@@ -86,4 +137,9 @@ mod tests {
         let p = unpack_r0!();
         assert_eq!(p, 0);
     }
+
+    // Tests for define_kernel_runtime! macro require ARM target since the
+    // macro generates code using cortex_m::interrupt::free and other ARM
+    // intrinsics. The QEMU integration tests verify the actual functionality.
+    // See svc.rs::unified_kernel_macro_tests for the gating pattern.
 }

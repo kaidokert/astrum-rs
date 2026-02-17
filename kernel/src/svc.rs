@@ -483,11 +483,20 @@ pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
 macro_rules! define_unified_kernel {
     // Basic variant with no custom yield handler.
     ($Config:ty) => {
-        $crate::define_unified_kernel!(@impl $Config, |_k| {});
+        $crate::define_unified_kernel!(@impl_named KERNEL, $Config, |_k| {});
     };
     // Variant with custom yield handler.
     ($Config:ty, |$k:ident| $yield_body:block) => {
-        $crate::define_unified_kernel!(@impl $Config, |$k| $yield_body);
+        $crate::define_unified_kernel!(@impl_named KERNEL, $Config, |$k| $yield_body);
+    };
+    // Named variant: `define_unified_kernel!(MY_KERNEL: Kernel<MyConfig>);`
+    // Allows specifying a custom name for the kernel static.
+    ($name:ident : Kernel<$Config:ty>) => {
+        $crate::define_unified_kernel!(@impl_named $name, $Config, |_k| {});
+    };
+    // Named variant with custom yield handler.
+    ($name:ident : Kernel<$Config:ty>, |$k:ident| $yield_body:block) => {
+        $crate::define_unified_kernel!(@impl_named $name, $Config, |$k| $yield_body);
     };
     // Variant that generates a complete KernelConfig struct and impl with
     // associated types wired up. Use this to reduce boilerplate when defining
@@ -514,7 +523,7 @@ macro_rules! define_unified_kernel {
             SP: $sp, SM: $sm, BS: $bs, BM: $bm, BW: $bw
             $(, BP: $bp, BZ: $bz)?
         });
-        $crate::define_unified_kernel!(@impl $Name, |_k| {});
+        $crate::define_unified_kernel!(@impl_named KERNEL, $Name, |_k| {});
     };
     // Variant that generates KernelConfig with custom yield handler.
     ($Name:ident {
@@ -531,7 +540,7 @@ macro_rules! define_unified_kernel {
             SP: $sp, SM: $sm, BS: $bs, BM: $bm, BW: $bw
             $(, BP: $bp, BZ: $bz)?
         });
-        $crate::define_unified_kernel!(@impl $Name, |$k| $yield_body);
+        $crate::define_unified_kernel!(@impl_named KERNEL, $Name, |$k| $yield_body);
     };
     // Private rule: generates the KernelConfig struct and impl.
     // Called by the public-facing rules to avoid code duplication.
@@ -577,8 +586,8 @@ macro_rules! define_unified_kernel {
             type Ports = $crate::port_pools::PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
         }
     };
-    // Internal implementation rule using @impl token as private pattern.
-    // NOTE: The @impl pattern below is valid Rust macro syntax. If a code review tool
+    // Internal implementation rule using @impl_named token as private pattern.
+    // NOTE: The @impl_named pattern below is valid Rust macro syntax. If a code review tool
     // reports a "file path as matcher token" error, that is a false positive from the
     // tool - verify by running `cargo check` which succeeds. The @impl idiom is standard
     // for private macro rules (see std::vec!, lazy_static!, etc.).
@@ -588,10 +597,10 @@ macro_rules! define_unified_kernel {
     // bounds (S, SW, MS, MW, QS, QD, QM, QW, SP, SM, BS, BM, BW) - see commit b1e8222.
     // The macro itself does not need explicit where clauses; reduced bounds are achieved
     // through the struct definition.
-    (@impl $Config:ty, |$k:ident| $yield_body:block) => {
+    (@impl_named $name:ident, $Config:ty, |$k:ident| $yield_body:block) => {
         /// Unified kernel storage: holds the `Kernel` struct containing partitions,
         /// schedule, resource pools, and dispatch state.
-        static KERNEL: ::cortex_m::interrupt::Mutex<
+        static $name: ::cortex_m::interrupt::Mutex<
             ::core::cell::RefCell<Option<$crate::svc::Kernel<$Config>>>,
         > = ::cortex_m::interrupt::Mutex::new(::core::cell::RefCell::new(None));
 
