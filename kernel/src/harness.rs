@@ -181,7 +181,6 @@ macro_rules! define_unified_harness {
     (no_boot, $Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@handlers $Config, $NP, $SW, |$tick, $k| $hook);
     };
-    // TODO: reviewer false positive - internal rule names are @handlers and @impl, not a cache path
     // Internal: handlers only (SysTick, PendSV, SVC linkage, kernel state)
     (@handlers $Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
         // NOTE: Per-partition stacks are stored in PartitionCore within the Kernel
