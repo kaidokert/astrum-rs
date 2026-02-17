@@ -930,7 +930,19 @@ where
                     actual_id: c.id,
                 });
             }
-            c.validate()?;
+            // Note: We skip c.validate() here because stack_base, stack_size, and
+            // mpu_region from PartitionConfig are NOT used - they are replaced with
+            // values derived from the internal PartitionCore stack. Only validate
+            // peripheral_regions which ARE used in the final PCB.
+            for (j, region) in c.peripheral_regions.iter().enumerate() {
+                crate::mpu::validate_mpu_region(region.base(), region.size()).map_err(
+                    |detail| ConfigError::PeripheralRegionInvalid {
+                        partition_id: c.id,
+                        region_index: j,
+                        detail,
+                    },
+                )?;
+            }
             // Use internal stack from PartitionCore instead of PartitionConfig.
             // This ensures MPU regions protect the actual stack memory.
             let internal_stack = core

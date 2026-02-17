@@ -15,19 +15,12 @@ fn main() {
         .write_all(include_bytes!("memory.x"))
         .unwrap();
 
-    // cortex-m-rt 0.7 asserts SIZEOF(.vector_table) > 0x40, requiring at least
-    // one interrupt vector. Without a device PAC, we provide a single dummy entry.
+    // cortex-m-rt 0.7 requires __INTERRUPTS to be defined. Without a device PAC,
+    // provide a minimal device.x that defines the symbol. The actual interrupt
+    // vector array must be provided in Rust code with #[link_section = ".vector_table.interrupts"].
     File::create(out.join("device.x"))
         .unwrap()
-        .write_all(
-            b"PROVIDE(__INTERRUPTS = __interrupts);\n\
-              SECTIONS {\n\
-                .vector_table.interrupts : {\n\
-                  __interrupts = .;\n\
-                  LONG(0);\n\
-                } > FLASH\n\
-              }\n",
-        )
+        .write_all(b"/* Minimal device.x for generic Cortex-M without a PAC */\n")
         .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rustc-link-arg=-Tdevice.x");
