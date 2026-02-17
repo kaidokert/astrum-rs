@@ -21,26 +21,25 @@ pub const IOCTL_AVAILABLE: u32 = 0x02;
 /// Ring buffer capacity for both TX and RX channels.
 const CAPACITY: usize = 64;
 
-/// Maximum number of partitions supported (limited by `u8` bitmask).
-const MAX_PARTITIONS: u8 = 8;
-
 /// Hardware UART backend with kernel-side TX/RX ring buffers.
 ///
 /// `write()` pushes into TX; an ISR/bottom-half drains TX to hardware.
 /// An ISR top-half calls `push_rx()` from hardware; `read()` pops RX.
-pub struct HwUartBackend {
+/// Generic `N` specifies the max partitions (use `KernelConfig::N`).
+pub struct HwUartBackend<const N: usize = 8> {
     device_id: u8,
     regs: UartRegs,
     tx: Deque<u8, CAPACITY>,
     rx: Deque<u8, CAPACITY>,
-    /// Bitmask of partitions that have opened this device (max 8).
-    open_partitions: u8,
+    /// Tracks which partitions have opened this device; `open_partitions[i]`
+    /// is `true` if partition `i` has opened the device.
+    open_partitions: [bool; N],
     /// When true, `drain_tx_to_hw` copies TX bytes directly into the
     /// RX ring buffer instead of writing to hardware registers.
     loopback: bool,
 }
 
-impl HwUartBackend {
+impl<const N: usize> HwUartBackend<N> {
     /// Create a new hardware UART backend.
     pub fn new(device_id: u8, regs: UartRegs) -> Self {
         Self {
@@ -48,7 +47,7 @@ impl HwUartBackend {
             regs,
             tx: Deque::new(),
             rx: Deque::new(),
-            open_partitions: 0,
+            open_partitions: [false; N],
             loopback: false,
         }
     }
@@ -95,7 +94,7 @@ impl HwUartBackend {
     }
 
     fn validate_partition(partition_id: u8) -> Result<(), DeviceError> {
-        if partition_id >= MAX_PARTITIONS {
+        if (partition_id as usize) >= N {
             return Err(DeviceError::InvalidPartition);
         }
         Ok(())
@@ -103,7 +102,7 @@ impl HwUartBackend {
 
     fn require_open(&self, partition_id: u8) -> Result<(), DeviceError> {
         Self::validate_partition(partition_id)?;
-        if self.open_partitions & (1 << partition_id) == 0 {
+        if !self.open_partitions[partition_id as usize] {
             return Err(DeviceError::NotOpen);
         }
         Ok(())
@@ -212,8 +211,8 @@ impl HwUartBackend {
 ///
 /// This is a free function so examples can call it directly from their
 /// interrupt vector table entry.
-pub fn uart1_isr_top_half<const D: usize, const M: usize>(
-    backend: &mut HwUartBackend,
+pub fn uart1_isr_top_half<const N: usize, const D: usize, const M: usize>(
+    backend: &mut HwUartBackend<N>,
     isr_ring: &mut IsrRingBuffer<D, M>,
 ) -> bool {
     let ris = backend.regs.read_ris();
@@ -274,23 +273,23 @@ pub fn disable_uart1_irq() {
     cortex_m::peripheral::NVIC::mask(Uart1Irq);
 }
 
-impl VirtualDevice for HwUartBackend {
+impl<const N: usize> VirtualDevice for HwUartBackend<N> {
     fn device_id(&self) -> u8 {
         self.device_id
     }
 
     fn open(&mut self, partition_id: u8) -> Result<(), DeviceError> {
         Self::validate_partition(partition_id)?;
-        if self.open_partitions & (1 << partition_id) != 0 {
+        if self.open_partitions[partition_id as usize] {
             return Err(DeviceError::AlreadyOpen);
         }
-        self.open_partitions |= 1 << partition_id;
+        self.open_partitions[partition_id as usize] = true;
         Ok(())
     }
 
     fn close(&mut self, partition_id: u8) -> Result<(), DeviceError> {
         self.require_open(partition_id)?;
-        self.open_partitions &= !(1 << partition_id);
+        self.open_partitions[partition_id as usize] = false;
         Ok(())
     }
 
@@ -351,16 +350,16 @@ mod tests {
     }
 
     #[test]
-    fn open_close_manages_partition_bitmask() {
+    fn open_close_manages_partition_vec() {
         let mut hw = make_backend(1);
         VirtualDevice::open(&mut hw, 0).unwrap();
-        assert_eq!(hw.open_partitions, 0b0000_0001);
+        assert!(hw.open_partitions[0] && !hw.open_partitions[3]);
         VirtualDevice::open(&mut hw, 3).unwrap();
-        assert_eq!(hw.open_partitions, 0b0000_1001);
+        assert!(hw.open_partitions[0] && hw.open_partitions[3]);
         VirtualDevice::close(&mut hw, 0).unwrap();
-        assert_eq!(hw.open_partitions, 0b0000_1000);
+        assert!(!hw.open_partitions[0] && hw.open_partitions[3]);
         VirtualDevice::close(&mut hw, 3).unwrap();
-        assert_eq!(hw.open_partitions, 0);
+        assert!(hw.open_partitions.iter().all(|&b| !b));
     }
 
     #[test]
@@ -832,7 +831,7 @@ mod tests {
             VirtualDevice::open(&mut hw, 2),
             Err(DeviceError::AlreadyOpen)
         );
-        assert_eq!(hw.open_partitions, 1 << 2);
+        assert!(hw.open_partitions[2]);
     }
 
     #[test]
@@ -840,7 +839,7 @@ mod tests {
         let mut hw = make_backend(1);
         // Closing a partition that was never opened must return NotOpen.
         assert_eq!(VirtualDevice::close(&mut hw, 3), Err(DeviceError::NotOpen));
-        assert_eq!(hw.open_partitions, 0);
+        assert!(hw.open_partitions.iter().all(|&b| !b));
     }
 
     #[test]
