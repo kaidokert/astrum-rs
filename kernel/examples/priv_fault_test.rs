@@ -10,6 +10,23 @@
 //!
 //! This is the definitive end-to-end test that the isolation model
 //! works: unprivileged partition code cannot reach kernel memory.
+//!
+//! ## Static mut usage
+//!
+//! This test intentionally uses `static mut PARTITION_STACK` because:
+//!
+//! - The MPU requires region base addresses to be aligned to the region size
+//!   (1024 bytes for this 1 KiB stack). The `#[repr(C, align(1024))]` attribute
+//!   ensures proper alignment, but we need a fixed address known at link time.
+//!
+//! - The test deliberately triggers a MemManage fault, which prevents using
+//!   semihosting or any other abstraction after dropping to unprivileged mode.
+//!   The raw address computation via `&raw const` is the only safe way to get
+//!   the stack address without creating a reference to the static mut.
+//!
+//! - This is a fault-injection test that cannot use the unified harness because
+//!   the harness expects partitions to run normally, not deliberately fault.
+//!   The test must control exact MPU configuration and privilege transitions.
 
 #![no_std]
 #![no_main]

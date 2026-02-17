@@ -1,3 +1,30 @@
+//! QEMU test: verify SVC yield syscall triggers PendSV.
+//!
+//! This test exercises the SVC dispatcher's yield path (SYS_YIELD = 0).
+//! It configures SVCall and PendSV priorities, switches to PSP (Thread mode),
+//! and issues `svc #0`. The kernel's SVC handler should set the PendSV pending
+//! bit. A minimal PendSV stub records that it fired, and the test verifies
+//! both the SVC return value (r0 = 0 for success) and that PendSV executed.
+//!
+//! ## Static mut usage
+//!
+//! This test intentionally uses `static mut` for two items:
+//!
+//! - `PSTACK`: The process stack must be at a stable address so we can set PSP
+//!   to point to it. The test runs outside the unified harness because it needs
+//!   a minimal PendSV stub (not a full context switch) to verify yield triggers
+//!   PendSV without side effects.
+//!
+//! - `PENDSV_FIRED`: A flag written by the inline-assembly PendSV handler and
+//!   read by main. The PendSV handler runs asynchronously after the SVC returns,
+//!   so the flag must be in a fixed location accessible from global_asm. Using
+//!   a Mutex<RefCell> would require the PendSV assembly to call Rust functions,
+//!   defeating the purpose of testing the raw mechanism.
+//!
+//! These items cannot use the unified harness infrastructure because this test
+//! specifically validates the low-level SVC-to-PendSV triggering path before
+//! any higher-level kernel abstractions.
+
 #![no_std]
 #![no_main]
 
