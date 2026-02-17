@@ -323,7 +323,8 @@ macro_rules! define_unified_harness {
             hprintln!("[boot] triggering PendSV");
 
             peripherals.SYST.set_clock_source(SystClkSource::Core);
-            peripherals.SYST.set_reload(120_000 - 1);
+            // SysTick counts from reload value down to 0, so subtract 1 from cycle count.
+            peripherals.SYST.set_reload(<$Config as $crate::config::KernelConfig>::SYSTICK_CYCLES - 1);
             peripherals.SYST.clear_current();
             peripherals.SYST.enable_counter();
             peripherals.SYST.enable_interrupt();

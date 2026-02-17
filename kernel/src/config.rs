@@ -131,12 +131,15 @@ pub trait KernelConfig {
     /// *lower* priority).
     const SYSTICK_PRIORITY: u8 = 0xFE;
 
-    /// SysTick reload value determining the tick rate.
+    /// SysTick cycle count determining the tick rate.
     ///
-    /// The tick period is `(SYSTICK_RELOAD + 1) / system_clock_hz` seconds.
+    /// The tick period is `SYSTICK_CYCLES / system_clock_hz` seconds.
     /// For example, with a 120 MHz system clock and the default value of
-    /// 119999, each tick is 1 ms (120_000 / 120_000_000 = 0.001 s).
-    const SYSTICK_RELOAD: u32 = 120_000 - 1;
+    /// 120_000, each tick is 1 ms (120_000 / 120_000_000 = 0.001 s).
+    ///
+    /// Note: The hardware reload register is set to `SYSTICK_CYCLES - 1`
+    /// because SysTick counts down from the reload value to zero inclusive.
+    const SYSTICK_CYCLES: u32 = 120_000;
 
     /// Partition/schedule state operations. Must implement `CoreOps` to
     /// allow dispatch() and other methods to call sub-struct methods.
@@ -242,8 +245,8 @@ mod tests {
         const SVCALL_PRIORITY: u8 = 0x00;
         const PENDSV_PRIORITY: u8 = 0xE0;
         const SYSTICK_PRIORITY: u8 = 0xC0;
-        // Custom reload for 10 ms tick at 80 MHz: 800_000 - 1 = 799999
-        const SYSTICK_RELOAD: u32 = 800_000 - 1;
+        // Custom cycle count for 10 ms tick at 80 MHz
+        const SYSTICK_CYCLES: u32 = 800_000;
 
         type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
         type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
@@ -260,8 +263,8 @@ mod tests {
     }
 
     #[test]
-    fn default_systick_reload_is_119999() {
-        assert_eq!(DefaultPriority::SYSTICK_RELOAD, 119999);
+    fn default_systick_cycles_is_120000() {
+        assert_eq!(DefaultPriority::SYSTICK_CYCLES, 120_000);
     }
 
     #[test]
@@ -283,8 +286,8 @@ mod tests {
     }
 
     #[test]
-    fn custom_systick_reload_overrides_default() {
-        assert_eq!(CustomPriority::SYSTICK_RELOAD, 799999);
+    fn custom_systick_cycles_overrides_default() {
+        assert_eq!(CustomPriority::SYSTICK_CYCLES, 800_000);
     }
 
     // Compile-time assertions: full priority ordering (including SVCall)
