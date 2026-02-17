@@ -20,6 +20,7 @@ extern "C" {
 
 pub mod macros;
 
+pub mod boot;
 pub mod harness;
 
 pub mod blackboard;
