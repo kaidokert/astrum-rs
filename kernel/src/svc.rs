@@ -1344,8 +1344,10 @@ where
                 }
             }
             Some(SyscallId::MsgSend) => validated_ptr!(self, frame.r3, C::QM, {
-                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
-                // the calling partition's MPU data region.
+                // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
+                // the calling partition's MPU data region. (2) Slice length is
+                // C::QM, a KernelConfig constant. (3) The partition owns this
+                // memory as enforced by MPU isolation.
                 let data = unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, C::QM) };
                 match self
                     .msg
@@ -1364,8 +1366,10 @@ where
                 }
             }),
             Some(SyscallId::MsgRecv) => validated_ptr!(self, frame.r3, C::QM, {
-                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
-                // the calling partition's MPU data region.
+                // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
+                // the calling partition's MPU data region. (2) Slice length is
+                // C::QM, a KernelConfig constant. (3) The partition owns this
+                // memory as enforced by MPU isolation.
                 let buf = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
                 match self
                     .msg
@@ -1382,8 +1386,10 @@ where
             }),
             Some(SyscallId::SamplingWrite) => {
                 validated_ptr!(self, frame.r3, frame.r2 as usize, {
-                    // SAFETY: validated_ptr confirmed [r3, r3+r2) lies within
-                    // the calling partition's MPU data region.
+                    // SAFETY: (1) validated_ptr confirmed [r3, r3+r2) lies within
+                    // the calling partition's MPU data region. (2) Slice length
+                    // is user-provided but validated against MPU bounds.
+                    // (3) The partition owns this memory as enforced by MPU.
                     let d = unsafe {
                         core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                     };
@@ -1399,8 +1405,10 @@ where
                 })
             }
             Some(SyscallId::SamplingRead) => validated_ptr!(self, frame.r3, C::SM, {
-                // SAFETY: validated_ptr confirmed [r3, r3+SM) lies within
-                // the calling partition's MPU data region.
+                // SAFETY: (1) validated_ptr confirmed [r3, r3+SM) lies within
+                // the calling partition's MPU data region. (2) Slice length is
+                // C::SM, a KernelConfig constant. (3) The partition owns this
+                // memory as enforced by MPU isolation.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::SM) };
                 let tick = self.tick.get();
                 match self
@@ -1414,8 +1422,10 @@ where
             }),
             Some(SyscallId::QueuingSend) => {
                 validated_ptr!(self, frame.r3, frame.r2 as usize, {
-                    // SAFETY: validated_ptr confirmed [r3, r3+r2) lies within
-                    // the calling partition's MPU data region.
+                    // SAFETY: (1) validated_ptr confirmed [r3, r3+r2) lies within
+                    // the calling partition's MPU data region. (2) Slice length
+                    // is user-provided but validated against MPU bounds.
+                    // (3) The partition owns this memory as enforced by MPU.
                     let d = unsafe {
                         core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                     };
@@ -1442,8 +1452,10 @@ where
                 })
             }
             Some(SyscallId::QueuingRecv) => validated_ptr!(self, frame.r3, C::QM, {
-                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
-                // the calling partition's MPU data region.
+                // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
+                // the calling partition's MPU data region. (2) Slice length is
+                // C::QM, a KernelConfig constant. (3) The partition owns this
+                // memory as enforced by MPU isolation.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
                 let pid = self.current_partition;
                 let tick = self.tick.get();
@@ -1469,8 +1481,10 @@ where
             }),
             Some(SyscallId::QueuingStatus) => {
                 validated_ptr!(self, frame.r2, core::mem::size_of::<QueuingPortStatus>(), {
-                    // SAFETY: validated_ptr confirmed [r2, r2+size_of QueuingPortStatus)
-                    // lies within the calling partition's MPU data region.
+                    // SAFETY: (1) validated_ptr confirmed [r2, r2+size_of QueuingPortStatus)
+                    // lies within the calling partition's MPU data region. (2) Size is
+                    // compile-time constant size_of::<QueuingPortStatus>. (3) The
+                    // partition owns this memory as enforced by MPU isolation.
                     let status_ptr = frame.r2 as *mut QueuingPortStatus;
                     match self
                         .msg
@@ -1478,9 +1492,8 @@ where
                         .get_queuing_port_status(frame.r1 as usize)
                     {
                         Ok(status) => {
-                            // SAFETY: validated_ptr confirmed the pointer lies within
-                            // the partition's MPU region. We are in Handler mode after
-                            // validation, so the write is sound.
+                            // SAFETY: Same as above — validated_ptr confirmed the pointer
+                            // and size; we are in Handler mode so the write is sound.
                             unsafe { core::ptr::write(status_ptr, status) };
                             0
                         }
@@ -1490,8 +1503,10 @@ where
             }
             Some(SyscallId::BbDisplay) => {
                 validated_ptr!(self, frame.r3, frame.r2 as usize, {
-                    // SAFETY: validated_ptr confirmed [r3, r3+r2) lies within
-                    // the calling partition's MPU data region.
+                    // SAFETY: (1) validated_ptr confirmed [r3, r3+r2) lies within
+                    // the calling partition's MPU data region. (2) Slice length
+                    // is user-provided but validated against MPU bounds.
+                    // (3) The partition owns this memory as enforced by MPU.
                     let d = unsafe {
                         core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                     };
@@ -1516,8 +1531,10 @@ where
             }
             Some(SyscallId::BbRead) => {
                 validated_ptr!(self, frame.r3, C::BM, {
-                    // SAFETY: validated_ptr confirmed [r3, r3+BM) lies within
-                    // the calling partition's MPU data region.
+                    // SAFETY: (1) validated_ptr confirmed [r3, r3+BM) lies within
+                    // the calling partition's MPU data region. (2) Slice length is
+                    // C::BM, a KernelConfig constant. (3) The partition owns this
+                    // memory as enforced by MPU isolation.
                     let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
                     let pid = self.current_partition;
                     let tick = self.tick.get();
