@@ -16,6 +16,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
+    boot,
     config::KernelConfig,
     msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
@@ -79,38 +80,45 @@ impl KernelConfig for DemoConfig {
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
-// Use the unified harness macro with SysTick hook for progress verification.
+// Use the unified harness macro (no_boot variant) with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.
-kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
-    // Check progress every 10 ticks
-    if tick.is_multiple_of(10) {
-        let sensor = SENSOR_VALUE.load(Ordering::Acquire);
-        let ctrl_read = CONTROL_READ.load(Ordering::Acquire);
-        let ctrl_status = CONTROL_STATUS.load(Ordering::Acquire);
-        let cycles = DISPLAY_CYCLES.load(Ordering::Acquire);
+// We call kernel::boot directly instead of the macro-generated boot().
+kernel::define_unified_harness!(
+    no_boot,
+    DemoConfig,
+    NUM_PARTITIONS,
+    STACK_WORDS,
+    |tick, _k| {
+        // Check progress every 10 ticks
+        if tick.is_multiple_of(10) {
+            let sensor = SENSOR_VALUE.load(Ordering::Acquire);
+            let ctrl_read = CONTROL_READ.load(Ordering::Acquire);
+            let ctrl_status = CONTROL_STATUS.load(Ordering::Acquire);
+            let cycles = DISPLAY_CYCLES.load(Ordering::Acquire);
 
-        hprintln!(
-            "[tick {}] sensor={} ctrl_read={} status={} cycles={}",
-            tick,
-            sensor,
-            ctrl_read,
-            ctrl_status,
-            cycles
-        );
+            hprintln!(
+                "[tick {}] sensor={} ctrl_read={} status={} cycles={}",
+                tick,
+                sensor,
+                ctrl_read,
+                ctrl_status,
+                cycles
+            );
 
-        // Test passes when display has completed 4 cycles
-        if cycles >= 4 {
-            hprintln!("sampling_demo: all checks passed");
-            debug::exit(debug::EXIT_SUCCESS);
-        }
+            // Test passes when display has completed 4 cycles
+            if cycles >= 4 {
+                hprintln!("sampling_demo: all checks passed");
+                debug::exit(debug::EXIT_SUCCESS);
+            }
 
-        // Timeout after 200 ticks
-        if tick > 200 {
-            hprintln!("sampling_demo: FAIL - timeout");
-            debug::exit(debug::EXIT_FAILURE);
+            // Timeout after 200 ticks
+            if tick > 200 {
+                hprintln!("sampling_demo: FAIL - timeout");
+                debug::exit(debug::EXIT_FAILURE);
+            }
         }
     }
-});
+);
 
 extern "C" fn sensor_main() -> ! {
     let (src, mut v) = (unpack_r0!() >> 16, 0u8);
@@ -224,5 +232,5 @@ fn main() -> ! {
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
         core::array::from_fn(|i| (eps[i], h[i]));
 
-    match boot(&parts, &mut p).expect("sampling_demo: boot failed") {}
+    match boot::boot::<DemoConfig>(&parts, &mut p).expect("sampling_demo: boot failed") {}
 }

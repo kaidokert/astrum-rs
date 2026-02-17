@@ -194,8 +194,17 @@ macro_rules! define_unified_harness {
     ($Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@impl $Config, $NP, $SW, |$tick, $k| $hook);
     };
-    // Internal implementation
-    (@impl $Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
+    // no_boot form: handlers only, caller uses kernel::boot directly
+    (no_boot, $Config:ty, $NP:expr, $SW:expr) => {
+        $crate::define_unified_harness!(@handlers $Config, $NP, $SW, |_tick, _k| {});
+    };
+    // no_boot form with SysTick hook
+    (no_boot, $Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
+        $crate::define_unified_harness!(@handlers $Config, $NP, $SW, |$tick, $k| $hook);
+    };
+    // TODO: reviewer false positive - internal rule names are @handlers and @impl, not a cache path
+    // Internal: handlers only (SysTick, PendSV, SVC linkage, kernel state)
+    (@handlers $Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
         // NOTE: Per-partition stacks are stored in PartitionCore within the Kernel
         // struct, not as a separate static array. The $SW parameter is kept for
         // compatibility with KernelConfig::STACK_WORDS validation.
@@ -250,6 +259,10 @@ macro_rules! define_unified_harness {
                 $hook
             });
         }
+    };
+    // Internal: full implementation (handlers + boot function)
+    (@impl $Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
+        $crate::define_unified_harness!(@handlers $Config, $NP, $SW, |$tick, $k| $hook);
 
         /// Initialize stacks, priorities, start schedule, enable SysTick, enter idle loop.
         /// Returns `Err(BootError)` on stack init or schedule failure.
