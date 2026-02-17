@@ -332,6 +332,46 @@ use crate::virtual_device::VirtualDevice;
 // trampoline is architecturally required here. If a future cortex-m-rt
 // version adds frame support for SVCall (as it does for HardFault), this
 // should be migrated to #[exception].
+//
+// SAFETY: This assembly block defines the SVC exception handler trampoline that is sound
+// because:
+//
+// 1. **PSP-Based Frame Pointer Extraction**:
+//    - `mrs r0, psp` reads the Process Stack Pointer (PSP) which points to the exception
+//      frame that hardware pushed on SVC entry. Partitions always use PSP in Thread mode.
+//    - The PSP points to an 8-word hardware-stacked frame: r0, r1, r2, r3, r12, lr, pc, xpsr.
+//    - Passing PSP in r0 to `dispatch_svc` allows the Rust handler to access syscall
+//      arguments (frame.r0-r3) and modify return values (frame.r0) in place.
+//    - The kernel uses MSP (Main Stack Pointer) in Handler mode, so reading PSP does not
+//      affect the kernel's own stack.
+//
+// 2. **Register Clobber Conventions (AAPCS)**:
+//    - Per ARM AAPCS, r0-r3 are caller-saved argument/scratch registers. The `bl dispatch_svc`
+//      call may clobber r0-r3 freely; hardware will restore the *modified* frame values on
+//      exception return (allowing syscall return values in r0).
+//    - r12 is a scratch register (ip) that AAPCS allows callees to clobber.
+//    - lr is saved with `push {lr}` before `bl` and restored with `pop {pc}` after, preserving
+//      the EXC_RETURN value needed for proper exception return.
+//    - r4-r11 are callee-saved; `dispatch_svc` (Rust code) preserves them per AAPCS, so no
+//      explicit save/restore is needed in this trampoline.
+//
+// 3. **Exception Return Behavior**:
+//    - On SVC entry, hardware loads lr with an EXC_RETURN value (0xFFFFFFFD for Thread mode
+//      using PSP, no FPU context).
+//    - `push {lr}` saves EXC_RETURN before the `bl` clobbers lr with the return address.
+//    - `pop {pc}` loads the saved EXC_RETURN into pc, triggering the hardware exception
+//      return sequence: hardware unstacks r0-r3, r12, lr, pc, xpsr from PSP and resumes
+//      the partition at the instruction after `svc`.
+//    - The modified frame.r0 (syscall return value) is what hardware restores to r0.
+//
+// 4. **Calling Context From Exception Mode**:
+//    - SVCall executes in Handler mode at the priority configured in SHPR2 (default 0).
+//    - Handler mode always uses MSP, never PSP, so kernel stack is separate from partition.
+//    - The trampoline runs with interrupts at the SVC priority level; higher-priority
+//      interrupts can preempt, but lower-priority cannot.
+//    - `dispatch_svc` is a safe Rust `extern "C"` function that receives a mutable reference
+//      to the exception frame. The frame remains valid for the entire handler duration
+//      because the partition is suspended until exception return.
 #[cfg(all(target_arch = "arm", not(test)))]
 core::arch::global_asm!(
     ".syntax unified",
