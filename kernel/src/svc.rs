@@ -2508,8 +2508,6 @@ mod tests {
         assert_eq!(ef.r0, SvcError::InvalidSyscall.to_u32());
     }
 
-    // TODO: reviewer false positive - event_* tests use `dispatch_syscall` (a safe fn),
-    // not `unsafe { k.dispatch(...) }`, so they do not need SAFETY comments.
     #[test]
     fn event_wait_dispatches_to_events_module() {
         let mut t = tbl();
@@ -2582,8 +2580,6 @@ mod tests {
         assert_eq!(k.mutexes().owner(0), Ok(None));
     }
 
-    // TODO: reviewer false positive - msg_send_recv_* tests call k.messages_mut().send/recv
-    // (safe methods), not `unsafe { k.dispatch(...) }`, so they do not need SAFETY comments.
     #[test]
     fn msg_send_recv_pointer_based() {
         let mut k = kernel(0, 0, 2);
@@ -3106,10 +3102,6 @@ mod tests {
         assert_eq!(slot1, 1);
         assert_eq!(k.buffers().deadline(slot1), Some(100));
     }
-
-    // TODO: reviewer false positive - claimed `sampling_write_read` and
-    // `svc_sampling_get_time` tests were missed, but these tests do not exist
-    // in this file. The scope 2811-2982 ends at `buf_alloc_sets_deadline_from_r2`.
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
