@@ -227,7 +227,7 @@ macro_rules! define_unified_harness {
         #[cfg(not(feature = "dynamic-mpu"))]
         $crate::define_pendsv!();
         #[cfg(feature = "dynamic-mpu")]
-        $crate::define_pendsv_dynamic!(HARNESS_STRATEGY);
+        $crate::define_pendsv!(dynamic: HARNESS_STRATEGY);
 
         #[exception]
         fn SysTick() {
