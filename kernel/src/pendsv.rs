@@ -69,29 +69,39 @@ macro_rules! define_pendsv {
         // SAFETY: This assembly implements the PendSV exception handler which
         // performs partition context switches. The operations are sound because:
         //
-        // 1. Exception priority exclusivity: PendSV is configured as the
-        //    lowest-priority exception (priority 0xFF). It cannot preempt
-        //    itself, and higher-priority exceptions (SysTick, SVC) complete
-        //    before PendSV runs. This guarantees exclusive access to the
-        //    partition state being saved/restored without needing critical sections.
+        // 1. Single-core exclusivity: PendSV is configured as the lowest-priority
+        //    exception (priority 0xFF). It cannot preempt itself, and higher-priority
+        //    exceptions (SysTick, SVC) complete before PendSV runs. On single-core
+        //    Cortex-M, this guarantees exclusive access to the partition state being
+        //    saved/restored without needing critical sections or atomic operations.
         //
-        // 2. Register convention compliance: The assembly follows ARM AAPCS.
+        // 2. Boot sequence invariants: This handler assumes boot() has completed:
+        //    - partition_sp[i] contains valid stack pointers for all partitions
+        //      (initialized via init_stack_frame() during boot)
+        //    - current_partition == 0xFF initially (sentinel for first switch)
+        //    - next_partition contains a valid partition index (set by scheduler)
+        //    - Exception priorities configured: SVCall < SysTick < PendSV (0xFF)
+        //    These invariants are established before SysTick is enabled.
+        //
+        // 3. Offset constant validity: Kernel state fields are accessed directly
+        //    via __kernel_state_start + compile-time field offsets. The offsets
+        //    (KERNEL_CURRENT_PARTITION_OFFSET, KERNEL_CORE_OFFSET, etc.) are:
+        //    - Computed using core::mem::offset_of! in define_unified_kernel!
+        //    - Valid because Kernel<C> and PartitionCore use #[repr(C)] layout
+        //    - Exported as #[no_mangle] symbols, linking the same values used here
+        //
+        // 4. Register convention compliance: The assembly follows ARM AAPCS.
         //    - r0-r3 are caller-saved scratch registers used for arguments
         //    - r4-r11 are callee-saved and explicitly preserved across calls
         //    - lr is saved/restored around bl instructions
         //    - The partition index is held in r4 (callee-saved) across calls
         //
-        // 3. Direct memory access: Kernel state fields are accessed directly
-        //    via __kernel_state_start + compile-time field offsets. The structs
-        //    use #[repr(C)] for deterministic layout, and offsets are computed
-        //    using core::mem::offset_of! in define_unified_kernel!.
-        //
-        // 4. PSP/register save ordering: The outgoing partition's r4-r11 are
+        // 5. PSP/register save ordering: The outgoing partition's r4-r11 are
         //    pushed to its process stack before modifying kernel state.
         //    The incoming partition's registers are restored after all state
         //    updates complete, ensuring no register corruption.
         //
-        // 5. MPU programming (dynamic mode only): When $mpu_call is non-empty,
+        // 6. MPU programming (dynamic mode only): When $mpu_call is non-empty,
         //    __pendsv_program_mpu is called AFTER saving the outgoing context
         //    and BEFORE restoring the incoming context. This ensures the MPU
         //    is reconfigured for the incoming partition before any of its code
