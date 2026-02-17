@@ -3385,11 +3385,13 @@ mod tests {
         let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open device 0
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         let ptr = low32_buf(0);
         // No RX data; timeout=0 (non-blocking) should return 0 immediately.
         let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 0, ptr as u32);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         // Partition should remain Running (not blocked).
@@ -3407,6 +3409,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         let ptr = low32_buf(0);
         let mut ef = frame4(SYS_DEV_READ_TIMED, 99, 10, ptr as u32);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
@@ -3417,6 +3420,7 @@ mod tests {
         use crate::syscall::SYS_DEV_READ_TIMED;
         let mut k = kernel(0, 0, 0);
         let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 10, 0xDEAD_0000);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
     }
@@ -3687,6 +3691,7 @@ mod tests {
                 k.sampling_mut().create_port(*dir, 1000).unwrap();
             }
             let mut ef = frame4(sys_id, r1, r2, 0xDEAD_0000);
+            // SAFETY: See module-level SAFETY docs for test dispatch justification.
             unsafe { k.dispatch(&mut ef) };
             assert_eq!(
                 ef.r0,
@@ -3734,6 +3739,7 @@ mod tests {
             let mut k = kernel(0, 0, 0);
             k.queuing_mut().create_port(dir).unwrap();
             let mut ef = frame4(sys_id, r1, r2, r3);
+            // SAFETY: See module-level SAFETY docs for test dispatch justification.
             unsafe { k.dispatch(&mut ef) };
             assert_eq!(
                 ef.r0,
@@ -3751,6 +3757,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.blackboards_mut().create().unwrap();
         let mut ef = frame4(crate::syscall::SYS_BB_DISPLAY, 0, 4, 0xDEAD_0000);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(
             ef.r0,
@@ -3762,6 +3769,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.blackboards_mut().create().unwrap();
         let mut ef = frame4(crate::syscall::SYS_BB_READ, 0, 0, 0xDEAD_0000);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(
             ef.r0,
