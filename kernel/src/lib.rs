@@ -2,6 +2,8 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 #![feature(where_clause_attrs)]
+// Require SAFETY comments for all unsafe blocks in the kernel library
+#![deny(clippy::undocumented_unsafe_blocks)]
 
 // Provide the interrupt vector table required by cortex-m-rt 0.7.
 // Without a device PAC crate, we supply a minimal one-entry array.

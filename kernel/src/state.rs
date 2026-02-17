@@ -320,6 +320,8 @@ where
         // 4. Creating a shared reference is safe because the critical section
         //    ensures no mutable references can exist concurrently.
         let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *const Kernel<C>;
+        // SAFETY: Invariants 1-4 documented above ensure ptr is valid and initialized,
+        // and the critical section prevents concurrent access.
         let kernel = unsafe { &*ptr };
         f(kernel)
     })
@@ -384,6 +386,8 @@ where
         // 4. Creating a mutable reference is safe because the critical section
         //    ensures no other references (shared or mutable) can exist concurrently.
         let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>;
+        // SAFETY: Invariants 1-4 documented above ensure ptr is valid and initialized,
+        // and the critical section prevents concurrent mutable access.
         let kernel = unsafe { &mut *ptr };
         f(kernel)
     })

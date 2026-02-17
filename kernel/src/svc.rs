@@ -1791,6 +1791,8 @@ where
                     let ptr = frame.r1 as *const u8;
                     let len = frame.r2 as usize;
                     if len > 0 && !ptr.is_null() {
+                        // SAFETY: caller ensures r1 points to valid memory of length r2
+                        // within the partition's region. Bounds checked above (len > 0, non-null).
                         let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
                         if let Ok(s) = core::str::from_utf8(slice) {
                             cortex_m_semihosting::hprint!("{}", s);
@@ -2192,6 +2194,7 @@ fn handle_yield() -> u32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::undocumented_unsafe_blocks)]
 mod tests {
     // Facade methods for `active_partition`, `current_partition`, `yield_requested`,
     // `buffers`, `dev_wait_queue`, and `hw_uart` are now available on Kernel.

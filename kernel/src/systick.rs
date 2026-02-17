@@ -155,6 +155,7 @@ struct ErasedHandler {
 // so it's safe to mark as Send + Sync. The kernel pointer remains valid for the
 // lifetime of the kernel (which is 'static in embedded contexts).
 unsafe impl Send for ErasedHandler {}
+// SAFETY: Same justification as Send - access is serialized via critical sections.
 unsafe impl Sync for ErasedHandler {}
 
 static SYSTICK_HANDLER: Mutex<RefCell<Option<ErasedHandler>>> = Mutex::new(RefCell::new(None));
@@ -181,10 +182,11 @@ where
     [(); C::DR]:,
 {
     // SAFETY: The kernel_ptr was created from a valid &mut Kernel<C> in register_handler.
-    // The handler_ptr was created from a valid fn(&mut Kernel<C>, u64) in register_handler.
     // The caller of invoke_handler guarantees the pointer is still valid and the type matches.
     // We're in a critical section (interrupt-disabled) when this runs.
     let kernel = unsafe { &mut *(kernel_ptr as *mut Kernel<C>) };
+    // SAFETY: The handler_ptr was created from a valid fn(&mut Kernel<C>, u64) in register_handler.
+    // Function pointers have the same size/alignment as *const (), and the type is preserved.
     let handler: fn(&mut Kernel<C>, u64) =
         unsafe { core::mem::transmute::<*const (), fn(&mut Kernel<C>, u64)>(handler_ptr) };
     handler(kernel, tick);
