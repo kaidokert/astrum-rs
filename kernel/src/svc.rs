@@ -2180,28 +2180,49 @@ mod tests {
     // `buffers`, `dev_wait_queue`, and `hw_uart` are now available on Kernel.
     // Tests should use these accessor methods instead of direct field access.
 
-    //! # Safety
+    //! # SAFETY — Test Dispatch Justification
     //!
-    //! All `unsafe { k.dispatch(&mut ef) }` calls in this test module share the
-    //! same safety justification:
+    //! All `unsafe { k.dispatch(&mut ef) }` calls in this test module share
+    //! the same safety justification:
     //!
-    //! 1. **ExceptionFrame construction**: The `frame()` test helper constructs
-    //!    `ExceptionFrame` instances with valid register values. Unlike hardware
-    //!    exception entry, these are not actual stacked registers, but the
-    //!    dispatch logic only reads/writes the r0-r3 fields which are always
-    //!    initialized.
+    //! ## Test Isolation
     //!
-    //! 2. **Kernel construction**: The `kernel()` and `kernel_with_registry()`
-    //!    helpers construct `Kernel` instances with properly initialized
-    //!    partition tables (via `tbl()`), schedule tables, and resource pools.
-    //!    All partitions have valid MPU regions and are transitioned to Running
-    //!    state before dispatch.
+    //! Each `#[test]` function creates its own `Kernel` and `ExceptionFrame`
+    //! instances on the stack. No global state is shared between tests, so
+    //! tests cannot interfere with each other's kernel or partition state.
     //!
-    //! 3. **Host-mode pointer validation**: Tests run on the host (not target
-    //!    hardware) where `validate_user_ptr` checks pass for any pointer within
-    //!    the partition's configured MPU region. Tests that exercise pointer
-    //!    validation use `mmap` to allocate memory at addresses matching the
-    //!    partition's MPU region, ensuring the kernel's bounds checks succeed.
+    //! ## Single-Threaded Execution
+    //!
+    //! Rust's default test runner executes tests in a single-threaded manner
+    //! (unless `--test-threads=N` is specified, which these tests do not
+    //! rely on). Even with parallel test execution, each test has isolated
+    //! stack-local state. The `dispatch()` function is not re-entrant, but
+    //! since each test owns its own `Kernel` instance, concurrent test
+    //! execution does not cause data races.
+    //!
+    //! ## Valid ExceptionFrame Construction
+    //!
+    //! The `frame()` test helper constructs `ExceptionFrame` instances with
+    //! valid register values. Unlike hardware exception entry, these are not
+    //! actual stacked registers, but the dispatch logic only reads/writes
+    //! the r0-r3 fields which are always initialized. The remaining fields
+    //! (r12, lr, pc, xpsr) are set to zero, which is safe because dispatch
+    //! does not use them.
+    //!
+    //! ## Kernel Construction
+    //!
+    //! The `kernel()` and `kernel_with_registry()` helpers construct `Kernel`
+    //! instances with properly initialized partition tables (via `tbl()`),
+    //! schedule tables, and resource pools. All partitions have valid MPU
+    //! regions and are transitioned to Running state before dispatch.
+    //!
+    //! ## Host-Mode Pointer Validation
+    //!
+    //! Tests run on the host (not target hardware) where `validate_user_ptr`
+    //! checks pass for any pointer within the partition's configured MPU
+    //! region. Tests that exercise pointer validation use `mmap` to allocate
+    //! memory at addresses matching the partition's MPU region, ensuring
+    //! the kernel's bounds checks succeed.
 
     use super::*;
     use crate::config::KernelConfig;
