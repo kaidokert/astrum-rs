@@ -33,7 +33,6 @@ pub mod context;
 pub mod events;
 #[cfg(feature = "dynamic-mpu")]
 pub mod hw_uart;
-pub mod kernel;
 pub mod message;
 pub mod mpu;
 #[cfg(feature = "dynamic-mpu")]
