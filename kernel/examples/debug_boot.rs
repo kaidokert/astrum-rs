@@ -8,23 +8,18 @@
 //! `define_unified_harness!` macro. This allows debugging boot issues by
 //! providing detailed semihosting output at each step.
 //!
-//! # Static Mut Migration Status
+//! # Architecture
 //!
-//! This example intentionally uses `static mut` for the following reasons:
+//! This example uses `define_unified_kernel!` to provide the kernel storage
+//! and PendSV offset constants, but manually manages stack initialization
+//! to enable detailed debug output.
 //!
 //! - **STACKS**: Raw stack storage must be mutable for `init_stack_frame` to
 //!   write the initial context. Using `Mutex<RefCell<>>` would add overhead
 //!   and complicate the low-level stack pointer arithmetic.
 //!
-//! - **PARTITION_SP**: Accessed by PendSV handler via `extern` linkage. The
-//!   `define_pendsv!` macro expects a `#[no_mangle] static mut` symbol.
-//!
-//! - **CURRENT_PARTITION / NEXT_PARTITION**: Also accessed by PendSV handler
-//!   via `extern` linkage for the same reason.
-//!
-//! These statics mirror the pattern used in the `define_unified_harness!` macro
-//! itself. Migration to safe abstractions would require redesigning the PendSV
-//! handler's data access model, which is out of scope for this debug test.
+//! - **Kernel state**: Managed by `define_unified_kernel!` which provides
+//!   `store_kernel()` and `set_partition_sp()` for accessing kernel internals.
 //!
 //! # Test Behavior
 //!
@@ -88,7 +83,7 @@ impl KernelConfig for TestConfig {
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
-// Manual statics (not using define_unified_harness!)
+// Manual stacks (not using define_unified_harness!)
 #[repr(C, align(1024))]
 struct AlignedStack([u32; STACK_WORDS]);
 
@@ -97,18 +92,11 @@ static mut STACKS: [AlignedStack; NUM_PARTITIONS] = {
     [ZERO; NUM_PARTITIONS]
 };
 
-#[no_mangle]
-static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
+// Use define_unified_kernel! to provide kernel storage and offset symbols for PendSV
+kernel::define_unified_kernel!(TestConfig, |_k| {});
 
-#[no_mangle]
-static mut CURRENT_PARTITION: u32 = u32::MAX;
-
-#[no_mangle]
-static mut NEXT_PARTITION: u32 = 0;
-
-// Kernel storage
-static KERNEL: cortex_m::interrupt::Mutex<core::cell::RefCell<Option<Kernel<TestConfig>>>> =
-    cortex_m::interrupt::Mutex::new(core::cell::RefCell::new(None));
+#[used]
+static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
 
 // Simple PendSV handler
 kernel::define_pendsv!();
@@ -199,12 +187,25 @@ fn main() -> ! {
     let mut k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel");
     hprintln!("debug_boot: kernel created");
 
-    // Initialize stacks BEFORE storing kernel
+    // Start schedule and get first partition (BEFORE storing kernel)
+    hprintln!("debug_boot: starting schedule");
+    let first_pid = k.start_schedule();
+    hprintln!("debug_boot: first_pid = {:?}", first_pid);
+
+    // Set next_partition before storing kernel
+    let pid = first_pid.expect("no partition");
+    k.set_next_partition(pid);
+    hprintln!("debug_boot: next_partition = {}", pid);
+
+    // Store kernel via store_kernel() from define_unified_kernel!
+    store_kernel(k);
+    hprintln!("debug_boot: kernel stored");
+
+    // Initialize stacks AFTER storing kernel (so set_partition_sp can access it)
     // SAFETY: single-core, interrupts disabled — exclusive access to statics.
     #[allow(clippy::deref_addrof)]
     unsafe {
         let stacks = &mut *(&raw mut STACKS);
-        let partition_sp = &mut *(&raw mut PARTITION_SP);
 
         let ep = partition_main as *const () as u32;
         hprintln!("debug_boot: entry point = {:#010x}", ep);
@@ -212,7 +213,7 @@ fn main() -> ! {
         let stk = &mut stacks[0].0;
         let ix = init_stack_frame(stk, ep, Some(0)).expect("init_stack_frame");
         let sp = stk.as_ptr() as u32 + (ix as u32) * 4;
-        partition_sp[0] = sp;
+        set_partition_sp(0, sp);
 
         hprintln!(
             "debug_boot: stack @ {:#010x}, SP = {:#010x}",
@@ -238,24 +239,6 @@ fn main() -> ! {
             hprintln!("  stack[{}] = {:#010x}", ix + j, stk[ix + j]);
         }
     }
-
-    // Start schedule and get first partition
-    hprintln!("debug_boot: starting schedule");
-    let first_pid = k.start_schedule();
-    hprintln!("debug_boot: first_pid = {:?}", first_pid);
-
-    // Store kernel
-    cortex_m::interrupt::free(|cs| {
-        *KERNEL.borrow(cs).borrow_mut() = Some(k);
-    });
-    hprintln!("debug_boot: kernel stored");
-
-    // Set NEXT_PARTITION
-    let pid = first_pid.expect("no partition") as u32;
-    unsafe {
-        core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid);
-    }
-    hprintln!("debug_boot: NEXT_PARTITION = {}", pid);
 
     // Set exception priorities
     unsafe {

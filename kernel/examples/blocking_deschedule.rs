@@ -222,7 +222,13 @@ fn main() -> ! {
     // so that blocking syscalls can transition it to Waiting.
     let _ = try_transition(k.partitions_mut(), 0, PartitionState::Running);
 
+    // Start schedule and set next partition before storing kernel
+    let first_pid = k.start_schedule().expect("schedule start failed");
+    k.set_next_partition(first_pid);
+    hprintln!("blocking_deschedule: first_pid={}", first_pid);
+
     store_kernel(k);
+    hprintln!("blocking_deschedule: kernel stored");
 
     // Initialize partition stack
     // SAFETY: single-core, interrupts disabled — exclusive access
@@ -242,11 +248,14 @@ fn main() -> ! {
         cp.SCB.set_priority(SystemHandler::SysTick, 0xFE);
     }
 
+    hprintln!("blocking_deschedule: stack initialized");
+
     cp.SYST.set_clock_source(SystClkSource::Core);
     cp.SYST.set_reload(120_000 - 1);
     cp.SYST.clear_current();
     cp.SYST.enable_counter();
     cp.SYST.enable_interrupt();
+    hprintln!("blocking_deschedule: SysTick enabled, triggering PendSV");
     cortex_m::peripheral::SCB::set_pendsv();
 
     loop {

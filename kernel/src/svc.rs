@@ -784,15 +784,9 @@ macro_rules! define_unified_kernel {
 /// when called from the SVCall assembly trampoline above.
 #[no_mangle]
 pub unsafe extern "C" fn dispatch_svc(frame: &mut ExceptionFrame) {
-    #[cfg(feature = "qemu")]
-    cortex_m_semihosting::hprintln!("[dispatch_svc] entered, r0={:#x}", frame.r0);
     let hook = with_cs(|cs| *SVC_DISPATCH_HOOK.borrow(cs).borrow());
     if let Some(hook) = hook {
-        #[cfg(feature = "qemu")]
-        cortex_m_semihosting::hprintln!("[dispatch_svc] calling hook");
         hook(frame);
-        #[cfg(feature = "qemu")]
-        cortex_m_semihosting::hprintln!("[dispatch_svc] hook returned, r0={:#x}", frame.r0);
         return;
     }
     frame.r0 = match SyscallId::from_u32(frame.r0) {
@@ -1298,8 +1292,6 @@ where
     /// writable `QueuingPortStatus`. The caller is responsible for ensuring
     /// this; in production the MPU enforces partition isolation.
     pub unsafe fn dispatch(&mut self, frame: &mut ExceptionFrame) {
-        #[cfg(feature = "qemu")]
-        cortex_m_semihosting::hprintln!("[Kernel::dispatch] syscall={}", frame.r0);
         frame.r0 = match SyscallId::from_u32(frame.r0) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::EventWait) => {
@@ -1814,8 +1806,6 @@ where
             }
             None => SvcError::InvalidSyscall.to_u32(),
         };
-        #[cfg(feature = "qemu")]
-        cortex_m_semihosting::hprintln!("[Kernel::dispatch] returning r0={:#x}", frame.r0);
     }
 
     // -------------------------------------------------------------------------
