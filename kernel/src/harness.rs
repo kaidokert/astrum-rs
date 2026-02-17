@@ -239,17 +239,14 @@ macro_rules! define_unified_harness {
             #[cfg(feature = "qemu")]
             ::cortex_m_semihosting::hprintln!("[SysTick] #{}", _systick_tick);
 
-            ::cortex_m::interrupt::free(|cs| {
-                let mut guard = KERNEL.borrow(cs).borrow_mut();
-                let _systick_kernel = match guard.as_mut() {
-                    Some(k) => k,
-                    None => return,
-                };
-                // Delegate to standalone systick_handler function
+            // Single critical section for both systick_handler and user hook to preserve atomicity
+            $crate::state::with_kernel_mut::<$Config, _, _>(|_systick_kernel| {
+                // Delegate to standalone systick_handler
                 #[cfg(not(feature = "dynamic-mpu"))]
-                $crate::tick::systick_handler(_systick_kernel);
+                $crate::tick::systick_handler::<$Config>(_systick_kernel);
                 #[cfg(feature = "dynamic-mpu")]
-                $crate::tick::systick_handler(_systick_kernel, &HARNESS_STRATEGY);
+                $crate::tick::systick_handler::<$Config>(_systick_kernel, &HARNESS_STRATEGY);
+
                 // Call user-provided SysTick hook
                 let $tick = _systick_tick;
                 let $k = _systick_kernel;

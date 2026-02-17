@@ -86,6 +86,9 @@ pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
 /// This function is called by the `define_unified_harness!` macro's SysTick
 /// exception handler. It advances the schedule, triggers PendSV on partition
 /// switches, and expires timed waits for blocking syscalls.
+///
+/// Takes `&mut Kernel<C>` to allow callers to compose this with other operations
+/// (e.g., user hooks) within a single critical section, preserving atomicity.
 #[cfg(not(feature = "dynamic-mpu"))]
 pub fn systick_handler<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<C>)
 where
@@ -128,6 +131,9 @@ where
 ///
 /// With `dynamic-mpu`, also handles system window processing (bottom-half for
 /// UART transfers, buffer expiry, etc.).
+///
+/// Takes `&mut Kernel<C>` to allow callers to compose this with other operations
+/// (e.g., user hooks) within a single critical section, preserving atomicity.
 #[cfg(feature = "dynamic-mpu")]
 pub fn systick_handler<C: crate::config::KernelConfig>(
     kernel: &mut crate::svc::Kernel<C>,
