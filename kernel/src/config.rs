@@ -131,6 +131,13 @@ pub trait KernelConfig {
     /// *lower* priority).
     const SYSTICK_PRIORITY: u8 = 0xFE;
 
+    /// SysTick reload value determining the tick rate.
+    ///
+    /// The tick period is `(SYSTICK_RELOAD + 1) / system_clock_hz` seconds.
+    /// For example, with a 120 MHz system clock and the default value of
+    /// 119999, each tick is 1 ms (120_000 / 120_000_000 = 0.001 s).
+    const SYSTICK_RELOAD: u32 = 120_000 - 1;
+
     /// Partition/schedule state operations. Must implement `CoreOps` to
     /// allow dispatch() and other methods to call sub-struct methods.
     type Core: Default + CoreOps;
@@ -235,6 +242,8 @@ mod tests {
         const SVCALL_PRIORITY: u8 = 0x00;
         const PENDSV_PRIORITY: u8 = 0xE0;
         const SYSTICK_PRIORITY: u8 = 0xC0;
+        // Custom reload for 10 ms tick at 80 MHz: 800_000 - 1 = 799999
+        const SYSTICK_RELOAD: u32 = 800_000 - 1;
 
         type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
         type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
@@ -248,6 +257,11 @@ mod tests {
         assert_eq!(DefaultPriority::SVCALL_PRIORITY, 0x00);
         assert_eq!(DefaultPriority::PENDSV_PRIORITY, 0xFF);
         assert_eq!(DefaultPriority::SYSTICK_PRIORITY, 0xFE);
+    }
+
+    #[test]
+    fn default_systick_reload_is_119999() {
+        assert_eq!(DefaultPriority::SYSTICK_RELOAD, 119999);
     }
 
     #[test]
@@ -266,6 +280,11 @@ mod tests {
     fn custom_priorities_override_defaults() {
         assert_eq!(CustomPriority::PENDSV_PRIORITY, 0xE0);
         assert_eq!(CustomPriority::SYSTICK_PRIORITY, 0xC0);
+    }
+
+    #[test]
+    fn custom_systick_reload_overrides_default() {
+        assert_eq!(CustomPriority::SYSTICK_RELOAD, 799999);
     }
 
     // Compile-time assertions: full priority ordering (including SVCall)
