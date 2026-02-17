@@ -3277,7 +3277,9 @@ mod tests {
         use crate::syscall::{SYS_DEV_CLOSE, SYS_DEV_OPEN};
         use crate::uart_hal::UartRegs;
         let (mut registry, _, _) = default_registry();
-        let hw = Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
+        // Type annotation needed: const generic N cannot be inferred through dyn VirtualDevice.
+        let hw: &mut HwUartBackend<8> =
+            Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
         registry.add(hw).unwrap();
         let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open hw_uart device 5 (registered in the registry)
@@ -3299,7 +3301,9 @@ mod tests {
         use crate::syscall::SYS_DEV_CLOSE;
         use crate::uart_hal::UartRegs;
         let (mut registry, _, _) = default_registry();
-        let hw = Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
+        // Type annotation needed: const generic N cannot be inferred through dyn VirtualDevice.
+        let hw: &mut HwUartBackend<8> =
+            Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
         registry.add(hw).unwrap();
         let mut k = kernel_with_registry(0, 0, 0, registry);
         // Close device 5 without opening — HwUartBackend checks require_open,
@@ -4324,7 +4328,9 @@ mod tests {
         use crate::uart_hal::UartRegs;
         let (mut registry, _, _) = default_registry();
         // Attempt to register hw_uart with device_id = 0 (same as UART-A).
-        let hw = Box::leak(Box::new(HwUartBackend::new(0, UartRegs::new(0x4000_C000))));
+        // Type annotation needed: const generic N cannot be inferred through dyn VirtualDevice.
+        let hw: &mut HwUartBackend<8> =
+            Box::leak(Box::new(HwUartBackend::new(0, UartRegs::new(0x4000_C000))));
         assert_eq!(
             registry.add(hw),
             Err(crate::virtual_device::DeviceError::DuplicateId)

@@ -74,13 +74,19 @@ macro_rules! unpack_r0 {
 /// Complete kernel runtime setup macro.
 ///
 /// Generates kernel storage, accessor functions, and PendSV handler in a
-/// single invocation. This macro wraps [`define_unified_kernel!`] to provide
-/// a complete, foolproof runtime setup.
+/// single invocation. This macro wraps [`define_unified_kernel!`] and
+/// [`define_pendsv!`] to provide a complete, foolproof runtime setup.
 ///
 /// # Syntax
 ///
+/// Static mode (standard context switch):
 /// ```ignore
 /// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>);
+/// ```
+///
+/// Dynamic mode (with MPU region programming):
+/// ```ignore
+/// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>, dynamic: STRATEGY);
 /// ```
 ///
 /// # Generated Items
@@ -96,6 +102,7 @@ macro_rules! unpack_r0 {
 /// | `get_partition_sp()` | C ABI accessor for PendSV |
 /// | `set_partition_sp()` | C ABI accessor for PendSV |
 /// | `set_current_partition()` | C ABI accessor for PendSV |
+/// | `PendSV` | Context-switch exception handler |
 ///
 /// # Example
 ///
@@ -108,7 +115,11 @@ macro_rules! unpack_r0 {
 ///     // ... configuration constants ...
 /// }
 ///
+/// // Static mode
 /// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>);
+///
+/// // Or dynamic mode with MPU strategy
+/// // kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>, dynamic: STRATEGY);
 ///
 /// fn main() {
 ///     let k = Kernel::<MyConfig>::new_empty();
@@ -117,8 +128,15 @@ macro_rules! unpack_r0 {
 /// ```
 #[macro_export]
 macro_rules! define_kernel_runtime {
+    // Static mode: standard context switch only
     ($name:ident : Kernel<$Config:ty>) => {
         $crate::define_unified_kernel!($name : Kernel<$Config>);
+        $crate::define_pendsv!();
+    };
+    // Dynamic mode: context switch with MPU region programming
+    ($name:ident : Kernel<$Config:ty>, dynamic: $strategy:ident) => {
+        $crate::define_unified_kernel!($name : Kernel<$Config>);
+        $crate::define_pendsv!(dynamic: $strategy);
     };
 }
 
