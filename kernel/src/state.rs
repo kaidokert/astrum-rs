@@ -155,6 +155,138 @@ where
     addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>
 }
 
+// TODO: DRY violation - with_kernel and with_kernel_mut have nearly identical
+// documentation. Consider using #[doc = include_str!("...")] or a doc macro
+// if the toolchain supports it and the duplication becomes a maintenance burden.
+
+/// Access the unified kernel state immutably within a critical section.
+///
+/// Wraps access to `UNIFIED_KERNEL_STORAGE` in `cortex_m::interrupt::free()`,
+/// ensuring exclusive access by masking interrupts on single-core Cortex-M.
+///
+/// # Safety Invariants
+///
+/// This function is safe to call provided the following invariants hold:
+///
+/// 1. **Initialization before use**: `init_kernel_state()` must be called
+///    exactly once by `boot()` before interrupts are enabled. The kernel
+///    is initialized during the boot sequence before any exception handlers
+///    can run.
+///
+/// 2. **Single-core execution**: Cortex-M is single-core; the critical section
+///    via `interrupt::free()` masks all configurable interrupts, preventing
+///    concurrent access from exception handlers.
+///
+/// 3. **Exception priority prevents reentrancy**: The ARM exception model
+///    ensures that lower-priority exceptions cannot preempt higher-priority
+///    ones. SVC runs at priority 0 (highest), PendSV at 0xFF (lowest), and
+///    SysTick at 0xFE. This priority ordering prevents reentrancy within
+///    kernel code paths.
+///
+/// # Returns
+///
+/// The result of applying closure `f` to a shared reference to the kernel.
+///
+/// # Safety
+///
+/// Calling this function before `init_kernel_state()` has been called results
+/// in **Undefined Behavior** (dereferencing an uninitialized pointer).
+#[cfg(not(test))]
+pub fn with_kernel<C, F, R>(f: F) -> R
+where
+    C: KernelConfig,
+    F: FnOnce(&Kernel<C>) -> R,
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+{
+    cortex_m::interrupt::free(|_cs| {
+        // SAFETY: Access is safe because:
+        // 1. We are inside a critical section (interrupt::free), which masks all
+        //    configurable interrupts on single-core Cortex-M, preventing concurrent
+        //    access from exception handlers.
+        // 2. The system boot sequence guarantees that init_kernel_state() is called
+        //    exactly once before interrupts are enabled, so UNIFIED_KERNEL_STORAGE
+        //    contains a valid, initialized Kernel<C> instance.
+        // 3. The pointer cast is valid because init_kernel_state() wrote a Kernel<C>
+        //    to this location, and the storage has sufficient size and alignment.
+        // 4. Creating a shared reference is safe because the critical section
+        //    ensures no mutable references can exist concurrently.
+        let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *const Kernel<C>;
+        let kernel = unsafe { &*ptr };
+        f(kernel)
+    })
+}
+
+/// Access the unified kernel state mutably within a critical section.
+///
+/// Wraps access to `UNIFIED_KERNEL_STORAGE` in `cortex_m::interrupt::free()`,
+/// ensuring exclusive access by masking interrupts on single-core Cortex-M.
+///
+/// # Safety Invariants
+///
+/// This function is safe to call provided the following invariants hold:
+///
+/// 1. **Initialization before use**: `init_kernel_state()` must be called
+///    exactly once by `boot()` before interrupts are enabled. The kernel
+///    is initialized during the boot sequence before any exception handlers
+///    can run.
+///
+/// 2. **Single-core execution**: Cortex-M is single-core; the critical section
+///    via `interrupt::free()` masks all configurable interrupts, preventing
+///    concurrent access from exception handlers.
+///
+/// 3. **Exception priority prevents reentrancy**: The ARM exception model
+///    ensures that lower-priority exceptions cannot preempt higher-priority
+///    ones. SVC runs at priority 0 (highest), PendSV at 0xFF (lowest), and
+///    SysTick at 0xFE. This priority ordering prevents reentrancy within
+///    kernel code paths.
+///
+/// # Returns
+///
+/// The result of applying closure `f` to a mutable reference to the kernel.
+///
+/// # Safety
+///
+/// Calling this function before `init_kernel_state()` has been called results
+/// in **Undefined Behavior** (dereferencing an uninitialized pointer).
+#[cfg(not(test))]
+pub fn with_kernel_mut<C, F, R>(f: F) -> R
+where
+    C: KernelConfig,
+    F: FnOnce(&mut Kernel<C>) -> R,
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+{
+    cortex_m::interrupt::free(|_cs| {
+        // SAFETY: Access is safe because:
+        // 1. We are inside a critical section (interrupt::free), which masks all
+        //    configurable interrupts on single-core Cortex-M, preventing concurrent
+        //    access from exception handlers.
+        // 2. The system boot sequence guarantees that init_kernel_state() is called
+        //    exactly once before interrupts are enabled, so UNIFIED_KERNEL_STORAGE
+        //    contains a valid, initialized Kernel<C> instance.
+        // 3. The pointer cast is valid because init_kernel_state() wrote a Kernel<C>
+        //    to this location, and the storage has sufficient size and alignment.
+        // 4. Creating a mutable reference is safe because the critical section
+        //    ensures no other references (shared or mutable) can exist concurrently.
+        let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>;
+        let kernel = unsafe { &mut *ptr };
+        f(kernel)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
