@@ -29,30 +29,9 @@
 //! exception priorities, SysTick configuration, and first PendSV
 //! trigger). Returns `Result<Never, BootError>` for panic-free init.
 
-/// Errors that can occur during kernel boot initialization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BootError {
-    /// Stack frame init failed (index out of bounds or stack too small).
-    StackInitFailed { partition_index: usize },
-    /// No partition is ready to run at boot time.
-    NoReadyPartition,
-}
-
-/// Uninhabited type representing a function that never returns on success.
-/// Use in `Result<Never, E>` for fallible divergent functions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Never {}
-
-impl core::fmt::Display for BootError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::StackInitFailed { partition_index } => {
-                write!(f, "stack init failed: partition {partition_index}")
-            }
-            Self::NoReadyPartition => write!(f, "no partition ready at boot"),
-        }
-    }
-}
+// Re-export BootError and Never from boot module for backwards compatibility.
+// The canonical definitions live in boot.rs.
+pub use crate::boot::{BootError, Never};
 
 #[cfg(not(feature = "dynamic-mpu"))]
 #[macro_export]
