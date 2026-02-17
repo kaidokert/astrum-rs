@@ -242,10 +242,7 @@ macro_rules! define_unified_harness {
             // Single critical section for both systick_handler and user hook to preserve atomicity
             $crate::state::with_kernel_mut::<$Config, _, _>(|_systick_kernel| {
                 // Delegate to standalone systick_handler
-                #[cfg(not(feature = "dynamic-mpu"))]
                 $crate::tick::systick_handler::<$Config>(_systick_kernel);
-                #[cfg(feature = "dynamic-mpu")]
-                $crate::tick::systick_handler::<$Config>(_systick_kernel, &HARNESS_STRATEGY);
 
                 // Call user-provided SysTick hook
                 let $tick = _systick_tick;

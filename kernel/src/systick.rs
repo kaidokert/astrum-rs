@@ -1,8 +1,26 @@
 //! SysTick handler registration API for user callbacks after kernel tick processing.
 //!
-//! This module provides a mechanism for registering a user-defined callback that
-//! receives a mutable reference to the `Kernel` along with the current tick count.
-//! The callback is invoked after the kernel's internal SysTick processing completes.
+//! This module provides two mechanisms for handling SysTick exceptions:
+//!
+//! ## Simple Handler Function
+//!
+//! For examples that just need standard SysTick behavior without custom hooks,
+//! use [`handle_systick`]:
+//!
+//! ```ignore
+//! #[exception]
+//! fn SysTick() {
+//!     kernel::systick::handle_systick::<MyConfig>();
+//! }
+//! ```
+//!
+//! This wraps `with_kernel_mut()` and calls `systick_handler()` to advance the
+//! schedule and trigger PendSV on partition switches.
+//!
+//! ## Custom Callback Registration
+//!
+//! For more control, register a callback that receives `&mut Kernel<C>` and the
+//! tick count. The callback runs after internal SysTick processing completes.
 //!
 //! # Type Erasure
 //!
@@ -37,6 +55,66 @@ use cortex_m::interrupt::Mutex;
 
 use crate::config::KernelConfig;
 use crate::svc::Kernel;
+
+/// Simple SysTick handler that advances the schedule and triggers PendSV.
+///
+/// This function is designed to be called from an `#[exception]` SysTick handler.
+/// It wraps access to the kernel state in a critical section, calls the internal
+/// `systick_handler`, and triggers PendSV when a partition switch is needed.
+///
+/// # Usage
+///
+/// ```ignore
+/// use cortex_m_rt::exception;
+///
+/// #[exception]
+/// fn SysTick() {
+///     kernel::systick::handle_systick::<MyConfig>();
+/// }
+/// ```
+///
+/// # Requirements
+///
+/// - The kernel must be initialized via `state::init_kernel_state()` before
+///   this function is called (typically done in `boot()`).
+/// - This function must only be called from handler mode (exception context).
+///
+/// # Note
+///
+/// For examples that need a custom SysTick hook, use `define_unified_harness!`
+/// with the extended form instead, or use `register_handler()` to add a callback.
+#[cfg(not(test))]
+pub fn handle_systick<C: KernelConfig>()
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+    C::Core: crate::config::CoreOps<
+        PartTable = crate::partition::PartitionTable<{ C::N }>,
+        SchedTable = crate::scheduler::ScheduleTable<{ C::SCHED }>,
+    >,
+    C::Sync: crate::config::SyncOps<
+        SemPool = crate::semaphore::SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = crate::mutex::MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: crate::config::MsgOps<
+        MsgPool = crate::message::MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = crate::queuing::QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: crate::config::PortsOps<
+        SamplingPool = crate::sampling::SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    crate::state::with_kernel_mut::<C, _, _>(|kernel| {
+        crate::tick::systick_handler::<C>(kernel);
+    });
+}
 
 #[cfg(not(test))]
 fn with_cs<F, R>(f: F) -> R

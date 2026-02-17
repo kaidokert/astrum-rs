@@ -75,11 +75,9 @@ pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
     syst.enable_interrupt();
 }
 
-// TODO: The two systick_handler variants have different signatures (the dynamic-mpu
-// version requires an additional `strategy` parameter and extra const bounds).
-// A future refactor could use a trait-based approach to unify the API, but this
-// would require changes to how the harness invokes systick_handler. For now,
-// we keep two feature-gated variants with consistent internal logic.
+// Note: Both systick_handler variants now have the same signature (just `&mut Kernel<C>`).
+// The dynamic-mpu version uses kernel.dynamic_strategy internally, so callers don't need
+// to pass a separate strategy reference.
 
 /// SysTick handler: advance schedule, trigger PendSV, expire timed waits.
 ///
@@ -135,10 +133,8 @@ where
 /// Takes `&mut Kernel<C>` to allow callers to compose this with other operations
 /// (e.g., user hooks) within a single critical section, preserving atomicity.
 #[cfg(feature = "dynamic-mpu")]
-pub fn systick_handler<C: crate::config::KernelConfig>(
-    kernel: &mut crate::svc::Kernel<C>,
-    strategy: &crate::mpu_strategy::DynamicStrategy,
-) where
+pub fn systick_handler<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<C>)
+where
     [(); C::N]:,
     [(); C::SCHED]:,
     [(); C::BP]:,
@@ -179,7 +175,7 @@ pub fn systick_handler<C: crate::config::KernelConfig>(
                 &mut kernel.buffers,
                 &mut kernel.hw_uart,
                 current_tick,
-                strategy,
+                &kernel.dynamic_strategy,
             );
             if bh.has_rx_data {
                 if let Some(woken) = kernel.dev_wait_queue.wake_one_reader() {

@@ -55,6 +55,10 @@ pub mod sync_pools;
 pub mod syscall;
 pub mod systick;
 pub mod tick;
+
+// Re-export handle_systick at crate root for convenience
+#[cfg(not(test))]
+pub use systick::handle_systick;
 #[cfg(feature = "dynamic-mpu")]
 pub mod uart_hal;
 #[cfg(feature = "dynamic-mpu")]
