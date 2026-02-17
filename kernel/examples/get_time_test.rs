@@ -1,11 +1,8 @@
-// Migrated to unified Kernel API.
-
 //! QEMU test: verify SYS_GET_TIME returns the actual tick count.
 //!
 //! Boots a single partition whose entry function calls `SYS_GET_TIME`
-//! in a loop and stores each reading to an atomic.  The SysTick handler
-//! (running privileged) drives the scheduler and periodically checks
-//! the partition's readings:
+//! in a loop and stores each reading to an atomic. The SysTick hook
+//! (running privileged) periodically checks the partition's readings:
 //!
 //! 1. After a few ticks the partition's reading must be non-zero,
 //!    proving the tick counter is being incremented.
@@ -24,8 +21,6 @@
 #![feature(generic_const_exprs)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
-use cortex_m::peripheral::scb::SystemHandler;
-use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
@@ -41,7 +36,7 @@ use kernel::{
 };
 use panic_semihosting as _;
 
-const NP: usize = 1;
+const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
 struct TestConfig;
@@ -75,23 +70,40 @@ impl KernelConfig for TestConfig {
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
-kernel::define_unified_kernel!(TestConfig, |_k| {});
-
-#[used]
-static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
-
-kernel::define_pendsv!();
-
-#[repr(C, align(1024))]
-struct AlignedStack([u32; STACK_WORDS]);
-
-static mut STACKS: [AlignedStack; NP] = {
-    const ZERO: AlignedStack = AlignedStack([0; STACK_WORDS]);
-    [ZERO; NP]
-};
-
 /// Latest SYS_GET_TIME reading from the partition (0 = not yet read).
 static TIME_READING: AtomicU32 = AtomicU32::new(0);
+/// First non-zero reading captured for monotonicity check.
+static FIRST_NONZERO: AtomicU32 = AtomicU32::new(0);
+
+// Use the unified harness macro with SysTick hook for verification.
+kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+    match tick {
+        // By tick 5, the partition should have read a non-zero time.
+        5 => {
+            let t = TIME_READING.load(Ordering::Acquire);
+            if t == 0 {
+                hprintln!("get_time_test: FAIL — tick still zero at tick 5");
+                debug::exit(debug::EXIT_FAILURE);
+            }
+            hprintln!("get_time_test: first non-zero reading = {}", t);
+            FIRST_NONZERO.store(t, Ordering::Release);
+        }
+        // By tick 10, a later reading must be >= the first (monotonicity).
+        10 => {
+            let t = TIME_READING.load(Ordering::Acquire);
+            let first = FIRST_NONZERO.load(Ordering::Acquire);
+            hprintln!("get_time_test: second reading = {}", t);
+            if t >= first {
+                hprintln!("get_time_test: PASS");
+                debug::exit(debug::EXIT_SUCCESS);
+            } else {
+                hprintln!("get_time_test: FAIL — not monotonic: {} < {}", t, first);
+                debug::exit(debug::EXIT_FAILURE);
+            }
+        }
+        _ => {}
+    }
+});
 
 /// Partition entry: spin calling SYS_GET_TIME and publish each reading.
 extern "C" fn partition_main() -> ! {
@@ -101,116 +113,36 @@ extern "C" fn partition_main() -> ! {
     }
 }
 
-#[exception]
-fn SysTick() {
-    static mut TICK: u32 = 0;
-    static mut FIRST_NONZERO: u32 = 0;
-    *TICK += 1;
-
-    // Drive scheduler via unified Kernel.
-    cortex_m::interrupt::free(|cs| {
-        let mut k_ref = KERNEL.borrow(cs).borrow_mut();
-        let k = match k_ref.as_mut() {
-            Some(k) => k,
-            None => return,
-        };
-
-        let event = k.advance_schedule_tick();
-        if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
-            k.set_next_partition(pid);
-            cortex_m::peripheral::SCB::set_pendsv();
-        }
-    });
-
-    // Check partition readings at specific ticks.
-    match *TICK {
-        // By tick 5, the partition should have read a non-zero time.
-        5 => {
-            let t = TIME_READING.load(Ordering::Acquire);
-            if t == 0 {
-                hprintln!("get_time_test: FAIL — tick still zero at tick 5");
-                debug::exit(debug::EXIT_FAILURE);
-            }
-            hprintln!("get_time_test: first non-zero reading = {}", t);
-            *FIRST_NONZERO = t;
-        }
-        // By tick 10, a later reading must be >= the first (monotonicity).
-        10 => {
-            let t = TIME_READING.load(Ordering::Acquire);
-            hprintln!("get_time_test: second reading = {}", t);
-            if t >= *FIRST_NONZERO {
-                hprintln!("get_time_test: PASS");
-                debug::exit(debug::EXIT_SUCCESS);
-            } else {
-                hprintln!(
-                    "get_time_test: FAIL — not monotonic: {} < {}",
-                    t,
-                    *FIRST_NONZERO
-                );
-                debug::exit(debug::EXIT_FAILURE);
-            }
-        }
-        _ => {}
-    }
-}
-
 #[entry]
 fn main() -> ! {
-    let mut cp = cortex_m::Peripherals::take().expect("cortex-m peripherals");
+    let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
     hprintln!("get_time_test: start");
 
-    // SAFETY: single-core, interrupts not yet enabled — exclusive access.
-    unsafe {
-        let mut sched = ScheduleTable::<4>::new();
-        sched.add(ScheduleEntry::new(0, 2)).expect("schedule entry");
+    // Build schedule: single partition runs for 2 ticks per slot.
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
+    sched.add(ScheduleEntry::new(0, 2)).expect("sched entry");
 
-        let cfgs: [PartitionConfig; NP] = [{
-            let b = STACKS[0].0.as_ptr() as u32;
-            PartitionConfig {
-                id: 0,
-                entry_point: 0,
-                stack_base: b,
-                stack_size: (STACK_WORDS * 4) as u32,
-                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
-                peripheral_regions: heapless::Vec::new(),
-            }
-        }];
+    // Build partition config. Stack base is derived from internal
+    // PartitionCore stacks by Kernel::new(), so we use dummy values here.
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = [PartitionConfig {
+        id: 0,
+        entry_point: 0,
+        stack_base: 0,
+        stack_size: (STACK_WORDS * 4) as u32,
+        mpu_region: MpuRegion::new(0, 0, 0),
+        peripheral_regions: heapless::Vec::new(),
+    }];
 
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel config");
-        #[cfg(feature = "dynamic-mpu")]
-        let k =
-            Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-                .expect("kernel config");
+    // Create the unified kernel with schedule and partition.
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel creation");
+    #[cfg(feature = "dynamic-mpu")]
+    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
+        .expect("kernel creation");
 
-        store_kernel(k);
+    store_kernel(k);
 
-        // Start the schedule after storing the kernel.
-        cortex_m::interrupt::free(|cs| {
-            if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
-                k.start_schedule();
-            }
-        });
-
-        let stk = &mut STACKS[0].0;
-        let ix = kernel::context::init_stack_frame(stk, partition_main as *const () as u32, None)
-            .expect("init_stack_frame");
-        let sp = stk.as_ptr() as u32 + (ix as u32) * 4;
-        set_partition_sp(0, sp);
-
-        cp.SCB.set_priority(SystemHandler::SVCall, 0x00);
-        cp.SCB.set_priority(SystemHandler::PendSV, 0xFF);
-        cp.SCB.set_priority(SystemHandler::SysTick, 0xFE);
-    }
-
-    cp.SYST.set_clock_source(SystClkSource::Core);
-    cp.SYST.set_reload(120_000 - 1);
-    cp.SYST.clear_current();
-    cp.SYST.enable_counter();
-    cp.SYST.enable_interrupt();
-    cortex_m::peripheral::SCB::set_pendsv();
-
-    loop {
-        cortex_m::asm::wfi();
-    }
+    // Boot with partition entry and hint (0 for no packed data).
+    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
+    match boot(&parts, &mut p).expect("get_time_test: boot failed") {}
 }
