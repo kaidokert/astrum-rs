@@ -245,86 +245,13 @@ macro_rules! define_unified_harness {
 
         /// Initialize stacks, priorities, start schedule, enable SysTick, enter idle loop.
         /// Returns `Err(BootError)` on stack init or schedule failure.
+        ///
+        /// This is a simple forwarding wrapper to the canonical [`boot::boot`] function.
         fn boot(
             partitions: &[(extern "C" fn() -> !, u32)],
             peripherals: &mut cortex_m::Peripherals,
         ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
-            use cortex_m::peripheral::scb::SystemHandler;
-            use cortex_m::peripheral::syst::SystClkSource;
-            use cortex_m::peripheral::SCB;
-            #[cfg(feature = "qemu")]
-            use ::cortex_m_semihosting::hprintln;
-
-            #[cfg(feature = "qemu")]
-            hprintln!("[boot] entered");
-
-            let stack_init_result: Result<(), $crate::harness::BootError> =
-                $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
-                    for (i, &(ep, hint)) in partitions.iter().enumerate() {
-                        let stk = k.core_stack_mut(i)
-                            .ok_or($crate::harness::BootError::StackInitFailed { partition_index: i })?;
-                        let base = stk.as_ptr() as u32;
-                        let ix = $crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
-                            .ok_or($crate::harness::BootError::StackInitFailed { partition_index: i })?;
-                        k.set_sp(i, base + (ix as u32) * 4);
-                    }
-                    Ok(())
-                });
-            stack_init_result?;
-
-            const { $crate::config::assert_priority_order::<$Config>() }
-            // SAFETY: Called exactly once from main() before the scheduler
-            // has started. Interrupts are disabled at this point (we just
-            // exited interrupt::free and no interrupt sources are enabled
-            // yet). Single-core Cortex-M guarantees exclusive access to
-            // the SCB priority registers.
-            unsafe {
-                peripherals.SCB.set_priority(
-                    SystemHandler::SVCall,
-                    <$Config as $crate::config::KernelConfig>::SVCALL_PRIORITY,
-                );
-                peripherals.SCB.set_priority(
-                    SystemHandler::PendSV,
-                    <$Config as $crate::config::KernelConfig>::PENDSV_PRIORITY,
-                );
-                peripherals.SCB.set_priority(
-                    SystemHandler::SysTick,
-                    <$Config as $crate::config::KernelConfig>::SYSTICK_PRIORITY,
-                );
-            }
-
-            #[cfg(feature = "qemu")]
-            hprintln!("[boot] priorities set");
-
-            let first_partition =
-                $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
-                    let pid = k.start_schedule()?;
-                    k.set_next_partition(pid);
-                    Some(pid)
-                });
-
-            #[cfg(feature = "qemu")]
-            hprintln!("[boot] first_partition={:?}", first_partition);
-
-            let _ = first_partition.ok_or($crate::harness::BootError::NoReadyPartition)?;
-
-            #[cfg(feature = "qemu")]
-            hprintln!("[boot] triggering PendSV");
-
-            peripherals.SYST.set_clock_source(SystClkSource::Core);
-            // SysTick counts from reload value down to 0, so subtract 1 from cycle count.
-            peripherals.SYST.set_reload(<$Config as $crate::config::KernelConfig>::SYSTICK_CYCLES - 1);
-            peripherals.SYST.clear_current();
-            peripherals.SYST.enable_counter();
-            peripherals.SYST.enable_interrupt();
-            SCB::set_pendsv();
-
-            #[cfg(feature = "qemu")]
-            hprintln!("[boot] entering idle loop");
-
-            loop {
-                cortex_m::asm::wfi();
-            }
+            $crate::boot::boot::<$Config>(partitions, peripherals)
         }
     };
 }
