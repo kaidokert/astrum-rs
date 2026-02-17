@@ -5,6 +5,13 @@
 //! - `pendsv_context_restore` — restores r4-r11 and PSP for the incoming partition
 //! - `pendsv_return_unprivileged` — sets CONTROL.nPRIV=1 and returns to Thread mode
 //!
+//! # Architecture
+//!
+//! These routines access the `partition_sp` array directly using struct field offsets
+//! rather than calling Rust shim functions. The linker symbol `__kernel_state_start`
+//! provides the kernel base address, and compile-time offset constants
+//! (`KERNEL_CORE_OFFSET`, `CORE_PARTITION_SP_OFFSET`) allow direct array access.
+//!
 //! # Safety
 //!
 //! These functions must only be called from PendSV handlers in Handler mode.
@@ -20,7 +27,6 @@
 //      register values before any assembly code modifies them.
 //    - `ldmia r3!, {r4-r11}` restores these registers and increments PSP, matching the
 //      stmdb operation exactly.
-//    - The push/pop of lr around `bl` calls follows AAPCS for nested function calls.
 //
 // 2. **PSP/MSP Stack Pointer Conventions**:
 //    - Partitions always use PSP (Process Stack Pointer) in Thread mode.
@@ -43,11 +49,11 @@
 //      0xFF lowest). They are NOT safe to call from Thread mode or other exceptions.
 //    - The caller must ensure `r0` contains a valid partition index before calling
 //      `pendsv_context_save` or `pendsv_context_restore`.
-//    - `set_partition_sp` and `get_partition_sp` are Rust FFI functions that safely
-//      access the `PARTITION_SP` array with bounds checking.
+//    - Direct memory access to partition_sp[idx] uses __kernel_state_start +
+//      KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET + (idx * 4). Bounds checking
+//      is the caller's responsibility.
 //    - The null-pointer check in `pendsv_context_restore` (cmp r3, #0; beq fault)
-//      prevents dereferencing an invalid SP if get_partition_sp returns 0 for an
-//      uninitialized or invalid partition.
+//      prevents dereferencing an invalid SP for an uninitialized partition.
 //
 // 5. **Interrupt Safety**:
 //    - PendSV runs at lowest priority (0xFF), so it cannot preempt other exceptions.
@@ -67,30 +73,39 @@ core::arch::global_asm!(
      *
      * Input:  r0 = current partition index (must be valid, not 0xFF)
      * Output: none
-     * Clobbers: r0, r1, r2, r3, lr (follows AAPCS)
+     * Clobbers: r0, r1, r2, r3 (follows AAPCS)
      *
      * The save path:
      *   1. mrs r3, psp — get current process stack pointer
      *   2. stmdb r3!, {{r4-r11}} — push callee-saved regs onto process stack
-     *   3. bl set_partition_sp(idx, sp) — store updated PSP
+     *   3. Store r3 to partition_sp[idx] using direct offset access
      */
     .global pendsv_context_save
     .type pendsv_context_save, %function
     .thumb_func
 pendsv_context_save:
-    /* Save lr since we'll call set_partition_sp */
-    push    {{lr}}
-
     /* Get PSP and push r4-r11 onto process stack BEFORE modifying any of them.
      * r0 (partition index) is not affected by mrs or stmdb. */
     mrs     r3, psp
     stmdb   r3!, {{r4-r11}}     /* r3 now points to saved context */
 
-    /* set_partition_sp(idx, sp) — r0 still holds partition index */
-    mov     r1, r3              /* r1 = new stack pointer */
-    bl      set_partition_sp
+    /* Compute address of partition_sp[idx]:
+     * addr = __kernel_state_start + KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET + (idx * 4)
+     */
+    ldr     r1, =__kernel_state_start
+    ldr     r2, =KERNEL_CORE_OFFSET
+    ldr     r2, [r2]            /* r2 = core offset */
+    add     r1, r1, r2          /* r1 = &kernel.core */
 
-    pop     {{pc}}
+    ldr     r2, =CORE_PARTITION_SP_OFFSET
+    ldr     r2, [r2]            /* r2 = partition_sp offset within core */
+    add     r1, r1, r2          /* r1 = &kernel.core.partition_sp[0] */
+
+    /* idx * 4 for u32 array element offset */
+    lsl     r2, r0, #2          /* r2 = idx * 4 */
+    str     r3, [r1, r2]        /* partition_sp[idx] = new SP */
+
+    bx      lr
     .size pendsv_context_save, . - pendsv_context_save
 
     /* ================================================================
@@ -100,14 +115,14 @@ pendsv_context_save:
      *
      * Input:  r0 = next partition index
      * Output: none (PSP and r4-r11 restored)
-     * Clobbers: r0, r1, r2, r3, lr (follows AAPCS)
+     * Clobbers: r0, r1, r2, r3 (follows AAPCS)
      *
-     * SAFETY: If get_partition_sp returns 0 (invalid index or
-     * uninitialized kernel), this function branches to a fault
-     * loop rather than dereferencing a null pointer.
+     * SAFETY: If partition_sp[idx] is 0 (uninitialized partition),
+     * this function branches to a fault loop rather than dereferencing
+     * a null pointer.
      *
      * The restore path:
-     *   1. bl get_partition_sp(idx) — retrieve saved SP
+     *   1. Load partition_sp[idx] using direct offset access
      *   2. Validate SP is non-zero (fault if zero)
      *   3. ldmia r3!, {{r4-r11}} — pop callee-saved regs from process stack
      *   4. msr psp, r3 — update PSP
@@ -116,11 +131,21 @@ pendsv_context_save:
     .type pendsv_context_restore, %function
     .thumb_func
 pendsv_context_restore:
-    push    {{lr}}
+    /* Compute address of partition_sp[idx]:
+     * addr = __kernel_state_start + KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET + (idx * 4)
+     */
+    ldr     r1, =__kernel_state_start
+    ldr     r2, =KERNEL_CORE_OFFSET
+    ldr     r2, [r2]            /* r2 = core offset */
+    add     r1, r1, r2          /* r1 = &kernel.core */
 
-    /* get_partition_sp(idx) */
-    bl      get_partition_sp
-    mov     r3, r0              /* r3 = saved stack pointer */
+    ldr     r2, =CORE_PARTITION_SP_OFFSET
+    ldr     r2, [r2]            /* r2 = partition_sp offset within core */
+    add     r1, r1, r2          /* r1 = &kernel.core.partition_sp[0] */
+
+    /* idx * 4 for u32 array element offset */
+    lsl     r2, r0, #2          /* r2 = idx * 4 */
+    ldr     r3, [r1, r2]        /* r3 = partition_sp[idx] */
 
     /* Validate: SP must be non-zero */
     cmp     r3, #0
@@ -130,7 +155,7 @@ pendsv_context_restore:
     ldmia   r3!, {{r4-r11}}
     msr     psp, r3
 
-    pop     {{pc}}
+    bx      lr
 
 .Lrestore_fault:
     /* Invalid partition SP - loop forever to trigger watchdog or debug.

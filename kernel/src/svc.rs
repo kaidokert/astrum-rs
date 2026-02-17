@@ -595,6 +595,45 @@ macro_rules! define_unified_kernel {
             ::core::cell::RefCell<Option<$crate::svc::Kernel<$Config>>>,
         > = ::cortex_m::interrupt::Mutex::new(::core::cell::RefCell::new(None));
 
+        // ============================================================
+        // Kernel struct field offsets for direct assembly access.
+        //
+        // These constants are computed at compile time using offset_of!
+        // and exported as #[no_mangle] symbols. PendSV assembly loads
+        // __kernel_state_start and adds these offsets to access fields
+        // directly, avoiding function call overhead during context switch.
+        // ============================================================
+
+        /// Offset of `current_partition` field in `Kernel<C>`.
+        #[cfg_attr(not(test), no_mangle)]
+        #[cfg_attr(not(test), link_section = ".rodata")]
+        #[allow(dead_code)]
+        static KERNEL_CURRENT_PARTITION_OFFSET: usize =
+            ::core::mem::offset_of!($crate::svc::Kernel<$Config>, current_partition);
+
+        /// Offset of `core` field in `Kernel<C>`.
+        #[cfg_attr(not(test), no_mangle)]
+        #[cfg_attr(not(test), link_section = ".rodata")]
+        #[allow(dead_code)]
+        static KERNEL_CORE_OFFSET: usize =
+            ::core::mem::offset_of!($crate::svc::Kernel<$Config>, core);
+
+        /// Offset of `next_partition` field within `PartitionCore`.
+        /// To get the absolute offset from kernel base, add KERNEL_CORE_OFFSET.
+        #[cfg_attr(not(test), no_mangle)]
+        #[cfg_attr(not(test), link_section = ".rodata")]
+        #[allow(dead_code)]
+        static CORE_NEXT_PARTITION_OFFSET: usize =
+            ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, next_partition);
+
+        /// Offset of `partition_sp` array within `PartitionCore`.
+        /// To get the absolute offset from kernel base, add KERNEL_CORE_OFFSET.
+        #[cfg_attr(not(test), no_mangle)]
+        #[cfg_attr(not(test), link_section = ".rodata")]
+        #[allow(dead_code)]
+        static CORE_PARTITION_SP_OFFSET: usize =
+            ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, partition_sp);
+
         /// SVC dispatch hook that routes syscalls through the unified kernel.
         ///
         /// # Safety
@@ -790,6 +829,15 @@ pub fn dispatch_syscall<const N: usize>(
 
 /// Encapsulates all kernel service pools alongside the partition table,
 /// with pool sizes derived from a single [`KernelConfig`] implementer.
+///
+/// # Representation
+///
+/// This struct uses `#[repr(C)]` to ensure deterministic field layout for
+/// direct memory access from PendSV assembly. The assembly loads
+/// `__kernel_state_start` and uses compile-time field offsets to access
+/// `current_partition`, `core.next_partition`, and `core.partition_sp[]`
+/// without calling Rust shim functions.
+#[repr(C)]
 pub struct Kernel<C: KernelConfig>
 where
     [(); C::N]:,

@@ -62,6 +62,13 @@ pub trait PartitionCoreOps {
 /// - `N`: Maximum number of partitions
 /// - `SCHED`: Schedule table capacity (number of entries)
 /// - `SW`: Stack word count per partition (256 = 1024 bytes for MPU alignment)
+///
+/// # Representation
+///
+/// This struct uses `#[repr(C)]` to ensure deterministic field layout for
+/// direct memory access from PendSV assembly. The `current_partition`,
+/// `next_partition`, and `partition_sp` fields are accessed at known offsets.
+#[repr(C)]
 pub struct PartitionCore<const N: usize, const SCHED: usize, const SW: usize>
 where
     [(); N]:,
@@ -71,8 +78,10 @@ where
     partitions: PartitionTable<N>,
     schedule: ScheduleTable<SCHED>,
     current_partition: u8,
-    next_partition: u8,
-    partition_sp: [u32; N],
+    /// Next partition index to switch to. Public for `offset_of!` in PendSV assembly.
+    pub next_partition: u8,
+    /// Per-partition saved stack pointers. Public for `offset_of!` in PendSV assembly.
+    pub partition_sp: [u32; N],
     /// Per-partition stack storage, aligned for MPU region base requirements.
     stacks: [AlignedStack<SW>; N],
     /// Currently active partition index, if any.
