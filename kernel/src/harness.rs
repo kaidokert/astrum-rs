@@ -15,7 +15,7 @@
 //!
 //! | Item | Description |
 //! |------|-------------|
-//! | `KERNEL` | `Mutex<RefCell<Option<Kernel<…>>>>` for SVC dispatch and SysTick |
+//! | Kernel state | Via `state::init_kernel_state()` in linker-controlled storage |
 //! | `static _SVC` | Forces linker to include the SVC assembly trampoline |
 //! | `SysTick` exception handler | Drives the round-robin scheduler |
 //! | `PendSV` handler | Via [`define_pendsv!`] |
@@ -157,8 +157,8 @@ macro_rules! _unified_handle_yield {
     }};
 }
 
-/// Unified harness: single `KERNEL` global for SVC dispatch and SysTick scheduling.
-/// Generates KERNEL, PendSV, SysTick, boot(). Stacks are in `PartitionCore`.
+/// Unified harness: uses linker-controlled kernel state for SVC dispatch and SysTick scheduling.
+/// Generates PendSV, SysTick, boot(). Stacks are in `PartitionCore`.
 ///
 /// # Usage
 ///
@@ -269,8 +269,8 @@ macro_rules! define_unified_harness {
             #[cfg(feature = "qemu")]
             hprintln!("[boot] entered");
 
-            let stack_init_result: Result<(), $crate::harness::BootError> = ::cortex_m::interrupt::free(|cs| {
-                if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
+            let stack_init_result: Result<(), $crate::harness::BootError> =
+                $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                     for (i, &(ep, hint)) in partitions.iter().enumerate() {
                         let stk = k.core_stack_mut(i)
                             .ok_or($crate::harness::BootError::StackInitFailed { partition_index: i })?;
@@ -279,9 +279,8 @@ macro_rules! define_unified_harness {
                             .ok_or($crate::harness::BootError::StackInitFailed { partition_index: i })?;
                         k.set_sp(i, base + (ix as u32) * 4);
                     }
-                }
-                Ok(())
-            });
+                    Ok(())
+                });
             stack_init_result?;
 
             const { $crate::config::assert_priority_order::<$Config>() }
@@ -308,17 +307,12 @@ macro_rules! define_unified_harness {
             #[cfg(feature = "qemu")]
             hprintln!("[boot] priorities set");
 
-            let first_partition = ::cortex_m::interrupt::free(|cs| {
-                KERNEL
-                    .borrow(cs)
-                    .borrow_mut()
-                    .as_mut()
-                    .and_then(|k| {
-                        let pid = k.start_schedule()?;
-                        k.set_next_partition(pid);
-                        Some(pid)
-                    })
-            });
+            let first_partition =
+                $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+                    let pid = k.start_schedule()?;
+                    k.set_next_partition(pid);
+                    Some(pid)
+                });
 
             #[cfg(feature = "qemu")]
             hprintln!("[boot] first_partition={:?}", first_partition);

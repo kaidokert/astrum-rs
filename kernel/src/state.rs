@@ -15,9 +15,11 @@ use crate::svc::Kernel;
 /// The `init_kernel_state` function includes a compile-time assertion to verify
 /// that the actual kernel size does not exceed this limit.
 ///
-/// Current allocation: 64 KiB, sufficient for typical configurations with
-/// multiple partitions, IPC pools, and all kernel subsystems.
-pub const MAX_KERNEL_SIZE: usize = 64 * 1024;
+/// Current allocation: 16 KiB, sufficient for typical configurations with
+/// up to 4 partitions (256-word stacks each), 8 schedule entries, and
+/// moderate IPC pool sizes. For larger configurations, increase this value
+/// and ensure the target has sufficient RAM.
+pub const MAX_KERNEL_SIZE: usize = 16 * 1024;
 
 /// Static storage for the unified kernel state.
 ///
