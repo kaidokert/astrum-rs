@@ -602,27 +602,14 @@ macro_rules! define_unified_kernel {
         /// Must be called from SVC exception context with a valid `ExceptionFrame`
         /// pointer from the process stack (PSP).
         unsafe extern "C" fn dispatch_hook(f: &mut $crate::context::ExceptionFrame) {
-            // SAFETY: called from SVC exception context on single-core Cortex-M;
-            // `cortex_m::interrupt::free` masks interrupts, ensuring exclusive access.
-            ::cortex_m::interrupt::free(|cs| {
-                if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
-                    // NOTE: current_partition is now maintained by PendSV via the
-                    // set_current_partition() shim. No sync from static needed.
-
-                    // SAFETY: `k.dispatch(f)` requires: (1) `f` is a valid pointer to the
-                    // exception frame on the process stack — guaranteed by the SVC assembly
-                    // trampoline that calls dispatch_hook, and (2) exclusive mutable access
-                    // to the Kernel — guaranteed by `interrupt::free` masking interrupts and
-                    // `RefCell::borrow_mut` providing runtime borrow checking within the
-                    // critical section.
-                    unsafe { k.dispatch(f) }
-
-                    // Check and handle yield request after dispatch.
-                    if k.yield_requested {
-                        k.yield_requested = false;
-                        let $k = k;
-                        $yield_body
-                    }
+            // Delegate to state module for unified kernel storage.
+            $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+                // SAFETY: `f` is a valid exception frame pointer from PSP.
+                unsafe { k.dispatch(f) }
+                if k.yield_requested {
+                    k.yield_requested = false;
+                    let $k = k;
+                    $yield_body
                 }
             });
         }
@@ -636,9 +623,8 @@ macro_rules! define_unified_kernel {
         /// Must be called exactly once during initialization, before enabling
         /// interrupts or starting the scheduler.
         fn store_kernel(k: $crate::svc::Kernel<$Config>) {
-            ::cortex_m::interrupt::free(|cs| {
-                KERNEL.borrow(cs).replace(Some(k));
-            });
+            // SAFETY: Called once during init before interrupts enabled.
+            unsafe { $crate::state::init_kernel_state(k) };
             $crate::svc::set_dispatch_hook(dispatch_hook);
         }
 
@@ -653,17 +639,13 @@ macro_rules! define_unified_kernel {
         // C-ABI shims that return raw pointers to kernel state (issue #3).
         #[inline]
         fn with_kernel<T, F: FnOnce(&$crate::svc::Kernel<$Config>) -> T>(f: F) -> Option<T> {
-            ::cortex_m::interrupt::free(|cs| {
-                KERNEL.borrow(cs).borrow().as_ref().map(f)
-            })
+            Some($crate::state::with_kernel::<$Config, _, _>(f))
         }
 
         /// Mutable variant of [`with_kernel`] for accessors that need `&mut`.
         #[inline]
         fn with_kernel_mut<T, F: FnOnce(&mut $crate::svc::Kernel<$Config>) -> T>(f: F) -> Option<T> {
-            ::cortex_m::interrupt::free(|cs| {
-                KERNEL.borrow(cs).borrow_mut().as_mut().map(f)
-            })
+            Some($crate::state::with_kernel_mut::<$Config, _, _>(f))
         }
 
         /// Returns the current partition index from the Kernel struct.
