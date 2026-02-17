@@ -9,6 +9,51 @@
 //!
 //! These functions must only be called from PendSV handlers in Handler mode.
 
+// SAFETY: This assembly block defines PendSV context switch routines that are sound
+// because:
+//
+// 1. **Register Operations (r4-r11 save/restore)**:
+//    - The Cortex-M hardware automatically saves r0-r3, r12, lr, pc, xpsr on exception
+//      entry (the "hardware frame"). We only save/restore r4-r11 (the "software frame")
+//      which AAPCS designates as callee-saved registers.
+//    - `stmdb r3!, {r4-r11}` decrements PSP then stores, preserving the pre-exception
+//      register values before any assembly code modifies them.
+//    - `ldmia r3!, {r4-r11}` restores these registers and increments PSP, matching the
+//      stmdb operation exactly.
+//    - The push/pop of lr around `bl` calls follows AAPCS for nested function calls.
+//
+// 2. **PSP/MSP Stack Pointer Conventions**:
+//    - Partitions always use PSP (Process Stack Pointer) in Thread mode.
+//    - Exception handlers (including PendSV) always use MSP (Main Stack Pointer).
+//    - `mrs r3, psp` reads the partition's stack pointer without affecting MSP.
+//    - `msr psp, r3` updates PSP for the incoming partition before exception return.
+//    - The kernel's MSP is never modified by context switch code.
+//
+// 3. **CONTROL.nPRIV=1 Return Behavior**:
+//    - `pendsv_return_unprivileged` sets CONTROL.nPRIV=1 before `bx lr`, ensuring the
+//      partition returns to Thread mode as unprivileged code.
+//    - The ISB after MSR CONTROL ensures the privilege drop takes effect before any
+//      subsequent instructions execute.
+//    - EXC_RETURN=0xFFFFFFFD specifies: return to Thread mode, use PSP, no FPU context.
+//    - Combined with PRIVDEFENA in MPU_CTRL, unprivileged code cannot access kernel
+//      memory or privileged peripherals.
+//
+// 4. **Calling Context Assumptions**:
+//    - These functions MUST be called only from PendSV handler (Handler mode, priority
+//      0xFF lowest). They are NOT safe to call from Thread mode or other exceptions.
+//    - The caller must ensure `r0` contains a valid partition index before calling
+//      `pendsv_context_save` or `pendsv_context_restore`.
+//    - `set_partition_sp` and `get_partition_sp` are Rust FFI functions that safely
+//      access the `PARTITION_SP` array with bounds checking.
+//    - The null-pointer check in `pendsv_context_restore` (cmp r3, #0; beq fault)
+//      prevents dereferencing an invalid SP if get_partition_sp returns 0 for an
+//      uninitialized or invalid partition.
+//
+// 5. **Interrupt Safety**:
+//    - PendSV runs at lowest priority (0xFF), so it cannot preempt other exceptions.
+//    - No other code can preempt PendSV mid-context-switch, ensuring atomicity.
+//    - The fault loop in restore path keeps the system debuggable rather than causing
+//      an unpredictable HardFault.
 #[cfg(target_arch = "arm")]
 core::arch::global_asm!(
     r#"
