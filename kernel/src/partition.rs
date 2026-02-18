@@ -374,6 +374,19 @@ pub enum ConfigError {
     /// schedule, bottom-half work will never run and IPC will stall.
     #[cfg(feature = "dynamic-mpu")]
     NoSystemWindow,
+    /// The gap between system windows exceeds the acceptable threshold.
+    ///
+    /// When `dynamic-mpu` is enabled, system windows must occur frequently
+    /// enough to service bottom-half work in a timely manner. If the maximum
+    /// gap between consecutive system windows (including wrap-around) exceeds
+    /// the configured threshold, real-time deadlines may be missed.
+    #[cfg(feature = "dynamic-mpu")]
+    SystemWindowTooInfrequent {
+        /// The actual maximum gap in ticks between system windows.
+        max_gap_ticks: u32,
+        /// The threshold that was exceeded.
+        threshold_ticks: u32,
+    },
 }
 
 impl core::fmt::Display for ConfigError {
@@ -435,6 +448,15 @@ impl core::fmt::Display for ConfigError {
                 "schedule contains no system window: bottom-half processing \
                  (buffer pool transfers, virtual device I/O) requires at least \
                  one system window entry"
+            ),
+            #[cfg(feature = "dynamic-mpu")]
+            Self::SystemWindowTooInfrequent {
+                max_gap_ticks,
+                threshold_ticks,
+            } => write!(
+                f,
+                "system window gap too large: max gap {max_gap_ticks} ticks \
+                 exceeds threshold {threshold_ticks} ticks"
             ),
         }
     }
@@ -1202,6 +1224,99 @@ mod tests {
             assert_ne!(no_sys, ConfigError::ScheduleEmpty);
             assert_ne!(no_sys, ConfigError::PartitionTableFull);
             assert_ne!(no_sys, ConfigError::StackSizeInvalid { partition_id: 0 });
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // ConfigError::SystemWindowTooInfrequent (dynamic-mpu feature)
+    // ------------------------------------------------------------------
+
+    #[cfg(feature = "dynamic-mpu")]
+    mod system_window_too_infrequent_tests {
+        use super::*;
+
+        #[test]
+        fn system_window_too_infrequent_is_copy() {
+            let e = ConfigError::SystemWindowTooInfrequent {
+                max_gap_ticks: 100,
+                threshold_ticks: 50,
+            };
+            let e2 = e;
+            assert_eq!(e, e2);
+        }
+
+        #[test]
+        fn system_window_too_infrequent_display_shows_gap() {
+            let msg = format!(
+                "{}",
+                ConfigError::SystemWindowTooInfrequent {
+                    max_gap_ticks: 200,
+                    threshold_ticks: 100,
+                }
+            );
+            assert!(msg.contains("200"), "should contain max_gap_ticks: {msg}");
+            assert!(msg.contains("100"), "should contain threshold_ticks: {msg}");
+        }
+
+        #[test]
+        fn system_window_too_infrequent_display_mentions_threshold() {
+            let msg = format!(
+                "{}",
+                ConfigError::SystemWindowTooInfrequent {
+                    max_gap_ticks: 500,
+                    threshold_ticks: 250,
+                }
+            );
+            assert!(msg.contains("threshold"), "should mention threshold: {msg}");
+        }
+
+        #[test]
+        fn system_window_too_infrequent_debug_contains_variant_name() {
+            let debug_str = format!(
+                "{:?}",
+                ConfigError::SystemWindowTooInfrequent {
+                    max_gap_ticks: 10,
+                    threshold_ticks: 5,
+                }
+            );
+            assert!(
+                debug_str.contains("SystemWindowTooInfrequent"),
+                "debug should contain variant name: {debug_str}"
+            );
+        }
+
+        #[test]
+        fn system_window_too_infrequent_distinct_from_other_variants() {
+            let too_infrequent = ConfigError::SystemWindowTooInfrequent {
+                max_gap_ticks: 100,
+                threshold_ticks: 50,
+            };
+            assert_ne!(too_infrequent, ConfigError::ScheduleEmpty);
+            assert_ne!(too_infrequent, ConfigError::NoSystemWindow);
+            assert_ne!(too_infrequent, ConfigError::PartitionTableFull);
+        }
+
+        #[test]
+        fn system_window_too_infrequent_equality_checks_both_fields() {
+            let e1 = ConfigError::SystemWindowTooInfrequent {
+                max_gap_ticks: 100,
+                threshold_ticks: 50,
+            };
+            let e2 = ConfigError::SystemWindowTooInfrequent {
+                max_gap_ticks: 100,
+                threshold_ticks: 50,
+            };
+            let e3 = ConfigError::SystemWindowTooInfrequent {
+                max_gap_ticks: 200,
+                threshold_ticks: 50,
+            };
+            let e4 = ConfigError::SystemWindowTooInfrequent {
+                max_gap_ticks: 100,
+                threshold_ticks: 75,
+            };
+            assert_eq!(e1, e2);
+            assert_ne!(e1, e3);
+            assert_ne!(e1, e4);
         }
     }
 }
