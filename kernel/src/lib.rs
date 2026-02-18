@@ -20,6 +20,7 @@ extern "C" {
     fn DefaultHandler();
 }
 
+pub mod klog;
 pub mod macros;
 
 pub mod boot;

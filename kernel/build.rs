@@ -4,6 +4,38 @@ use std::io::Write;
 use std::path::PathBuf;
 
 fn main() {
+    // Emit klog backend cfg based on enabled features.
+    // Priority: semihosting > rtt > swo > defmt > none
+    // If multiple are enabled, we pick the first in priority order and emit a warning.
+    let backends = [
+        ("CARGO_FEATURE_LOG_SEMIHOSTING", "semihosting"),
+        ("CARGO_FEATURE_LOG_RTT", "rtt"),
+        ("CARGO_FEATURE_LOG_SWO", "swo"),
+        ("CARGO_FEATURE_LOG_DEFMT", "defmt"),
+    ];
+
+    let enabled: Vec<&str> = backends
+        .iter()
+        .filter(|(env_var, _)| env::var(env_var).is_ok())
+        .map(|(_, name)| *name)
+        .collect();
+
+    let backend = match enabled.len() {
+        0 => "none",
+        1 => enabled[0],
+        _ => {
+            println!(
+                "cargo:warning=Multiple klog backends enabled ({:?}), using '{}'",
+                enabled, enabled[0]
+            );
+            enabled[0]
+        }
+    };
+
+    println!("cargo:rustc-cfg=klog_backend=\"{}\"", backend);
+    // Declare valid klog_backend values for check-cfg lint.
+    println!("cargo::rustc-check-cfg=cfg(klog_backend, values(\"semihosting\", \"rtt\", \"swo\", \"defmt\", \"none\"))");
+
     let target = env::var("TARGET").unwrap_or_default();
     if !target.contains("thumb") {
         return;

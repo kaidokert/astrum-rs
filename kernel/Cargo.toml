@@ -6,178 +6,184 @@ edition = "2021"
 [dependencies]
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7", features = ["device"] }
-cortex-m-semihosting = "0.5"
+cortex-m-semihosting = { version = "0.5", optional = true }
+defmt = { version = "0.3", optional = true }
 heapless = "0.8"
 panic-semihosting = { version = "0.6", features = ["exit"] }
 rtos-traits = { path = "../rtos-traits" }
+rtt-target = { version = "0.5", optional = true }
 
 [[example]]
 name = "hello"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "panic_test"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "mpu_info"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "mpu_region"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "systick"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "mpu_wx"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "mpu_fault"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "partition_switch"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "context_switch"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "scheduler_tick"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "mpu_partition"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "svc_yield"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "integration"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "sampling_demo"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "queuing_demo"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "blackboard_demo"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "priv_drop_test"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "priv_fault_test"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "get_time_test"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "blocking_deschedule"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "unified_minimal"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "debug_boot"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "mpu_dynamic"
-required-features = ["qemu", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
 name = "mpu_dynamic_test"
-required-features = ["qemu", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
 name = "buffer_pool_test"
-required-features = ["qemu", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
 name = "virtual_uart_demo"
-required-features = ["qemu", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
 name = "uart1_loopback"
-required-features = ["qemu", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
 name = "adversarial_mod_stub"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "read_kernel_mem"
 path = "examples/adversarial/read_kernel_mem.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "read_other_stack"
 path = "examples/adversarial/read_other_stack.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "write_other_stack"
 path = "examples/adversarial/write_other_stack.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "stack_guard"
 path = "examples/adversarial/stack_guard.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "write_mpu_regs"
 path = "examples/adversarial/write_mpu_regs.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "syscall_other_ptr"
 path = "examples/adversarial/syscall_other_ptr.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "syscall_bad_ptrs"
 path = "examples/adversarial/syscall_bad_ptrs.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "syscall_bad_ids"
 path = "examples/adversarial/syscall_bad_ids.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "disable_interrupts"
 path = "examples/adversarial/disable_interrupts.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "write_control"
 path = "examples/adversarial/write_control.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "syscall_kernel_ptr"
 path = "examples/adversarial/syscall_kernel_ptr.rs"
-required-features = ["qemu"]
+required-features = ["qemu", "log-semihosting"]
 
 [features]
 qemu = []
 dynamic-mpu = []
+log-semihosting = ["dep:cortex-m-semihosting"]
+log-rtt = ["dep:rtt-target"]
+log-swo = []
+log-defmt = ["dep:defmt"]
