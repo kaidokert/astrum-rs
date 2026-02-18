@@ -114,6 +114,12 @@ use crate::svc::Kernel;
 /// and ensure the target has sufficient RAM.
 pub const MAX_KERNEL_SIZE: usize = 16 * 1024;
 
+/// Required alignment for kernel state storage in bytes.
+///
+/// This must match the alignment requirement of `Kernel<C>`, which contains
+/// `AlignedStack<SW>` fields that require 1024-byte alignment.
+pub const KERNEL_ALIGNMENT: usize = 1024;
+
 /// Static storage for the unified kernel state.
 ///
 /// Uses a byte array wrapped in `MaybeUninit` for deferred initialization.
@@ -131,7 +137,9 @@ pub static mut UNIFIED_KERNEL_STORAGE: MaybeUninit<KernelStorageBuffer> = MaybeU
 ///
 /// This is a concrete, non-generic type that reserves [`MAX_KERNEL_SIZE`] bytes.
 /// The actual `Kernel<C>` is written into this buffer at initialization time.
-#[repr(C, align(8))]
+// Note: #[repr(align(...))] requires a literal, so we cannot use KERNEL_ALIGNMENT directly.
+// The test `storage_buffer_alignment` verifies this value matches KERNEL_ALIGNMENT.
+#[repr(C, align(1024))]
 pub struct KernelStorageBuffer {
     _data: [u8; MAX_KERNEL_SIZE],
 }
@@ -218,12 +226,15 @@ where
     // creating a reference to the static (avoiding static_mut_refs warning).
     //
     // The storage buffer is properly sized (MAX_KERNEL_SIZE bytes) and aligned
-    // (8-byte alignment via repr(C, align(8))). The compile-time assertion above
-    // guarantees that Kernel<C> fits within this buffer. The pointer cast from
-    // *mut KernelStorageBuffer to *mut Kernel<C> is valid because:
+    // (KERNEL_ALIGNMENT-byte alignment via repr(C, align(...)). This alignment
+    // matches the requirement of Kernel<C> which contains AlignedStack<SW>
+    // fields that require KERNEL_ALIGNMENT-byte alignment. The compile-time
+    // assertion above guarantees that Kernel<C> fits within this buffer. The
+    // pointer cast from *mut KernelStorageBuffer to *mut Kernel<C> is valid
+    // because:
     // 1. Both pointers point to the same memory location
     // 2. The buffer has sufficient size (verified at compile time)
-    // 3. The buffer has sufficient alignment (8 bytes >= Kernel<C> alignment)
+    // 3. The buffer has sufficient alignment (KERNEL_ALIGNMENT >= Kernel<C> alignment)
     // 4. The write initializes the memory with a valid Kernel<C> value
     let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>;
     ptr.write(kernel);
@@ -472,7 +483,7 @@ mod tests {
     #[test]
     fn storage_buffer_alignment() {
         use core::mem::align_of;
-        // Verify 8-byte alignment
-        assert!(align_of::<KernelStorageBuffer>() >= 8);
+        // Verify alignment matches KERNEL_ALIGNMENT (Kernel<C> contains AlignedStack<SW>)
+        assert!(align_of::<KernelStorageBuffer>() >= KERNEL_ALIGNMENT);
     }
 }
