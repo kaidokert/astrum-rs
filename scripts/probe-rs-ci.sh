@@ -112,16 +112,20 @@ TIMEOUT_SECONDS=30
 # Grace period before SIGKILL if SIGTERM is ignored (hardware debug tools can hang)
 KILL_AFTER_SECONDS=5
 
+# Temporary file for capturing RTT output
+RTT_OUTPUT=$(mktemp)
+trap 'rm -f "$RTT_OUTPUT"' EXIT
+
 # Run the firmware on hardware with timeout
 echo "Running firmware with ${TIMEOUT_SECONDS}s timeout..."
 echo "=== probe-rs output ==="
 
 # Run probe-rs with timeout and real-time output streaming.
 # - Use --kill-after to forcefully terminate hung debug tools
-# - Stream output in real-time for hardware debugging visibility
+# - Stream output in real-time via tee while capturing to file
 # - Capture exit code without toggling global shell error state
 timeout --kill-after="${KILL_AFTER_SECONDS}s" "$TIMEOUT_SECONDS" \
-    probe-rs run --chip "$CHIP" "$ELF" 2>&1 \
+    probe-rs run --chip "$CHIP" "$ELF" 2>&1 | tee "$RTT_OUTPUT" \
     && EXIT_CODE=0 || EXIT_CODE=$?
 
 echo "=== end probe-rs output ==="
@@ -140,13 +144,30 @@ if [[ $EXIT_CODE -eq 137 ]]; then
     exit 1
 fi
 
-# Check exit code
+# Check for probe-rs errors (non-zero exit that isn't timeout)
+# This catches flash failures, probe disconnects, and other hardware errors
 if [[ $EXIT_CODE -ne 0 ]]; then
     echo ""
-    echo "FAIL: probe-rs run exited with code $EXIT_CODE" >&2
+    echo "FAIL: probe-rs run exited with code $EXIT_CODE (check output above for details)" >&2
     exit 1
 fi
 
+# Parse RTT output for test markers
+# Check for failure first - failure takes precedence over success
+# (prevents false positives if both markers appear in output)
+if grep -q "TEST FAILED" "$RTT_OUTPUT"; then
+    echo ""
+    echo "FAIL: Test marker 'TEST FAILED' found in RTT output" >&2
+    exit 1
+fi
+
+if grep -q "TEST PASSED" "$RTT_OUTPUT"; then
+    echo ""
+    echo "PASS: Test marker 'TEST PASSED' found in RTT output"
+    exit 0
+fi
+
+# No marker found - probe-rs succeeded but test didn't output a result marker
 echo ""
-echo "PASS: probe-rs run completed successfully"
-exit 0
+echo "FAIL: No test marker (TEST PASSED/TEST FAILED) found in RTT output (test may not have completed)" >&2
+exit 1
