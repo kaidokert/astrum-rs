@@ -54,9 +54,9 @@ pub const SYS_DEV_READ_TIMED: u32 = 30;
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_QUERY_BOTTOM_HALF: u32 = 33;
 
-// Re-export SYS_DEBUG_NOTIFY from shared traits crate for ABI isolation
+// Re-export SYS_DEBUG_NOTIFY and SYS_DEBUG_WRITE from shared traits crate for ABI isolation
 #[cfg(feature = "partition-debug")]
-pub use rtos_traits::syscall::SYS_DEBUG_NOTIFY;
+pub use rtos_traits::syscall::{SYS_DEBUG_NOTIFY, SYS_DEBUG_WRITE};
 
 /// Typed syscall identifier for use in the kernel dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +107,8 @@ pub enum SyscallId {
     QueryBottomHalf,
     #[cfg(feature = "partition-debug")]
     DebugNotify,
+    #[cfg(feature = "partition-debug")]
+    DebugWrite,
 }
 
 impl SyscallId {
@@ -161,6 +163,8 @@ impl SyscallId {
             SYS_QUERY_BOTTOM_HALF => Some(Self::QueryBottomHalf),
             #[cfg(feature = "partition-debug")]
             SYS_DEBUG_NOTIFY => Some(Self::DebugNotify),
+            #[cfg(feature = "partition-debug")]
+            SYS_DEBUG_WRITE => Some(Self::DebugWrite),
             _ => None,
         }
     }
@@ -213,6 +217,8 @@ impl SyscallId {
             Self::QueryBottomHalf => SYS_QUERY_BOTTOM_HALF,
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => SYS_DEBUG_NOTIFY,
+            #[cfg(feature = "partition-debug")]
+            Self::DebugWrite => SYS_DEBUG_WRITE,
         }
     }
 }

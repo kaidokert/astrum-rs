@@ -17,12 +17,12 @@ mod tests {
     #[test]
     fn basic_ring_buffer() {
         let rb = DebugRingBuffer::<16>::new();
-        assert!(rb.is_empty() && rb.dropped() == 0 && rb.write(&[1, 2, 3, 4]));
+        assert!(rb.is_empty() && rb.dropped() == 0 && rb.write(&[1, 2, 3, 4]) == 4);
         let mut out = [0u8; 8];
         assert_eq!(rb.drain(&mut out, 8), 4);
         let rb2 = DebugRingBuffer::<8>::new();
         rb2.write(&[1, 2, 3, 4, 5, 6, 7, 8]);
-        assert!(!rb2.write(&[9]) && rb2.dropped() == 1);
+        assert!(rb2.write(&[9]) == 0 && rb2.dropped() == 1);
     }
     #[test]
     fn header_packing_and_constants() {

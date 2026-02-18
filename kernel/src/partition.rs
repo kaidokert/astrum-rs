@@ -1171,7 +1171,7 @@ mod tests {
             pcb.set_debug_buffer(&BUF);
             let retrieved = pcb.debug_buffer().unwrap();
             // Write directly to BUF and verify via trait object
-            assert!(BUF.write(b"test"));
+            assert_eq!(BUF.write(b"test"), 4);
             assert_eq!(retrieved.available(), 4);
         }
     }

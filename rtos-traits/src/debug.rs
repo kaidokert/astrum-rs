@@ -34,6 +34,8 @@ pub trait DebugBuffer: Sync {
     fn is_empty(&self) -> bool;
     /// Returns bytes dropped due to overflow.
     fn dropped(&self) -> u32;
+    /// Write raw bytes to the buffer. Returns bytes written (0 on overflow).
+    fn write(&self, data: &[u8]) -> usize;
 }
 
 /// Debug record header (4 bytes): [len, level, kind, flags].
@@ -115,8 +117,8 @@ impl<const N: usize> DebugRingBuffer<N> {
         }
     }
 
-    /// Write data (partition-side). Returns false on overflow.
-    pub fn write(&self, data: &[u8]) -> bool {
+    /// Write data (partition-side). Returns bytes written (0 on overflow).
+    pub fn write(&self, data: &[u8]) -> usize {
         let write_pos = self.write_idx.load(Ordering::Relaxed);
         let read_pos = self.read_idx.load(Ordering::Relaxed);
         let used = write_pos.wrapping_sub(read_pos);
@@ -124,7 +126,7 @@ impl<const N: usize> DebugRingBuffer<N> {
 
         if data.len() as u32 > available {
             self.dropped.fetch_add(data.len() as u32, Ordering::Relaxed);
-            return false;
+            return 0;
         }
         let start = (write_pos & Self::MASK) as usize;
         let first_chunk = core::cmp::min(data.len(), N - start);
@@ -143,7 +145,7 @@ impl<const N: usize> DebugRingBuffer<N> {
 
         self.write_idx
             .store(write_pos.wrapping_add(data.len() as u32), Ordering::Release);
-        true
+        data.len()
     }
 
     /// Drain up to `budget` bytes (kernel-side). Returns bytes read.
@@ -246,5 +248,8 @@ impl<const N: usize> DebugBuffer for DebugRingBuffer<N> {
     }
     fn dropped(&self) -> u32 {
         DebugRingBuffer::dropped(self)
+    }
+    fn write(&self, data: &[u8]) -> usize {
+        DebugRingBuffer::write(self, data)
     }
 }

@@ -7,6 +7,11 @@
 #[cfg(feature = "partition-debug")]
 pub const SYS_DEBUG_NOTIFY: u32 = 0x40;
 
+/// Debug write syscall number: writes data to partition's debug ring buffer.
+/// r1=ptr, r2=len. Returns bytes written in r0 or error code.
+#[cfg(feature = "partition-debug")]
+pub const SYS_DEBUG_WRITE: u32 = 0x41;
+
 /// Typed SVC error codes returned to user-space via r0.
 ///
 /// Each variant maps to a unique `u32` with the high bit set (>= 0x8000_0000),
@@ -36,6 +41,10 @@ pub enum SvcError {
     /// The syscall number is recognised but the handler is not yet
     /// implemented.
     NotImplemented,
+    /// A write to a debug buffer failed because the buffer is full.
+    BufferFull,
+    /// The requested operation is not supported (e.g., debug buffer not configured).
+    NotSupported,
 }
 
 impl SvcError {
@@ -65,6 +74,8 @@ impl SvcError {
             Self::OperationFailed => 0xFFFF_FFFA,
             Self::InvalidPointer => 0xFFFF_FFF9,
             Self::NotImplemented => 0xFFFF_FFF8,
+            Self::BufferFull => 0xFFFF_FFF7,
+            Self::NotSupported => 0xFFFF_FFF6,
         }
     }
 }

@@ -1829,6 +1829,32 @@ where
                     SvcError::InvalidPartition.to_u32()
                 }
             }
+            #[cfg(feature = "partition-debug")]
+            Some(SyscallId::DebugWrite) => {
+                let (ptr, len) = (frame.r1, frame.r2 as usize);
+                if !validate_user_ptr(self.partitions(), self.current_partition, ptr, len) {
+                    SvcError::InvalidPointer.to_u32()
+                } else {
+                    let pid = self.current_partition as usize;
+                    match self.partitions_mut().get_mut(pid) {
+                        None => SvcError::InvalidPartition.to_u32(),
+                        Some(pcb) => match pcb.debug_buffer() {
+                            None => SvcError::NotSupported.to_u32(),
+                            Some(buf) => {
+                                // SAFETY: validate_user_ptr confirmed [ptr, ptr+len) in partition memory.
+                                let data =
+                                    unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
+                                let written = buf.write(data);
+                                if written == len {
+                                    len as u32
+                                } else {
+                                    SvcError::BufferFull.to_u32()
+                                }
+                            }
+                        },
+                    }
+                }
+            }
             None => SvcError::InvalidSyscall.to_u32(),
         };
     }
@@ -5638,6 +5664,106 @@ mod tests {
         // debug_pending should be cleared and buffer empty
         assert!(!k.partitions().get(0).unwrap().debug_pending());
         assert!(BUF.is_empty());
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn debug_write_rejects_invalid_pointer() {
+        use crate::syscall::SYS_DEBUG_WRITE;
+        let mut k = kernel(0, 0, 0);
+        let mut ef = frame(SYS_DEBUG_WRITE, 0xDEAD_BEEF, 5);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
+    }
+
+    /// Allocate a page at a fixed low address for partition-debug tests.
+    /// Page 0 corresponds to partition 0's MPU data region at 0x2000_0000.
+    #[cfg(feature = "partition-debug")]
+    fn debug_test_buf(page: usize) -> *mut u8 {
+        extern "C" {
+            fn mmap(a: *mut u8, l: usize, p: i32, f: i32, d: i32, o: i64) -> *mut u8;
+        }
+        // Partition 0 has MPU data region at 0x2000_0000 with size 4096.
+        // Use page 0 for all partition-debug tests (shared with dynamic-mpu tests).
+        let _ = page; // All tests use partition 0's region.
+        let addr = 0x2000_0000_usize;
+        // SAFETY: MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED at a known-free
+        // low address. The mapping is intentionally leaked (test-only).
+        let ptr = unsafe { mmap(addr as *mut u8, 4096, 0x3, 0x32, -1, 0) };
+        assert_eq!(ptr as usize, addr, "mmap MAP_FIXED failed");
+        ptr
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn debug_write_success_writes_data_to_buffer() {
+        use crate::debug::DebugRingBuffer;
+        use crate::syscall::SYS_DEBUG_WRITE;
+
+        static BUF: DebugRingBuffer<64> = DebugRingBuffer::new();
+        let mut k = kernel(0, 0, 0);
+
+        // Configure debug buffer for partition 0.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_debug_buffer(&BUF);
+
+        // Write a known pattern into partition memory.
+        let ptr = debug_test_buf(0);
+        let pattern = [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE];
+        unsafe { core::ptr::copy_nonoverlapping(pattern.as_ptr(), ptr, pattern.len()) };
+
+        // Invoke SYS_DEBUG_WRITE with ptr and len.
+        let mut ef = frame(SYS_DEBUG_WRITE, ptr as u32, pattern.len() as u32);
+        unsafe { k.dispatch(&mut ef) };
+
+        // Verify success: r0 == bytes written.
+        assert_eq!(ef.r0, pattern.len() as u32);
+
+        // Verify data integrity: drain buffer and compare.
+        let mut out = [0u8; 64];
+        let n = BUF.drain(&mut out, 64);
+        assert_eq!(n, pattern.len());
+        assert_eq!(&out[..n], &pattern);
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn debug_write_returns_not_supported_when_no_buffer() {
+        use crate::syscall::SYS_DEBUG_WRITE;
+
+        let mut k = kernel(0, 0, 0);
+        // Do NOT set a debug buffer.
+
+        let ptr = debug_test_buf(1);
+        let mut ef = frame(SYS_DEBUG_WRITE, ptr as u32, 4);
+        unsafe { k.dispatch(&mut ef) };
+
+        assert_eq!(ef.r0, SvcError::NotSupported.to_u32());
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn debug_write_returns_buffer_full_on_overflow() {
+        use crate::debug::DebugRingBuffer;
+        use crate::syscall::SYS_DEBUG_WRITE;
+
+        // Small buffer that will overflow.
+        static BUF: DebugRingBuffer<16> = DebugRingBuffer::new();
+        let mut k = kernel(0, 0, 0);
+
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_debug_buffer(&BUF);
+
+        // Try to write more than the buffer can hold.
+        let ptr = debug_test_buf(2);
+        let mut ef = frame(SYS_DEBUG_WRITE, ptr as u32, 32);
+        unsafe { k.dispatch(&mut ef) };
+
+        assert_eq!(ef.r0, SvcError::BufferFull.to_u32());
     }
 
     /// Test module for `define_unified_kernel!` macro.
