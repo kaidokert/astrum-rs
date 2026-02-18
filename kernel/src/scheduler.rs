@@ -137,6 +137,44 @@ impl<const N: usize> ScheduleTable<N> {
         self.entries.iter().any(|e| e.is_system_window)
     }
 
+    /// Returns the maximum consecutive ticks between system windows (with wraparound).
+    /// Returns `major_frame_ticks` if no system windows exist.
+    #[cfg(feature = "dynamic-mpu")]
+    pub fn max_ticks_without_system_window(&self) -> u32 {
+        if !self.has_system_window() {
+            return self.major_frame_ticks;
+        }
+
+        // Collect (start, end) tick offsets for each system window in one pass.
+        let mut starts: heapless::Vec<u32, N> = heapless::Vec::new();
+        let mut ends: heapless::Vec<u32, N> = heapless::Vec::new();
+        let mut tick: u32 = 0;
+
+        for entry in self.entries.iter() {
+            if entry.is_system_window {
+                let _ = starts.push(tick);
+                let _ = ends.push(tick.saturating_add(entry.duration_ticks));
+            }
+            tick = tick.saturating_add(entry.duration_ticks);
+        }
+
+        // Calculate max gap: from end[i] to start[i+1], with wraparound for last.
+        let n = ends.len();
+        let mut max_gap: u32 = 0;
+        for i in 0..n {
+            let next_start = if i + 1 < n {
+                starts[i + 1]
+            } else {
+                self.major_frame_ticks + starts[0] // wraparound
+            };
+            let gap = next_start.saturating_sub(ends[i]);
+            if gap > max_gap {
+                max_gap = gap;
+            }
+        }
+        max_gap
+    }
+
     /// Reset to the first slot. Call after adding all entries.
     pub fn start(&mut self) {
         self.current_slot = 0;
@@ -654,6 +692,53 @@ mod tests {
             let mut t: ScheduleTable<4> = ScheduleTable::new();
             t.add_system_window(5).unwrap();
             assert!(t.has_system_window());
+        }
+
+        #[test]
+        fn max_ticks_no_system_windows() {
+            let t = table(&[(0, 5), (1, 3), (2, 2)]);
+            assert_eq!(t.max_ticks_without_system_window(), 10); // returns major_frame
+        }
+
+        #[test]
+        fn max_ticks_single_system_window() {
+            // [P0:3, SYS:1, P1:4] -> gap = 4+3 = 7 (wraparound)
+            let t = table_with_windows(&[(Some(0), 3), (None, 1), (Some(1), 4)]);
+            assert_eq!(t.max_ticks_without_system_window(), 7);
+        }
+
+        #[test]
+        fn max_ticks_multiple_system_windows() {
+            // [SYS:1, P0:3, SYS:1, P1:2] -> gaps: 3, 2; max = 3
+            let t = table_with_windows(&[(None, 1), (Some(0), 3), (None, 1), (Some(1), 2)]);
+            assert_eq!(t.max_ticks_without_system_window(), 3);
+        }
+
+        #[test]
+        fn max_ticks_wraparound_is_largest_gap() {
+            // [SYS:1, P0:2, P1:5] -> wraparound gap = 7
+            let t = table_with_windows(&[(None, 1), (Some(0), 2), (Some(1), 5)]);
+            assert_eq!(t.max_ticks_without_system_window(), 7);
+        }
+
+        #[test]
+        fn max_ticks_consecutive_system_windows() {
+            // [P0:3, SYS:1, SYS:1, P1:3] -> gaps: 0, 6; max = 6
+            let t = table_with_windows(&[(Some(0), 3), (None, 1), (None, 1), (Some(1), 3)]);
+            assert_eq!(t.max_ticks_without_system_window(), 6);
+        }
+
+        #[test]
+        fn max_ticks_empty_table() {
+            let t: ScheduleTable<4> = ScheduleTable::new();
+            assert_eq!(t.max_ticks_without_system_window(), 0);
+        }
+
+        #[test]
+        fn max_ticks_only_system_windows() {
+            // All system windows -> max gap = 0
+            let t = table_with_windows(&[(None, 2), (None, 3)]);
+            assert_eq!(t.max_ticks_without_system_window(), 0);
         }
     }
 }
