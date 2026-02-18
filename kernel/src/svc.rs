@@ -829,6 +829,13 @@ where
     /// pointers against both static MPU regions and dynamic windows.
     #[cfg(feature = "dynamic-mpu")]
     pub dynamic_strategy: crate::mpu_strategy::DynamicStrategy,
+    /// Counts ticks since the last bottom-half (system window) processing.
+    ///
+    /// Incremented on each call to `advance_schedule_tick()`, reset to 0
+    /// when `ScheduleEvent::SystemWindow` is returned. Used to monitor
+    /// bottom-half staleness at runtime.
+    #[cfg(feature = "dynamic-mpu")]
+    pub ticks_since_bottom_half: u32,
     /// Partition/schedule state sub-struct containing partitions, schedule,
     /// current_partition, next_partition, and partition_sp.
     pub core: C::Core,
@@ -1020,6 +1027,8 @@ where
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            ticks_since_bottom_half: 0,
             core,
             sync: C::Sync::default(),
             msg: C::Msg::default(),
@@ -1060,6 +1069,8 @@ where
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            ticks_since_bottom_half: 0,
             core: C::Core::default(),
             sync: C::Sync::default(),
             msg: C::Msg::default(),
@@ -1951,12 +1962,21 @@ where
     /// Advance the schedule table by one tick. Returns a [`ScheduleEvent`]
     /// indicating whether a partition switch or system window occurred.
     /// Updates `active_partition` and `next_partition` on partition switches.
+    /// With `dynamic-mpu`, also tracks `ticks_since_bottom_half`.
     pub fn advance_schedule_tick(&mut self) -> ScheduleEvent {
         self.tick.increment();
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            self.ticks_since_bottom_half = self.ticks_since_bottom_half.saturating_add(1);
+        }
         let event = self.schedule_mut().advance_tick();
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             self.active_partition = Some(pid);
             self.set_next_partition(pid);
+        }
+        #[cfg(feature = "dynamic-mpu")]
+        if matches!(event, ScheduleEvent::SystemWindow) {
+            self.ticks_since_bottom_half = 0;
         }
         event
     }
@@ -2422,6 +2442,8 @@ mod tests {
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
+            #[cfg(feature = "dynamic-mpu")]
+            ticks_since_bottom_half: 0,
             core,
             sync: <TestConfig as KernelConfig>::Sync::default(),
             msg: <TestConfig as KernelConfig>::Msg::default(),
@@ -5110,6 +5132,45 @@ mod tests {
         assert_eq!(k.tick().get(), 1);
         k.advance_schedule_tick();
         assert_eq!(k.tick().get(), 2);
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn ticks_since_bottom_half_tracks_staleness() {
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+        // Initially 0
+        assert_eq!(k.ticks_since_bottom_half, 0);
+        // Schedule: P0(5 ticks), P1(3 ticks), SystemWindow(1 tick)
+        // Advance through P0's slot (5 ticks) - counter increments each tick
+        for i in 1..=5 {
+            let event = k.advance_schedule_tick();
+            if i < 5 {
+                assert_eq!(event, ScheduleEvent::None);
+            } else {
+                assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
+            }
+            assert_eq!(k.ticks_since_bottom_half, i);
+        }
+        // Advance through P1's slot (3 ticks)
+        for i in 6..=8 {
+            let event = k.advance_schedule_tick();
+            if i < 8 {
+                assert_eq!(event, ScheduleEvent::None);
+            } else {
+                assert_eq!(event, ScheduleEvent::SystemWindow);
+            }
+            if i < 8 {
+                assert_eq!(k.ticks_since_bottom_half, i);
+            } else {
+                // SystemWindow resets to 0
+                assert_eq!(k.ticks_since_bottom_half, 0);
+            }
+        }
+        // Continue advancing - counter should increment again from 0
+        let event = k.advance_schedule_tick();
+        assert_eq!(event, ScheduleEvent::PartitionSwitch(0));
+        assert_eq!(k.ticks_since_bottom_half, 1);
     }
 
     #[test]
