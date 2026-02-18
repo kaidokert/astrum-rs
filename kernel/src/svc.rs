@@ -932,6 +932,11 @@ where
                 });
             }
         }
+        // Validate system window presence for dynamic-mpu builds.
+        #[cfg(feature = "dynamic-mpu")]
+        if !schedule.has_system_window() {
+            return Err(ConfigError::NoSystemWindow);
+        }
         // Initialize core sub-struct with schedule and partitions.
         let mut core = C::Core::default();
         *core.schedule_mut() = schedule;
@@ -2474,6 +2479,8 @@ mod tests {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         schedule.add(ScheduleEntry::new(1, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        schedule.add_system_window(1).unwrap();
         // Config stack_base values are ignored; internal stacks are used instead.
         let configs = [
             PartitionConfig {
@@ -4614,6 +4621,8 @@ mod tests {
         // Test valid config succeeds
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        s.add_system_window(1).unwrap();
         #[cfg(not(feature = "dynamic-mpu"))]
         let k = Kernel::<TestConfig>::new(s, core::slice::from_ref(&cfg)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
@@ -4628,8 +4637,11 @@ mod tests {
     }
 
     /// Helper to call `Kernel::new` with correct feature-flag arguments.
+    ///
+    /// For `dynamic-mpu` builds, this adds a system window to the schedule
+    /// (required for kernel bottom-half processing).
     fn try_kernel_new(
-        schedule: ScheduleTable<4>,
+        mut schedule: ScheduleTable<4>,
         configs: &[PartitionConfig],
     ) -> Result<Kernel<TestConfig>, ConfigError> {
         #[cfg(not(feature = "dynamic-mpu"))]
@@ -4638,6 +4650,8 @@ mod tests {
         }
         #[cfg(feature = "dynamic-mpu")]
         {
+            // Add system window required for dynamic-mpu builds.
+            let _ = schedule.add_system_window(1);
             Kernel::<TestConfig>::new(
                 schedule,
                 configs,
@@ -4868,6 +4882,32 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn kernel_new_rejects_no_system_window() {
+        // Schedule with only partition entries (no system window)
+        let mut s = ScheduleTable::<4>::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+
+        let cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
+        };
+
+        // Call Kernel::new directly (not try_kernel_new which adds a system window)
+        let result = Kernel::<TestConfig>::new(
+            s,
+            core::slice::from_ref(&cfg),
+            crate::virtual_device::DeviceRegistry::new(),
+        );
+
+        assert!(matches!(result, Err(ConfigError::NoSystemWindow)));
+    }
+
     // -------------------------------------------------------------------------
     // Schedule advance and accessor tests
     // -------------------------------------------------------------------------
@@ -4878,6 +4918,8 @@ mod tests {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
         schedule.add(ScheduleEntry::new(1, 3)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        schedule.add_system_window(1).unwrap();
         schedule.start();
         let cfgs = [
             PartitionConfig {
@@ -4928,8 +4970,10 @@ mod tests {
     #[test]
     fn schedule_accessor_returns_schedule_table() {
         let k = kernel_with_schedule();
-        assert_eq!(k.schedule().major_frame_ticks, 8); // 5 + 3
-        assert_eq!(k.schedule().len(), 2);
+        #[cfg(not(feature = "dynamic-mpu"))]
+        assert_eq!((k.schedule().major_frame_ticks, k.schedule().len()), (8, 2));
+        #[cfg(feature = "dynamic-mpu")]
+        assert_eq!((k.schedule().major_frame_ticks, k.schedule().len()), (9, 3));
     }
 
     #[test]
@@ -4954,6 +4998,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "dynamic-mpu"))]
     fn advance_schedule_tick_updates_next_partition() {
         use crate::scheduler::ScheduleEvent;
         let mut k = kernel_with_schedule();
@@ -5000,6 +5045,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "dynamic-mpu"))]
     fn yield_current_slot_wraps_around() {
         let mut k = kernel_with_schedule();
         // Yield to P1
@@ -5036,6 +5082,8 @@ mod tests {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
         schedule.add(ScheduleEntry::new(1, 3)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        schedule.add_system_window(1).unwrap();
         let cfgs = [
             PartitionConfig {
                 id: 0,

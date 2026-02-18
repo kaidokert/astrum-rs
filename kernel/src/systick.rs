@@ -327,6 +327,8 @@ mod tests {
         let mut schedule = ScheduleTable::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         schedule.add(ScheduleEntry::new(1, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        schedule.add_system_window(1).unwrap();
         let configs = [
             PartitionConfig {
                 id: 0,
