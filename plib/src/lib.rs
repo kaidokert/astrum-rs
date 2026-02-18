@@ -83,31 +83,86 @@ macro_rules! define_partition_debug {
 /// for best-effort debug logging where partial output is preferable to panicking.
 // TODO: Consider making the default size configurable via KernelConfig trait
 // for system-wide stack budget control.
-// TODO: reviewer false positive - macro uses @size keyword correctly, not a path
 #[cfg(feature = "partition-debug")]
 #[macro_export]
 macro_rules! dprint {
     // Form with explicit buffer size (uses @size keyword to disambiguate from format string)
-    ($buf:expr, @size $size:literal, $($arg:tt)*) => {{
-        use core::fmt::Write;
-        let mut fmt_buf = $crate::FmtBuffer::<$size>::new();
-        // Silent truncation is intentional for best-effort debug logging
-        let _ = write!(fmt_buf, $($arg)*);
-        $crate::debug_write($buf, $crate::__LOG_INFO, fmt_buf.as_bytes())
-    }};
+    ($buf:expr, @size $size:literal, $($arg:tt)*) => {
+        $crate::__debug_write_impl!($buf, $crate::__LOG_INFO, @size $size, $($arg)*)
+    };
     // Form with default 128-byte buffer
-    ($buf:expr, $($arg:tt)*) => {{
-        use core::fmt::Write;
-        let mut fmt_buf = $crate::FmtBuffer::<128>::new();
-        // Silent truncation is intentional for best-effort debug logging
-        let _ = write!(fmt_buf, $($arg)*);
-        $crate::debug_write($buf, $crate::__LOG_INFO, fmt_buf.as_bytes())
-    }};
+    ($buf:expr, $($arg:tt)*) => {
+        $crate::__debug_write_impl!($buf, $crate::__LOG_INFO, $($arg)*)
+    };
 }
 
 #[cfg(feature = "partition-debug")]
 #[doc(hidden)]
+pub use rtos_traits::debug::LOG_ERROR as __LOG_ERROR;
+#[cfg(feature = "partition-debug")]
+#[doc(hidden)]
 pub use rtos_traits::debug::LOG_INFO as __LOG_INFO;
+#[cfg(feature = "partition-debug")]
+#[doc(hidden)]
+pub use rtos_traits::debug::LOG_WARN as __LOG_WARN;
+
+/// Internal macro that implements the common formatting and writing logic.
+/// Used by `dprint!`, `debug_warn!`, and `debug_error!` to avoid code duplication.
+#[cfg(feature = "partition-debug")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __debug_write_impl {
+    ($buf:expr, $level:expr, @size $size:literal, $($arg:tt)*) => {{
+        use core::fmt::Write;
+        let mut fmt_buf = $crate::FmtBuffer::<$size>::new();
+        // Silent truncation is intentional for best-effort debug logging
+        let _ = write!(fmt_buf, $($arg)*);
+        $crate::debug_write($buf, $level, fmt_buf.as_bytes())
+    }};
+    ($buf:expr, $level:expr, $($arg:tt)*) => {{
+        use core::fmt::Write;
+        let mut fmt_buf = $crate::FmtBuffer::<128>::new();
+        // Silent truncation is intentional for best-effort debug logging
+        let _ = write!(fmt_buf, $($arg)*);
+        $crate::debug_write($buf, $level, fmt_buf.as_bytes())
+    }};
+}
+
+/// Format and write a warning-level debug message to the partition's debug ring buffer.
+///
+/// Similar to [`dprint!`] but uses `LOG_WARN` level instead of `LOG_INFO`.
+///
+/// # Forms
+/// - `debug_warn!(buffer, "format", args...)` - uses default 128-byte stack buffer
+/// - `debug_warn!(buffer, @size SIZE, "format", args...)` - uses SIZE-byte stack buffer
+#[cfg(feature = "partition-debug")]
+#[macro_export]
+macro_rules! debug_warn {
+    ($buf:expr, @size $size:literal, $($arg:tt)*) => {
+        $crate::__debug_write_impl!($buf, $crate::__LOG_WARN, @size $size, $($arg)*)
+    };
+    ($buf:expr, $($arg:tt)*) => {
+        $crate::__debug_write_impl!($buf, $crate::__LOG_WARN, $($arg)*)
+    };
+}
+
+/// Format and write an error-level debug message to the partition's debug ring buffer.
+///
+/// Similar to [`dprint!`] but uses `LOG_ERROR` level instead of `LOG_INFO`.
+///
+/// # Forms
+/// - `debug_error!(buffer, "format", args...)` - uses default 128-byte stack buffer
+/// - `debug_error!(buffer, @size SIZE, "format", args...)` - uses SIZE-byte stack buffer
+#[cfg(feature = "partition-debug")]
+#[macro_export]
+macro_rules! debug_error {
+    ($buf:expr, @size $size:literal, $($arg:tt)*) => {
+        $crate::__debug_write_impl!($buf, $crate::__LOG_ERROR, @size $size, $($arg)*)
+    };
+    ($buf:expr, $($arg:tt)*) => {
+        $crate::__debug_write_impl!($buf, $crate::__LOG_ERROR, $($arg)*)
+    };
+}
 
 /// Error type for debug_write operations.
 #[cfg(feature = "partition-debug")]
