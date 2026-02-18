@@ -49,6 +49,8 @@ pub mod partition_core;
 pub mod partition_debug;
 pub mod pendsv;
 pub mod pendsv_asm;
+#[cfg(feature = "partition-debug")]
+pub mod plib;
 pub mod port_pools;
 pub mod queuing;
 pub mod sampling;
