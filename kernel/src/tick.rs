@@ -240,14 +240,7 @@ where
             cortex_m::peripheral::SCB::set_pendsv();
         }
         ScheduleEvent::SystemWindow => {
-            let bh = run_bottom_half(
-                &mut kernel.uart_pair,
-                &mut kernel.isr_ring,
-                &mut kernel.buffers,
-                &mut kernel.hw_uart,
-                current_tick,
-                &kernel.dynamic_strategy,
-            );
+            let bh = crate::run_bottom_half!(kernel, current_tick, &kernel.dynamic_strategy);
             if bh.has_rx_data {
                 if let Some(woken) = kernel.dev_wait_queue.wake_one_reader() {
                     crate::svc::try_transition(
@@ -264,6 +257,46 @@ where
 
     #[cfg(feature = "partition-debug")]
     drain_debug_at_tick::<C>(kernel);
+}
+
+/// RAII guard that clears `in_bottom_half` on drop.
+///
+/// Ensures the flag is cleared even if `run_bottom_half` panics or returns early.
+#[cfg(feature = "dynamic-mpu")]
+pub struct BottomHalfGuard<'a> {
+    /// Reference to the flag to clear on drop. Public for macro use only.
+    #[doc(hidden)]
+    pub flag: &'a mut bool,
+}
+
+#[cfg(feature = "dynamic-mpu")]
+impl Drop for BottomHalfGuard<'_> {
+    fn drop(&mut self) {
+        *self.flag = false;
+    }
+}
+
+/// Wraps `run_bottom_half` with guard flag. Panics on nested calls.
+#[cfg(feature = "dynamic-mpu")]
+#[macro_export]
+macro_rules! run_bottom_half {
+    ($kernel:expr, $current_tick:expr, $strategy:expr) => {{
+        if $kernel.in_bottom_half {
+            panic!("nested bottom-half invocation detected");
+        }
+        $kernel.in_bottom_half = true;
+        let _guard = $crate::tick::BottomHalfGuard {
+            flag: &mut $kernel.in_bottom_half,
+        };
+        $crate::tick::run_bottom_half(
+            &mut $kernel.uart_pair,
+            &mut $kernel.isr_ring,
+            &mut $kernel.buffers,
+            &mut $kernel.hw_uart,
+            $current_tick,
+            $strategy,
+        )
+    }};
 }
 
 /// Result of bottom-half processing.

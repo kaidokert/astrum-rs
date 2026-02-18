@@ -841,6 +841,9 @@ where
     /// is overdue. Used for runtime health monitoring.
     #[cfg(feature = "dynamic-mpu")]
     bottom_half_stale: bool,
+    /// Guard flag for nested bottom-half detection. Set/cleared by `run_bottom_half!`.
+    #[cfg(feature = "dynamic-mpu")]
+    pub in_bottom_half: bool,
     /// Partition/schedule state sub-struct containing partitions, schedule,
     /// current_partition, next_partition, and partition_sp.
     pub core: C::Core,
@@ -1036,6 +1039,8 @@ where
             ticks_since_bottom_half: 0,
             #[cfg(feature = "dynamic-mpu")]
             bottom_half_stale: false,
+            #[cfg(feature = "dynamic-mpu")]
+            in_bottom_half: false,
             core,
             sync: C::Sync::default(),
             msg: C::Msg::default(),
@@ -1080,6 +1085,8 @@ where
             ticks_since_bottom_half: 0,
             #[cfg(feature = "dynamic-mpu")]
             bottom_half_stale: false,
+            #[cfg(feature = "dynamic-mpu")]
+            in_bottom_half: false,
             core: C::Core::default(),
             sync: C::Sync::default(),
             msg: C::Msg::default(),
@@ -2516,6 +2523,8 @@ mod tests {
             ticks_since_bottom_half: 0,
             #[cfg(feature = "dynamic-mpu")]
             bottom_half_stale: false,
+            #[cfg(feature = "dynamic-mpu")]
+            in_bottom_half: false,
             core,
             sync: <TestConfig as KernelConfig>::Sync::default(),
             msg: <TestConfig as KernelConfig>::Msg::default(),

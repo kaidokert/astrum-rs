@@ -579,4 +579,22 @@ mod tests {
             init_kernel_state_at(misaligned_ptr, kernel);
         }
     }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn run_bottom_half_macro_sets_and_clears_flag() {
+        let mut k = create_test_kernel();
+        assert!(!k.in_bottom_half);
+        let _bh = crate::run_bottom_half!(k, 0, &k.dynamic_strategy);
+        assert!(!k.in_bottom_half);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    #[should_panic(expected = "nested bottom-half invocation detected")]
+    fn run_bottom_half_macro_panics_on_nested_call() {
+        let mut k = create_test_kernel();
+        k.in_bottom_half = true;
+        let _bh = crate::run_bottom_half!(k, 0, &k.dynamic_strategy);
+    }
 }

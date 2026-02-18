@@ -64,14 +64,7 @@ macro_rules! _unified_handle_tick {
 #[doc(hidden)]
 macro_rules! _unified_run_system_window {
     ($kernel:expr, $tick:expr, $strategy:expr) => {{
-        let bh = $crate::tick::run_bottom_half(
-            &mut $kernel.uart_pair,
-            &mut $kernel.isr_ring,
-            &mut $kernel.buffers,
-            &mut $kernel.hw_uart,
-            $tick,
-            $strategy,
-        );
+        let bh = $crate::run_bottom_half!($kernel, $tick, $strategy);
         if bh.has_rx_data {
             if let Some(woken) = $kernel.dev_wait_queue.wake_one_reader() {
                 $crate::svc::try_transition(
