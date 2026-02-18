@@ -5304,6 +5304,34 @@ mod tests {
         assert!(BUF1.is_empty());
     }
 
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn systick_handler_drains_debug_output() {
+        use crate::debug::{DebugRingBuffer, KIND_TEXT, LOG_INFO};
+
+        static BUF: DebugRingBuffer<64> = DebugRingBuffer::new();
+        let mut k = kernel(0, 0, 0);
+
+        // Set up debug buffer on partition 0
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_debug_buffer(&BUF);
+        BUF.write_record(LOG_INFO, KIND_TEXT, b"test");
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .signal_debug_pending();
+        assert!(k.partitions().get(0).unwrap().debug_pending());
+
+        // Call systick_handler - should drain debug output
+        crate::tick::systick_handler::<TestConfig>(&mut k);
+
+        // debug_pending should be cleared and buffer empty
+        assert!(!k.partitions().get(0).unwrap().debug_pending());
+        assert!(BUF.is_empty());
+    }
+
     /// Test module for `define_unified_kernel!` macro.
     ///
     /// The macro generates:

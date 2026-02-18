@@ -64,6 +64,74 @@ impl TickCounterOps for TickCounter {
     }
 }
 
+/// Drain partition debug output at tick boundary.
+///
+/// This helper consolidates the debug draining logic to avoid duplication
+/// across the two `systick_handler` variants.
+// TODO: Consider deferring debug draining to a lower-priority context (e.g., PendSV
+// or idle task) to reduce jitter in the SysTick ISR. Currently this runs on every
+// tick which may add overhead in timing-critical scenarios.
+#[cfg(all(feature = "partition-debug", not(feature = "dynamic-mpu")))]
+#[inline]
+fn drain_debug_at_tick<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<C>)
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    C::Core: crate::config::CoreOps<
+        PartTable = crate::partition::PartitionTable<{ C::N }>,
+        SchedTable = crate::scheduler::ScheduleTable<{ C::SCHED }>,
+    >,
+    C::Sync: crate::config::SyncOps<
+        SemPool = crate::semaphore::SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = crate::mutex::MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: crate::config::MsgOps<
+        MsgPool = crate::message::MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = crate::queuing::QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: crate::config::PortsOps<
+        SamplingPool = crate::sampling::SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    let mut ctx = crate::partition_debug::DrainContext::new();
+    kernel.drain_debug_pending(&mut ctx, C::DEBUG_BUFFER_SIZE);
+}
+
+/// Drain partition debug output at tick boundary (dynamic-mpu variant).
+// TODO: Consider deferring debug draining to a lower-priority context (e.g., PendSV
+// or idle task) to reduce jitter in the SysTick ISR. Currently this runs on every
+// tick which may add overhead in timing-critical scenarios.
+#[cfg(all(feature = "partition-debug", feature = "dynamic-mpu"))]
+#[inline]
+fn drain_debug_at_tick<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<C>)
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    [(); C::BP]:,
+    [(); C::BZ]:,
+    [(); C::DR]:,
+    C::Core: crate::config::CoreOps<
+        PartTable = crate::partition::PartitionTable<{ C::N }>,
+        SchedTable = crate::scheduler::ScheduleTable<{ C::SCHED }>,
+    >,
+    C::Sync: crate::config::SyncOps<
+        SemPool = crate::semaphore::SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = crate::mutex::MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: crate::config::MsgOps<
+        MsgPool = crate::message::MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = crate::queuing::QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: crate::config::PortsOps<
+        SamplingPool = crate::sampling::SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    let mut ctx = crate::partition_debug::DrainContext::new();
+    kernel.drain_debug_pending(&mut ctx, C::DEBUG_BUFFER_SIZE);
+}
+
 /// Configure the SysTick timer with the given reload value.
 #[cfg(not(test))]
 pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
@@ -119,6 +187,9 @@ where
     }
     let current_tick = kernel.tick().get();
     kernel.expire_timed_waits::<{ C::N }>(current_tick);
+
+    #[cfg(feature = "partition-debug")]
+    drain_debug_at_tick::<C>(kernel);
 }
 
 /// SysTick handler: advance schedule, trigger PendSV, expire timed waits.
@@ -190,6 +261,9 @@ where
         ScheduleEvent::None => {}
     }
     kernel.expire_timed_waits::<{ C::N }>(current_tick);
+
+    #[cfg(feature = "partition-debug")]
+    drain_debug_at_tick::<C>(kernel);
 }
 
 /// Result of bottom-half processing.
