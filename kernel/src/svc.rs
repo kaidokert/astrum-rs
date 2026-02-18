@@ -1815,19 +1815,21 @@ where
                 }
             }
             Some(SyscallId::DebugExit) => {
-                #[cfg(feature = "log-semihosting")]
+                #[cfg(feature = "qemu")]
                 {
-                    use cortex_m_semihosting::debug;
+                    // The kexit! macro expands to identical infinite loops when semihosting
+                    // is disabled, but different exit codes when enabled.
+                    #[allow(clippy::if_same_then_else)]
                     if frame.r1 == 0 {
-                        debug::exit(debug::EXIT_SUCCESS);
+                        crate::kexit!(success);
                     } else {
-                        debug::exit(debug::EXIT_FAILURE);
+                        crate::kexit!(failure);
                     }
-                    // Note: debug::exit() does not return in QEMU.
+                    // Note: kexit! does not return when semihosting is enabled.
                     #[allow(unreachable_code)]
                     0
                 }
-                #[cfg(not(feature = "log-semihosting"))]
+                #[cfg(not(feature = "qemu"))]
                 {
                     SvcError::NotImplemented.to_u32()
                 }
