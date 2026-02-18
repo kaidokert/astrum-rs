@@ -32,6 +32,8 @@ pub mod blackboard;
 pub mod buffer_pool;
 pub mod config;
 pub mod context;
+#[cfg(feature = "partition-debug")]
+pub mod debug;
 pub mod events;
 #[cfg(feature = "dynamic-mpu")]
 pub mod hw_uart;
