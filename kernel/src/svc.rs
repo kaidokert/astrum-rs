@@ -1789,14 +1789,14 @@ where
                     }
                 })
             }
-            // Debug syscalls: only available in qemu builds with semihosting.
-            // For non-qemu builds these are recognized but return NotImplemented.
+            // Debug syscalls: only available with log-semihosting feature.
+            // Otherwise these are recognized but return NotImplemented.
             Some(SyscallId::DebugPrint) => {
-                #[cfg(feature = "qemu")]
+                #[cfg(feature = "log-semihosting")]
                 {
                     // SAFETY: caller ensures r1 points to a valid string of length r2
                     // within the partition's memory region. Semihosting is available
-                    // in QEMU builds.
+                    // when log-semihosting feature is enabled.
                     let ptr = frame.r1 as *const u8;
                     let len = frame.r2 as usize;
                     if len > 0 && !ptr.is_null() {
@@ -1809,13 +1809,13 @@ where
                     }
                     0
                 }
-                #[cfg(not(feature = "qemu"))]
+                #[cfg(not(feature = "log-semihosting"))]
                 {
                     SvcError::NotImplemented.to_u32()
                 }
             }
             Some(SyscallId::DebugExit) => {
-                #[cfg(feature = "qemu")]
+                #[cfg(feature = "log-semihosting")]
                 {
                     use cortex_m_semihosting::debug;
                     if frame.r1 == 0 {
@@ -1827,7 +1827,7 @@ where
                     #[allow(unreachable_code)]
                     0
                 }
-                #[cfg(not(feature = "qemu"))]
+                #[cfg(not(feature = "log-semihosting"))]
                 {
                     SvcError::NotImplemented.to_u32()
                 }

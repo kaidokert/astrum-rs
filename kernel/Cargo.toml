@@ -9,7 +9,9 @@ cortex-m-rt = { version = "0.7", features = ["device"] }
 cortex-m-semihosting = { version = "0.5", optional = true }
 defmt = { version = "0.3", optional = true }
 heapless = "0.8"
-panic-semihosting = { version = "0.6", features = ["exit"] }
+panic-halt = "1.0"
+panic-rtt-target = { version = "0.2", optional = true }
+panic-semihosting = { version = "0.6", features = ["exit"], optional = true }
 rtos-traits = { path = "../rtos-traits" }
 rtt-target = { version = "0.5", optional = true }
 
@@ -183,7 +185,7 @@ required-features = ["qemu", "log-semihosting"]
 [features]
 qemu = []
 dynamic-mpu = []
-log-semihosting = ["dep:cortex-m-semihosting"]
-log-rtt = ["dep:rtt-target"]
+log-semihosting = ["dep:cortex-m-semihosting", "dep:panic-semihosting"]
+log-rtt = ["dep:rtt-target", "dep:panic-rtt-target"]
 log-swo = []
 log-defmt = ["dep:defmt"]

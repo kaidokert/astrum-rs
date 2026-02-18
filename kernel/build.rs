@@ -36,6 +36,18 @@ fn main() {
     // Declare valid klog_backend values for check-cfg lint.
     println!("cargo::rustc-check-cfg=cfg(klog_backend, values(\"semihosting\", \"rtt\", \"swo\", \"defmt\", \"none\"))");
 
+    // Emit panic_backend cfg matching the log backend.
+    // Priority: semihosting > rtt > halt (fallback)
+    let panic_backend = match backend {
+        "semihosting" => "semihosting",
+        "rtt" => "rtt",
+        _ => "halt",
+    };
+    println!("cargo:rustc-cfg=panic_backend=\"{}\"", panic_backend);
+    println!(
+        "cargo::rustc-check-cfg=cfg(panic_backend, values(\"semihosting\", \"rtt\", \"halt\"))"
+    );
+
     let target = env::var("TARGET").unwrap_or_default();
     if !target.contains("thumb") {
         return;
