@@ -1,6 +1,47 @@
 use heapless::Vec;
 
+#[cfg(feature = "partition-debug")]
+use crate::debug::DebugBuffer;
 use crate::mpu::{validate_mpu_region, MpuError};
+
+/// Wrapper for a reference to a debug buffer trait object.
+///
+/// This wrapper provides Clone, Debug, PartialEq, and Eq implementations
+/// required by `PartitionControlBlock`'s derived traits.
+#[cfg(feature = "partition-debug")]
+#[derive(Clone, Copy)]
+struct DebugBufferRef(Option<&'static dyn DebugBuffer>);
+
+#[cfg(feature = "partition-debug")]
+impl DebugBufferRef {
+    const fn none() -> Self {
+        Self(None)
+    }
+}
+
+#[cfg(feature = "partition-debug")]
+impl core::fmt::Debug for DebugBufferRef {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(buf) => write!(f, "DebugBufferRef(Some({:p}))", buf),
+            None => write!(f, "DebugBufferRef(None)"),
+        }
+    }
+}
+
+#[cfg(feature = "partition-debug")]
+impl PartialEq for DebugBufferRef {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.0, other.0) {
+            (Some(a), Some(b)) => core::ptr::eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "partition-debug")]
+impl Eq for DebugBufferRef {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartitionState {
@@ -57,6 +98,9 @@ pub struct PartitionControlBlock {
     peripheral_regions: Vec<MpuRegion, 2>,
     /// Flag set by SYS_DEBUG_NOTIFY syscall, cleared after kernel drains debug ring buffer.
     debug_pending: bool,
+    /// Reference to the partition's debug ring buffer (type-erased via trait object).
+    #[cfg(feature = "partition-debug")]
+    debug_buffer: DebugBufferRef,
 }
 
 impl PartitionControlBlock {
@@ -79,6 +123,8 @@ impl PartitionControlBlock {
             event_wait_mask: 0,
             peripheral_regions: Vec::new(),
             debug_pending: false,
+            #[cfg(feature = "partition-debug")]
+            debug_buffer: DebugBufferRef::none(),
         }
     }
 
@@ -185,6 +231,21 @@ impl PartitionControlBlock {
     /// Clears the debug pending flag after kernel drains the debug ring buffer.
     pub fn clear_debug_pending(&mut self) {
         self.debug_pending = false;
+    }
+
+    /// Returns a reference to this partition's debug ring buffer, if set.
+    #[cfg(feature = "partition-debug")]
+    pub fn debug_buffer(&self) -> Option<&'static dyn DebugBuffer> {
+        self.debug_buffer.0
+    }
+
+    /// Sets this partition's debug ring buffer.
+    #[cfg(feature = "partition-debug")]
+    pub fn set_debug_buffer<const N: usize>(
+        &mut self,
+        buffer: &'static crate::debug::DebugRingBuffer<N>,
+    ) {
+        self.debug_buffer = DebugBufferRef(Some(buffer as &'static dyn DebugBuffer));
     }
 
     pub fn transition(&mut self, to: PartitionState) -> Result<(), TransitionError> {
@@ -1032,5 +1093,45 @@ mod tests {
         };
         let msg = format!("{e}");
         assert!(msg.contains("partition 2") && msg.contains("peripheral region 1"));
+    }
+
+    // ------------------------------------------------------------------
+    // debug_buffer (partition-debug feature)
+    // ------------------------------------------------------------------
+
+    #[cfg(feature = "partition-debug")]
+    mod debug_buffer_tests {
+        use super::*;
+        use crate::debug::DebugRingBuffer;
+
+        static TEST_DEBUG_BUFFER: DebugRingBuffer<64> = DebugRingBuffer::new();
+
+        #[test]
+        fn debug_buffer_initially_none() {
+            let pcb = make_pcb();
+            assert!(pcb.debug_buffer().is_none());
+        }
+
+        #[test]
+        fn set_and_get_debug_buffer() {
+            let mut pcb = make_pcb();
+            pcb.set_debug_buffer(&TEST_DEBUG_BUFFER);
+            let buf = pcb.debug_buffer();
+            assert!(buf.is_some());
+            // Verify it's the same buffer by checking it's usable via trait methods
+            let buf = buf.unwrap();
+            assert!(buf.is_empty());
+        }
+
+        #[test]
+        fn debug_buffer_returns_correct_reference() {
+            static BUF: DebugRingBuffer<128> = DebugRingBuffer::new();
+            let mut pcb = make_pcb();
+            pcb.set_debug_buffer(&BUF);
+            let retrieved = pcb.debug_buffer().unwrap();
+            // Write directly to BUF and verify via trait object
+            assert!(BUF.write(b"test"));
+            assert_eq!(retrieved.available(), 4);
+        }
     }
 }

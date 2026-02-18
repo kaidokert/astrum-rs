@@ -3,6 +3,21 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+/// Trait for type-erased access to debug ring buffers.
+///
+/// This provides safe, polymorphic access to `DebugRingBuffer<N>` without
+/// exposing the const generic `N` to callers.
+pub trait DebugBuffer: Sync {
+    /// Drain up to `budget` bytes (kernel-side). Returns bytes read.
+    fn drain(&self, output: &mut [u8], budget: usize) -> usize;
+    /// Returns bytes available to read.
+    fn available(&self) -> usize;
+    /// Returns true if empty.
+    fn is_empty(&self) -> bool;
+    /// Returns bytes dropped due to overflow.
+    fn dropped(&self) -> u32;
+}
+
 // Log levels: ERROR=0 (highest) to TRACE=4 (lowest)
 pub const LOG_ERROR: u8 = 0;
 pub const LOG_WARN: u8 = 1;
@@ -197,6 +212,21 @@ impl<const N: usize> DebugRingBuffer<N> {
 impl<const N: usize> Default for DebugRingBuffer<N> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<const N: usize> DebugBuffer for DebugRingBuffer<N> {
+    fn drain(&self, output: &mut [u8], budget: usize) -> usize {
+        DebugRingBuffer::drain(self, output, budget)
+    }
+    fn available(&self) -> usize {
+        DebugRingBuffer::available(self)
+    }
+    fn is_empty(&self) -> bool {
+        DebugRingBuffer::is_empty(self)
+    }
+    fn dropped(&self) -> u32 {
+        DebugRingBuffer::dropped(self)
     }
 }
 
