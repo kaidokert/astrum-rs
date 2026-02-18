@@ -153,6 +153,15 @@ pub fn check_storage_alignment(address: u32, required: u32) -> Result<(), BootEr
     Ok(())
 }
 
+/// AAPCS requires 8-byte stack pointer alignment at public interfaces.
+pub const AAPCS_STACK_ALIGNMENT: u32 = 8;
+
+/// Check if a stack pointer is 8-byte aligned per AAPCS.
+#[inline]
+pub fn is_stack_aapcs_aligned(sp: u32) -> bool {
+    sp & (AAPCS_STACK_ALIGNMENT - 1) == 0
+}
+
 /// Initialize stacks, priorities, start schedule, enable SysTick, enter idle loop.
 #[cfg(not(test))]
 pub fn boot<C: KernelConfig>(
@@ -212,6 +221,14 @@ where
                 .checked_mul(4)
                 .and_then(|offset| base.checked_add(offset))
                 .ok_or(BootError::StackSizeOverflow { partition_index: i })?;
+            // Validate AAPCS 8-byte alignment; warn but do not fail boot.
+            if !is_stack_aapcs_aligned(sp) {
+                crate::klog!(
+                    "WARN: partition {} stack pointer 0x{:08x} not 8-byte aligned (AAPCS)",
+                    i,
+                    sp
+                );
+            }
             k.set_sp(i, sp);
         }
         Ok::<(), BootError>(())
@@ -444,5 +461,28 @@ mod tests {
                 required: 1024,
             })
         );
+    }
+
+    #[test]
+    fn is_stack_aapcs_aligned_accepts_8byte_aligned() {
+        // 8-byte aligned addresses
+        assert!(is_stack_aapcs_aligned(0x0000_0000));
+        assert!(is_stack_aapcs_aligned(0x0000_0008));
+        assert!(is_stack_aapcs_aligned(0x0000_0010));
+        assert!(is_stack_aapcs_aligned(0x2000_0000));
+        assert!(is_stack_aapcs_aligned(0x2000_0008));
+        assert!(is_stack_aapcs_aligned(0x2000_0100));
+    }
+
+    #[test]
+    fn is_stack_aapcs_aligned_rejects_misaligned() {
+        // Not 8-byte aligned (4-byte aligned only)
+        assert!(!is_stack_aapcs_aligned(0x0000_0004));
+        assert!(!is_stack_aapcs_aligned(0x0000_000C));
+        assert!(!is_stack_aapcs_aligned(0x2000_0004));
+        assert!(!is_stack_aapcs_aligned(0x2000_000C));
+        // Odd addresses
+        assert!(!is_stack_aapcs_aligned(0x0000_0001));
+        assert!(!is_stack_aapcs_aligned(0x0000_0002));
     }
 }
