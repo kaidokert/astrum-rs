@@ -120,6 +120,15 @@ pub const MAX_KERNEL_SIZE: usize = 16 * 1024;
 /// `AlignedStack<SW>` fields that require 1024-byte alignment.
 pub const KERNEL_ALIGNMENT: usize = 1024;
 
+/// Check pointer alignment to [`KERNEL_ALIGNMENT`]. Returns `Err(offset)` if misaligned.
+#[inline]
+fn check_kernel_alignment(ptr: *const u8) -> Result<(), usize> {
+    match ptr as usize % KERNEL_ALIGNMENT {
+        0 => Ok(()),
+        offset => Err(offset),
+    }
+}
+
 /// Static storage for the unified kernel state.
 ///
 /// Uses a byte array wrapped in `MaybeUninit` for deferred initialization.
@@ -191,6 +200,32 @@ where
     };
 }
 
+/// Initialize kernel at `ptr`. Panics if misaligned.
+/// # Safety
+/// `ptr` must be valid, writable, and sized for `Kernel<C>`.
+pub unsafe fn init_kernel_state_at<C: KernelConfig>(ptr: *mut Kernel<C>, kernel: Kernel<C>)
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+{
+    if let Err(offset) = check_kernel_alignment(ptr as *const u8) {
+        // TODO(panic-free): convert to Result
+        panic!(
+            "UNIFIED_KERNEL_STORAGE misaligned: offset {} from required {} byte alignment",
+            offset, KERNEL_ALIGNMENT
+        );
+    }
+    // SAFETY: The caller guarantees that ptr is valid, writable, and has sufficient
+    // size for Kernel<C>. The alignment check above ensures ptr is KERNEL_ALIGNMENT-aligned.
+    ptr.write(kernel);
+}
+
 /// Initialize kernel state storage with a configured kernel instance.
 ///
 /// # Safety
@@ -241,23 +276,8 @@ where
     // 4. The write initializes the memory with a valid Kernel<C> value
     let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>;
 
-    // SAFETY: The pointer-to-integer cast for alignment checking is safe because:
-    // 1. We only read the pointer's numeric address, not the memory it points to
-    // 2. The modulo operation verifies the invariant that ptr is KERNEL_ALIGNMENT-aligned
-    // 3. This check occurs before any dereference or write through the pointer
-    // Verify storage alignment at runtime. This catches linker script
-    // misconfigurations that could cause hard faults on Cortex-M due to
-    // unaligned access to stack pointers within Kernel<C>.
-    let offset = ptr as usize % KERNEL_ALIGNMENT;
-    // TODO(panic-free): convert to Result
-    assert!(
-        offset == 0,
-        "UNIFIED_KERNEL_STORAGE misaligned: offset {} from required {} byte alignment",
-        offset,
-        KERNEL_ALIGNMENT
-    );
-
-    ptr.write(kernel);
+    // SAFETY: ptr points to UNIFIED_KERNEL_STORAGE with sufficient size and alignment.
+    init_kernel_state_at(ptr, kernel);
 }
 
 /// Get a raw pointer to the kernel state storage.
@@ -463,23 +483,27 @@ mod tests {
             PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
     }
 
-    #[test]
-    fn unified_kernel_is_kernel_alias() {
-        fn assert_same_type<T>(_: T, _: T) {}
+    /// Helper to create a test kernel instance.
+    ///
+    /// Abstracts cfg-gated construction logic for DRY compliance.
+    fn create_test_kernel() -> Kernel<TestConfig> {
         #[cfg(not(feature = "dynamic-mpu"))]
         {
-            let k1: Kernel<TestConfig> = Kernel::new_empty();
-            let k2: UnifiedKernel<TestConfig> = Kernel::new_empty();
-            assert_same_type(k1, k2);
+            Kernel::new_empty()
         }
         #[cfg(feature = "dynamic-mpu")]
         {
             let reg = crate::virtual_device::DeviceRegistry::default();
-            let k1: Kernel<TestConfig> = Kernel::new_empty(reg);
-            let reg2 = crate::virtual_device::DeviceRegistry::default();
-            let k2: UnifiedKernel<TestConfig> = Kernel::new_empty(reg2);
-            assert_same_type(k1, k2);
+            Kernel::new_empty(reg)
         }
+    }
+
+    #[test]
+    fn unified_kernel_is_kernel_alias() {
+        fn assert_same_type<T>(_: T, _: T) {}
+        let k1: Kernel<TestConfig> = create_test_kernel();
+        let k2: UnifiedKernel<TestConfig> = create_test_kernel();
+        assert_same_type(k1, k2);
     }
 
     #[test]
@@ -505,5 +529,46 @@ mod tests {
         use core::mem::align_of;
         // Verify alignment matches KERNEL_ALIGNMENT (Kernel<C> contains AlignedStack<SW>)
         assert!(align_of::<KernelStorageBuffer>() >= KERNEL_ALIGNMENT);
+    }
+
+    // TODO: These alignment tests are unit tests rather than integration tests because
+    // the kernel crate's panic-halt dependency conflicts with std's panic handler,
+    // preventing integration tests in tests/ from compiling. Moving these to integration
+    // tests would require making panic-halt optional or restructuring the crate.
+    #[test]
+    fn init_kernel_state_at_succeeds_with_aligned_pointer() {
+        #[repr(C, align(1024))]
+        struct AlignedStorage {
+            data: MaybeUninit<[u8; MAX_KERNEL_SIZE]>,
+        }
+        let mut storage = AlignedStorage {
+            data: MaybeUninit::uninit(),
+        };
+        let ptr = storage.data.as_mut_ptr() as *mut Kernel<TestConfig>;
+        let kernel = create_test_kernel();
+        // SAFETY: ptr points to aligned, sufficiently-sized storage.
+        unsafe {
+            init_kernel_state_at(ptr, kernel);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "offset 512 from required 1024 byte alignment")]
+    fn init_kernel_state_at_panics_with_misaligned_pointer() {
+        #[repr(C, align(1024))]
+        struct AlignedStorage {
+            data: MaybeUninit<[u8; MAX_KERNEL_SIZE + 1024]>,
+        }
+        let mut storage = AlignedStorage {
+            data: MaybeUninit::uninit(),
+        };
+        let aligned_ptr = storage.data.as_mut_ptr() as *mut u8;
+        // SAFETY: aligned_ptr has MAX_KERNEL_SIZE + 1024 bytes; offset 512 is in bounds.
+        let misaligned_ptr = unsafe { aligned_ptr.add(512) } as *mut Kernel<TestConfig>;
+        let kernel = create_test_kernel();
+        // SAFETY: Testing panic on misaligned pointer; memory is valid but misaligned.
+        unsafe {
+            init_kernel_state_at(misaligned_ptr, kernel);
+        }
     }
 }
