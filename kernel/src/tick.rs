@@ -495,5 +495,99 @@ mod tests {
             );
             assert_eq!(buffers.deadline(1), Some(200));
         }
+
+        // -------------------------------------------------------------------------
+        // Bottom-half recursion detection tests
+        //
+        // These tests verify the guard mechanism that prevents nested bottom-half
+        // invocations. The invariant being protected:
+        //
+        //   **Only one bottom-half invocation may be active at any time.**
+        //
+        // Why this matters for a hard-realtime RTOS:
+        // - Bottom-half processing runs in the kernel's system window (privileged)
+        // - Re-entrancy could corrupt UART state, buffer pools, or MPU config
+        // - A nested call would indicate a scheduler bug (processing SystemWindow
+        //   while already in a system window) or an illegal interrupt nesting
+        // - The guard provides a fail-fast defense: panic immediately rather than
+        //   corrupt kernel state silently
+        //
+        // The `in_bottom_half` flag is set before entering bottom-half processing
+        // and cleared by an RAII guard on exit. Any attempt to re-enter while the
+        // flag is set triggers a panic.
+        // -------------------------------------------------------------------------
+
+        /// Verifies that `BottomHalfGuard` clears the flag when dropped normally.
+        #[test]
+        fn bottom_half_guard_clears_flag_on_drop() {
+            use crate::tick::BottomHalfGuard;
+
+            let mut flag = true;
+            {
+                let _guard = BottomHalfGuard { flag: &mut flag };
+                // Flag remains borrowed while guard is alive; we verify state after drop
+            }
+            assert!(!flag, "flag should be cleared after guard is dropped");
+        }
+
+        /// Mock kernel structure for testing recursion detection.
+        ///
+        /// Simulates the minimal kernel state needed to test the `run_bottom_half!`
+        /// macro's guard behavior without requiring the full `Kernel<C>` type.
+        struct MockKernelForRecursion {
+            in_bottom_half: bool,
+            uart_pair: crate::virtual_uart::VirtualUartPair,
+            isr_ring: crate::split_isr::IsrRingBuffer<4, 8>,
+            buffers: crate::buffer_pool::BufferPool<4, 32>,
+            hw_uart: Option<crate::hw_uart::HwUartBackend>,
+            dynamic_strategy: DynamicStrategy,
+        }
+
+        impl MockKernelForRecursion {
+            fn new() -> Self {
+                Self {
+                    in_bottom_half: false,
+                    uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
+                    isr_ring: crate::split_isr::IsrRingBuffer::new(),
+                    buffers: crate::buffer_pool::BufferPool::new(),
+                    hw_uart: None,
+                    dynamic_strategy: DynamicStrategy::new(),
+                }
+            }
+        }
+
+        /// Tests that a single bottom-half invocation works correctly:
+        /// flag is set during execution and cleared after.
+        #[test]
+        fn bottom_half_single_invocation_succeeds() {
+            let mut mock = MockKernelForRecursion::new();
+            assert!(!mock.in_bottom_half, "flag should start false");
+
+            let result = crate::run_bottom_half!(mock, 0, &mock.dynamic_strategy);
+
+            assert!(
+                !mock.in_bottom_half,
+                "flag should be cleared after invocation"
+            );
+            // Verify the function actually ran (empty inputs = zero transfers)
+            assert_eq!(result.a_to_b, 0);
+            assert_eq!(result.b_to_a, 0);
+        }
+
+        /// Tests that nested bottom-half invocation is detected and panics.
+        ///
+        /// This simulates the scenario where a bug in the scheduler or interrupt
+        /// handling causes `run_bottom_half!` to be invoked while already inside
+        /// a bottom-half context (e.g., SysTick fires during system window).
+        #[test]
+        #[should_panic(expected = "nested bottom-half invocation detected")]
+        fn bottom_half_nested_invocation_panics() {
+            let mut mock = MockKernelForRecursion::new();
+            // Simulate being already inside bottom-half processing
+            mock.in_bottom_half = true;
+
+            // This should panic because we're attempting re-entry
+            let _ = crate::run_bottom_half!(mock, 0, &mock.dynamic_strategy);
+        }
     }
 }
