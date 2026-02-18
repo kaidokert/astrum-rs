@@ -107,7 +107,46 @@ echo "  ELF:  $ELF"
 echo "  Chip: $CHIP"
 echo ""
 
-# TODO: Implement actual hardware test logic here.
-# This stub exits successfully when probe-rs is available.
-echo "probe-rs available. Hardware test logic not yet implemented."
+# Timeout in seconds for probe-rs run
+TIMEOUT_SECONDS=30
+# Grace period before SIGKILL if SIGTERM is ignored (hardware debug tools can hang)
+KILL_AFTER_SECONDS=5
+
+# Run the firmware on hardware with timeout
+echo "Running firmware with ${TIMEOUT_SECONDS}s timeout..."
+echo "=== probe-rs output ==="
+
+# Run probe-rs with timeout and real-time output streaming.
+# - Use --kill-after to forcefully terminate hung debug tools
+# - Stream output in real-time for hardware debugging visibility
+# - Capture exit code without toggling global shell error state
+timeout --kill-after="${KILL_AFTER_SECONDS}s" "$TIMEOUT_SECONDS" \
+    probe-rs run --chip "$CHIP" "$ELF" 2>&1 \
+    && EXIT_CODE=0 || EXIT_CODE=$?
+
+echo "=== end probe-rs output ==="
+
+# Check for timeout (exit code 124 from timeout command)
+# Exit code 137 indicates SIGKILL was needed (128 + 9)
+if [[ $EXIT_CODE -eq 124 ]]; then
+    echo ""
+    echo "FAIL: probe-rs run timed out after ${TIMEOUT_SECONDS}s (SIGTERM)" >&2
+    exit 1
+fi
+
+if [[ $EXIT_CODE -eq 137 ]]; then
+    echo ""
+    echo "FAIL: probe-rs run timed out and required SIGKILL after ${KILL_AFTER_SECONDS}s grace period" >&2
+    exit 1
+fi
+
+# Check exit code
+if [[ $EXIT_CODE -ne 0 ]]; then
+    echo ""
+    echo "FAIL: probe-rs run exited with code $EXIT_CODE" >&2
+    exit 1
+fi
+
+echo ""
+echo "PASS: probe-rs run completed successfully"
 exit 0
