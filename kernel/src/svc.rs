@@ -937,6 +937,17 @@ where
         if !schedule.has_system_window() {
             return Err(ConfigError::NoSystemWindow);
         }
+        // Validate system window frequency for dynamic-mpu builds.
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            let max_gap = schedule.max_ticks_without_system_window();
+            if max_gap > C::SYSTEM_WINDOW_MAX_GAP_TICKS {
+                return Err(ConfigError::SystemWindowTooInfrequent {
+                    max_gap_ticks: max_gap,
+                    threshold_ticks: C::SYSTEM_WINDOW_MAX_GAP_TICKS,
+                });
+            }
+        }
         // Initialize core sub-struct with schedule and partitions.
         let mut core = C::Core::default();
         *core.schedule_mut() = schedule;
@@ -4640,6 +4651,12 @@ mod tests {
     ///
     /// For `dynamic-mpu` builds, this adds a system window to the schedule
     /// (required for kernel bottom-half processing).
+    ///
+    /// **Note for `dynamic-mpu` builds:** This helper appends a 1-tick system window
+    /// at the end of the schedule. The maximum gap between system windows is therefore
+    /// the sum of all partition entry ticks before the system window. Tests using this
+    /// helper must ensure total partition ticks ≤ `SYSTEM_WINDOW_MAX_GAP_TICKS` (100)
+    /// to pass the system window frequency validation.
     fn try_kernel_new(
         mut schedule: ScheduleTable<4>,
         configs: &[PartitionConfig],
@@ -4690,8 +4707,8 @@ mod tests {
     #[test]
     fn kernel_new_rejects_second_partition_id_mismatch() {
         let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 100)).unwrap();
-        s.add(ScheduleEntry::new(1, 100)).unwrap();
+        s.add(ScheduleEntry::new(0, 50)).unwrap();
+        s.add(ScheduleEntry::new(1, 50)).unwrap();
 
         let cfg0 = PartitionConfig {
             id: 0, // correct
@@ -4725,8 +4742,8 @@ mod tests {
     #[test]
     fn kernel_new_accepts_matching_partition_ids() {
         let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 100)).unwrap();
-        s.add(ScheduleEntry::new(1, 100)).unwrap();
+        s.add(ScheduleEntry::new(0, 50)).unwrap();
+        s.add(ScheduleEntry::new(1, 50)).unwrap();
 
         let cfgs = [
             PartitionConfig {
@@ -4795,9 +4812,9 @@ mod tests {
     #[test]
     fn kernel_new_three_contiguous_partitions_succeeds() {
         let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 100)).unwrap();
-        s.add(ScheduleEntry::new(1, 100)).unwrap();
-        s.add(ScheduleEntry::new(2, 100)).unwrap();
+        s.add(ScheduleEntry::new(0, 30)).unwrap();
+        s.add(ScheduleEntry::new(1, 30)).unwrap();
+        s.add(ScheduleEntry::new(2, 30)).unwrap();
 
         let cfgs = [
             PartitionConfig {
@@ -4837,9 +4854,9 @@ mod tests {
     #[test]
     fn kernel_new_swapped_partition_ids_fails() {
         let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 100)).unwrap();
-        s.add(ScheduleEntry::new(1, 100)).unwrap();
-        s.add(ScheduleEntry::new(2, 100)).unwrap();
+        s.add(ScheduleEntry::new(0, 30)).unwrap();
+        s.add(ScheduleEntry::new(1, 30)).unwrap();
+        s.add(ScheduleEntry::new(2, 30)).unwrap();
 
         // Three partitions with non-sequential ID in middle: [id:0, id:2, id:1]
         let cfgs = [
@@ -4906,6 +4923,69 @@ mod tests {
         );
 
         assert!(matches!(result, Err(ConfigError::NoSystemWindow)));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn kernel_new_rejects_system_window_too_infrequent() {
+        // Create schedule with system window gap exceeding SYSTEM_WINDOW_MAX_GAP_TICKS (100).
+        // P0 runs for 150 ticks, then system window for 1 tick. Gap is 150 > 100.
+        let mut s = ScheduleTable::<4>::new();
+        s.add(ScheduleEntry::new(0, 150)).unwrap();
+        s.add_system_window(1).unwrap();
+        // Note: s.start() is intentionally not called here; Kernel::new calls it internally.
+
+        let cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
+        };
+
+        let result = Kernel::<TestConfig>::new(
+            s,
+            core::slice::from_ref(&cfg),
+            crate::virtual_device::DeviceRegistry::new(),
+        );
+
+        assert!(matches!(
+            result,
+            Err(ConfigError::SystemWindowTooInfrequent {
+                max_gap_ticks: 150,
+                threshold_ticks: 100,
+            })
+        ));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn kernel_new_accepts_system_window_at_exact_threshold() {
+        // Create schedule with system window gap exactly equal to SYSTEM_WINDOW_MAX_GAP_TICKS (100).
+        // P0 runs for 100 ticks, then system window for 1 tick. Gap is 100 == 100.
+        // The check is `max_gap > threshold`, so equality should be accepted.
+        let mut s = ScheduleTable::<4>::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        s.add_system_window(1).unwrap();
+
+        let cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
+        };
+
+        let result = Kernel::<TestConfig>::new(
+            s,
+            core::slice::from_ref(&cfg),
+            crate::virtual_device::DeviceRegistry::new(),
+        );
+
+        // Should succeed: max_gap (100) is not greater than threshold (100).
+        assert!(result.is_ok());
     }
 
     // -------------------------------------------------------------------------
