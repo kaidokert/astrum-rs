@@ -84,9 +84,19 @@ macro_rules! unpack_r0 {
 /// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>);
 /// ```
 ///
+/// Static mode with SysTick handler:
+/// ```ignore
+/// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>, systick);
+/// ```
+///
 /// Dynamic mode (with MPU region programming):
 /// ```ignore
 /// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>, dynamic: STRATEGY);
+/// ```
+///
+/// Dynamic mode with SysTick handler:
+/// ```ignore
+/// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>, dynamic: STRATEGY, systick);
 /// ```
 ///
 /// # Generated Items
@@ -103,6 +113,7 @@ macro_rules! unpack_r0 {
 /// | `set_partition_sp()` | C ABI accessor for PendSV |
 /// | `set_current_partition()` | C ABI accessor for PendSV |
 /// | `PendSV` | Context-switch exception handler |
+/// | `SysTick` | (with systick) Exception handler for scheduler tick |
 ///
 /// # Example
 ///
@@ -118,8 +129,14 @@ macro_rules! unpack_r0 {
 /// // Static mode
 /// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>);
 ///
+/// // Static mode with SysTick handler
+/// kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>, systick);
+///
 /// // Or dynamic mode with MPU strategy
 /// // kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>, dynamic: STRATEGY);
+///
+/// // Dynamic mode with SysTick handler
+/// // kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>, dynamic: STRATEGY, systick);
 ///
 /// fn main() {
 ///     let k = Kernel::<MyConfig>::new_empty();
@@ -128,15 +145,59 @@ macro_rules! unpack_r0 {
 /// ```
 #[macro_export]
 macro_rules! define_kernel_runtime {
-    // Static mode: standard context switch only
-    ($name:ident : Kernel<$Config:ty>) => {
+    // Unified arm: handles static/dynamic mode and optional systick
+    ($name:ident : Kernel<$Config:ty> $(, dynamic: $strategy:ident)? $(, systick)?) => {
         $crate::define_unified_kernel!($name : Kernel<$Config>);
+        $crate::define_kernel_runtime!(@pendsv_impl $(dynamic: $strategy)?);
+        $crate::define_kernel_runtime!(@systick_impl $Config $(, systick)?);
+    };
+
+    // Internal: emit PendSV for static mode
+    (@pendsv_impl) => {
         $crate::define_pendsv!();
     };
-    // Dynamic mode: context switch with MPU region programming
-    ($name:ident : Kernel<$Config:ty>, dynamic: $strategy:ident) => {
-        $crate::define_unified_kernel!($name : Kernel<$Config>);
+    // Internal: emit PendSV for dynamic mode
+    (@pendsv_impl dynamic: $strategy:ident) => {
         $crate::define_pendsv!(dynamic: $strategy);
+    };
+    // Internal: no SysTick handler
+    (@systick_impl $Config:ty) => {};
+    // Internal: emit SysTick handler
+    (@systick_impl $Config:ty, systick) => {
+        $crate::define_systick!($Config);
+    };
+}
+
+/// Generate a SysTick exception handler that advances the scheduler.
+///
+/// This macro emits a `SysTick` exception handler that calls
+/// [`tick::systick_handler`](crate::tick::systick_handler) within a critical
+/// section to advance the scheduler and handle partition switches.
+///
+/// # Usage
+///
+/// Typically invoked automatically by [`define_kernel_runtime!`] with the
+/// `systick` option. Can also be used standalone:
+///
+/// ```ignore
+/// kernel::define_systick!(MyConfig);
+/// ```
+///
+/// # Generated Items
+///
+/// | Item | Description |
+/// |------|-------------|
+/// | `SysTick` | Exception handler that calls `systick_handler` |
+#[macro_export]
+macro_rules! define_systick {
+    ($Config:ty) => {
+        #[cfg(target_arch = "arm")]
+        #[cortex_m_rt::exception]
+        fn SysTick() {
+            $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+                $crate::tick::systick_handler::<$Config>(k);
+            });
+        }
     };
 }
 
