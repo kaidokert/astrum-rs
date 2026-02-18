@@ -366,6 +366,14 @@ pub enum ConfigError {
         region_index: usize,
         detail: MpuError,
     },
+    /// The schedule contains no system window entries.
+    ///
+    /// When `dynamic-mpu` is enabled, system windows are required for
+    /// kernel bottom-half processing (buffer pool transfers, virtual
+    /// device I/O, etc.). Without at least one system window in the
+    /// schedule, bottom-half work will never run and IPC will stall.
+    #[cfg(feature = "dynamic-mpu")]
+    NoSystemWindow,
 }
 
 impl core::fmt::Display for ConfigError {
@@ -420,6 +428,13 @@ impl core::fmt::Display for ConfigError {
             } => write!(
                 f,
                 "partition {partition_id}: peripheral region {region_index} invalid: {detail}"
+            ),
+            #[cfg(feature = "dynamic-mpu")]
+            Self::NoSystemWindow => write!(
+                f,
+                "schedule contains no system window: bottom-half processing \
+                 (buffer pool transfers, virtual device I/O) requires at least \
+                 one system window entry"
             ),
         }
     }
@@ -1136,6 +1151,57 @@ mod tests {
             // Write directly to BUF and verify via trait object
             assert!(BUF.write(b"test"));
             assert_eq!(retrieved.available(), 4);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // ConfigError::NoSystemWindow (dynamic-mpu feature)
+    // ------------------------------------------------------------------
+
+    #[cfg(feature = "dynamic-mpu")]
+    mod no_system_window_tests {
+        use super::*;
+
+        #[test]
+        fn no_system_window_is_copy() {
+            let e = ConfigError::NoSystemWindow;
+            let e2 = e;
+            assert_eq!(e, e2);
+        }
+
+        #[test]
+        fn no_system_window_display_mentions_bottom_half() {
+            let msg = format!("{}", ConfigError::NoSystemWindow);
+            assert!(
+                msg.contains("bottom-half"),
+                "should mention bottom-half processing: {msg}"
+            );
+        }
+
+        #[test]
+        fn no_system_window_display_mentions_system_window() {
+            let msg = format!("{}", ConfigError::NoSystemWindow);
+            assert!(
+                msg.contains("system window"),
+                "should mention system window: {msg}"
+            );
+        }
+
+        #[test]
+        fn no_system_window_debug_contains_variant_name() {
+            let debug_str = format!("{:?}", ConfigError::NoSystemWindow);
+            assert!(
+                debug_str.contains("NoSystemWindow"),
+                "debug should contain variant name: {debug_str}"
+            );
+        }
+
+        #[test]
+        fn no_system_window_distinct_from_other_variants() {
+            let no_sys = ConfigError::NoSystemWindow;
+            assert_ne!(no_sys, ConfigError::ScheduleEmpty);
+            assert_ne!(no_sys, ConfigError::PartitionTableFull);
+            assert_ne!(no_sys, ConfigError::StackSizeInvalid { partition_id: 0 });
         }
     }
 }
