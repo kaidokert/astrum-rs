@@ -836,6 +836,11 @@ where
     /// bottom-half staleness at runtime.
     #[cfg(feature = "dynamic-mpu")]
     pub ticks_since_bottom_half: u32,
+    /// Diagnostic flag: true when `ticks_since_bottom_half` exceeds
+    /// `C::SYSTEM_WINDOW_MAX_GAP_TICKS`, indicating bottom-half processing
+    /// is overdue. Used for runtime health monitoring.
+    #[cfg(feature = "dynamic-mpu")]
+    bottom_half_stale: bool,
     /// Partition/schedule state sub-struct containing partitions, schedule,
     /// current_partition, next_partition, and partition_sp.
     pub core: C::Core,
@@ -1029,6 +1034,8 @@ where
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
             #[cfg(feature = "dynamic-mpu")]
             ticks_since_bottom_half: 0,
+            #[cfg(feature = "dynamic-mpu")]
+            bottom_half_stale: false,
             core,
             sync: C::Sync::default(),
             msg: C::Msg::default(),
@@ -1071,6 +1078,8 @@ where
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
             #[cfg(feature = "dynamic-mpu")]
             ticks_since_bottom_half: 0,
+            #[cfg(feature = "dynamic-mpu")]
+            bottom_half_stale: false,
             core: C::Core::default(),
             sync: C::Sync::default(),
             msg: C::Msg::default(),
@@ -1968,6 +1977,9 @@ where
         #[cfg(feature = "dynamic-mpu")]
         {
             self.ticks_since_bottom_half = self.ticks_since_bottom_half.saturating_add(1);
+            if self.ticks_since_bottom_half > C::SYSTEM_WINDOW_MAX_GAP_TICKS {
+                self.bottom_half_stale = true;
+            }
         }
         let event = self.schedule_mut().advance_tick();
         if let ScheduleEvent::PartitionSwitch(pid) = event {
@@ -1977,6 +1989,7 @@ where
         #[cfg(feature = "dynamic-mpu")]
         if matches!(event, ScheduleEvent::SystemWindow) {
             self.ticks_since_bottom_half = 0;
+            self.bottom_half_stale = false;
         }
         event
     }
@@ -2047,6 +2060,18 @@ where
     #[inline(always)]
     pub fn active_partition(&self) -> Option<u8> {
         self.active_partition
+    }
+
+    /// Returns whether bottom-half processing is stale.
+    ///
+    /// This flag is set to `true` when `ticks_since_bottom_half` exceeds
+    /// `C::SYSTEM_WINDOW_MAX_GAP_TICKS`, indicating that the system window
+    /// has not been reached within the expected time. The flag is cleared
+    /// when a `SystemWindow` event occurs.
+    #[cfg(feature = "dynamic-mpu")]
+    #[inline(always)]
+    pub fn is_bottom_half_stale(&self) -> bool {
+        self.bottom_half_stale
     }
 
     /// Returns an immutable reference to the buffer pool.
@@ -2444,6 +2469,8 @@ mod tests {
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
             #[cfg(feature = "dynamic-mpu")]
             ticks_since_bottom_half: 0,
+            #[cfg(feature = "dynamic-mpu")]
+            bottom_half_stale: false,
             core,
             sync: <TestConfig as KernelConfig>::Sync::default(),
             msg: <TestConfig as KernelConfig>::Msg::default(),
@@ -5171,6 +5198,49 @@ mod tests {
         let event = k.advance_schedule_tick();
         assert_eq!(event, ScheduleEvent::PartitionSwitch(0));
         assert_eq!(k.ticks_since_bottom_half, 1);
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn bottom_half_stale_flag_set_when_threshold_exceeded() {
+        // Create a kernel with a schedule that has NO system window.
+        // This allows ticks_since_bottom_half to exceed the threshold.
+        // Note: new() would fail validation if system window gap > threshold,
+        // so we use new_empty() and manually set up the schedule.
+        let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
+        k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
+        k.schedule_mut().add(ScheduleEntry::new(1, 60)).unwrap();
+        k.schedule_mut().start();
+
+        // Initially both counter and flag are at default values
+        assert_eq!(k.ticks_since_bottom_half, 0);
+        assert!(!k.is_bottom_half_stale());
+
+        // Advance ticks up to the threshold - flag should remain false
+        for i in 1..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
+            k.advance_schedule_tick();
+            assert_eq!(k.ticks_since_bottom_half, i);
+            assert!(
+                !k.is_bottom_half_stale(),
+                "flag should be false at tick {}",
+                i
+            );
+        }
+
+        // Advance one more tick past the threshold - flag should become true
+        k.advance_schedule_tick();
+        assert_eq!(
+            k.ticks_since_bottom_half,
+            TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS + 1
+        );
+        assert!(
+            k.is_bottom_half_stale(),
+            "flag should be true after exceeding threshold"
+        );
+
+        // Flag should remain true on subsequent ticks
+        k.advance_schedule_tick();
+        assert!(k.is_bottom_half_stale());
     }
 
     #[test]
