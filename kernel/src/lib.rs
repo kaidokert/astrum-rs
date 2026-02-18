@@ -45,6 +45,8 @@ pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
 pub mod partition_core;
+#[cfg(feature = "partition-debug")]
+pub mod partition_debug;
 pub mod pendsv;
 pub mod pendsv_asm;
 pub mod port_pools;
