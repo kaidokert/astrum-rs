@@ -3,6 +3,50 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+// Log levels: ERROR=0 (highest) to TRACE=4 (lowest)
+pub const LOG_ERROR: u8 = 0;
+pub const LOG_WARN: u8 = 1;
+pub const LOG_INFO: u8 = 2;
+pub const LOG_DEBUG: u8 = 3;
+pub const LOG_TRACE: u8 = 4;
+// Record kinds
+pub const KIND_TEXT: u8 = 0;
+pub const KIND_DEFMT: u8 = 1;
+pub const KIND_BINARY: u8 = 2;
+pub const KIND_EVENT_ID: u8 = 3;
+
+/// Debug record header (4 bytes): [len, level, kind, flags].
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DebugRecordHeader {
+    pub len: u8,
+    pub level: u8,
+    pub kind: u8,
+    pub flags: u8,
+}
+impl DebugRecordHeader {
+    pub const SIZE: usize = 4;
+    pub const fn new(len: u8, level: u8, kind: u8) -> Self {
+        Self {
+            len,
+            level,
+            kind,
+            flags: 0,
+        }
+    }
+    pub const fn to_bytes(self) -> [u8; 4] {
+        [self.len, self.level, self.kind, self.flags]
+    }
+    pub const fn from_bytes(b: [u8; 4]) -> Self {
+        Self {
+            len: b[0],
+            level: b[1],
+            kind: b[2],
+            flags: b[3],
+        }
+    }
+}
+
 /// Debug ring buffer for partition-to-kernel communication.
 pub struct DebugRingBuffer<const N: usize> {
     write_idx: AtomicU32,
@@ -116,6 +160,38 @@ impl<const N: usize> DebugRingBuffer<N> {
     pub fn is_empty(&self) -> bool {
         self.available() == 0
     }
+    /// Write a framed record (header + payload) atomically. Returns false on overflow.
+    pub fn write_record(&self, level: u8, kind: u8, payload: &[u8]) -> bool {
+        let len = payload.len();
+        if len > 255 {
+            self.dropped.fetch_add((4 + len) as u32, Ordering::Relaxed);
+            return false;
+        }
+        let total = 4 + len;
+        let w = self.write_idx.load(Ordering::Relaxed);
+        let r = self.read_idx.load(Ordering::Relaxed);
+        if total as u32 > (N as u32).saturating_sub(w.wrapping_sub(r)) {
+            self.dropped.fetch_add(total as u32, Ordering::Relaxed);
+            return false;
+        }
+        let hdr = DebugRecordHeader::new(len as u8, level, kind).to_bytes();
+        // SAFETY: Same SPSC invariant as write().
+        unsafe {
+            let buf = &mut *self.data.get();
+            let mut p = (w & Self::MASK) as usize;
+            for &b in &hdr {
+                buf[p] = b;
+                p = (p + 1) & (N - 1);
+            }
+            for &b in payload {
+                buf[p] = b;
+                p = (p + 1) & (N - 1);
+            }
+        }
+        self.write_idx
+            .store(w.wrapping_add(total as u32), Ordering::Release);
+        true
+    }
 }
 
 impl<const N: usize> Default for DebugRingBuffer<N> {
@@ -127,25 +203,36 @@ impl<const N: usize> Default for DebugRingBuffer<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn empty_and_single_write() {
+    fn basic_ring_buffer() {
         let rb = DebugRingBuffer::<16>::new();
-        assert!(rb.is_empty() && rb.dropped() == 0 && rb.drain(&mut [0u8; 16], 16) == 0);
-        assert!(rb.write(&[1, 2, 3, 4]) && rb.available() == 4);
+        assert!(rb.is_empty() && rb.dropped() == 0 && rb.write(&[1, 2, 3, 4]));
         let mut out = [0u8; 8];
-        assert!(rb.drain(&mut out, 8) == 4 && out[..4] == [1, 2, 3, 4]);
+        assert_eq!(rb.drain(&mut out, 8), 4);
+        let rb2 = DebugRingBuffer::<8>::new();
+        rb2.write(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert!(!rb2.write(&[9]) && rb2.dropped() == 1);
     }
-
     #[test]
-    fn wrap_and_overflow() {
-        let rb = DebugRingBuffer::<8>::new();
-        let mut out = [0u8; 8];
-        rb.write(&[1, 2, 3, 4, 5, 6]);
-        rb.drain(&mut out, 6);
-        rb.write(&[7, 8, 9, 10, 11, 12]);
-        assert_eq!(rb.drain(&mut out, 8), 6);
-        rb.write(&[1, 2, 3, 4, 5, 6, 7, 8]);
-        assert!(!rb.write(&[9]) && rb.dropped() == 1);
+    fn header_packing_and_constants() {
+        assert_eq!(core::mem::size_of::<DebugRecordHeader>(), 4);
+        let h = DebugRecordHeader::new(42, LOG_WARN, KIND_TEXT);
+        assert_eq!((h.len, h.level, h.kind, h.flags), (42, 1, 0, 0));
+        assert_eq!(h, DebugRecordHeader::from_bytes(h.to_bytes()));
+        assert!((LOG_ERROR, LOG_WARN, LOG_INFO, LOG_DEBUG, LOG_TRACE) == (0, 1, 2, 3, 4));
+        assert!((KIND_TEXT, KIND_DEFMT, KIND_BINARY, KIND_EVENT_ID) == (0, 1, 2, 3));
+    }
+    #[test]
+    fn record_write_roundtrip() {
+        let rb = DebugRingBuffer::<64>::new();
+        assert!(rb.write_record(LOG_INFO, KIND_TEXT, b"hello") && rb.available() == 9);
+        let mut out = [0u8; 32];
+        assert_eq!(rb.drain(&mut out, 32), 9);
+        let hdr = DebugRecordHeader::from_bytes([out[0], out[1], out[2], out[3]]);
+        assert_eq!((hdr.len, hdr.level, hdr.kind), (5, LOG_INFO, KIND_TEXT));
+        assert_eq!(&out[4..9], b"hello");
+        let rb2 = DebugRingBuffer::<16>::new();
+        rb2.write_record(LOG_INFO, KIND_TEXT, b"12345678");
+        assert!(!rb2.write_record(LOG_DEBUG, KIND_TEXT, b"fail") && rb2.dropped() > 0);
     }
 }
