@@ -149,15 +149,58 @@ pub trait KernelConfig {
     /// *lower* priority).
     const SYSTICK_PRIORITY: u8 = 0xFE;
 
+    /// Core clock frequency in Hz.
+    ///
+    /// This is the frequency of the processor core clock that drives the
+    /// SysTick timer. The default value of 12 MHz matches the QEMU
+    /// lm3s6965evb emulation target.
+    ///
+    /// This constant, together with [`TICK_PERIOD_US`], determines the
+    /// [`SYSTICK_CYCLES`] value (which is auto-calculated by default).
+    ///
+    /// [`TICK_PERIOD_US`]: Self::TICK_PERIOD_US
+    /// [`SYSTICK_CYCLES`]: Self::SYSTICK_CYCLES
+    const CORE_CLOCK_HZ: u32 = 12_000_000;
+
+    /// Tick period in microseconds.
+    ///
+    /// This defines the desired interval between SysTick interrupts.
+    /// The default value of 1000 microseconds gives a 1 ms tick period.
+    ///
+    /// This constant, together with [`CORE_CLOCK_HZ`], determines the
+    /// [`SYSTICK_CYCLES`] value (which is auto-calculated by default).
+    ///
+    /// [`CORE_CLOCK_HZ`]: Self::CORE_CLOCK_HZ
+    /// [`SYSTICK_CYCLES`]: Self::SYSTICK_CYCLES
+    const TICK_PERIOD_US: u32 = 1000;
+
     /// SysTick cycle count determining the tick rate.
     ///
-    /// The tick period is `SYSTICK_CYCLES / system_clock_hz` seconds.
-    /// For example, with a 120 MHz system clock and the default value of
-    /// 120_000, each tick is 1 ms (120_000 / 120_000_000 = 0.001 s).
+    /// This is the number of core clock cycles between SysTick interrupts.
+    /// By default, it is automatically calculated from [`CORE_CLOCK_HZ`]
+    /// and [`TICK_PERIOD_US`] using the formula:
+    ///
+    /// ```text
+    /// SYSTICK_CYCLES = (CORE_CLOCK_HZ as u64 * TICK_PERIOD_US as u64 / 1_000_000) as u32
+    /// ```
+    ///
+    /// The intermediate `u64` cast prevents overflow for large clock frequencies.
+    /// For the defaults (12 MHz clock, 1000 µs period), this gives 12,000
+    /// cycles per tick.
+    ///
+    /// Implementors may override this constant if a specific cycle count is
+    /// required, but the default calculation should suffice for most cases.
     ///
     /// Note: The hardware reload register is set to `SYSTICK_CYCLES - 1`
     /// because SysTick counts down from the reload value to zero inclusive.
-    const SYSTICK_CYCLES: u32 = 120_000;
+    ///
+    /// [`CORE_CLOCK_HZ`]: Self::CORE_CLOCK_HZ
+    /// [`TICK_PERIOD_US`]: Self::TICK_PERIOD_US
+    // TODO: backward compatibility - the previous default was 120,000 (for 120 MHz).
+    // Existing configurations that relied on the old default must now explicitly
+    // set CORE_CLOCK_HZ to 120_000_000 to preserve the same timing behavior.
+    const SYSTICK_CYCLES: u32 =
+        (Self::CORE_CLOCK_HZ as u64 * Self::TICK_PERIOD_US as u64 / 1_000_000) as u32;
 
     /// Partition/schedule state operations. Must implement `CoreOps` to
     /// allow dispatch() and other methods to call sub-struct methods.
@@ -263,8 +306,9 @@ mod tests {
         const SVCALL_PRIORITY: u8 = 0x00;
         const PENDSV_PRIORITY: u8 = 0xE0;
         const SYSTICK_PRIORITY: u8 = 0xC0;
-        // Custom cycle count for 10 ms tick at 80 MHz
-        const SYSTICK_CYCLES: u32 = 800_000;
+        // Custom timing: 10 ms tick at 80 MHz (SYSTICK_CYCLES auto-calculated)
+        const CORE_CLOCK_HZ: u32 = 80_000_000;
+        const TICK_PERIOD_US: u32 = 10_000;
 
         #[cfg(feature = "partition-debug")]
         const DEBUG_BUFFER_SIZE: usize = 512;
@@ -288,8 +332,12 @@ mod tests {
     }
 
     #[test]
-    fn default_systick_cycles_is_120000() {
-        assert_eq!(DefaultPriority::SYSTICK_CYCLES, 120_000);
+    fn default_systick_cycles_is_auto_calculated() {
+        // Verify the trait default calculates SYSTICK_CYCLES from CORE_CLOCK_HZ and TICK_PERIOD_US
+        let expected = (DefaultPriority::CORE_CLOCK_HZ as u64
+            * DefaultPriority::TICK_PERIOD_US as u64
+            / 1_000_000) as u32;
+        assert_eq!(DefaultPriority::SYSTICK_CYCLES, expected);
     }
 
     #[test]
@@ -311,8 +359,12 @@ mod tests {
     }
 
     #[test]
-    fn custom_systick_cycles_overrides_default() {
-        assert_eq!(CustomPriority::SYSTICK_CYCLES, 800_000);
+    fn custom_systick_cycles_is_auto_calculated() {
+        // Verify custom config also gets SYSTICK_CYCLES auto-calculated from clock and period
+        let expected = (CustomPriority::CORE_CLOCK_HZ as u64
+            * CustomPriority::TICK_PERIOD_US as u64
+            / 1_000_000) as u32;
+        assert_eq!(CustomPriority::SYSTICK_CYCLES, expected);
     }
 
     // Compile-time assertions: full priority ordering (including SVCall)
