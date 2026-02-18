@@ -237,6 +237,16 @@ where
     // 3. The buffer has sufficient alignment (KERNEL_ALIGNMENT >= Kernel<C> alignment)
     // 4. The write initializes the memory with a valid Kernel<C> value
     let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>;
+
+    // Defense-in-depth: verify storage alignment at runtime in debug builds.
+    let actual_align = ptr as usize % KERNEL_ALIGNMENT;
+    debug_assert!(
+        actual_align == 0,
+        "UNIFIED_KERNEL_STORAGE misaligned: offset {} from required {} bytes",
+        actual_align,
+        KERNEL_ALIGNMENT
+    );
+
     ptr.write(kernel);
 }
 
