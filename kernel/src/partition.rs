@@ -55,6 +55,8 @@ pub struct PartitionControlBlock {
     /// Optional peripheral register block regions for user-space drivers.
     /// Supports up to 2 peripheral regions (Approach D).
     peripheral_regions: Vec<MpuRegion, 2>,
+    /// Flag set by SYS_DEBUG_NOTIFY syscall, cleared after kernel drains debug ring buffer.
+    debug_pending: bool,
 }
 
 impl PartitionControlBlock {
@@ -76,6 +78,7 @@ impl PartitionControlBlock {
             event_flags: 0,
             event_wait_mask: 0,
             peripheral_regions: Vec::new(),
+            debug_pending: false,
         }
     }
 
@@ -166,6 +169,22 @@ impl PartitionControlBlock {
 
     pub fn set_event_wait_mask(&mut self, mask: u32) {
         self.event_wait_mask = mask;
+    }
+
+    /// Returns whether this partition has pending debug output.
+    pub fn debug_pending(&self) -> bool {
+        self.debug_pending
+    }
+
+    /// Signals that this partition has pending debug output.
+    /// Called by SYS_DEBUG_NOTIFY syscall handler.
+    pub fn signal_debug_pending(&mut self) {
+        self.debug_pending = true;
+    }
+
+    /// Clears the debug pending flag after kernel drains the debug ring buffer.
+    pub fn clear_debug_pending(&mut self) {
+        self.debug_pending = false;
     }
 
     pub fn transition(&mut self, to: PartitionState) -> Result<(), TransitionError> {
@@ -418,6 +437,26 @@ mod tests {
         assert_eq!(pcb.mpu_region().size(), 4096);
         assert_eq!(pcb.mpu_region().permissions(), 0x0306_0000);
         assert_eq!(pcb.event_flags(), 0);
+        assert!(!pcb.debug_pending());
+    }
+
+    #[test]
+    fn debug_pending_initially_false() {
+        let pcb = make_pcb();
+        assert!(!pcb.debug_pending());
+    }
+
+    #[test]
+    fn test_debug_pending_cycle() {
+        let mut pcb = make_pcb();
+        // Initially false
+        assert!(!pcb.debug_pending());
+        // Signal sets it
+        pcb.signal_debug_pending();
+        assert!(pcb.debug_pending());
+        // Clear resets it
+        pcb.clear_debug_pending();
+        assert!(!pcb.debug_pending());
     }
 
     #[test]
