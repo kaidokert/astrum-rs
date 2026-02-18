@@ -3710,6 +3710,103 @@ mod tests {
         assert!(!validate_user_ptr(&t, 0, 0x2000_2000, 16));
     }
 
+    // ---- validate_user_ptr peripheral region tests ----
+
+    /// Build a partition table with data, stack, and peripheral regions.
+    fn ptr_table_with_peripherals(
+        stack_base: u32,
+        stack_size: u32,
+        data_base: u32,
+        data_size: u32,
+        peripheral_regions: &[MpuRegion],
+    ) -> PartitionTable<4> {
+        let mut t = PartitionTable::new();
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,             // entry_point
+            stack_base,              // stack_base
+            stack_base + stack_size, // stack_pointer (top of stack)
+            MpuRegion::new(data_base, data_size, 0),
+        )
+        .with_peripheral_regions(peripheral_regions);
+        t.add(pcb).unwrap();
+        t
+    }
+
+    #[test]
+    fn validate_ptr_in_peripheral_region_passes() {
+        // Stack: 0x2000_0000..0x2000_0400
+        // Data:  0x2000_1000..0x2000_2000
+        // Peripheral: 0x4000_0000..0x4000_0100 (UART)
+        let periph = [MpuRegion::new(0x4000_0000, 0x100, 0)];
+        let t = ptr_table_with_peripherals(0x2000_0000, 0x400, 0x2000_1000, 0x1000, &periph);
+
+        // Pointer at start of peripheral region.
+        assert!(validate_user_ptr(&t, 0, 0x4000_0000, 4));
+        // Pointer in middle of peripheral region.
+        assert!(validate_user_ptr(&t, 0, 0x4000_0080, 16));
+        // Pointer at exact end of peripheral region (ptr + len == base + size).
+        assert!(validate_user_ptr(&t, 0, 0x4000_00F0, 16));
+        // Zero-length at peripheral region start.
+        assert!(validate_user_ptr(&t, 0, 0x4000_0000, 0));
+        // Zero-length at peripheral region end.
+        assert!(validate_user_ptr(&t, 0, 0x4000_0100, 0));
+    }
+
+    #[test]
+    fn validate_ptr_outside_peripheral_region_fails() {
+        // Stack: 0x2000_0000..0x2000_0400
+        // Data:  0x2000_1000..0x2000_2000
+        // Peripheral: 0x4000_0000..0x4000_0100
+        let periph = [MpuRegion::new(0x4000_0000, 0x100, 0)];
+        let t = ptr_table_with_peripherals(0x2000_0000, 0x400, 0x2000_1000, 0x1000, &periph);
+
+        // Before peripheral region.
+        assert!(!validate_user_ptr(&t, 0, 0x3FFF_FF00, 16));
+        // After peripheral region.
+        assert!(!validate_user_ptr(&t, 0, 0x4000_0100, 16));
+        // Spanning past peripheral region end.
+        assert!(!validate_user_ptr(&t, 0, 0x4000_00F8, 16));
+        // In gap between data and peripheral.
+        assert!(!validate_user_ptr(&t, 0, 0x3000_0000, 16));
+    }
+
+    #[test]
+    fn validate_ptr_multiple_peripheral_regions() {
+        // Stack: 0x2000_0000..0x2000_0400
+        // Data:  0x2000_1000..0x2000_2000
+        // Peripheral 1: 0x4000_0000..0x4000_0100 (UART)
+        // Peripheral 2: 0x4001_0000..0x4001_0200 (SPI)
+        let periph = [
+            MpuRegion::new(0x4000_0000, 0x100, 0),
+            MpuRegion::new(0x4001_0000, 0x200, 0),
+        ];
+        let t = ptr_table_with_peripherals(0x2000_0000, 0x400, 0x2000_1000, 0x1000, &periph);
+
+        // First peripheral region.
+        assert!(validate_user_ptr(&t, 0, 0x4000_0000, 16));
+        assert!(validate_user_ptr(&t, 0, 0x4000_00F0, 16));
+        // Second peripheral region.
+        assert!(validate_user_ptr(&t, 0, 0x4001_0000, 32));
+        assert!(validate_user_ptr(&t, 0, 0x4001_01E0, 32));
+        // Gap between peripherals fails.
+        assert!(!validate_user_ptr(&t, 0, 0x4000_0800, 16));
+        // Spanning both peripherals fails.
+        assert!(!validate_user_ptr(&t, 0, 0x4000_0000, 0x1_0100));
+    }
+
+    #[test]
+    fn validate_ptr_no_peripheral_regions_configured() {
+        // Partition without any peripheral regions.
+        let t = ptr_table_with_peripherals(0x2000_0000, 0x400, 0x2000_1000, 0x1000, &[]);
+
+        // Pointer in typical peripheral address range should fail.
+        assert!(!validate_user_ptr(&t, 0, 0x4000_0000, 16));
+        // Data and stack regions still work.
+        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 16)); // stack
+        assert!(validate_user_ptr(&t, 0, 0x2000_1000, 16)); // data
+    }
+
     // ---- validate_user_ptr_dynamic tests (dynamic-mpu feature) ----
 
     /// Comprehensive test for validate_user_ptr_dynamic covering dynamic windows,
@@ -4185,14 +4282,16 @@ mod tests {
             .unwrap()
             .enqueue_blocked_receiver(1, u64::MAX);
         let ptr = low32_buf(0);
-        // Write two bytes of data into the buffer
+        // Write two bytes of data into the buffer at an offset to avoid race
+        // with other tests. Use offset 64 within the page.
         // SAFETY: test-only, writing to a known-mapped page.
+        let data_ptr = unsafe { ptr.add(64) };
         unsafe {
-            *ptr = 0xAA;
-            *ptr.add(1) = 0xBB;
+            *data_ptr = 0xAA;
+            *data_ptr.add(1) = 0xBB;
         }
         let r2 = pack_r2(100, 2);
-        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
+        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, data_ptr as u32);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0, "send should return 0 on successful delivery");
         assert_queued_message(&mut k, d, &[0xAA, 0xBB]);
