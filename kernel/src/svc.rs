@@ -1836,10 +1836,13 @@ where
             }
             #[cfg(feature = "partition-debug")]
             Some(SyscallId::DebugNotify) => {
-                // Set the per-partition debug pending flag.
-                // Actual flag field will be added to PartitionControlBlock
-                // in follow-up tasks. For now, succeed immediately.
-                0
+                let pid = self.current_partition as usize;
+                if let Some(pcb) = self.partitions_mut().get_mut(pid) {
+                    pcb.signal_debug_pending();
+                    0
+                } else {
+                    SvcError::InvalidPartition.to_u32()
+                }
             }
             None => SvcError::InvalidSyscall.to_u32(),
         };
@@ -5156,6 +5159,23 @@ mod tests {
         // Use sync_tick to change the tick (simulating what SysTick handler does)
         k.sync_tick(42);
         assert_eq!(k.tick().get(), 42);
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn debug_notify_sets_debug_pending_flag() {
+        use crate::syscall::SYS_DEBUG_NOTIFY;
+        let mut k = kernel(0, 0, 0);
+        // Verify debug_pending is initially false
+        assert!(!k.partitions().get(0).unwrap().debug_pending());
+        // Dispatch SYS_DEBUG_NOTIFY syscall
+        let mut ef = frame(SYS_DEBUG_NOTIFY, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        // Should return 0 on success
+        assert_eq!(ef.r0, 0);
+        // debug_pending flag should now be set on current partition (0)
+        assert!(k.partitions().get(0).unwrap().debug_pending());
     }
 
     /// Test module for `define_unified_kernel!` macro.
