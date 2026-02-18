@@ -131,6 +131,12 @@ impl<const N: usize> ScheduleTable<N> {
         self.add(entry)
     }
 
+    /// Returns `true` if at least one entry has `is_system_window = true`.
+    #[cfg(feature = "dynamic-mpu")]
+    pub fn has_system_window(&self) -> bool {
+        self.entries.iter().any(|e| e.is_system_window)
+    }
+
     /// Reset to the first slot. Call after adding all entries.
     pub fn start(&mut self) {
         self.current_slot = 0;
@@ -617,6 +623,37 @@ mod tests {
             // ticks_remaining should be 2
             assert_eq!(t.advance_tick(), ScheduleEvent::None);
             assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
+        }
+
+        #[test]
+        fn has_system_window_empty_table() {
+            let t: ScheduleTable<4> = ScheduleTable::new();
+            assert!(!t.has_system_window());
+        }
+
+        #[test]
+        fn has_system_window_partition_only() {
+            let t = table(&[(0, 5), (1, 3), (2, 2)]);
+            assert!(!t.has_system_window());
+        }
+
+        #[test]
+        fn has_system_window_with_system_window() {
+            let t = table_with_windows(&[(Some(0), 5), (None, 2), (Some(1), 3)]);
+            assert!(t.has_system_window());
+        }
+
+        #[test]
+        fn has_system_window_only_system_windows() {
+            let t = table_with_windows(&[(None, 2), (None, 3)]);
+            assert!(t.has_system_window());
+        }
+
+        #[test]
+        fn has_system_window_single_system_window() {
+            let mut t: ScheduleTable<4> = ScheduleTable::new();
+            t.add_system_window(5).unwrap();
+            assert!(t.has_system_window());
         }
     }
 }
