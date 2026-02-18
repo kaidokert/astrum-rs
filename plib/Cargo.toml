@@ -14,4 +14,6 @@ rtos-traits = { path = "../rtos-traits" }
 
 [features]
 default = []
-partition-debug = ["kernel/partition-debug", "rtos-traits/partition-debug"]
+# Note: kernel dependency is only needed for the svc! macro (syscall interface).
+# DebugRingBuffer and other shared types come from rtos-traits.
+partition-debug = ["rtos-traits/partition-debug"]

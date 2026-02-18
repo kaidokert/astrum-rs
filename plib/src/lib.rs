@@ -11,15 +11,62 @@
 #![no_std]
 
 #[cfg(feature = "partition-debug")]
-use kernel::debug::DebugRingBuffer;
-#[cfg(feature = "partition-debug")]
-use rtos_traits::debug::KIND_TEXT;
+use rtos_traits::debug::{DebugRingBuffer, KIND_TEXT};
 #[cfg(feature = "partition-debug")]
 use rtos_traits::syscall::{SvcError, SYS_DEBUG_NOTIFY};
 
 // Re-export FmtBuffer from shared traits crate for use with dprint! macro
 #[cfg(feature = "partition-debug")]
 pub use rtos_traits::fmt::FmtBuffer;
+
+// Re-export DebugRingBuffer for use with define_partition_debug! macro
+#[cfg(feature = "partition-debug")]
+#[doc(hidden)]
+pub use rtos_traits::debug::DebugRingBuffer as __DebugRingBuffer;
+
+/// Define a static debug ring buffer for a partition.
+///
+/// This macro declares a static [`DebugRingBuffer`] with the specified size,
+/// suitable for use with [`dprint!`] and kernel debug output draining.
+///
+/// # Usage
+///
+/// ```ignore
+/// // Define a 256-byte debug buffer named DEBUG_BUF
+/// define_partition_debug!(DEBUG_BUF, 256);
+///
+/// // Use it with dprint!
+/// dprint!(&DEBUG_BUF, "value = {}", 42);
+/// ```
+///
+/// # Requirements
+///
+/// - `SIZE` must be a power of 2 (enforced at compile time)
+/// - The buffer is initialized to empty state
+/// - The buffer has correct alignment for atomic operations
+///
+/// # Linkage
+///
+/// The generated static has internal linkage. To register it with the kernel,
+/// pass a reference to `PartitionControlBlock::set_debug_buffer` during
+/// partition initialization.
+#[cfg(feature = "partition-debug")]
+#[macro_export]
+macro_rules! define_partition_debug {
+    ($name:ident, $size:expr) => {
+        // Compile-time assertion: SIZE must be a power of 2
+        const _: () = {
+            assert!(
+                $size > 0 && ($size & ($size - 1)) == 0,
+                "define_partition_debug!: SIZE must be a power of 2"
+            );
+        };
+        // TODO: Linkage is currently private. If partition harness or kernel needs
+        // to discover this buffer via linker symbols, add #[no_mangle] and pub.
+        #[allow(dead_code)]
+        static $name: $crate::__DebugRingBuffer<$size> = $crate::__DebugRingBuffer::new();
+    };
+}
 
 /// Format and write a debug message to the partition's debug ring buffer.
 ///
