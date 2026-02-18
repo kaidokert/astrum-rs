@@ -277,6 +277,10 @@ impl Drop for BottomHalfGuard<'_> {
 }
 
 /// Wraps `run_bottom_half` with guard flag. Panics on nested calls.
+// TODO(panic-free): Return Result instead of panicking on nested invocation.
+// This is currently acceptable because nested invocation indicates a kernel
+// logic bug that should never occur in correct code, but ideally should be
+// handled without panic per the panic-free policy.
 #[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 macro_rules! run_bottom_half {
@@ -312,6 +316,51 @@ pub struct BottomHalfResult {
 }
 
 /// Bottom-half processing for system window ticks.
+///
+/// **Do not call this function directly.** Use the [`run_bottom_half!`] macro,
+/// which enforces the single-shot invariant via the `in_bottom_half` guard flag.
+///
+/// # Safety
+///
+/// ## Schedule-Dependency Invariant
+///
+/// **This function must not call any scheduler functions that yield, deschedule,
+/// or switch partitions.** During a system window, no partition is running —
+/// calling such functions would corrupt scheduler state or cause PendSV to
+/// fire with no partition context to save/restore.
+///
+/// ## Forbidden Functions (must not be called from bottom-half context)
+///
+/// - `Kernel::trigger_deschedule()` — sets `yield_requested` and pends PendSV
+/// - `handle_yield()` — pends PendSV for partition context switch
+/// - `Kernel::yield_current_slot()` — advances schedule and triggers PendSV
+/// - `SCB::set_pendsv()` — directly pends PendSV exception
+/// - Any function that transitions a partition to `Running` state
+/// - Any function that expects `CURRENT_PCB` to point to a valid partition
+///
+/// ## Why This Invariant Exists
+///
+/// The system window is a kernel-only time slot with no associated partition.
+/// PendSV assumes `CURRENT_PCB` points to the currently running partition
+/// whose context must be saved. During a system window:
+///
+/// 1. `CURRENT_PCB` may be null or point to the previous partition (already saved)
+/// 2. No partition stack is active — PSP is undefined or stale
+/// 3. The scheduler expects the system window to complete without state changes
+///
+/// Violating this invariant causes undefined behavior: corrupted partition
+/// stacks, lost register state, or kernel panic.
+///
+/// ## Permitted Operations
+///
+/// - UART data transfer between ring buffers
+/// - ISR ring buffer draining (routes bytes to device backends)
+/// - Hardware UART TX draining
+/// - Buffer pool expiry enforcement (revokes MPU windows)
+///
+/// Note: Partition waking (`Waiting` → `Ready`) is performed by the caller
+/// (`systick_handler`) based on the returned `BottomHalfResult`, not by this
+/// function.
 #[cfg(feature = "dynamic-mpu")]
 pub fn run_bottom_half<const D: usize, const M: usize, const BP: usize, const BZ: usize>(
     uart_pair: &mut crate::virtual_uart::VirtualUartPair,
