@@ -2074,6 +2074,17 @@ where
         self.bottom_half_stale
     }
 
+    /// Clears the bottom-half stale diagnostic flag.
+    ///
+    /// This allows external monitoring code to reset the flag after observing
+    /// and logging a stale condition, enabling detection of subsequent stale
+    /// events.
+    #[cfg(feature = "dynamic-mpu")]
+    #[inline(always)]
+    pub fn clear_bottom_half_stale(&mut self) {
+        self.bottom_half_stale = false;
+    }
+
     /// Returns an immutable reference to the buffer pool.
     #[cfg(feature = "dynamic-mpu")]
     #[inline(always)]
@@ -5241,6 +5252,44 @@ mod tests {
         // Flag should remain true on subsequent ticks
         k.advance_schedule_tick();
         assert!(k.is_bottom_half_stale());
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn clear_bottom_half_stale_resets_flag() {
+        // Set up a kernel where the stale flag can be triggered
+        let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
+        k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
+        k.schedule_mut().add(ScheduleEntry::new(1, 60)).unwrap();
+        k.schedule_mut().start();
+
+        // Initially flag is false
+        assert!(!k.is_bottom_half_stale());
+
+        // Advance past threshold to set the flag
+        for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
+            k.advance_schedule_tick();
+        }
+        assert!(
+            k.is_bottom_half_stale(),
+            "flag should be true after exceeding threshold"
+        );
+
+        // Clear the flag
+        k.clear_bottom_half_stale();
+        assert!(
+            !k.is_bottom_half_stale(),
+            "flag should be false after clear"
+        );
+
+        // Advancing more ticks past threshold should set it again
+        for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
+            k.advance_schedule_tick();
+        }
+        assert!(
+            k.is_bottom_half_stale(),
+            "flag should be true again after exceeding threshold"
+        );
     }
 
     #[test]
