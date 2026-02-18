@@ -33,6 +33,13 @@ pub enum BootError {
     StackSizeError { partition_index: usize, size: u32 },
     /// Stack size arithmetic overflow.
     StackSizeOverflow { partition_index: usize },
+    /// Kernel storage buffer misaligned (requires 1024-byte alignment).
+    StorageMisaligned {
+        /// Actual address of the storage buffer.
+        address: u32,
+        /// Required alignment in bytes.
+        required: u32,
+    },
 }
 
 impl core::fmt::Display for BootError {
@@ -65,6 +72,12 @@ impl core::fmt::Display for BootError {
                 write!(
                     f,
                     "stack size arithmetic overflow: partition {partition_index}"
+                )
+            }
+            Self::StorageMisaligned { address, required } => {
+                write!(
+                    f,
+                    "kernel storage misaligned: address=0x{address:08x}, required={required}-byte alignment"
                 )
             }
         }
@@ -128,6 +141,18 @@ pub fn check_stack_mpu_alignment(
     Ok(())
 }
 
+/// Check if the kernel storage buffer is properly aligned.
+///
+/// Returns `Ok(())` if aligned to [`crate::state::KERNEL_ALIGNMENT`], or
+/// `Err(BootError::StorageMisaligned)` with address and required alignment.
+#[inline]
+pub fn check_storage_alignment(address: u32, required: u32) -> Result<(), BootError> {
+    if !address.is_multiple_of(required) {
+        return Err(BootError::StorageMisaligned { address, required });
+    }
+    Ok(())
+}
+
 /// Initialize stacks, priorities, start schedule, enable SysTick, enter idle loop.
 #[cfg(not(test))]
 pub fn boot<C: KernelConfig>(
@@ -158,7 +183,13 @@ where
         BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     >,
 {
+    use core::ptr::addr_of;
     use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
+
+    // Verify kernel storage alignment before proceeding.
+    let storage_addr = addr_of!(crate::state::UNIFIED_KERNEL_STORAGE) as u32;
+    check_storage_alignment(storage_addr, crate::state::KERNEL_ALIGNMENT as u32)?;
+
     crate::state::with_kernel_mut::<C, _, _>(|k| {
         for (i, &(ep, hint)) in partitions.iter().enumerate() {
             let stk = k
@@ -249,6 +280,16 @@ mod tests {
         assert_eq!(
             std::format!("{err}"),
             "stack size arithmetic overflow: partition 3"
+        );
+
+        // Test StorageMisaligned display
+        let err = BootError::StorageMisaligned {
+            address: 0x2000_0200,
+            required: 1024,
+        };
+        assert_eq!(
+            std::format!("{err}"),
+            "kernel storage misaligned: address=0x20000200, required=1024-byte alignment"
         );
     }
 
@@ -371,6 +412,36 @@ mod tests {
                 partition_index: 2,
                 base: 0x2000_0100,
                 size: 512,
+            })
+        );
+    }
+
+    #[test]
+    fn check_storage_alignment_accepts_aligned_address() {
+        // 1024-byte aligned addresses should pass
+        assert!(check_storage_alignment(0x2000_0000, 1024).is_ok());
+        assert!(check_storage_alignment(0x2000_0400, 1024).is_ok());
+        assert!(check_storage_alignment(0x2000_0800, 1024).is_ok());
+    }
+
+    #[test]
+    fn check_storage_alignment_rejects_misaligned_address() {
+        // 512-byte aligned but 1024 required
+        let result = check_storage_alignment(0x2000_0200, 1024);
+        assert_eq!(
+            result,
+            Err(BootError::StorageMisaligned {
+                address: 0x2000_0200,
+                required: 1024,
+            })
+        );
+        // 256-byte aligned but 1024 required
+        let result = check_storage_alignment(0x2000_0100, 1024);
+        assert_eq!(
+            result,
+            Err(BootError::StorageMisaligned {
+                address: 0x2000_0100,
+                required: 1024,
             })
         );
     }
