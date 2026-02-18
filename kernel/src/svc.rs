@@ -1699,6 +1699,14 @@ where
                     }
                 })
             }
+            // TODO: QueryBottomHalf gated behind dynamic-mpu because underlying
+            // ticks_since_bottom_half/is_bottom_half_stale are feature-gated. Future
+            // refactor should make bottom-half health monitoring unconditional.
+            #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::QueryBottomHalf) => {
+                frame.r1 = u32::from(self.is_bottom_half_stale());
+                self.ticks_since_bottom_half
+            }
             Some(SyscallId::QueuingRecvTimed) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
@@ -5290,6 +5298,57 @@ mod tests {
             k.is_bottom_half_stale(),
             "flag should be true again after exceeding threshold"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn query_bottom_half_returns_ticks_in_r0() {
+        let mut k = kernel_with_schedule();
+        // Initially both values are zero
+        let mut ef = frame(crate::syscall::SYS_QUERY_BOTTOM_HALF, 0xAA, 0xBB);
+        // SAFETY: `ef` is a valid stack-local ExceptionFrame with initialized r0-r3
+        // fields. `k` is a properly constructed Kernel with partitions in Running
+        // state. Single-threaded test execution prevents data races.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "r0 should contain ticks_since_bottom_half (0)");
+        assert_eq!(ef.r1, 0, "r1 should contain stale flag (false -> 0)");
+
+        // Advance a few ticks and check again
+        k.advance_schedule_tick();
+        k.advance_schedule_tick();
+        let mut ef2 = frame(crate::syscall::SYS_QUERY_BOTTOM_HALF, 0, 0);
+        // SAFETY: `ef2` is a valid stack-local ExceptionFrame with initialized r0-r3
+        // fields. `k` remains a valid Kernel. Single-threaded test execution.
+        unsafe { k.dispatch(&mut ef2) };
+        assert_eq!(ef2.r0, 2, "r0 should contain ticks_since_bottom_half (2)");
+        assert_eq!(ef2.r1, 0, "r1 should contain stale flag (false -> 0)");
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn query_bottom_half_returns_stale_flag_in_r1() {
+        // Use new_empty so we can exceed the threshold without system window reset
+        let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
+        k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
+        k.schedule_mut().start();
+
+        // Advance past the threshold to trigger the stale flag
+        for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
+            k.advance_schedule_tick();
+        }
+        assert!(k.is_bottom_half_stale(), "flag should be set");
+
+        let mut ef = frame(crate::syscall::SYS_QUERY_BOTTOM_HALF, 0, 0);
+        // SAFETY: `ef` is a valid stack-local ExceptionFrame with initialized r0-r3
+        // fields. `k` is a properly constructed Kernel (via new_empty) with a valid
+        // schedule. Single-threaded test execution prevents data races.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(
+            ef.r0,
+            TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS + 1,
+            "r0 should contain ticks_since_bottom_half"
+        );
+        assert_eq!(ef.r1, 1, "r1 should contain stale flag (true -> 1)");
     }
 
     #[test]

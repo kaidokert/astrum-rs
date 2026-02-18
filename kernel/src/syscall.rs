@@ -47,6 +47,12 @@ pub const SYS_DEV_CLOSE: u32 = 29;
 /// Timed device read: r1=device_id, r2=timeout_ticks (0=non-blocking), r3=buf_ptr
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_READ_TIMED: u32 = 30;
+/// Query bottom-half status: returns ticks_since_bottom_half in r0, stale flag in r1.
+// TODO: Currently gated behind dynamic-mpu because the underlying ticks_since_bottom_half
+// and is_bottom_half_stale mechanisms are feature-gated. A future refactor should make
+// bottom-half health monitoring unconditional as it's a core architectural concern.
+#[cfg(feature = "dynamic-mpu")]
+pub const SYS_QUERY_BOTTOM_HALF: u32 = 33;
 
 // Re-export SYS_DEBUG_NOTIFY from shared traits crate for ABI isolation
 #[cfg(feature = "partition-debug")]
@@ -96,6 +102,9 @@ pub enum SyscallId {
     DevClose,
     #[cfg(feature = "dynamic-mpu")]
     DevReadTimed,
+    // TODO: QueryBottomHalf gated behind dynamic-mpu; see SYS_QUERY_BOTTOM_HALF comment.
+    #[cfg(feature = "dynamic-mpu")]
+    QueryBottomHalf,
     #[cfg(feature = "partition-debug")]
     DebugNotify,
 }
@@ -148,6 +157,8 @@ impl SyscallId {
             SYS_DEV_CLOSE => Some(Self::DevClose),
             #[cfg(feature = "dynamic-mpu")]
             SYS_DEV_READ_TIMED => Some(Self::DevReadTimed),
+            #[cfg(feature = "dynamic-mpu")]
+            SYS_QUERY_BOTTOM_HALF => Some(Self::QueryBottomHalf),
             #[cfg(feature = "partition-debug")]
             SYS_DEBUG_NOTIFY => Some(Self::DebugNotify),
             _ => None,
@@ -198,6 +209,8 @@ impl SyscallId {
             Self::DevClose => SYS_DEV_CLOSE,
             #[cfg(feature = "dynamic-mpu")]
             Self::DevReadTimed => SYS_DEV_READ_TIMED,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::QueryBottomHalf => SYS_QUERY_BOTTOM_HALF,
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => SYS_DEBUG_NOTIFY,
         }
@@ -251,6 +264,8 @@ mod tests {
         (SYS_DEV_CLOSE, SyscallId::DevClose),
         #[cfg(feature = "dynamic-mpu")]
         (SYS_DEV_READ_TIMED, SyscallId::DevReadTimed),
+        #[cfg(feature = "dynamic-mpu")]
+        (SYS_QUERY_BOTTOM_HALF, SyscallId::QueryBottomHalf),
         #[cfg(feature = "partition-debug")]
         (SYS_DEBUG_NOTIFY, SyscallId::DebugNotify),
     ];
@@ -278,8 +293,13 @@ mod tests {
     fn from_u32_rejects_invalid() {
         // Gap at 1 (reserved for SYS_GET_ID, not in this enum).
         assert_eq!(SyscallId::from_u32(1), None);
-        // Just above the defined range (33 is after SYS_DEBUG_EXIT=32).
+        // Just above the defined range depends on features:
+        // - Without dynamic-mpu: 33 is invalid (after SYS_DEBUG_EXIT=32)
+        // - With dynamic-mpu: 34 is invalid (after SYS_QUERY_BOTTOM_HALF=33)
+        #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(SyscallId::from_u32(33), None);
+        #[cfg(feature = "dynamic-mpu")]
+        assert_eq!(SyscallId::from_u32(34), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -288,15 +308,15 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        // Base: 23, +9 for dynamic-mpu, +1 for partition-debug
+        // Base: 23, +10 for dynamic-mpu, +1 for partition-debug
         #[cfg(all(not(feature = "dynamic-mpu"), not(feature = "partition-debug")))]
         assert_eq!(ALL_VARIANTS.len(), 23);
         #[cfg(all(feature = "dynamic-mpu", not(feature = "partition-debug")))]
-        assert_eq!(ALL_VARIANTS.len(), 32);
+        assert_eq!(ALL_VARIANTS.len(), 33);
         #[cfg(all(not(feature = "dynamic-mpu"), feature = "partition-debug"))]
         assert_eq!(ALL_VARIANTS.len(), 24);
         #[cfg(all(feature = "dynamic-mpu", feature = "partition-debug"))]
-        assert_eq!(ALL_VARIANTS.len(), 33);
+        assert_eq!(ALL_VARIANTS.len(), 34);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);
