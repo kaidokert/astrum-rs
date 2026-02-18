@@ -201,8 +201,11 @@ where
 ///
 /// # Panics
 ///
-/// Compile-time assertion fails if `size_of::<Kernel<C>>()` exceeds
-/// [`MAX_KERNEL_SIZE`].
+/// - Compile-time assertion fails if `size_of::<Kernel<C>>()` exceeds
+///   [`MAX_KERNEL_SIZE`].
+/// - Runtime panic if `UNIFIED_KERNEL_STORAGE` address is not aligned to
+///   [`KERNEL_ALIGNMENT`] (1024 bytes). The panic message includes the actual
+///   alignment offset.
 #[allow(dead_code)]
 pub unsafe fn init_kernel_state<C: KernelConfig>(kernel: Kernel<C>)
 where
@@ -238,12 +241,19 @@ where
     // 4. The write initializes the memory with a valid Kernel<C> value
     let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>;
 
-    // Defense-in-depth: verify storage alignment at runtime in debug builds.
-    let actual_align = ptr as usize % KERNEL_ALIGNMENT;
-    debug_assert!(
-        actual_align == 0,
-        "UNIFIED_KERNEL_STORAGE misaligned: offset {} from required {} bytes",
-        actual_align,
+    // SAFETY: The pointer-to-integer cast for alignment checking is safe because:
+    // 1. We only read the pointer's numeric address, not the memory it points to
+    // 2. The modulo operation verifies the invariant that ptr is KERNEL_ALIGNMENT-aligned
+    // 3. This check occurs before any dereference or write through the pointer
+    // Verify storage alignment at runtime. This catches linker script
+    // misconfigurations that could cause hard faults on Cortex-M due to
+    // unaligned access to stack pointers within Kernel<C>.
+    let offset = ptr as usize % KERNEL_ALIGNMENT;
+    // TODO(panic-free): convert to Result
+    assert!(
+        offset == 0,
+        "UNIFIED_KERNEL_STORAGE misaligned: offset {} from required {} byte alignment",
+        offset,
         KERNEL_ALIGNMENT
     );
 
