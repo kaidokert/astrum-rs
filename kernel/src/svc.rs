@@ -1834,6 +1834,13 @@ where
                     SvcError::NotImplemented.to_u32()
                 }
             }
+            #[cfg(feature = "partition-debug")]
+            Some(SyscallId::DebugNotify) => {
+                // Set the per-partition debug pending flag.
+                // Actual flag field will be added to PartitionControlBlock
+                // in follow-up tasks. For now, succeed immediately.
+                0
+            }
             None => SvcError::InvalidSyscall.to_u32(),
         };
     }

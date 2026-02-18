@@ -48,6 +48,10 @@ pub const SYS_DEV_CLOSE: u32 = 29;
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_READ_TIMED: u32 = 30;
 
+/// Debug notify: sets a per-partition 'debug pending' flag (~10-20 cycle cost).
+#[cfg(feature = "partition-debug")]
+pub const SYS_DEBUG_NOTIFY: u32 = 0x40;
+
 /// Typed syscall identifier for use in the kernel dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyscallId {
@@ -92,6 +96,8 @@ pub enum SyscallId {
     DevClose,
     #[cfg(feature = "dynamic-mpu")]
     DevReadTimed,
+    #[cfg(feature = "partition-debug")]
+    DebugNotify,
 }
 
 impl SyscallId {
@@ -142,6 +148,8 @@ impl SyscallId {
             SYS_DEV_CLOSE => Some(Self::DevClose),
             #[cfg(feature = "dynamic-mpu")]
             SYS_DEV_READ_TIMED => Some(Self::DevReadTimed),
+            #[cfg(feature = "partition-debug")]
+            SYS_DEBUG_NOTIFY => Some(Self::DebugNotify),
             _ => None,
         }
     }
@@ -190,6 +198,8 @@ impl SyscallId {
             Self::DevClose => SYS_DEV_CLOSE,
             #[cfg(feature = "dynamic-mpu")]
             Self::DevReadTimed => SYS_DEV_READ_TIMED,
+            #[cfg(feature = "partition-debug")]
+            Self::DebugNotify => SYS_DEBUG_NOTIFY,
         }
     }
 }
@@ -241,6 +251,8 @@ mod tests {
         (SYS_DEV_CLOSE, SyscallId::DevClose),
         #[cfg(feature = "dynamic-mpu")]
         (SYS_DEV_READ_TIMED, SyscallId::DevReadTimed),
+        #[cfg(feature = "partition-debug")]
+        (SYS_DEBUG_NOTIFY, SyscallId::DebugNotify),
     ];
 
     #[test]
@@ -276,15 +288,22 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        #[cfg(not(feature = "dynamic-mpu"))]
+        // Base: 23, +9 for dynamic-mpu, +1 for partition-debug
+        #[cfg(all(not(feature = "dynamic-mpu"), not(feature = "partition-debug")))]
         assert_eq!(ALL_VARIANTS.len(), 23);
-        #[cfg(feature = "dynamic-mpu")]
+        #[cfg(all(feature = "dynamic-mpu", not(feature = "partition-debug")))]
         assert_eq!(ALL_VARIANTS.len(), 32);
+        #[cfg(all(not(feature = "dynamic-mpu"), feature = "partition-debug"))]
+        assert_eq!(ALL_VARIANTS.len(), 24);
+        #[cfg(all(feature = "dynamic-mpu", feature = "partition-debug"))]
+        assert_eq!(ALL_VARIANTS.len(), 33);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);
         assert_eq!(SYS_QUEUING_SEND_TIMED, 27);
         assert_eq!(SYS_QUEUING_RECV_TIMED, 28);
+        #[cfg(feature = "partition-debug")]
+        assert_eq!(SYS_DEBUG_NOTIFY, 0x40);
     }
 
     #[test]
