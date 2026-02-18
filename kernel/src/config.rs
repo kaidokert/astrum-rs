@@ -122,6 +122,10 @@ pub trait KernelConfig {
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
 
+    /// Debug buffer size in bytes per partition (only used with `partition-debug` feature).
+    #[cfg(feature = "partition-debug")]
+    const DEBUG_BUFFER_SIZE: usize = 256;
+
     /// SVCall exception priority (0x00 = highest on Cortex-M).
     const SVCALL_PRIORITY: u8 = 0x00;
     /// PendSV exception priority (must be the lowest of the three).
@@ -248,6 +252,9 @@ mod tests {
         // Custom cycle count for 10 ms tick at 80 MHz
         const SYSTICK_CYCLES: u32 = 800_000;
 
+        #[cfg(feature = "partition-debug")]
+        const DEBUG_BUFFER_SIZE: usize = 512;
+
         type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
         type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
         type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
@@ -294,4 +301,17 @@ mod tests {
     // is verified at const-eval time for both default and custom configs.
     const _: () = assert_priority_order::<DefaultPriority>();
     const _: () = assert_priority_order::<CustomPriority>();
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn default_debug_buffer_size_is_256() {
+        assert_eq!(DefaultPriority::DEBUG_BUFFER_SIZE, 256);
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn custom_debug_buffer_size_overrides_default() {
+        // CustomPriority overrides DEBUG_BUFFER_SIZE to 512
+        assert_eq!(CustomPriority::DEBUG_BUFFER_SIZE, 512);
+    }
 }
