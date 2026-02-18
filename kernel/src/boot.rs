@@ -13,6 +13,9 @@ use crate::{
     semaphore::SemaphorePool,
 };
 
+/// Minimum MPU region size (32 bytes for ARMv7-M and ARMv8-M).
+pub const MPU_MIN_REGION_SIZE: u32 = 32;
+
 /// Boot initialization errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootError {
@@ -20,6 +23,16 @@ pub enum BootError {
     StackInitFailed { partition_index: usize },
     /// No partition ready at boot.
     NoReadyPartition,
+    /// Stack buffer alignment error (MPU requires base aligned to size).
+    StackAlignmentError {
+        partition_index: usize,
+        base: u32,
+        size: u32,
+    },
+    /// Stack size is invalid for MPU (must be power-of-two >= 32 bytes).
+    StackSizeError { partition_index: usize, size: u32 },
+    /// Stack size arithmetic overflow.
+    StackSizeOverflow { partition_index: usize },
 }
 
 impl core::fmt::Display for BootError {
@@ -29,6 +42,31 @@ impl core::fmt::Display for BootError {
                 write!(f, "stack init failed: partition {partition_index}")
             }
             Self::NoReadyPartition => write!(f, "no partition ready at boot"),
+            Self::StackAlignmentError {
+                partition_index,
+                base,
+                size,
+            } => {
+                write!(
+                    f,
+                    "stack buffer misaligned for MPU: partition {partition_index}, base=0x{base:08x}, size={size}"
+                )
+            }
+            Self::StackSizeError {
+                partition_index,
+                size,
+            } => {
+                write!(
+                    f,
+                    "invalid stack size for MPU: partition {partition_index}, size={size} (must be power-of-two >= 32)"
+                )
+            }
+            Self::StackSizeOverflow { partition_index } => {
+                write!(
+                    f,
+                    "stack size arithmetic overflow: partition {partition_index}"
+                )
+            }
         }
     }
 }
@@ -36,6 +74,59 @@ impl core::fmt::Display for BootError {
 /// Uninhabited type for diverging functions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Never {}
+
+/// Check if stack buffer size is valid for MPU.
+///
+/// For ARMv7-M MPU, region size must be a power of two and at least 32 bytes.
+/// For ARMv8-M MPU, minimum region size is also 32 bytes.
+///
+/// Returns `Ok(())` if the size is valid, or `Err(BootError::StackSizeError)`.
+#[inline]
+pub fn check_stack_mpu_size(partition_index: usize, size: u32) -> Result<(), BootError> {
+    // MPU requires size to be a power of two and at least MPU_MIN_REGION_SIZE.
+    if size < MPU_MIN_REGION_SIZE || !size.is_power_of_two() {
+        return Err(BootError::StackSizeError {
+            partition_index,
+            size,
+        });
+    }
+    Ok(())
+}
+
+/// Check if stack buffer base address is properly aligned for MPU.
+///
+/// For ARMv7-M MPU, the region base address must be aligned to the region size.
+/// For ARMv8-M MPU, minimum alignment is 32 bytes.
+///
+/// **Precondition**: `size` must be a valid MPU size (power-of-two >= 32).
+/// Call `check_stack_mpu_size` first to validate size.
+///
+/// Returns `Ok(())` if the base address is properly aligned, or
+/// `Err(BootError::StackAlignmentError)` with the partition index, base, and size.
+#[inline]
+pub fn check_stack_mpu_alignment(
+    partition_index: usize,
+    base: u32,
+    size: u32,
+) -> Result<(), BootError> {
+    // SAFETY: This bitwise check (base & (size - 1) == 0) is only valid when size
+    // is a power of two. Caller must validate size with check_stack_mpu_size first.
+    // For v8-M, minimum alignment is 32 bytes; this check is conservative for v7-M
+    // which requires alignment to the full region size.
+    // TODO: v8-M only needs 32-byte minimum alignment; this check is conservative for v7-M.
+    debug_assert!(
+        size.is_power_of_two() && size >= MPU_MIN_REGION_SIZE,
+        "check_stack_mpu_alignment requires valid MPU size"
+    );
+    if base & (size - 1) != 0 {
+        return Err(BootError::StackAlignmentError {
+            partition_index,
+            base,
+            size,
+        });
+    }
+    Ok(())
+}
 
 /// Initialize stacks, priorities, start schedule, enable SysTick, enter idle loop.
 #[cfg(not(test))]
@@ -74,9 +165,23 @@ where
                 .core_stack_mut(i)
                 .ok_or(BootError::StackInitFailed { partition_index: i })?;
             let base = stk.as_ptr() as u32;
+            // Use checked arithmetic for size calculation to avoid overflow.
+            let size = stk
+                .len()
+                .checked_mul(4)
+                .and_then(|s| u32::try_from(s).ok())
+                .ok_or(BootError::StackSizeOverflow { partition_index: i })?;
+            // Verify stack buffer is MPU-compatible before initializing.
+            check_stack_mpu_size(i, size)?;
+            check_stack_mpu_alignment(i, base, size)?;
             let ix = crate::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
                 .ok_or(BootError::StackInitFailed { partition_index: i })?;
-            k.set_sp(i, base + (ix as u32) * 4);
+            // Use checked arithmetic for SP calculation.
+            let sp = (ix as u32)
+                .checked_mul(4)
+                .and_then(|offset| base.checked_add(offset))
+                .ok_or(BootError::StackSizeOverflow { partition_index: i })?;
+            k.set_sp(i, sp);
         }
         Ok::<(), BootError>(())
     })?;
@@ -128,5 +233,145 @@ mod tests {
         );
         let (e2, e3) = (err, err);
         assert_eq!(e2, e3);
+
+        // Test StackSizeError display
+        let err = BootError::StackSizeError {
+            partition_index: 1,
+            size: 16,
+        };
+        assert_eq!(
+            std::format!("{err}"),
+            "invalid stack size for MPU: partition 1, size=16 (must be power-of-two >= 32)"
+        );
+
+        // Test StackSizeOverflow display
+        let err = BootError::StackSizeOverflow { partition_index: 3 };
+        assert_eq!(
+            std::format!("{err}"),
+            "stack size arithmetic overflow: partition 3"
+        );
+    }
+
+    #[test]
+    fn check_stack_mpu_size_accepts_valid_sizes() {
+        // Minimum size (32 bytes)
+        assert!(check_stack_mpu_size(0, 32).is_ok());
+        // Common stack sizes
+        assert!(check_stack_mpu_size(0, 64).is_ok());
+        assert!(check_stack_mpu_size(0, 128).is_ok());
+        assert!(check_stack_mpu_size(0, 256).is_ok());
+        assert!(check_stack_mpu_size(0, 512).is_ok());
+        assert!(check_stack_mpu_size(0, 1024).is_ok());
+        assert!(check_stack_mpu_size(0, 2048).is_ok());
+        assert!(check_stack_mpu_size(0, 4096).is_ok());
+    }
+
+    #[test]
+    fn check_stack_mpu_size_rejects_zero() {
+        let result = check_stack_mpu_size(0, 0);
+        assert_eq!(
+            result,
+            Err(BootError::StackSizeError {
+                partition_index: 0,
+                size: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn check_stack_mpu_size_rejects_too_small() {
+        // Less than minimum (32 bytes)
+        let result = check_stack_mpu_size(0, 16);
+        assert_eq!(
+            result,
+            Err(BootError::StackSizeError {
+                partition_index: 0,
+                size: 16,
+            })
+        );
+        let result = check_stack_mpu_size(1, 4);
+        assert_eq!(
+            result,
+            Err(BootError::StackSizeError {
+                partition_index: 1,
+                size: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn check_stack_mpu_size_rejects_non_power_of_two() {
+        // Non-power-of-two sizes
+        let result = check_stack_mpu_size(0, 384);
+        assert_eq!(
+            result,
+            Err(BootError::StackSizeError {
+                partition_index: 0,
+                size: 384,
+            })
+        );
+        let result = check_stack_mpu_size(1, 100);
+        assert_eq!(
+            result,
+            Err(BootError::StackSizeError {
+                partition_index: 1,
+                size: 100,
+            })
+        );
+        let result = check_stack_mpu_size(2, 1000);
+        assert_eq!(
+            result,
+            Err(BootError::StackSizeError {
+                partition_index: 2,
+                size: 1000,
+            })
+        );
+    }
+
+    #[test]
+    fn check_stack_mpu_alignment_accepts_properly_aligned() {
+        // Base aligned to size (power-of-2 alignment for MPU)
+        // 256-byte region at 256-byte aligned address
+        assert!(check_stack_mpu_alignment(0, 0x2000_0100, 256).is_ok());
+        // 1024-byte region at 1024-byte aligned address
+        assert!(check_stack_mpu_alignment(0, 0x2000_0400, 1024).is_ok());
+        // 512-byte region at 512-byte aligned address
+        assert!(check_stack_mpu_alignment(1, 0x2000_0200, 512).is_ok());
+        // 32-byte region (minimum for v8-M) at 32-byte aligned address
+        assert!(check_stack_mpu_alignment(0, 0x2000_0020, 32).is_ok());
+    }
+
+    #[test]
+    fn check_stack_mpu_alignment_rejects_misaligned_base() {
+        // 1024-byte region but base only 512-byte aligned
+        let result = check_stack_mpu_alignment(0, 0x2000_0200, 1024);
+        assert_eq!(
+            result,
+            Err(BootError::StackAlignmentError {
+                partition_index: 0,
+                base: 0x2000_0200,
+                size: 1024,
+            })
+        );
+        // 256-byte region but base only 128-byte aligned
+        let result = check_stack_mpu_alignment(1, 0x2000_0080, 256);
+        assert_eq!(
+            result,
+            Err(BootError::StackAlignmentError {
+                partition_index: 1,
+                base: 0x2000_0080,
+                size: 256,
+            })
+        );
+        // 512-byte region but base at odd offset
+        let result = check_stack_mpu_alignment(2, 0x2000_0100, 512);
+        assert_eq!(
+            result,
+            Err(BootError::StackAlignmentError {
+                partition_index: 2,
+                base: 0x2000_0100,
+                size: 512,
+            })
+        );
     }
 }
