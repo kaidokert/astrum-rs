@@ -188,7 +188,7 @@ pub trait KernelConfig {
     /// For the defaults (12 MHz clock, 1000 µs period), this gives 12,000
     /// cycles per tick.
     ///
-    /// Implementors may override this constant if a specific cycle count is
+    /// Implementers may override this constant if a specific cycle count is
     /// required, but the default calculation should suffice for most cases.
     ///
     /// Note: The hardware reload register is set to `SYSTICK_CYCLES - 1`
@@ -214,6 +214,57 @@ pub trait KernelConfig {
     /// Sampling ports and blackboards operations. Must implement `PortsOps`
     /// for sampling port and blackboard syscall dispatch.
     type Ports: Default + PortsOps;
+}
+
+/// Maximum value for the SysTick RELOAD register (24-bit).
+pub const SYSTICK_RELOAD_MAX: u32 = 0xFF_FFFF;
+
+/// Computes the SysTick reload value from clock frequency and tick period.
+///
+/// The ARM SysTick timer counts down from the reload value to zero, then
+/// reloads and fires an interrupt. To achieve a period of N cycles, the
+/// RELOAD register must be set to N-1. This function computes and returns
+/// that N-1 value directly.
+///
+/// # Arguments
+/// * `core_clock_hz` - Core clock frequency in Hz
+/// * `tick_period_us` - Desired tick period in microseconds
+///
+/// # Returns
+/// The reload value (N-1) to write directly to the SysTick RELOAD register,
+/// where N is the number of cycles per tick period.
+///
+/// # Panics
+/// Panics at compile time if the computed reload value exceeds the 24-bit
+/// maximum (0xFFFFFF) supported by the SysTick RELOAD register, or if the
+/// cycle count is zero (which would result in underflow).
+///
+/// # Note
+/// This function uses `assert!` for validation, which is acceptable for
+/// compile-time const evaluation but creates a panic path if called at
+/// runtime. The kernel targets a panic-free binary; callers should only
+/// use this function in const contexts.
+// TODO: panic-free policy - this function panics at runtime. For runtime
+// use, consider a fallible variant returning Result or Option.
+///
+/// # Example
+/// ```ignore
+/// use kernel::config::compute_systick_reload;
+/// // 12 MHz clock, 1 ms tick period = 12,000 cycles, reload = 11,999
+/// const RELOAD: u32 = compute_systick_reload(12_000_000, 1000);
+/// assert_eq!(RELOAD, 11_999);
+/// ```
+pub const fn compute_systick_reload(core_clock_hz: u32, tick_period_us: u32) -> u32 {
+    // Use u64 intermediate to prevent overflow for large clock/period combinations
+    let cycles = (core_clock_hz as u64 * tick_period_us as u64) / 1_000_000;
+    assert!(cycles > 0, "SysTick cycle count must be at least 1");
+    // Subtract 1 for the RELOAD register (counts N-1 down to 0 for N cycles)
+    let reload = cycles - 1;
+    assert!(
+        reload <= SYSTICK_RELOAD_MAX as u64,
+        "SysTick reload value exceeds 24-bit maximum (0xFFFFFF)"
+    );
+    reload as u32
 }
 
 /// Compile-time assertion that the three exception priorities are
@@ -243,6 +294,91 @@ mod tests {
     use crate::partition_core::PartitionCore;
     use crate::port_pools::PortPools;
     use crate::sync_pools::SyncPools;
+
+    // ============ compute_systick_reload tests ============
+
+    #[test]
+    fn compute_systick_reload_12mhz_1000us() {
+        // 12 MHz clock, 1000 us (1 ms) tick period = 12,000 cycles
+        // RELOAD register gets N-1 = 11,999
+        const RELOAD: u32 = compute_systick_reload(12_000_000, 1000);
+        assert_eq!(RELOAD, 11_999);
+    }
+
+    #[test]
+    fn compute_systick_reload_120mhz_1000us() {
+        // 120 MHz clock, 1000 us (1 ms) tick period = 120,000 cycles
+        // RELOAD register gets N-1 = 119,999
+        const RELOAD: u32 = compute_systick_reload(120_000_000, 1000);
+        assert_eq!(RELOAD, 119_999);
+    }
+
+    #[test]
+    fn compute_systick_reload_64mhz_1000us() {
+        // 64 MHz clock, 1000 us (1 ms) tick period = 64,000 cycles
+        // RELOAD register gets N-1 = 63,999
+        const RELOAD: u32 = compute_systick_reload(64_000_000, 1000);
+        assert_eq!(RELOAD, 63_999);
+    }
+
+    #[test]
+    fn compute_systick_reload_max_valid() {
+        // Maximum valid reload value: 0xFFFFFF = 16,777,215
+        // Using 16 MHz clock with 1,048,576 us period = 16,777,216 cycles
+        // RELOAD register gets N-1 = 16,777,215 (exactly 0xFFFFFF)
+        const RELOAD: u32 = compute_systick_reload(16_000_000, 1_048_576);
+        assert_eq!(RELOAD, 0xFFFFFF);
+    }
+
+    #[test]
+    fn compute_systick_reload_non_integer_mhz() {
+        // 12.5 MHz clock (12,500,000 Hz), 1000 us tick period = 12,500 cycles
+        // RELOAD register gets N-1 = 12,499
+        // This tests that we don't lose precision with non-integer MHz frequencies
+        const RELOAD: u32 = compute_systick_reload(12_500_000, 1000);
+        assert_eq!(RELOAD, 12_499);
+    }
+
+    #[test]
+    fn compute_systick_reload_sub_mhz() {
+        // 500 kHz clock (500,000 Hz), 2000 us tick period = 1,000 cycles
+        // RELOAD register gets N-1 = 999
+        // This tests clocks below 1 MHz which would fail with premature division
+        const RELOAD: u32 = compute_systick_reload(500_000, 2000);
+        assert_eq!(RELOAD, 999);
+    }
+
+    #[test]
+    fn compute_systick_reload_fractional_result() {
+        // 8 MHz clock, 125 us tick period = 1,000 cycles
+        // RELOAD register gets N-1 = 999
+        const RELOAD: u32 = compute_systick_reload(8_000_000, 125);
+        assert_eq!(RELOAD, 999);
+    }
+
+    // Compile-time assertion tests for compute_systick_reload
+    const _: u32 = compute_systick_reload(12_000_000, 1000);
+    const _: u32 = compute_systick_reload(120_000_000, 1000);
+    const _: u32 = compute_systick_reload(64_000_000, 1000);
+
+    // Compile-time overflow validation test (would fail at compile time if uncommented)
+    // const _OVERFLOW: u32 = compute_systick_reload(16_000_000, 1_048_577); // exceeds 24-bit
+
+    #[test]
+    #[should_panic(expected = "24-bit maximum")]
+    fn compute_systick_reload_panics_on_overflow() {
+        // 16 MHz clock with 1,048,577 us period exceeds 24-bit max
+        // cycles = 16 * 1_048_577 = 16,777,232, reload = 16,777,231 > 0xFFFFFF
+        let _ = compute_systick_reload(16_000_000, 1_048_577);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be at least 1")]
+    fn compute_systick_reload_panics_on_zero_cycles() {
+        // Very low frequency and short period results in 0 cycles
+        // 100 Hz clock, 1 us period = 0 cycles (truncated)
+        let _ = compute_systick_reload(100, 1);
+    }
 
     /// Minimal config using all default priority values.
     struct DefaultPriority;
