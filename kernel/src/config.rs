@@ -121,6 +121,20 @@ pub trait KernelConfig {
     /// Device registry capacity (only used with `dynamic-mpu` feature).
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
+    /// Maximum acceptable gap in ticks between system windows.
+    ///
+    /// During kernel initialization, the schedule table is validated to ensure
+    /// system windows occur frequently enough. If `max_ticks_without_system_window()`
+    /// exceeds this threshold, `Kernel::new()` returns `ConfigError::SystemWindowTooInfrequent`.
+    ///
+    /// This ensures the kernel can service device interrupts and perform MPU
+    /// region updates within a bounded time. A typical value of 100 ticks
+    /// (e.g., 100ms at 1ms/tick) balances responsiveness with partition scheduling
+    /// flexibility.
+    ///
+    /// Only used with the `dynamic-mpu` feature.
+    #[cfg(feature = "dynamic-mpu")]
+    const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 = 100;
 
     /// Debug buffer size in bytes per partition (only used with `partition-debug` feature).
     #[cfg(feature = "partition-debug")]
@@ -255,6 +269,10 @@ mod tests {
         #[cfg(feature = "partition-debug")]
         const DEBUG_BUFFER_SIZE: usize = 512;
 
+        // Custom system window gap threshold for testing
+        #[cfg(feature = "dynamic-mpu")]
+        const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 = 200;
+
         type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
         type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
         type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
@@ -313,5 +331,18 @@ mod tests {
     fn custom_debug_buffer_size_overrides_default() {
         // CustomPriority overrides DEBUG_BUFFER_SIZE to 512
         assert_eq!(CustomPriority::DEBUG_BUFFER_SIZE, 512);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn default_system_window_max_gap_ticks_is_100() {
+        assert_eq!(DefaultPriority::SYSTEM_WINDOW_MAX_GAP_TICKS, 100);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn custom_system_window_max_gap_ticks_overrides_default() {
+        // CustomPriority overrides SYSTEM_WINDOW_MAX_GAP_TICKS to 200
+        assert_eq!(CustomPriority::SYSTEM_WINDOW_MAX_GAP_TICKS, 200);
     }
 }
