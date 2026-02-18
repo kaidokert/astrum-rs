@@ -24,6 +24,10 @@ name = "panic_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "kpanic_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "mpu_info"
 required-features = ["qemu", "log-semihosting"]
 

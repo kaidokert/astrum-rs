@@ -21,6 +21,7 @@ extern "C" {
 }
 
 pub mod klog;
+pub mod kpanic;
 pub mod macros;
 
 pub mod boot;
