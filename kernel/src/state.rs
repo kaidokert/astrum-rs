@@ -147,11 +147,18 @@ pub static mut UNIFIED_KERNEL_STORAGE: MaybeUninit<KernelStorageBuffer> = MaybeU
 /// This is a concrete, non-generic type that reserves [`MAX_KERNEL_SIZE`] bytes.
 /// The actual `Kernel<C>` is written into this buffer at initialization time.
 // Note: #[repr(align(...))] requires a literal, so we cannot use KERNEL_ALIGNMENT directly.
-// The test `storage_buffer_alignment` verifies this value matches KERNEL_ALIGNMENT.
+// The const assertion below verifies this value matches KERNEL_ALIGNMENT at compile time.
 #[repr(C, align(1024))]
 pub struct KernelStorageBuffer {
     _data: [u8; MAX_KERNEL_SIZE],
 }
+
+// Compile-time assertion: KERNEL_ALIGNMENT must match actual type alignment.
+// This prevents silent breakage if KERNEL_ALIGNMENT is changed without updating repr(align).
+const _: () = assert!(
+    core::mem::align_of::<KernelStorageBuffer>() == KERNEL_ALIGNMENT,
+    "KERNEL_ALIGNMENT constant does not match KernelStorageBuffer repr(align) value"
+);
 
 /// Unified kernel state containing all kernel subsystems.
 ///
@@ -527,8 +534,9 @@ mod tests {
     #[test]
     fn storage_buffer_alignment() {
         use core::mem::align_of;
-        // Verify alignment matches KERNEL_ALIGNMENT (Kernel<C> contains AlignedStack<SW>)
-        assert!(align_of::<KernelStorageBuffer>() >= KERNEL_ALIGNMENT);
+        // Verify alignment matches KERNEL_ALIGNMENT exactly.
+        // This mirrors the compile-time const assertion in the module.
+        assert_eq!(align_of::<KernelStorageBuffer>(), KERNEL_ALIGNMENT);
     }
 
     // TODO: These alignment tests are unit tests rather than integration tests because
