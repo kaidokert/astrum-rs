@@ -18,17 +18,11 @@ pub trait DebugBuffer: Sync {
     fn dropped(&self) -> u32;
 }
 
-// Log levels: ERROR=0 (highest) to TRACE=4 (lowest)
-pub const LOG_ERROR: u8 = 0;
-pub const LOG_WARN: u8 = 1;
-pub const LOG_INFO: u8 = 2;
-pub const LOG_DEBUG: u8 = 3;
-pub const LOG_TRACE: u8 = 4;
-// Record kinds
-pub const KIND_TEXT: u8 = 0;
-pub const KIND_DEFMT: u8 = 1;
-pub const KIND_BINARY: u8 = 2;
-pub const KIND_EVENT_ID: u8 = 3;
+// Re-export log levels and record kinds from shared traits crate
+pub use rtos_traits::debug::{
+    KIND_BINARY, KIND_DEFMT, KIND_EVENT_ID, KIND_TEXT, LOG_DEBUG, LOG_ERROR, LOG_INFO, LOG_TRACE,
+    LOG_WARN,
+};
 
 /// Debug record header (4 bytes): [len, level, kind, flags].
 #[repr(C, packed)]
@@ -233,6 +227,8 @@ impl<const N: usize> DebugBuffer for DebugRingBuffer<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::fmt::Write;
+    use rtos_traits::fmt::FmtBuffer;
     #[test]
     fn basic_ring_buffer() {
         let rb = DebugRingBuffer::<16>::new();
@@ -264,5 +260,18 @@ mod tests {
         let rb2 = DebugRingBuffer::<16>::new();
         rb2.write_record(LOG_INFO, KIND_TEXT, b"12345678");
         assert!(!rb2.write_record(LOG_DEBUG, KIND_TEXT, b"fail") && rb2.dropped() > 0);
+    }
+    /// Tests FmtBuffer -> DebugRingBuffer path (same path dprint! macro uses in plib).
+    #[test]
+    fn fmt_buffer_to_ring_buffer() {
+        let rb = DebugRingBuffer::<64>::new();
+        let mut fb = FmtBuffer::<32>::new();
+        write!(fb, "x={}", 42).unwrap();
+        assert_eq!(fb.as_bytes(), b"x=42");
+        assert!(rb.write_record(LOG_INFO, KIND_TEXT, fb.as_bytes()));
+        let mut out = [0u8; 16];
+        let n = rb.drain(&mut out, 16);
+        assert_eq!(n, 8); // 4 header + 4 payload
+        assert_eq!(&out[4..8], b"x=42");
     }
 }

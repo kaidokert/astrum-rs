@@ -10,7 +10,8 @@ description = "Partition library: user-space helpers for partitions"
 # This is a known limitation - run tests via `cargo test -p kernel` instead.
 [dependencies]
 kernel = { path = "../kernel", default-features = false }
+rtos-traits = { path = "../rtos-traits" }
 
 [features]
 default = []
-partition-debug = ["kernel/partition-debug"]
+partition-debug = ["kernel/partition-debug", "rtos-traits/partition-debug"]

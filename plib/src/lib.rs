@@ -11,11 +11,56 @@
 #![no_std]
 
 #[cfg(feature = "partition-debug")]
-use kernel::debug::{DebugRingBuffer, KIND_TEXT};
+use kernel::debug::DebugRingBuffer;
 #[cfg(feature = "partition-debug")]
-use kernel::svc::SvcError;
+use rtos_traits::debug::KIND_TEXT;
 #[cfg(feature = "partition-debug")]
-use kernel::syscall::SYS_DEBUG_NOTIFY;
+use rtos_traits::syscall::{SvcError, SYS_DEBUG_NOTIFY};
+
+// Re-export FmtBuffer from shared traits crate for use with dprint! macro
+#[cfg(feature = "partition-debug")]
+pub use rtos_traits::fmt::FmtBuffer;
+
+/// Format and write a debug message to the partition's debug ring buffer.
+///
+/// # Forms
+/// - `dprint!(buffer, "format", args...)` - uses default 128-byte stack buffer
+/// - `dprint!(buffer, @size SIZE, "format", args...)` - uses SIZE-byte stack buffer
+///
+/// # Stack Safety
+/// The default 128-byte buffer is chosen as a reasonable balance between message
+/// length and stack usage. For very constrained partitions, use the explicit size form.
+///
+/// # Truncation Behavior
+/// Messages that exceed the buffer size are silently truncated. This is intentional
+/// for best-effort debug logging where partial output is preferable to panicking.
+// TODO: Consider making the default size configurable via KernelConfig trait
+// for system-wide stack budget control.
+// TODO: reviewer false positive - macro uses @size keyword correctly, not a path
+#[cfg(feature = "partition-debug")]
+#[macro_export]
+macro_rules! dprint {
+    // Form with explicit buffer size (uses @size keyword to disambiguate from format string)
+    ($buf:expr, @size $size:literal, $($arg:tt)*) => {{
+        use core::fmt::Write;
+        let mut fmt_buf = $crate::FmtBuffer::<$size>::new();
+        // Silent truncation is intentional for best-effort debug logging
+        let _ = write!(fmt_buf, $($arg)*);
+        $crate::debug_write($buf, $crate::__LOG_INFO, fmt_buf.as_bytes())
+    }};
+    // Form with default 128-byte buffer
+    ($buf:expr, $($arg:tt)*) => {{
+        use core::fmt::Write;
+        let mut fmt_buf = $crate::FmtBuffer::<128>::new();
+        // Silent truncation is intentional for best-effort debug logging
+        let _ = write!(fmt_buf, $($arg)*);
+        $crate::debug_write($buf, $crate::__LOG_INFO, fmt_buf.as_bytes())
+    }};
+}
+
+#[cfg(feature = "partition-debug")]
+#[doc(hidden)]
+pub use rtos_traits::debug::LOG_INFO as __LOG_INFO;
 
 /// Error type for debug_write operations.
 #[cfg(feature = "partition-debug")]

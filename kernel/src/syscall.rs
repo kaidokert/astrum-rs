@@ -48,9 +48,9 @@ pub const SYS_DEV_CLOSE: u32 = 29;
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_READ_TIMED: u32 = 30;
 
-/// Debug notify: sets a per-partition 'debug pending' flag (~10-20 cycle cost).
+// Re-export SYS_DEBUG_NOTIFY from shared traits crate for ABI isolation
 #[cfg(feature = "partition-debug")]
-pub const SYS_DEBUG_NOTIFY: u32 = 0x40;
+pub use rtos_traits::syscall::SYS_DEBUG_NOTIFY;
 
 /// Typed syscall identifier for use in the kernel dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
