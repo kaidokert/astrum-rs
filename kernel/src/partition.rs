@@ -467,6 +467,10 @@ impl<const N: usize> PartitionTable<N> {
         self.partitions.iter()
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut PartitionControlBlock> {
+        self.partitions.iter_mut()
+    }
+
     /// Returns a slice of all partition control blocks.
     pub fn as_slice(&self) -> &[PartitionControlBlock] {
         &self.partitions

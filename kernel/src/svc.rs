@@ -2106,6 +2106,32 @@ where
     pub fn hw_uart(&self) -> &Option<crate::hw_uart::HwUartBackend> {
         &self.hw_uart
     }
+
+    /// Drains debug output from all partitions with pending debug data.
+    ///
+    /// Iterates through all partitions, and for each with `debug_pending=true`,
+    /// calls `drain_partition` with the given budget. The budget is applied
+    /// per-partition, not globally.
+    ///
+    /// Returns the total number of bytes drained across all partitions.
+    ///
+    // TODO: Real-time determinism - worst-case execution time scales linearly
+    // with partition count. Consider adding a global aggregate budget cap for
+    // low-latency scenarios.
+    #[cfg(feature = "partition-debug")]
+    pub fn drain_debug_pending(
+        &mut self,
+        ctx: &mut crate::partition_debug::DrainContext,
+        budget: usize,
+    ) -> usize {
+        let mut total = 0;
+        for pcb in self.partitions_mut().iter_mut() {
+            if pcb.debug_pending() {
+                total += ctx.drain_partition(pcb, budget);
+            }
+        }
+        total
+    }
 }
 
 /// Try to transition partition `pid` to `state`. Returns `true` on success.
@@ -5176,6 +5202,106 @@ mod tests {
         assert_eq!(ef.r0, 0);
         // debug_pending flag should now be set on current partition (0)
         assert!(k.partitions().get(0).unwrap().debug_pending());
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn drain_debug_pending_iterates_and_clears() {
+        use crate::debug::{DebugRingBuffer, KIND_TEXT, LOG_INFO};
+        use crate::partition_debug::DrainContext;
+
+        static BUF0: DebugRingBuffer<64> = DebugRingBuffer::new();
+        static BUF1: DebugRingBuffer<64> = DebugRingBuffer::new();
+
+        let mut k = kernel(0, 0, 0);
+
+        // Set up debug buffers on both partitions
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_debug_buffer(&BUF0);
+        k.partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .set_debug_buffer(&BUF1);
+
+        // Write records to both buffers
+        BUF0.write_record(LOG_INFO, KIND_TEXT, b"p0");
+        BUF1.write_record(LOG_INFO, KIND_TEXT, b"p1");
+
+        // Signal debug pending on both partitions
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .signal_debug_pending();
+        k.partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .signal_debug_pending();
+
+        // Verify both flags are set
+        assert!(k.partitions().get(0).unwrap().debug_pending());
+        assert!(k.partitions().get(1).unwrap().debug_pending());
+
+        // Drain with sufficient budget
+        let mut ctx = DrainContext::new();
+        let drained = k.drain_debug_pending(&mut ctx, 256);
+
+        // Should have drained records from both partitions (4 + 2 bytes each)
+        assert_eq!(drained, 12);
+
+        // Both debug_pending flags should be cleared
+        assert!(!k.partitions().get(0).unwrap().debug_pending());
+        assert!(!k.partitions().get(1).unwrap().debug_pending());
+
+        // Buffers should be empty
+        assert!(BUF0.is_empty());
+        assert!(BUF1.is_empty());
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn drain_debug_pending_skips_non_pending() {
+        use crate::debug::{DebugRingBuffer, KIND_TEXT, LOG_INFO};
+        use crate::partition_debug::DrainContext;
+
+        static BUF0: DebugRingBuffer<64> = DebugRingBuffer::new();
+        static BUF1: DebugRingBuffer<64> = DebugRingBuffer::new();
+
+        let mut k = kernel(0, 0, 0);
+
+        // Set up debug buffers on both partitions
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_debug_buffer(&BUF0);
+        k.partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .set_debug_buffer(&BUF1);
+
+        // Write records to both buffers but only signal partition 1
+        BUF0.write_record(LOG_INFO, KIND_TEXT, b"p0");
+        BUF1.write_record(LOG_INFO, KIND_TEXT, b"p1");
+        k.partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .signal_debug_pending();
+
+        // Only partition 1 has debug_pending set
+        assert!(!k.partitions().get(0).unwrap().debug_pending());
+        assert!(k.partitions().get(1).unwrap().debug_pending());
+
+        let mut ctx = DrainContext::new();
+        let drained = k.drain_debug_pending(&mut ctx, 256);
+
+        // Should only drain partition 1's buffer (4 + 2 = 6 bytes)
+        assert_eq!(drained, 6);
+
+        // Partition 0's buffer should still have data
+        assert!(!BUF0.is_empty());
+        // Partition 1's buffer should be empty
+        assert!(BUF1.is_empty());
     }
 
     /// Test module for `define_unified_kernel!` macro.
