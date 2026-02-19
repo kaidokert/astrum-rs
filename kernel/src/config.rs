@@ -196,9 +196,6 @@ pub trait KernelConfig {
     ///
     /// [`CORE_CLOCK_HZ`]: Self::CORE_CLOCK_HZ
     /// [`TICK_PERIOD_US`]: Self::TICK_PERIOD_US
-    // TODO: backward compatibility - the previous default was 120,000 (for 120 MHz).
-    // Existing configurations that relied on the old default must now explicitly
-    // set CORE_CLOCK_HZ to 120_000_000 to preserve the same timing behavior.
     const SYSTICK_CYCLES: u32 =
         (Self::CORE_CLOCK_HZ as u64 * Self::TICK_PERIOD_US as u64 / 1_000_000) as u32;
 
@@ -284,6 +281,22 @@ pub const fn assert_priority_order<C: KernelConfig>() {
     assert!(
         C::PENDSV_PRIORITY > C::SYSTICK_PRIORITY,
         "PendSV priority must be strictly lower (larger number) than SysTick priority"
+    );
+}
+
+/// Compile-time assertion that `SYSTICK_CYCLES` fits in the 24-bit SysTick
+/// RELOAD register.
+///
+/// The SysTick RELOAD register is 24 bits wide, so the maximum reload value
+/// is 0xFF_FFFF (16,777,215).  Since the hardware register is loaded with
+/// `SYSTICK_CYCLES - 1`, the check is `SYSTICK_CYCLES - 1 <= SYSTICK_RELOAD_MAX`.
+/// Also rejects zero, which would underflow on the subtraction.
+pub const fn assert_systick_reload<C: KernelConfig>() {
+    assert!(C::SYSTICK_CYCLES > 0, "SYSTICK_CYCLES must be at least 1");
+    // SYSTICK_RELOAD_MAX is defined above in this module (0xFF_FFFF).
+    assert!(
+        C::SYSTICK_CYCLES - 1 <= SYSTICK_RELOAD_MAX,
+        "SYSTICK_CYCLES - 1 exceeds 24-bit SysTick RELOAD maximum (0xFFFFFF)"
     );
 }
 
@@ -459,6 +472,56 @@ mod tests {
     // is verified at const-eval time for both default and custom configs.
     const _: () = assert_priority_order::<DefaultPriority>();
     const _: () = assert_priority_order::<CustomPriority>();
+
+    // Compile-time assertions: SysTick reload fits in 24-bit RELOAD register.
+    const _: () = assert_systick_reload::<DefaultPriority>();
+    const _: () = assert_systick_reload::<CustomPriority>();
+
+    #[test]
+    fn assert_systick_reload_accepts_default_config() {
+        assert_systick_reload::<DefaultPriority>();
+    }
+
+    #[test]
+    fn assert_systick_reload_accepts_custom_config() {
+        assert_systick_reload::<CustomPriority>();
+    }
+
+    /// Config with SYSTICK_CYCLES that exceeds the 24-bit RELOAD max.
+    struct OverflowSystick;
+    impl KernelConfig for OverflowSystick {
+        const N: usize = 2;
+        const SYSTICK_CYCLES: u32 = SYSTICK_RELOAD_MAX + 2; // 0x1000001, reload would be 0x1000000
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
+        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+        type Ports =
+            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    }
+
+    #[test]
+    #[should_panic(expected = "24-bit SysTick RELOAD maximum")]
+    fn assert_systick_reload_panics_on_overflow() {
+        assert_systick_reload::<OverflowSystick>();
+    }
+
+    /// Config with SYSTICK_CYCLES = 0 (would underflow on RELOAD = cycles - 1).
+    struct ZeroSystick;
+    impl KernelConfig for ZeroSystick {
+        const N: usize = 2;
+        const SYSTICK_CYCLES: u32 = 0;
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
+        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+        type Ports =
+            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    }
+
+    #[test]
+    #[should_panic(expected = "must be at least 1")]
+    fn assert_systick_reload_panics_on_zero() {
+        assert_systick_reload::<ZeroSystick>();
+    }
 
     #[cfg(feature = "partition-debug")]
     #[test]

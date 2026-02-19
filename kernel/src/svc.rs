@@ -4538,6 +4538,11 @@ mod tests {
             .unwrap()
             .enqueue_blocked_sender(1, u64::MAX);
         let ptr = low32_buf(0);
+        // Zero the buffer to eliminate stale data from parallel tests
+        // sharing the same mmap page, so we verify dispatch actually wrote.
+        // SAFETY: `ptr` was obtained from `low32_buf(0)` which returns a valid,
+        // mmap-backed pointer with at least 4096 bytes; writing 2 bytes is in-bounds.
+        unsafe { core::ptr::write_bytes(ptr, 0, 2) };
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 100, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 2, "should return msg_len=2");

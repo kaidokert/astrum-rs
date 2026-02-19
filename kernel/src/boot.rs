@@ -250,6 +250,7 @@ where
     })?;
 
     const { crate::config::assert_priority_order::<C>() }
+    const { crate::config::assert_systick_reload::<C>() }
     // SAFETY: Called once before scheduler starts; single-core exclusive access to SCB.
     unsafe {
         peripherals
@@ -269,6 +270,10 @@ where
     .ok_or(BootError::NoReadyPartition)?;
     let _ = first;
 
+    // Select the processor core clock (CLKSOURCE = 1) as the SysTick
+    // clock source.  SYSTICK_CYCLES and CORE_CLOCK_HZ assume this setting.
+    // To use an external reference clock instead, override CORE_CLOCK_HZ to
+    // match the external frequency and change this to SystClkSource::External.
     peripherals.SYST.set_clock_source(SystClkSource::Core);
     peripherals.SYST.set_reload(C::SYSTICK_CYCLES - 1);
     peripherals.SYST.clear_current();
