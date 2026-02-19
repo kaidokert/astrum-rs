@@ -1419,6 +1419,7 @@ where
                     },
                 }
             }
+            #[cfg(feature = "ipc-message")]
             Some(SyscallId::MsgSend) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region. (2) Slice length is
@@ -1441,6 +1442,7 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
+            #[cfg(feature = "ipc-message")]
             Some(SyscallId::MsgRecv) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region. (2) Slice length is
@@ -1460,6 +1462,7 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
+            #[cfg(feature = "ipc-sampling")]
             Some(SyscallId::SamplingWrite) => {
                 validated_ptr!(self, frame.r3, frame.r2 as usize, {
                     // SAFETY: (1) validated_ptr confirmed [r3, r3+r2) lies within
@@ -1480,6 +1483,7 @@ where
                     }
                 })
             }
+            #[cfg(feature = "ipc-sampling")]
             Some(SyscallId::SamplingRead) => validated_ptr!(self, frame.r3, C::SM, {
                 // SAFETY: (1) validated_ptr confirmed [r3, r3+SM) lies within
                 // the calling partition's MPU data region. (2) Slice length is
@@ -1496,6 +1500,7 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
+            #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingSend) => {
                 validated_ptr!(self, frame.r3, frame.r2 as usize, {
                     // SAFETY: (1) validated_ptr confirmed [r3, r3+r2) lies within
@@ -1527,6 +1532,7 @@ where
                     }
                 })
             }
+            #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingRecv) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region. (2) Slice length is
@@ -1555,6 +1561,7 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
+            #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingStatus) => {
                 validated_ptr!(self, frame.r2, core::mem::size_of::<QueuingPortStatus>(), {
                     // SAFETY: (1) validated_ptr confirmed [r2, r2+size_of QueuingPortStatus)
@@ -1577,6 +1584,7 @@ where
                     }
                 })
             }
+            #[cfg(feature = "ipc-blackboard")]
             Some(SyscallId::BbDisplay) => {
                 validated_ptr!(self, frame.r3, frame.r2 as usize, {
                     // SAFETY: (1) validated_ptr confirmed [r3, r3+r2) lies within
@@ -1605,6 +1613,7 @@ where
                     }
                 })
             }
+            #[cfg(feature = "ipc-blackboard")]
             Some(SyscallId::BbRead) => {
                 validated_ptr!(self, frame.r3, C::BM, {
                     // SAFETY: (1) validated_ptr confirmed [r3, r3+BM) lies within
@@ -1636,6 +1645,7 @@ where
                     }
                 })
             }
+            #[cfg(feature = "ipc-blackboard")]
             Some(SyscallId::BbClear) => {
                 match self
                     .ports
@@ -1797,6 +1807,7 @@ where
                 frame.r1 = u32::from(self.is_bottom_half_stale());
                 self.ticks_since_bottom_half
             }
+            #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingRecvTimed) => validated_ptr!(self, frame.r3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
@@ -1826,6 +1837,7 @@ where
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
+            #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingSendTimed) => {
                 let data_len = (frame.r2 & 0xFFFF) as usize;
                 let timeout = (frame.r2 >> 16) as u64;
@@ -1945,6 +1957,8 @@ where
                     }
                 }
             }
+            #[allow(unreachable_patterns)]
+            Some(_) => SvcError::InvalidSyscall.to_u32(),
             None => SvcError::InvalidSyscall.to_u32(),
         };
     }
