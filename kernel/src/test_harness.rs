@@ -1,4 +1,5 @@
 use crate::config::KernelConfig;
+use crate::context::ExceptionFrame;
 use crate::partition::{ConfigError, MpuRegion, PartitionConfig, PartitionState, TransitionError};
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
 use crate::svc::Kernel;
@@ -118,11 +119,50 @@ impl KernelTestHarness {
     pub fn kernel_mut(&mut self) -> &mut Kernel<HarnessConfig> {
         &mut self.kernel
     }
+
+    /// Dispatch a syscall through the kernel and return the resulting frame.
+    ///
+    /// Creates an `ExceptionFrame` with `r0 = syscall`, `r1`, `r2`, `r3` set
+    /// from the arguments, calls `kernel.dispatch()`, and returns the frame
+    /// so callers can inspect the return value in `r0`.
+    pub fn dispatch(&mut self, syscall: u32, r1: u32, r2: u32, r3: u32) -> ExceptionFrame {
+        let mut frame = ExceptionFrame {
+            r0: syscall,
+            r1,
+            r2,
+            r3,
+            r12: 0,
+            lr: 0,
+            pc: 0,
+            xpsr: 0,
+        };
+        // SAFETY: stack-local frame, properly constructed kernel,
+        // single-threaded test environment.
+        unsafe { self.kernel.dispatch(&mut frame) };
+        frame
+    }
+
+    /// Set `current_partition` to `pid` then dispatch a syscall.
+    ///
+    /// Useful for exercising syscalls as a specific partition without
+    /// running the scheduler.
+    pub fn dispatch_as(
+        &mut self,
+        pid: usize,
+        syscall: u32,
+        r1: u32,
+        r2: u32,
+        r3: u32,
+    ) -> ExceptionFrame {
+        self.kernel.current_partition = pid as u8;
+        self.dispatch(syscall, r1, r2, r3)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::syscall::SYS_YIELD;
 
     #[test]
     fn two_partitions_count_and_state() {
@@ -154,5 +194,38 @@ mod tests {
         let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
         h.kernel_mut().current_partition = 1;
         assert_eq!(h.kernel().current_partition, 1);
+    }
+
+    #[test]
+    fn dispatch_yield_returns_zero_and_sets_yield_requested() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        assert!(!h.kernel().yield_requested);
+
+        let frame = h.dispatch(SYS_YIELD, 0, 0, 0);
+
+        assert_eq!(frame.r0, 0, "SYS_YIELD must return 0");
+        assert!(
+            h.kernel().yield_requested,
+            "yield_requested must be set after SYS_YIELD"
+        );
+    }
+
+    #[test]
+    fn dispatch_as_changes_partition_and_dispatches() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        assert_eq!(h.kernel().current_partition, 0);
+
+        let frame = h.dispatch_as(1, SYS_YIELD, 0, 0, 0);
+
+        assert_eq!(
+            h.kernel().current_partition,
+            1,
+            "dispatch_as must set current_partition to the given pid"
+        );
+        assert_eq!(frame.r0, 0, "SYS_YIELD must return 0");
+        assert!(
+            h.kernel().yield_requested,
+            "yield_requested must be set after SYS_YIELD via dispatch_as"
+        );
     }
 }
