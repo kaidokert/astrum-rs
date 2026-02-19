@@ -40,6 +40,8 @@ pub enum BootError {
         /// Required alignment in bytes.
         required: u32,
     },
+    /// Failed to update PCB stack region fields.
+    StackRegionError { partition_index: usize },
 }
 
 impl core::fmt::Display for BootError {
@@ -78,6 +80,12 @@ impl core::fmt::Display for BootError {
                 write!(
                     f,
                     "kernel storage misaligned: address=0x{address:08x}, required={required}-byte alignment"
+                )
+            }
+            Self::StackRegionError { partition_index } => {
+                write!(
+                    f,
+                    "failed to update PCB stack region: partition {partition_index}"
                 )
             }
         }
@@ -230,6 +238,10 @@ where
                 );
             }
             k.set_sp(i, sp);
+            // Sync PCB stack fields with actual relocated stack memory.
+            if !k.fix_stack_region(i, base, size) {
+                return Err(BootError::StackRegionError { partition_index: i });
+            }
         }
         Ok::<(), BootError>(())
     })?;
@@ -307,6 +319,13 @@ mod tests {
         assert_eq!(
             std::format!("{err}"),
             "kernel storage misaligned: address=0x20000200, required=1024-byte alignment"
+        );
+
+        // Test StackRegionError display
+        let err = BootError::StackRegionError { partition_index: 5 };
+        assert_eq!(
+            std::format!("{err}"),
+            "failed to update PCB stack region: partition 5"
         );
     }
 

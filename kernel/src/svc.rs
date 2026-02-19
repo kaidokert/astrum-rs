@@ -1987,6 +1987,20 @@ where
         self.core.set_sp(index, sp)
     }
 
+    /// Updates the PCB stack region fields for a partition.
+    ///
+    /// Returns `true` if the partition exists and the region was updated,
+    /// `false` if the partition index is out of bounds or the MPU validation
+    /// fails.
+    #[inline(always)]
+    pub fn fix_stack_region(&mut self, index: usize, base: u32, size: u32) -> bool {
+        if let Some(pcb) = self.core.partitions_mut().get_mut(index) {
+            pcb.fix_stack_region(base, size).is_ok()
+        } else {
+            false
+        }
+    }
+
     /// Returns a reference to the partition_sp array.
     #[inline(always)]
     pub fn partition_sp(&self) -> &[u32] {
