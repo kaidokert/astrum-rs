@@ -96,7 +96,7 @@
 //! | Linker placement | `#[link_section = ".kernel_state"]` attribute |
 //! | Assembly visibility | `__kernel_state_start` symbol in linker script |
 
-use core::mem::{size_of, MaybeUninit};
+use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::addr_of_mut;
 
 use crate::config::KernelConfig;
@@ -228,6 +228,15 @@ where
             offset, KERNEL_ALIGNMENT
         );
     }
+    // Belt-and-suspenders: catch cases where Kernel<C> requires more alignment than
+    // KERNEL_ALIGNMENT. The check above validates against KERNEL_ALIGNMENT, but Kernel<C>
+    // could theoretically require stricter alignment if its internal types change.
+    debug_assert!(
+        ptr.is_aligned(),
+        "ptr not aligned for Kernel<C>: buffer alignment {} but type requires {} byte alignment",
+        KERNEL_ALIGNMENT,
+        align_of::<Kernel<C>>()
+    );
     // SAFETY: The caller guarantees that ptr is valid, writable, and has sufficient
     // size for Kernel<C>. The alignment check above ensures ptr is KERNEL_ALIGNMENT-aligned.
     ptr.write(kernel);
