@@ -2153,6 +2153,14 @@ where
     pub fn yield_current_slot(&mut self) -> impl YieldResult {
         let result = self.schedule_mut().force_advance();
         if let Some(pid) = result.partition_id() {
+            let is_waiting = self
+                .partitions()
+                .get(pid as usize)
+                .map(|pcb| pcb.state() == PartitionState::Waiting)
+                .unwrap_or(false);
+            if is_waiting {
+                return ScheduleEvent::None;
+            }
             self.active_partition = Some(pid);
         }
         result
@@ -5960,6 +5968,24 @@ mod tests {
         // Should switch to P1
         assert_eq!(result.partition_id(), Some(1));
         assert!(!result.is_system_window());
+    }
+
+    /// Tests yield_current_slot skips Waiting partitions (returns None,
+    /// doesn't update active_partition).
+    #[test]
+    fn yield_current_slot_skips_waiting_partition() {
+        let mut k = kernel_with_schedule();
+        let initial_active = k.active_partition();
+
+        // Transition P1 to Waiting (Ready -> Running -> Waiting)
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // Yield from P0 slot: force_advance returns P1, but P1 is Waiting
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), None);
+        assert_eq!(k.active_partition(), initial_active);
     }
 
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
