@@ -187,6 +187,17 @@ path = "examples/adversarial/syscall_kernel_ptr.rs"
 required-features = ["qemu", "log-semihosting"]
 
 [features]
+default = ["arinc-compat"]
+
+# IPC primitives (optional, enabled via arinc-compat by default)
+ipc-sampling = []
+ipc-queuing = []
+ipc-blackboard = []
+ipc-message = []
+
+# ARINC 653 compatibility: enables all optional IPC primitives
+arinc-compat = ["ipc-sampling", "ipc-queuing", "ipc-blackboard", "ipc-message"]
+
 qemu = []
 dynamic-mpu = []
 partition-debug = ["rtos-traits/partition-debug"]
