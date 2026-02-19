@@ -2247,6 +2247,25 @@ where
         self.bottom_half_stale = false;
     }
 
+    /// Safety-critical fallback: revoke expired buffer lending deadlines.
+    ///
+    /// When `bottom_half_stale` is true (system windows are too infrequent),
+    /// this method enforces buffer deadlines by revoking any buffer slots
+    /// whose deadline has passed. Only buffer revocation runs as fallback —
+    /// UART transfer and ISR ring draining are not safety-critical and are
+    /// deferred to the next system window.
+    ///
+    /// Returns the number of buffers revoked, or 0 if the stale flag is not set.
+    #[cfg(feature = "dynamic-mpu")]
+    pub fn fallback_revoke_expired_buffers(&mut self) -> usize {
+        if !self.bottom_half_stale {
+            return 0;
+        }
+        let current_tick = self.tick.get();
+        self.buffers
+            .revoke_expired(current_tick, &self.dynamic_strategy)
+    }
+
     /// Returns an immutable reference to the buffer pool.
     #[cfg(feature = "dynamic-mpu")]
     #[inline(always)]
@@ -5924,6 +5943,87 @@ mod tests {
         assert!(
             k.is_bottom_half_stale(),
             "flag should be true again after exceeding threshold"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn fallback_revoke_noop_when_not_stale() {
+        let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
+        k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
+        k.schedule_mut().add(ScheduleEntry::new(1, 60)).unwrap();
+        k.schedule_mut().start();
+
+        // Lend a buffer with an already-expired deadline
+        let ds = &k.dynamic_strategy;
+        k.buffers.lend_to_partition(0, 1, false, ds).unwrap();
+        k.buffers.set_deadline(0, Some(0)).unwrap();
+
+        // bottom_half_stale is false — fallback should be a no-op
+        assert!(!k.is_bottom_half_stale());
+        let revoked = k.fallback_revoke_expired_buffers();
+        assert_eq!(revoked, 0, "should not revoke when stale flag is false");
+
+        // Buffer should still be borrowed
+        assert_eq!(
+            k.buffers.get(0).unwrap().state(),
+            crate::buffer_pool::BorrowState::BorrowedRead { owner: 1 },
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn fallback_revoke_expired_buffers_when_stale() {
+        let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
+        k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
+        k.schedule_mut().add(ScheduleEntry::new(1, 60)).unwrap();
+        k.schedule_mut().start();
+
+        // Lend slot 0 with deadline=10
+        let ds = &k.dynamic_strategy;
+        k.buffers.lend_to_partition(0, 1, true, ds).unwrap();
+        k.buffers.set_deadline(0, Some(10)).unwrap();
+
+        // Advance past threshold to trigger stale flag
+        for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
+            k.advance_schedule_tick();
+        }
+        assert!(k.is_bottom_half_stale());
+
+        // Current tick is now > 10, so buffer should be revoked
+        let revoked = k.fallback_revoke_expired_buffers();
+        assert_eq!(revoked, 1, "expired buffer should be revoked");
+        assert_eq!(
+            k.buffers.get(0).unwrap().state(),
+            crate::buffer_pool::BorrowState::Free,
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn fallback_revoke_skips_non_expired_buffers() {
+        let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
+        k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
+        k.schedule_mut().add(ScheduleEntry::new(1, 60)).unwrap();
+        k.schedule_mut().start();
+
+        // Lend slot 0 with a deadline far in the future
+        let ds = &k.dynamic_strategy;
+        k.buffers.lend_to_partition(0, 1, false, ds).unwrap();
+        k.buffers.set_deadline(0, Some(999_999)).unwrap();
+
+        // Advance past threshold to trigger stale flag
+        for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
+            k.advance_schedule_tick();
+        }
+        assert!(k.is_bottom_half_stale());
+
+        // Current tick (~101) is well below deadline (999_999)
+        let revoked = k.fallback_revoke_expired_buffers();
+        assert_eq!(revoked, 0, "non-expired buffer should not be revoked");
+        assert_eq!(
+            k.buffers.get(0).unwrap().state(),
+            crate::buffer_pool::BorrowState::BorrowedRead { owner: 1 },
         );
     }
 
