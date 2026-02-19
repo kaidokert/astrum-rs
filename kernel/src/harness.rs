@@ -217,7 +217,7 @@ macro_rules! define_unified_harness {
                 .fetch_add(1, ::core::sync::atomic::Ordering::Relaxed)
                 + 1;
             #[cfg(feature = "qemu")]
-            ::cortex_m_semihosting::hprintln!("[SysTick] #{}", _systick_tick);
+            $crate::klog!("[SysTick] #{}", _systick_tick);
 
             // Single critical section for both systick_handler and user hook to preserve atomicity
             $crate::state::with_kernel_mut::<$Config, _, _>(|_systick_kernel| {

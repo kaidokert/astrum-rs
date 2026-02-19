@@ -108,6 +108,9 @@ name = "debug_boot"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "hw_integration"
+
+[[example]]
 name = "mpu_dynamic"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
