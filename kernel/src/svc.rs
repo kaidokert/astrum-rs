@@ -1356,7 +1356,11 @@ where
         frame.r0 = match SyscallId::from_u32(frame.r0) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::EventWait) => {
-                events::event_wait(self.partitions_mut(), frame.r1 as usize, frame.r2)
+                let result = events::event_wait(self.partitions_mut(), frame.r1 as usize, frame.r2);
+                if result == 0 {
+                    self.trigger_deschedule();
+                }
+                result
             }
             Some(SyscallId::EventSet) => {
                 events::event_set(self.partitions_mut(), frame.r1 as usize, frame.r2)
@@ -2928,6 +2932,33 @@ mod tests {
         let mut ef = frame(SYS_EVT_CLEAR, 99, 0b0001);
         dispatch_syscall(&mut ef, &mut t);
         assert_eq!(ef.r0, inv);
+    }
+
+    #[test]
+    fn dispatch_event_wait_blocking_triggers_deschedule() {
+        let mut k = kernel(0, 0, 0);
+        // No bits set — event_wait should block (return 0) and trigger deschedule.
+        let mut ef = frame(SYS_EVT_WAIT, 0, 0b1010);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert!(k.yield_requested());
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+    }
+
+    #[test]
+    fn dispatch_event_wait_immediate_no_deschedule() {
+        let mut k = kernel(0, 0, 0);
+        // Pre-set bits so event_wait returns immediately with matched bits.
+        events::event_set(k.partitions_mut(), 0, 0b1010);
+        let mut ef = frame(SYS_EVT_WAIT, 0, 0b1110);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0b1010);
+        assert!(!k.yield_requested());
     }
 
     #[test]
