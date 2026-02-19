@@ -220,6 +220,40 @@ pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32);
     ])
 }
 
+/// Compute (RBAR, RASR) pairs for a partition's peripheral MPU regions.
+///
+/// Returns a fixed-size array of two entries for hardware MPU regions R4 and
+/// R5 (region numbers 4 and 5).  Each valid peripheral region is configured
+/// as device memory (S/C/B = 0/0/0) with full read-write access
+/// (AP_FULL_ACCESS) and execute-never (XN=true).
+///
+/// Invalid or missing entries are set to `(0, 0)`, which disables the
+/// corresponding hardware region (RASR enable bit = 0), ensuring a
+/// deterministic MPU state regardless of the partition's peripheral config.
+pub fn peripheral_mpu_pairs(pcb: &PartitionControlBlock) -> [(u32, u32); 2] {
+    let mut result = [(0u32, 0u32); 2];
+
+    for (i, region) in pcb.peripheral_regions().iter().take(2).enumerate() {
+        let base = region.base();
+        let size = region.size();
+        if validate_mpu_region(base, size).is_err() {
+            continue; // slot stays (0, 0) → hardware region disabled
+        }
+        // validate_mpu_region guarantees size is a power of 2 and >= 32,
+        // so trailing_zeros() - 1 is the correct SIZE field encoding.
+        let size_field = size.trailing_zeros() - 1;
+        let region_number = 4 + i as u32; // i ∈ {0, 1} → region ∈ {4, 5}
+        let rbar = match build_rbar(base, region_number) {
+            Some(r) => r,
+            None => continue, // slot stays (0, 0) → hardware region disabled
+        };
+        let rasr = build_rasr(size_field, AP_FULL_ACCESS, true, (false, false, false));
+        result[i] = (rbar, rasr);
+    }
+
+    result
+}
+
 /// Build a deny-all MPU region set: region 0 is background no-access
 /// covering the full 4 GiB address space (XN), regions 1-3 are disabled.
 /// Used as a safe fallback when `partition_mpu_regions` returns `None`,
@@ -975,5 +1009,95 @@ mod tests {
     fn unprivileged_regions_empty_input() {
         let result = unprivileged_regions_from_pairs(&[]);
         assert!(result.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // peripheral_mpu_pairs
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn peripheral_mpu_pairs_empty() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        let pairs = peripheral_mpu_pairs(&pcb);
+        // Both slots disabled
+        assert_eq!(pairs, [(0, 0), (0, 0)]);
+    }
+
+    #[test]
+    fn peripheral_mpu_pairs_one_region() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
+        let pairs = peripheral_mpu_pairs(&pcb);
+        // Region number 4 is active
+        let (rbar, rasr) = pairs[0];
+        assert_eq!(rbar, build_rbar(0x4000_0000, 4).unwrap());
+        // AP = FULL_ACCESS
+        assert_eq!(decode_rasr_ap(rasr), AP_FULL_ACCESS);
+        // XN = 1
+        assert_eq!((rasr >> 28) & 1, 1);
+        // Enable bit set
+        assert_eq!(rasr & 1, 1);
+        // SIZE field = 11 (4096 bytes)
+        assert_eq!((rasr >> RASR_SIZE_SHIFT) & RASR_SIZE_MASK, 11);
+        // Region number 5 is disabled
+        assert_eq!(pairs[1], (0, 0));
+    }
+
+    #[test]
+    fn peripheral_mpu_pairs_two_regions() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096).with_peripheral_regions(&[
+            MpuRegion::new(0x4000_0000, 4096, 0),
+            MpuRegion::new(0x4001_0000, 256, 0),
+        ]);
+        let pairs = peripheral_mpu_pairs(&pcb);
+        // First peripheral: region number 4
+        assert_eq!(pairs[0].0, build_rbar(0x4000_0000, 4).unwrap());
+        assert_eq!(
+            (pairs[0].1 >> RASR_SIZE_SHIFT) & RASR_SIZE_MASK,
+            encode_size(4096).unwrap()
+        );
+        // Second peripheral: region number 5
+        assert_eq!(pairs[1].0, build_rbar(0x4001_0000, 5).unwrap());
+        assert_eq!(
+            (pairs[1].1 >> RASR_SIZE_SHIFT) & RASR_SIZE_MASK,
+            encode_size(256).unwrap()
+        );
+    }
+
+    #[test]
+    fn peripheral_mpu_pairs_skips_invalid() {
+        // Non-power-of-2 size → invalid, slot stays disabled
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 100, 0)]);
+        let pairs = peripheral_mpu_pairs(&pcb);
+        assert_eq!(pairs, [(0, 0), (0, 0)]);
+    }
+
+    #[test]
+    fn peripheral_mpu_pairs_skips_invalid_keeps_valid() {
+        // First region invalid (size 100), second valid (size 256).
+        // with_peripheral_regions stores both (non-zero sizes accepted).
+        // peripheral_mpu_pairs should disable R4 (invalid) and configure R5.
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096).with_peripheral_regions(&[
+            MpuRegion::new(0x4000_0000, 100, 0),
+            MpuRegion::new(0x4001_0000, 256, 0),
+        ]);
+        let pairs = peripheral_mpu_pairs(&pcb);
+        // R4 disabled (invalid first region)
+        assert_eq!(pairs[0], (0, 0));
+        // R5 configured with second region
+        assert_eq!(pairs[1].0, build_rbar(0x4001_0000, 5).unwrap());
+        assert_eq!(pairs[1].1 & 1, 1); // enable bit set
+    }
+
+    #[test]
+    fn peripheral_mpu_pairs_device_memory_attributes() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
+        let (_, rasr) = peripheral_mpu_pairs(&pcb)[0];
+        // S/C/B = 0/0/0 (device memory)
+        assert_eq!((rasr >> 18) & 1, 0); // S
+        assert_eq!((rasr >> 17) & 1, 0); // C
+        assert_eq!((rasr >> 16) & 1, 0); // B
     }
 }
