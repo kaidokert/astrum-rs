@@ -149,4 +149,20 @@ mod tests {
         for i in 1..5usize { assert_eq!(p.lock(&mut t, 0, i), Ok(false)); }
         assert_eq!(p.lock(&mut t, 0, 5), Err(MutexError::WaitQueueFull));
     }
+    #[test] fn mutex_lock_returns_false_when_blocking() {
+        // Setup: P0 and P1 both in Running state
+        let (mut t, mut p) = (tbl::<4>(2), MutexPool::<1, 4>::new(1));
+        // P0 acquires mutex (should succeed with Ok(true))
+        let p0_result = p.lock(&mut t, 0, 0);
+        assert_eq!(p0_result, Ok(true));
+        assert_eq!(p.owner(0), Ok(Some(0)));
+        // P1 tries to acquire held mutex - must return Ok(false) exactly
+        let p1_result = p.lock(&mut t, 0, 1);
+        assert_eq!(p1_result, Ok(false), "lock() must return Ok(false) when blocking");
+        // Verify P1's state transitioned to Waiting
+        let p1_state = t.get(1).unwrap().state();
+        assert_eq!(p1_state, Waiting, "blocked partition must be in Waiting state");
+        // P0 still owns the mutex
+        assert_eq!(p.owner(0), Ok(Some(0)));
+    }
 }
