@@ -67,6 +67,69 @@ pub fn assert_partition_table_integrity(partitions: &[PartitionControlBlock]) {
 #[inline(always)]
 pub fn assert_partition_table_integrity(_partitions: &[PartitionControlBlock]) {}
 
+/// Assert that each partition's saved stack pointer is within its stack region.
+///
+/// For each partition, if the saved SP is non-zero (initialized), it must fall
+/// within the range `[stack_base, stack_base + stack_size]`. The upper bound
+/// is inclusive because the initial SP points to the top of the stack (one
+/// past the last usable word).
+///
+/// Partitions with SP == 0 are skipped; they have not yet been initialized
+/// and will receive their initial SP during the first context switch.
+///
+/// # Panics
+///
+/// Panics if any initialized partition's SP falls outside its stack bounds,
+/// or if the slices have mismatched lengths.
+#[cfg(any(debug_assertions, test))]
+pub fn assert_stack_pointer_bounds(partitions: &[PartitionControlBlock], partition_sp: &[u32]) {
+    // Ensure slices have matching lengths to detect kernel state corruption.
+    assert!(
+        partitions.len() == partition_sp.len(),
+        "invariant violation: partitions.len() ({}) != partition_sp.len() ({})",
+        partitions.len(),
+        partition_sp.len()
+    );
+
+    for (pcb, &sp) in partitions.iter().zip(partition_sp.iter()) {
+        // Skip uninitialized partitions (SP == 0)
+        if sp == 0 {
+            continue;
+        }
+
+        let pid = pcb.id();
+
+        // ARM Cortex-M requires 4-byte (word) aligned stack pointers.
+        if sp % 4 != 0 {
+            panic!(
+                "invariant violation: partition {} SP 0x{:08x} is not 4-byte aligned",
+                pid, sp
+            );
+        }
+
+        let stack_base = pcb.stack_base();
+        let stack_size = pcb.stack_size();
+        // TODO: wrapping_add is used defensively here, but if stacks actually wrapped
+        // around address space, the linear comparisons below would be invalid. This is
+        // acceptable because valid stack regions never wrap on Cortex-M.
+        let stack_top = stack_base.wrapping_add(stack_size);
+
+        // SP must be within [stack_base, stack_top] (inclusive on both ends)
+        if sp < stack_base || sp > stack_top {
+            panic!(
+                "invariant violation: partition {} SP 0x{:08x} outside stack bounds \
+                 [0x{:08x}, 0x{:08x}]",
+                pid, sp, stack_base, stack_top
+            );
+        }
+    }
+}
+
+/// No-op version for release builds.
+#[cfg(not(any(debug_assertions, test)))]
+#[inline(always)]
+pub fn assert_stack_pointer_bounds(_partitions: &[PartitionControlBlock], _partition_sp: &[u32]) {}
+
 /// Assert all kernel invariants hold.
 ///
 /// In debug builds and tests, this function performs runtime validation of
@@ -79,6 +142,10 @@ pub fn assert_partition_table_integrity(_partitions: &[PartitionControlBlock]) {
 pub fn assert_kernel_invariants() {
     // Invariant checks will be added in subsequent commits.
     // This is the entry point that will call individual check functions.
+    //
+    // TODO: integrate assert_stack_pointer_bounds here once assert_kernel_invariants
+    // gains access to kernel state (partitions and partition_sp slices). Currently
+    // this function has no parameters to pass to the individual checks.
 }
 
 /// No-op version for release builds.
@@ -203,5 +270,129 @@ mod tests {
         // Partition at index 1 with id 5 violates the invariant.
         let partitions = [make_pcb(0), make_pcb(5)];
         assert_partition_table_integrity(&partitions);
+    }
+
+    // ------------------------------------------------------------------
+    // assert_stack_pointer_bounds
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn stack_pointer_bounds_empty_slices() {
+        // Empty partition and SP lists are valid.
+        assert_stack_pointer_bounds(&[], &[]);
+    }
+
+    #[test]
+    fn stack_pointer_bounds_uninitialized_sp_skipped() {
+        // Partitions with SP == 0 are skipped (not yet initialized).
+        let partitions = [make_pcb(0), make_pcb(1)];
+        let partition_sp = [0u32, 0u32];
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    fn stack_pointer_bounds_valid_sp_at_base() {
+        // SP exactly at stack_base is valid.
+        // make_pcb creates: stack_base = 0x2000_0000, stack_size = 1024
+        let partitions = [make_pcb(0)];
+        let partition_sp = [0x2000_0000u32]; // SP at stack base
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    fn stack_pointer_bounds_valid_sp_at_top() {
+        // SP exactly at stack_top (stack_base + stack_size) is valid.
+        // This is the initial SP position.
+        let partitions = [make_pcb(0)];
+        let partition_sp = [0x2000_0400u32]; // SP at stack top
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    fn stack_pointer_bounds_valid_sp_in_middle() {
+        // SP in the middle of stack region is valid.
+        let partitions = [make_pcb(0)];
+        let partition_sp = [0x2000_0200u32]; // SP at stack_base + 512
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    fn stack_pointer_bounds_multiple_valid() {
+        // Multiple partitions with valid SPs.
+        let partitions = [make_pcb(0), make_pcb(1), make_pcb(2)];
+        let partition_sp = [0x2000_0100, 0x2000_0200, 0x2000_0300];
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    fn stack_pointer_bounds_mixed_initialized_and_uninitialized() {
+        // Mix of initialized and uninitialized partitions.
+        let partitions = [make_pcb(0), make_pcb(1), make_pcb(2)];
+        let partition_sp = [0x2000_0200, 0, 0x2000_0100]; // p1 uninitialized
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    #[should_panic(expected = "partition 0 SP 0x1fff0000 outside stack bounds")]
+    fn stack_pointer_bounds_below_base_panics() {
+        // SP below stack_base violates the invariant.
+        let partitions = [make_pcb(0)];
+        let partition_sp = [0x1fff_0000u32]; // Below stack_base
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    #[should_panic(expected = "partition 0 SP 0x20000500 outside stack bounds")]
+    fn stack_pointer_bounds_above_top_panics() {
+        // SP above stack_top violates the invariant.
+        // stack_top = 0x2000_0000 + 0x400 = 0x2000_0400
+        let partitions = [make_pcb(0)];
+        let partition_sp = [0x2000_0500u32]; // Above stack_top
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    #[should_panic(expected = "partition 1 SP 0x30000000 outside stack bounds")]
+    fn stack_pointer_bounds_second_partition_out_of_bounds() {
+        // Second partition has invalid SP while first is valid.
+        let partitions = [make_pcb(0), make_pcb(1)];
+        let partition_sp = [0x2000_0200, 0x3000_0000]; // p1 out of bounds
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    #[should_panic(expected = "partitions.len() (2) != partition_sp.len() (1)")]
+    fn stack_pointer_bounds_length_mismatch_more_partitions() {
+        // More partitions than SPs violates the invariant.
+        let partitions = [make_pcb(0), make_pcb(1)];
+        let partition_sp = [0x2000_0200u32];
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    #[should_panic(expected = "partitions.len() (1) != partition_sp.len() (2)")]
+    fn stack_pointer_bounds_length_mismatch_more_sps() {
+        // More SPs than partitions violates the invariant.
+        let partitions = [make_pcb(0)];
+        let partition_sp = [0x2000_0200, 0x2000_0100];
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    #[should_panic(expected = "partition 0 SP 0x20000201 is not 4-byte aligned")]
+    fn stack_pointer_bounds_misaligned_sp_panics() {
+        // SP not 4-byte aligned violates ARM Cortex-M requirements.
+        let partitions = [make_pcb(0)];
+        let partition_sp = [0x2000_0201u32]; // Misaligned by 1
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    #[should_panic(expected = "partition 0 SP 0x20000202 is not 4-byte aligned")]
+    fn stack_pointer_bounds_misaligned_sp_by_2_panics() {
+        // SP misaligned by 2 bytes also violates alignment.
+        let partitions = [make_pcb(0)];
+        let partition_sp = [0x2000_0202u32]; // Misaligned by 2
+        assert_stack_pointer_bounds(&partitions, &partition_sp);
     }
 }
