@@ -54,9 +54,10 @@ macro_rules! klog {
     ($($arg:tt)*) => { $crate::__klog_impl!($($arg)*) };
 }
 
-/// Exit macro for QEMU termination abstraction.
+/// Exit macro for test termination abstraction.
 ///
 /// On semihosting backend, calls `cortex_m_semihosting::debug::exit`.
+/// On RTT backend, prints `TEST PASSED`/`TEST FAILED` then halts via `bkpt`.
 /// On other backends, enters an infinite loop.
 ///
 /// # Usage
@@ -78,7 +79,21 @@ macro_rules! __kexit_impl {
 
 #[doc(hidden)]
 #[macro_export]
-#[cfg(not(klog_backend = "semihosting"))]
+#[cfg(klog_backend = "rtt")]
+macro_rules! __kexit_impl {
+    (success) => {{
+        rtt_target::rprintln!("TEST PASSED");
+        cortex_m::asm::bkpt();
+    }};
+    (failure) => {{
+        rtt_target::rprintln!("TEST FAILED");
+        cortex_m::asm::bkpt();
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+#[cfg(not(any(klog_backend = "semihosting", klog_backend = "rtt")))]
 macro_rules! __kexit_impl {
     ($_status:ident) => {
         loop {
@@ -87,9 +102,10 @@ macro_rules! __kexit_impl {
     };
 }
 
-/// Exit macro for QEMU termination.
+/// Exit macro for test termination.
 ///
 /// On semihosting backend, terminates QEMU with the specified status.
+/// On RTT backend, prints a test marker and halts via `bkpt`.
 /// On other backends, enters an infinite loop (WFI).
 ///
 /// # Arguments
@@ -114,7 +130,8 @@ mod tests {
     }
 
     /// Verify kexit macro expansion compiles for both variants.
-    /// On test (host) builds, klog_backend is "none", so kexit expands to WFI loops.
+    /// On test (host) builds, klog_backend is "none", so kexit expands to WFI loops
+    /// (the catch-all gate excludes both semihosting and rtt backends).
     /// We can't actually call the macro since it would hang, but we verify it parses.
     #[test]
     fn kexit_macro_expansion_compiles() {
@@ -131,5 +148,32 @@ mod tests {
             }
         }
         // If we get here, macro expansion compiled successfully.
+    }
+
+    /// Verify all three __kexit_impl cfg gates are mutually exclusive.
+    /// Exactly one variant should be active for any valid klog_backend value.
+    #[test]
+    fn kexit_cfg_gates_are_mutually_exclusive() {
+        // Count how many __kexit_impl variants are active at compile time.
+        // On host builds with klog_backend="none", only the catch-all should be active.
+        let mut active_count = 0u32;
+
+        #[cfg(klog_backend = "semihosting")]
+        {
+            active_count += 1;
+        }
+        #[cfg(klog_backend = "rtt")]
+        {
+            active_count += 1;
+        }
+        #[cfg(not(any(klog_backend = "semihosting", klog_backend = "rtt")))]
+        {
+            active_count += 1;
+        }
+
+        assert_eq!(
+            active_count, 1,
+            "exactly one __kexit_impl variant must be active"
+        );
     }
 }

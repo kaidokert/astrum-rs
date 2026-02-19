@@ -203,6 +203,9 @@ where
     use core::ptr::addr_of;
     use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
 
+    #[cfg(klog_backend = "rtt")]
+    rtt_target::rtt_init_print!();
+
     // Verify kernel storage alignment before proceeding.
     let storage_addr = addr_of!(crate::state::UNIFIED_KERNEL_STORAGE) as u32;
     check_storage_alignment(storage_addr, crate::state::KERNEL_ALIGNMENT as u32)?;
