@@ -53,6 +53,8 @@ macro_rules! _unified_handle_tick {
     ($kernel:expr, $tick:expr, $strategy:expr) => {{
         let event = $kernel.advance_schedule_tick();
         $crate::_unified_handle_tick_event!($kernel, event, $tick, $strategy);
+        #[cfg(feature = "dynamic-mpu")]
+        $kernel.fallback_revoke_expired_buffers();
     }};
 }
 

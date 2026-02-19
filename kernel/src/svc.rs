@@ -6027,6 +6027,47 @@ mod tests {
         );
     }
 
+    /// Verify that systick_handler calls fallback_revoke_expired_buffers
+    /// during tick processing when bottom_half_stale is set, revoking
+    /// buffers with expired deadlines even without a SystemWindow event.
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn systick_handler_fallback_revokes_expired_buffers() {
+        use crate::buffer_pool::BorrowState;
+
+        // Create kernel with no system window so stale flag will trigger.
+        let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
+        k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
+        k.schedule_mut().add(ScheduleEntry::new(1, 60)).unwrap();
+        k.schedule_mut().start();
+
+        // Lend slot 0 with deadline=10 (will expire quickly).
+        let ds = &k.dynamic_strategy;
+        k.buffers.lend_to_partition(0, 1, true, ds).unwrap();
+        k.buffers.set_deadline(0, Some(10)).unwrap();
+
+        // Confirm buffer is currently borrowed.
+        assert_eq!(
+            k.buffers.get(0).unwrap().state(),
+            BorrowState::BorrowedWrite { owner: 1 },
+        );
+
+        // Drive ticks past the stale threshold via systick_handler.
+        // Threshold is 100 ticks; deadline is 10. After 101 ticks,
+        // stale flag is set and deadline is long past.
+        for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
+            crate::tick::systick_handler::<TestConfig>(&mut k);
+        }
+
+        // The fallback path inside systick_handler should have revoked
+        // the expired buffer.
+        assert_eq!(
+            k.buffers.get(0).unwrap().state(),
+            BorrowState::Free,
+            "expired buffer should be revoked by fallback in systick_handler",
+        );
+    }
+
     #[test]
     #[cfg(feature = "dynamic-mpu")]
     fn query_bottom_half_returns_ticks_in_r0() {

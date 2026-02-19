@@ -253,6 +253,8 @@ where
         }
         ScheduleEvent::Idle | ScheduleEvent::None => {}
     }
+    // NOTE: already gated — this function is #[cfg(feature = "dynamic-mpu")]
+    kernel.fallback_revoke_expired_buffers();
     kernel.expire_timed_waits::<{ C::N }>(current_tick);
 
     #[cfg(feature = "partition-debug")]
