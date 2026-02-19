@@ -128,13 +128,9 @@ fn SysTick() {
     static TICK: AtomicU32 = AtomicU32::new(0);
     let tick = TICK.fetch_add(1, Ordering::Relaxed) + 1;
 
-    cortex_m::interrupt::free(|cs| {
-        let mut k_ref = KERNEL.borrow(cs).borrow_mut();
-        let k = match k_ref.as_mut() {
-            Some(k) => k,
-            None => return,
-        };
-
+    // TODO: with_kernel_mut refactoring is a DRY cleanup, technically out of
+    // scope for the schedule audit. Consider splitting into a separate commit.
+    with_kernel_mut(|k| {
         let event = k.advance_schedule_tick();
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             // Transition incoming partition to Running so syscalls can block it
@@ -154,23 +150,21 @@ fn SysTick() {
         let block_tick = BLOCK_TICK.load(Ordering::Acquire);
         let delta = tick.saturating_sub(block_tick);
         // Check partition state
-        cortex_m::interrupt::free(|cs| {
-            if let Some(k) = KERNEL.borrow(cs).borrow().as_ref() {
-                if let Some(p) = k.partitions().get(0) {
-                    let state = p.state();
-                    // Partition should transition to Waiting within a few ticks
-                    if state == PartitionState::Waiting && delta <= 4 {
-                        hprintln!("blocking_deschedule: state=Waiting, delta={}", delta);
-                        hprintln!("blocking_deschedule: PASS");
-                        debug::exit(debug::EXIT_SUCCESS);
-                    } else if delta > 10 {
-                        hprintln!(
-                            "blocking_deschedule: FAIL - state={:?}, delta={}",
-                            state,
-                            delta
-                        );
-                        debug::exit(debug::EXIT_FAILURE);
-                    }
+        with_kernel(|k| {
+            if let Some(p) = k.partitions().get(0) {
+                let state = p.state();
+                // Partition should transition to Waiting within a few ticks
+                if state == PartitionState::Waiting && delta <= 4 {
+                    hprintln!("blocking_deschedule: state=Waiting, delta={}", delta);
+                    hprintln!("blocking_deschedule: PASS");
+                    debug::exit(debug::EXIT_SUCCESS);
+                } else if delta > 10 {
+                    hprintln!(
+                        "blocking_deschedule: FAIL - state={:?}, delta={}",
+                        state,
+                        delta
+                    );
+                    debug::exit(debug::EXIT_FAILURE);
                 }
             }
         });
@@ -185,9 +179,14 @@ fn main() -> ! {
     // Build schedule
     let mut sched = ScheduleTable::<4>::new();
     sched.add(ScheduleEntry::new(0, 20)).unwrap();
+    #[cfg(feature = "dynamic-mpu")]
+    if sched.add_system_window(1).is_err() {
+        loop {
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
 
     // Build partition config
-    // TODO: reviewer false positive — SAFETY comment is present below; the diff was truncated.
     // SAFETY: single-core Cortex-M, interrupts not yet enabled — exclusive
     // access to all static-mut variables (STACKS, PARTITION_SP). Exception
     // priorities are configured before SysTick is enabled.

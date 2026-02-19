@@ -218,12 +218,7 @@ fn SysTick() {
     *TICK += 1;
 
     // Drive scheduler using the unified Kernel, configure R4 via DynamicStrategy.
-    cortex_m::interrupt::free(|cs| {
-        let mut guard = KERNEL.borrow(cs).borrow_mut();
-        let k = match guard.as_mut() {
-            Some(k) => k,
-            None => return,
-        };
+    with_kernel_mut(|k| {
         let event = k.advance_schedule_tick();
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             if let Some(pcb) = k.partitions().get(pid as usize) {
@@ -236,8 +231,9 @@ fn SysTick() {
         }
     });
 
+    // Tick offsets adjusted for 6-tick major frame: P0(2)+SW(1)+P1(2)+SW(1).
     match *TICK {
-        4 => {
+        6 => {
             // Step 1: P1 should have allocated, written, and released a buffer.
             // Verify P1 signaled readiness and the slot is back to Free.
             let ready = P1_READY.load(Ordering::Acquire) == 1;
@@ -247,24 +243,15 @@ fn SysTick() {
                 *SLOT = alloc_slot as usize;
             }
             let state_ok = slot_ok
-                && cortex_m::interrupt::free(|cs| {
-                    KERNEL
-                        .borrow(cs)
-                        .borrow_mut()
-                        .as_mut()
-                        .map(|k| {
-                            k.buffers.get(*SLOT).unwrap().state()
-                                == kernel::buffer_pool::BorrowState::Free
-                        })
-                        .unwrap_or(false)
-                });
+                && with_kernel_mut(|k| {
+                    k.buffers.get(*SLOT).unwrap().state() == kernel::buffer_pool::BorrowState::Free
+                })
+                .unwrap_or(false);
             check("step1: p1-alloc-write-release", state_ok, FAIL);
         }
-        5 => cortex_m::interrupt::free(|cs| {
-            // Step 2: Kernel lends the buffer (with P1's data) read-only to P2.
-            // lend_to_partition is a privileged kernel operation with no
-            // corresponding user-space syscall.
-            if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
+        7 => {
+            with_kernel_mut(|k| {
+                // Step 2: Kernel lends the buffer (with P1's data) read-only to P2.
                 match k.buffers.lend_to_partition(*SLOT, P2, false, &STRATEGY) {
                     Ok(rid) => {
                         *RID = rid;
@@ -279,16 +266,16 @@ fn SysTick() {
                     }
                     Err(_) => check("step2: lend", false, FAIL),
                 }
-            }
-        }),
-        10 => check(
+            });
+        }
+        14 => check(
             "step3: p2-read",
             P2_READ_RESULT.load(Ordering::Acquire) == 1,
             FAIL,
         ),
-        11 => cortex_m::interrupt::free(|cs| {
-            // Step 4: revoke access, verify MPU region disabled.
-            if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
+        15 => {
+            with_kernel_mut(|k| {
+                // Step 4: revoke access, verify MPU region disabled.
                 match k.buffers.revoke_from_partition(*SLOT, &STRATEGY) {
                     Ok(()) => {
                         let slot = k.buffers.get(*SLOT).unwrap();
@@ -303,9 +290,9 @@ fn SysTick() {
                     }
                     Err(_) => check("step4: revoke", false, FAIL),
                 }
-            }
-        }),
-        12 => {
+            });
+        }
+        16 => {
             if *FAIL {
                 hprintln!("buffer_pool_test: FAIL");
                 debug::exit(debug::EXIT_FAILURE);
@@ -323,10 +310,20 @@ fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
     hprintln!("buffer_pool_test: start");
 
-    // Build schedule table
+    // Build schedule table: P0(2) → system window(1) → P1(2) → system window(1)
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).unwrap();
+    if sched.add_system_window(1).is_err() {
+        loop {
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
     sched.add(ScheduleEntry::new(1, 2)).unwrap();
+    if sched.add_system_window(1).is_err() {
+        loop {
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
 
     // Build partition configs
     // SAFETY: before interrupts; single-core exclusive access.

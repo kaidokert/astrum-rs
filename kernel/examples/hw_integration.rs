@@ -94,7 +94,11 @@ fn main() -> ! {
     klog!("hw_integration: start");
     let mut sched = ScheduleTable::<{ Cfg::SCHED }>::new();
     if sched.add(ScheduleEntry::new(0, 2)).is_err() { loop { kexit!(failure); } }
+    #[cfg(feature = "dynamic-mpu")]
+    if sched.add_system_window(1).is_err() { loop { kexit!(failure); } }
     if sched.add(ScheduleEntry::new(1, 2)).is_err() { loop { kexit!(failure); } }
+    #[cfg(feature = "dynamic-mpu")]
+    if sched.add_system_window(1).is_err() { loop { kexit!(failure); } }
     let cfgs: [PartitionConfig; NP] = core::array::from_fn(|i| PartitionConfig {
         id: i as u8, entry_point: 0, stack_base: 0, stack_size: (SW * 4) as u32,
         mpu_region: MpuRegion::new(0, 0, 0), peripheral_regions: heapless::Vec::new(),

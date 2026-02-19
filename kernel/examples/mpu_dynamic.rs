@@ -137,12 +137,7 @@ fn SysTick() {
         }
     }
 
-    cortex_m::interrupt::free(|cs| {
-        let mut guard = KERNEL.borrow(cs).borrow_mut();
-        let k = match guard.as_mut() {
-            Some(k) => k,
-            None => return,
-        };
+    with_kernel_mut(|k| {
         let event = k.advance_schedule_tick();
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             if let Some(pcb) = k.partitions().get(pid as usize) {
@@ -165,10 +160,23 @@ fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
     hprintln!("mpu_dynamic: start");
 
-    // Build schedule table
+    // Build schedule table: P0(2) → system window(1) → P1(2) → system window(1)
+    // TODO: system windows are unconditionally added because this example is
+    // inherently dynamic-mpu-only (uses DynamicStrategy, define_pendsv_dynamic!).
+    // Consider adding a top-level #[cfg(feature = "dynamic-mpu")] to the whole file.
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).unwrap();
+    if sched.add_system_window(1).is_err() {
+        loop {
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
     sched.add(ScheduleEntry::new(1, 2)).unwrap();
+    if sched.add_system_window(1).is_err() {
+        loop {
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
 
     // Build partition configs
     // SAFETY: before interrupts; single-core exclusive.

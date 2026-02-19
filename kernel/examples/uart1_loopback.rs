@@ -56,9 +56,6 @@ struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
-    // TODO: reviewer false positive - STACK_WORDS was added to KernelConfig
-    // in prior commits (82e5e84..3519740). This line conforms to the existing
-    // API, not a new architectural change.
     const STACK_WORDS: usize = 256;
     const S: usize = 1;
     const SW: usize = 1;
@@ -77,8 +74,6 @@ impl KernelConfig for DemoConfig {
     const BZ: usize = 32;
     const DR: usize = 4;
 
-    // TODO: reviewer false positive - PartitionCore<N, SCHED, SW> signature
-    // exists in HEAD (partition_core.rs:65). This matches the existing API.
     type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
     type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
@@ -164,12 +159,7 @@ kernel::define_pendsv!();
 
 #[exception]
 fn SysTick() {
-    cortex_m::interrupt::free(|cs| {
-        let mut guard = KERNEL.borrow(cs).borrow_mut();
-        let k = match guard.as_mut() {
-            Some(k) => k,
-            None => return,
-        };
+    with_kernel_mut(|k| {
         let event = k.advance_schedule_tick();
         let current_tick = k.tick().get();
         match event {
@@ -435,9 +425,17 @@ fn main() -> ! {
     // Build schedule: P1(3) → system window(1) → P2(3) → system window(1)
     let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 3)).unwrap();
-    sched.add_system_window(1).unwrap();
+    if sched.add_system_window(1).is_err() {
+        loop {
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
     sched.add(ScheduleEntry::new(1, 3)).unwrap();
-    sched.add_system_window(1).unwrap();
+    if sched.add_system_window(1).is_err() {
+        loop {
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
 
     // Build partition configs
     // SAFETY: called once before the scheduler starts (interrupts disabled,
@@ -472,23 +470,21 @@ fn main() -> ! {
     // Store kernel and register device backends
     store_kernel(kern);
 
-    cortex_m::interrupt::free(|cs| {
-        if let Some(k) = KERNEL.borrow(cs).borrow_mut().as_mut() {
-            // SAFETY: KERNEL is a static that is never dropped. The
-            // backends live inside KERNEL (uart_pair and hw_uart
-            // fields). Interrupts are disabled (interrupt::free),
-            // guaranteeing exclusive access on single-core Cortex-M.
-            // The 'static lifetime is valid because KERNEL is 'static.
-            unsafe {
-                let a: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.a as *mut _);
-                let b: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.b as *mut _);
-                k.registry.add(a).expect("register UART-A");
-                k.registry.add(b).expect("register UART-B");
-                if let Some(hw) = k.hw_uart.as_mut() {
-                    let hw: &'static mut dyn VirtualDevice =
-                        &mut *(hw as *mut HwUartBackend as *mut _);
-                    k.registry.add(hw).expect("register HW UART");
-                }
+    with_kernel_mut(|k| {
+        // SAFETY: Kernel state is stored in a 'static global
+        // (UNIFIED_KERNEL_STORAGE). The backends live inside the kernel
+        // (uart_pair and hw_uart fields). with_kernel_mut runs inside
+        // interrupt::free, guaranteeing exclusive access on single-core
+        // Cortex-M. The 'static lifetime is valid because the storage
+        // is 'static.
+        unsafe {
+            let a: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.a as *mut _);
+            let b: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.b as *mut _);
+            k.registry.add(a).expect("register UART-A");
+            k.registry.add(b).expect("register UART-B");
+            if let Some(hw) = k.hw_uart.as_mut() {
+                let hw: &'static mut dyn VirtualDevice = &mut *(hw as *mut HwUartBackend as *mut _);
+                k.registry.add(hw).expect("register HW UART");
             }
         }
     });
