@@ -2687,6 +2687,106 @@ mod tests {
         assert_eq!(k.partition_sp()[2], 0); // Unused slots zero-initialized.
     }
 
+    /// Regression test for stale stack_base bug: verifies PCB stack_base fields
+    /// match the actual internal stack addresses from PartitionCore after
+    /// fix_stack_region is called.
+    ///
+    /// The kernel must be placed in its final memory location before calling
+    /// fix_stack_region, since the internal stack addresses depend on where
+    /// the kernel struct lives in memory. This test demonstrates the pattern:
+    /// 1. Create kernel via Kernel::new()
+    /// 2. Place kernel in final location (here: let binding on stack)
+    /// 3. Call fix_stack_region for each partition to sync PCB stack fields
+    /// 4. Verify PCB stack_base matches actual internal stack addresses
+    #[test]
+    fn pcb_stack_base_matches_actual_internal_stack() {
+        use crate::partition::PartitionConfig;
+
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 10)).unwrap();
+        schedule.add(ScheduleEntry::new(1, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        schedule.add_system_window(1).unwrap();
+
+        // Use deliberately different stack_base values in config to ensure
+        // we're testing that fix_stack_region syncs with actual stacks.
+        let configs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0000,
+                stack_base: 0x2000_0000, // deliberately stale value
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
+            },
+            PartitionConfig {
+                id: 1,
+                entry_point: 0x0800_1000,
+                stack_base: 0x2000_1000, // deliberately stale value
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
+            },
+        ];
+
+        #[cfg(feature = "dynamic-mpu")]
+        let registry = crate::virtual_device::DeviceRegistry::new();
+        let mut k = Kernel::<TestConfig>::new(
+            schedule,
+            &configs,
+            #[cfg(feature = "dynamic-mpu")]
+            registry,
+        )
+        .unwrap();
+
+        // After Kernel::new() returns and the kernel is placed in its final
+        // location, call fix_stack_region to sync PCB stack fields with actual
+        // internal stack addresses. This mimics what boot() does after placing
+        // the kernel in UNIFIED_KERNEL_STORAGE.
+        for i in 0..2 {
+            let stk = k.core_stack_mut(i).expect("partition stack exists");
+            let base = stk.as_ptr() as u32;
+            let size = (stk.len() * 4) as u32;
+            assert!(
+                k.fix_stack_region(i, base, size),
+                "fix_stack_region({i}) failed: base=0x{base:08x}, size={size}"
+            );
+        }
+
+        // Verify PCB stack_base matches actual internal stack for partition 0
+        let pcb0_stack_base = k.partitions().get(0).unwrap().stack_base();
+        let actual_stack0 = k.core_stack_mut(0).expect("partition 0 stack exists");
+        let actual_base0 = actual_stack0.as_ptr() as u32;
+        assert_eq!(
+            pcb0_stack_base, actual_base0,
+            "PCB[0] stack_base (0x{:08x}) must equal actual internal stack base (0x{:08x})",
+            pcb0_stack_base, actual_base0
+        );
+
+        // Verify PCB stack_base matches actual internal stack for partition 1
+        let pcb1_stack_base = k.partitions().get(1).unwrap().stack_base();
+        let actual_stack1 = k.core_stack_mut(1).expect("partition 1 stack exists");
+        let actual_base1 = actual_stack1.as_ptr() as u32;
+        assert_eq!(
+            pcb1_stack_base, actual_base1,
+            "PCB[1] stack_base (0x{:08x}) must equal actual internal stack base (0x{:08x})",
+            pcb1_stack_base, actual_base1
+        );
+
+        // Additionally verify that the stack sizes match (STACK_WORDS * 4 bytes)
+        let expected_size = (TestConfig::STACK_WORDS * 4) as u32;
+        assert_eq!(
+            k.partitions().get(0).unwrap().stack_size(),
+            expected_size,
+            "PCB[0] stack_size must match TestConfig::STACK_WORDS * 4"
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().stack_size(),
+            expected_size,
+            "PCB[1] stack_size must match TestConfig::STACK_WORDS * 4"
+        );
+    }
+
     #[test]
     fn invalid_syscall_returns_error_code() {
         let mut ef = frame(0xFFFF, 0, 0);
