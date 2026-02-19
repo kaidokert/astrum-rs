@@ -11,6 +11,7 @@
 //! consistent.
 
 use crate::partition::{PartitionControlBlock, PartitionState};
+use crate::scheduler::ScheduleEntry;
 
 /// Assert that at most one partition has state `Running`.
 ///
@@ -129,6 +130,55 @@ pub fn assert_stack_pointer_bounds(partitions: &[PartitionControlBlock], partiti
 #[cfg(not(any(debug_assertions, test)))]
 #[inline(always)]
 pub fn assert_stack_pointer_bounds(_partitions: &[PartitionControlBlock], _partition_sp: &[u32]) {}
+
+/// Assert that `active_partition` matches the single Running partition.
+#[cfg(any(debug_assertions, test))]
+pub fn assert_running_matches_active(
+    partitions: &[PartitionControlBlock],
+    active_partition: Option<u8>,
+) {
+    if let Some(pid) = active_partition {
+        let idx = pid as usize;
+        assert!(idx < partitions.len(), "active_partition {pid} OOB");
+        let st = partitions[idx].state();
+        assert!(st == PartitionState::Running, "active {pid} is {st:?}");
+        for (i, p) in partitions.iter().enumerate() {
+            if i != idx && p.state() == PartitionState::Running {
+                panic!("partition {i} Running, active is {pid}");
+            }
+        }
+    } else {
+        for (i, p) in partitions.iter().enumerate() {
+            if p.state() == PartitionState::Running {
+                panic!("partition {i} Running, active is None");
+            }
+        }
+    }
+}
+
+#[cfg(not(any(debug_assertions, test)))]
+#[inline(always)]
+pub fn assert_running_matches_active(
+    _partitions: &[PartitionControlBlock],
+    _active_partition: Option<u8>,
+) {
+}
+
+/// Assert every schedule entry's `partition_index < partition_count`.
+#[cfg(any(debug_assertions, test))]
+pub fn assert_schedule_indices_in_bounds(entries: &[ScheduleEntry], partition_count: usize) {
+    for (i, e) in entries.iter().enumerate() {
+        let pi = e.partition_index as usize;
+        assert!(
+            pi < partition_count,
+            "entry {i} index {pi} >= {partition_count}"
+        );
+    }
+}
+
+#[cfg(not(any(debug_assertions, test)))]
+#[inline(always)]
+pub fn assert_schedule_indices_in_bounds(_entries: &[ScheduleEntry], _partition_count: usize) {}
 
 /// Assert all kernel invariants hold.
 ///
@@ -394,5 +444,79 @@ mod tests {
         let partitions = [make_pcb(0)];
         let partition_sp = [0x2000_0202u32]; // Misaligned by 2
         assert_stack_pointer_bounds(&partitions, &partition_sp);
+    }
+
+    #[test]
+    fn running_matches_active_none_valid() {
+        assert_running_matches_active(&[], None);
+        assert_running_matches_active(&[make_pcb(0), make_pcb(1)], None);
+    }
+
+    #[test]
+    fn running_matches_active_some_matches() {
+        let mut p0 = make_pcb(0);
+        p0.transition(PartitionState::Running).unwrap();
+        assert_running_matches_active(&[p0, make_pcb(1), make_pcb(2)], Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "active 0 is Ready")]
+    fn running_matches_active_some_but_not_running() {
+        assert_running_matches_active(&[make_pcb(0), make_pcb(1)], Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "partition 1 Running, active is None")]
+    fn running_matches_active_none_but_one_running() {
+        let mut p1 = make_pcb(1);
+        p1.transition(PartitionState::Running).unwrap();
+        assert_running_matches_active(&[make_pcb(0), p1], None);
+    }
+
+    #[test]
+    #[should_panic(expected = "partition 1 Running, active is 0")]
+    fn running_matches_active_wrong_partition_running() {
+        let mut p0 = make_pcb(0);
+        let mut p1 = make_pcb(1);
+        p0.transition(PartitionState::Running).unwrap();
+        p1.transition(PartitionState::Running).unwrap();
+        assert_running_matches_active(&[p0, p1], Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "active_partition 5 OOB")]
+    fn running_matches_active_out_of_bounds() {
+        assert_running_matches_active(&[make_pcb(0), make_pcb(1)], Some(5));
+    }
+
+    #[test]
+    fn schedule_indices_valid() {
+        assert_schedule_indices_in_bounds(&[], 4);
+        let entries = [ScheduleEntry::new(0, 100), ScheduleEntry::new(1, 200)];
+        assert_schedule_indices_in_bounds(&entries, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "entry 0 index 0 >= 0")]
+    fn schedule_indices_zero_partitions() {
+        assert_schedule_indices_in_bounds(&[ScheduleEntry::new(0, 100)], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "entry 1 index 3 >= 2")]
+    fn schedule_indices_out_of_bounds() {
+        let entries = [ScheduleEntry::new(0, 100), ScheduleEntry::new(3, 200)];
+        assert_schedule_indices_in_bounds(&entries, 2);
+    }
+
+    #[test]
+    fn schedule_indices_boundary_valid() {
+        assert_schedule_indices_in_bounds(&[ScheduleEntry::new(3, 100)], 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "entry 0 index 4 >= 4")]
+    fn schedule_indices_boundary_invalid() {
+        assert_schedule_indices_in_bounds(&[ScheduleEntry::new(4, 100)], 4);
     }
 }
