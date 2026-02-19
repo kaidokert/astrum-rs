@@ -250,7 +250,8 @@ fn main() -> ! {
     hprintln!("blocking_deschedule: stack initialized");
 
     cp.SYST.set_clock_source(SystClkSource::Core);
-    cp.SYST.set_reload(120_000 - 1);
+    cp.SYST
+        .set_reload(kernel::config::compute_systick_reload(12_000_000, 10_000));
     cp.SYST.clear_current();
     cp.SYST.enable_counter();
     cp.SYST.enable_interrupt();

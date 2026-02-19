@@ -205,9 +205,9 @@ fn main() -> ! {
     configure_partition_mpu(&p.MPU, stack_base);
 
     // Configure SysTick to fire periodically.
-    // 120_000 cycles at 12 MHz = ~10ms per tick.
     p.SYST.set_clock_source(SystClkSource::Core);
-    p.SYST.set_reload(120_000 - 1);
+    p.SYST
+        .set_reload(kernel::config::compute_systick_reload(12_000_000, 10_000));
     p.SYST.clear_current();
     p.SYST.enable_counter();
     p.SYST.enable_interrupt();

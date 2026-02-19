@@ -207,7 +207,9 @@ fn boot(partitions: &[(extern "C" fn() -> !, u32)], peripherals: &mut cortex_m::
             .set_priority(SystemHandler::SysTick, DemoConfig::SYSTICK_PRIORITY);
     }
     peripherals.SYST.set_clock_source(SystClkSource::Core);
-    peripherals.SYST.set_reload(120_000 - 1);
+    peripherals
+        .SYST
+        .set_reload(kernel::config::compute_systick_reload(12_000_000, 10_000));
     peripherals.SYST.clear_current();
     peripherals.SYST.enable_counter();
     peripherals.SYST.enable_interrupt();
