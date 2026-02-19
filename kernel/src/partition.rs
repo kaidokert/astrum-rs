@@ -197,6 +197,37 @@ impl PartitionControlBlock {
         &self.mpu_region
     }
 
+    /// Updates the stack region and rebuilds the MPU region with the new base/size.
+    ///
+    /// This method validates the new region parameters against MPU hardware
+    /// constraints, then updates `stack_base`, `stack_size`, and `mpu_region`
+    /// while preserving the existing permissions.
+    ///
+    /// # Arguments
+    /// * `base` - The new stack base address (must be aligned to `size`)
+    /// * `size` - The new stack size (must be a power of two and >= 32)
+    ///
+    /// # Errors
+    /// Returns `MpuError` if the base/size violate MPU constraints:
+    /// - `SizeTooSmall`: size < 32 bytes
+    /// - `SizeNotPowerOfTwo`: size is not a power of two
+    /// - `BaseNotAligned`: base is not aligned to size
+    /// - `AddressOverflow`: base + size overflows u32
+    pub fn fix_stack_region(&mut self, base: u32, size: u32) -> Result<(), MpuError> {
+        // Validate MPU constraints before modifying any state
+        validate_mpu_region(base, size)?;
+
+        let new_region = MpuRegion::new(base, size, self.mpu_region.permissions());
+
+        // Sync PCB fields from the constructed MpuRegion to ensure consistency
+        // with actual hardware configuration
+        self.stack_base = new_region.base();
+        self.stack_size = new_region.size();
+        self.mpu_region = new_region;
+
+        Ok(())
+    }
+
     pub fn event_flags(&self) -> u32 {
         self.event_flags
     }
@@ -571,6 +602,147 @@ mod tests {
         // Verify consistency with individual accessors
         assert_eq!(base, pcb.stack_base());
         assert_eq!(size, pcb.stack_size());
+    }
+
+    // ------------------------------------------------------------------
+    // fix_stack_region
+    // ------------------------------------------------------------------
+
+    /// Test permission value used by make_pcb().
+    /// This is an opaque value preserved across fix_stack_region calls;
+    /// the exact encoding is not significant for these tests.
+    const TEST_PERMISSIONS: u32 = 0x0306_0000;
+
+    #[test]
+    fn fix_stack_region_updates_stack_base() {
+        let mut pcb = make_pcb();
+        let original_base = pcb.stack_base();
+        assert_eq!(original_base, 0x2000_0000);
+
+        // 0x2001_0000 is aligned to 2048
+        pcb.fix_stack_region(0x2001_0000, 2048).unwrap();
+        assert_eq!(pcb.stack_base(), 0x2001_0000);
+    }
+
+    #[test]
+    fn fix_stack_region_updates_stack_size() {
+        let mut pcb = make_pcb();
+        let original_size = pcb.stack_size();
+        assert_eq!(original_size, 1024);
+
+        // 0x2001_0000 is aligned to 2048
+        pcb.fix_stack_region(0x2001_0000, 2048).unwrap();
+        assert_eq!(pcb.stack_size(), 2048);
+    }
+
+    #[test]
+    fn fix_stack_region_rebuilds_mpu_region_with_correct_base_size_permissions() {
+        let mut pcb = make_pcb();
+        let original_permissions = pcb.mpu_region().permissions();
+        assert_eq!(original_permissions, TEST_PERMISSIONS);
+
+        // 0x2002_0000 is aligned to 8192
+        pcb.fix_stack_region(0x2002_0000, 8192).unwrap();
+
+        // Verify mpu_region has new base and size
+        assert_eq!(pcb.mpu_region().base(), 0x2002_0000);
+        assert_eq!(pcb.mpu_region().size(), 8192);
+        // Verify permissions are preserved
+        assert_eq!(pcb.mpu_region().permissions(), original_permissions);
+    }
+
+    #[test]
+    fn fix_stack_region_stack_region_accessor_reflects_changes() {
+        let mut pcb = make_pcb();
+        // 0x2003_0000 is aligned to 4096
+        pcb.fix_stack_region(0x2003_0000, 4096).unwrap();
+
+        let (base, size) = pcb.stack_region();
+        assert_eq!(base, 0x2003_0000);
+        assert_eq!(size, 4096);
+    }
+
+    #[test]
+    fn fix_stack_region_rejects_size_too_small() {
+        let mut pcb = make_pcb();
+        let original_base = pcb.stack_base();
+        let original_size = pcb.stack_size();
+
+        // Size < 32 is invalid
+        let result = pcb.fix_stack_region(0x2000_0000, 16);
+        assert_eq!(result, Err(MpuError::SizeTooSmall));
+
+        // Verify state is unchanged on error
+        assert_eq!(pcb.stack_base(), original_base);
+        assert_eq!(pcb.stack_size(), original_size);
+    }
+
+    #[test]
+    fn fix_stack_region_rejects_size_not_power_of_two() {
+        let mut pcb = make_pcb();
+        let original_base = pcb.stack_base();
+        let original_size = pcb.stack_size();
+
+        // Size 100 is not a power of two
+        let result = pcb.fix_stack_region(0x2000_0000, 100);
+        assert_eq!(result, Err(MpuError::SizeNotPowerOfTwo));
+
+        // Verify state is unchanged on error
+        assert_eq!(pcb.stack_base(), original_base);
+        assert_eq!(pcb.stack_size(), original_size);
+    }
+
+    #[test]
+    fn fix_stack_region_rejects_misaligned_base() {
+        let mut pcb = make_pcb();
+        let original_base = pcb.stack_base();
+        let original_size = pcb.stack_size();
+
+        // Base 0x2000_0100 is not aligned to size 1024
+        let result = pcb.fix_stack_region(0x2000_0100, 1024);
+        assert_eq!(result, Err(MpuError::BaseNotAligned));
+
+        // Verify state is unchanged on error
+        assert_eq!(pcb.stack_base(), original_base);
+        assert_eq!(pcb.stack_size(), original_size);
+    }
+
+    #[test]
+    fn fix_stack_region_rejects_address_overflow() {
+        let mut pcb = make_pcb();
+        let original_base = pcb.stack_base();
+        let original_size = pcb.stack_size();
+
+        // base + size would overflow u32
+        let result = pcb.fix_stack_region(0x8000_0000, 0x8000_0000);
+        assert_eq!(result, Err(MpuError::AddressOverflow));
+
+        // Verify state is unchanged on error
+        assert_eq!(pcb.stack_base(), original_base);
+        assert_eq!(pcb.stack_size(), original_size);
+    }
+
+    #[test]
+    fn fix_stack_region_accepts_minimum_valid_size() {
+        let mut pcb = make_pcb();
+
+        // 32 is the minimum valid size, base must be 32-byte aligned
+        pcb.fix_stack_region(0x2000_0020, 32).unwrap();
+
+        assert_eq!(pcb.stack_base(), 0x2000_0020);
+        assert_eq!(pcb.stack_size(), 32);
+    }
+
+    #[test]
+    fn fix_stack_region_syncs_fields_from_mpu_region() {
+        let mut pcb = make_pcb();
+
+        // Use valid aligned values
+        pcb.fix_stack_region(0x2004_0000, 4096).unwrap();
+
+        // Verify PCB fields match MpuRegion fields exactly
+        assert_eq!(pcb.stack_base(), pcb.mpu_region().base());
+        assert_eq!(pcb.stack_size(), pcb.mpu_region().size());
     }
 
     // ------------------------------------------------------------------
