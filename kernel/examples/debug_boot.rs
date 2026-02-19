@@ -250,7 +250,8 @@ fn main() -> ! {
 
     // Configure SysTick
     p.SYST.set_clock_source(SystClkSource::Core);
-    p.SYST.set_reload(120_000 - 1);
+    p.SYST
+        .set_reload(kernel::config::compute_systick_reload(12_000_000, 10_000));
     p.SYST.clear_current();
     p.SYST.enable_counter();
     p.SYST.enable_interrupt();

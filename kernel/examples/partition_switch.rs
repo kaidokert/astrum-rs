@@ -17,7 +17,7 @@ static PARTITION: AtomicU32 = AtomicU32::new(u32::MAX);
 const MAX_SWITCHES: u32 = 6;
 
 /// SysTick reload: ~10 ms at 12 MHz.
-const RELOAD: u32 = 120_000 - 1;
+const RELOAD: u32 = kernel::config::compute_systick_reload(12_000_000, 10_000);
 
 #[exception]
 fn SysTick() {

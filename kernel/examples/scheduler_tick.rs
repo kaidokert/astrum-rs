@@ -52,7 +52,7 @@ impl KernelConfig for TestConfig {
 kernel::define_unified_kernel!(TestConfig);
 
 static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
-const RELOAD: u32 = 120_000 - 1; // ~10 ms at 12 MHz
+const RELOAD: u32 = kernel::config::compute_systick_reload(12_000_000, 10_000);
 const MAX_SWITCHES: u32 = 6;
 
 #[exception]

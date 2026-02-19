@@ -13,8 +13,7 @@ static TICK_COUNT: AtomicU32 = AtomicU32::new(0);
 const MAX_TICKS: u32 = 5;
 
 /// SysTick reload value for ~10 ms ticks at 12 MHz (QEMU lm3s6965evb).
-/// 12_000_000 * 0.01 = 120_000 cycles per tick; reload = cycles - 1.
-const RELOAD: u32 = 120_000 - 1;
+const RELOAD: u32 = kernel::config::compute_systick_reload(12_000_000, 10_000);
 
 #[exception]
 fn SysTick() {

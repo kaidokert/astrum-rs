@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 static PARTITION: AtomicU32 = AtomicU32::new(u32::MAX);
 const MAX_SWITCHES: u32 = 4;
-const RELOAD: u32 = 120_000 - 1;
+const RELOAD: u32 = kernel::config::compute_systick_reload(12_000_000, 10_000);
 
 fn make_pcb(id: u8, data_base: u32) -> PartitionControlBlock {
     PartitionControlBlock::new(
