@@ -168,6 +168,48 @@ macro_rules! define_kernel_runtime {
     };
 }
 
+/// Generate a `#[naked] extern "C" fn() -> !` trampoline that tail-calls a
+/// partition body function of type `extern "C" fn(u32) -> !`.
+///
+/// On ARM targets the trampoline is a single `b` (branch) instruction.
+/// Because the function is `#[naked]`, the compiler emits no prologue and
+/// `r0` is guaranteed to still hold the value the kernel placed there at
+/// partition entry.  This eliminates the compiler-reordering hazard that
+/// would exist if `unpack_r0!` were used in a non-naked function.
+///
+/// On non-ARM test hosts the trampoline calls `$body(0)`, matching the
+/// existing `unpack_r0!` host behaviour (always returns 0).
+///
+/// # Usage
+///
+/// ```ignore
+/// extern "C" fn my_body(r0: u32) -> ! { loop {} }
+/// kernel::partition_trampoline!(my_trampoline => my_body);
+/// ```
+#[macro_export]
+macro_rules! partition_trampoline {
+    ($name:ident => $body:path) => {
+        #[cfg(target_arch = "arm")]
+        #[no_mangle]
+        #[naked]
+        pub extern "C" fn $name() -> ! {
+            // SAFETY: naked function — no prologue, so r0 is untouched.
+            // The `b` instruction tail-calls $body which expects r0 as its
+            // first argument per AAPCS.
+            unsafe { core::arch::naked_asm!("b {0}", sym $body) }
+        }
+
+        #[cfg(not(target_arch = "arm"))]
+        #[no_mangle]
+        pub extern "C" fn $name() -> ! {
+            // On host targets, call the body with 0 (matching unpack_r0!
+            // host behaviour).
+            let body: extern "C" fn(u32) -> ! = $body;
+            body(0)
+        }
+    };
+}
+
 /// Generate a SysTick exception handler that advances the scheduler.
 ///
 /// This macro emits a `SysTick` exception handler that calls
@@ -215,6 +257,26 @@ mod tests {
     fn unpack_r0_returns_zero_on_host() {
         let p = unpack_r0!();
         assert_eq!(p, 0);
+    }
+
+    #[allow(clippy::empty_loop)]
+    extern "C" fn test_body(_r0: u32) -> ! {
+        loop {}
+    }
+
+    partition_trampoline!(test_trampoline => test_body);
+
+    #[test]
+    fn partition_trampoline_has_correct_fn_type() {
+        // The trampoline must be `extern "C" fn() -> !`, compatible with
+        // boot() which expects that signature for partition entry points.
+        let _: extern "C" fn() -> ! = test_trampoline;
+    }
+
+    #[test]
+    fn partition_trampoline_is_not_null() {
+        let ptr = test_trampoline as *const ();
+        assert!(!ptr.is_null());
     }
 
     // Tests for define_kernel_runtime! macro require ARM target since the
