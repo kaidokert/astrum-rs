@@ -428,7 +428,6 @@ pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
 /// Declares a unified kernel storage static with dispatch hook and store function.
 ///
 /// This macro generates:
-/// - `static KERNEL: Mutex<RefCell<Option<Kernel<$Config>>>>` — the unified kernel storage
 /// - `unsafe extern "C" fn dispatch_hook(f: &mut ExceptionFrame)` — the SVC dispatch hook
 /// - `fn store_kernel(k: Kernel<$Config>)` — stores the kernel and installs the hook
 /// - PendSV accessors: `get_current_partition`, `get_next_partition`, `get_partition_sp_ptr`
@@ -583,12 +582,6 @@ macro_rules! define_unified_kernel {
     // The macro itself does not need explicit where clauses; reduced bounds are achieved
     // through the struct definition.
     (@impl_named $name:ident, $Config:ty, |$k:ident| $yield_body:block) => {
-        /// Unified kernel storage: holds the `Kernel` struct containing partitions,
-        /// schedule, resource pools, and dispatch state.
-        static $name: ::cortex_m::interrupt::Mutex<
-            ::core::cell::RefCell<Option<$crate::svc::Kernel<$Config>>>,
-        > = ::cortex_m::interrupt::Mutex::new(::core::cell::RefCell::new(None));
-
         // ============================================================
         // Kernel struct field offsets for direct assembly access.
         //
@@ -650,7 +643,7 @@ macro_rules! define_unified_kernel {
         /// Store the kernel instance and install the SVC dispatch hook.
         ///
         /// This function:
-        /// 1. Stores the provided `Kernel` instance in the global `KERNEL` static
+        /// 1. Stores the provided `Kernel` instance in the global unified kernel storage
         /// 2. Installs `dispatch_hook` as the SVC exception handler
         ///
         /// Must be called exactly once during initialization, before enabling
@@ -661,13 +654,13 @@ macro_rules! define_unified_kernel {
             $crate::svc::set_dispatch_hook(dispatch_hook);
         }
 
-        /// Helper to access KERNEL within an interrupt-free critical section.
+        /// Helper to access the kernel within an interrupt-free critical section.
         ///
         /// Consolidates the repeated pattern of `interrupt::free` + `borrow` +
         /// `as_ref`/`as_mut` into a single abstraction for PendSV accessor functions.
         ///
-        /// Returns `None` if KERNEL is not initialized; otherwise passes a reference
-        /// to the closure and returns its result wrapped in `Some`.
+        /// Returns `None` if the kernel is not initialized; otherwise passes a
+        /// reference to the closure and returns its result wrapped in `Some`.
         // TODO: Reviewer feedback suggests a cleaner abstraction layer for all
         // C-ABI shims that return raw pointers to kernel state (issue #3).
         #[inline]
@@ -684,9 +677,9 @@ macro_rules! define_unified_kernel {
         /// Returns the current partition index from the Kernel struct.
         ///
         /// Called by the Rust shim from PendSV assembly to read context-switch
-        /// state. Uses `interrupt::free` to safely access KERNEL.
+        /// state. Uses `interrupt::free` to safely access kernel state.
         ///
-        /// Returns `u32::MAX` if KERNEL is not initialized.
+        /// Returns `u32::MAX` if the kernel is not initialized.
         #[cfg_attr(not(test), no_mangle)]
         #[allow(dead_code)] // Called from assembly, not Rust
         extern "C" fn get_current_partition() -> u32 {
@@ -696,9 +689,9 @@ macro_rules! define_unified_kernel {
         /// Returns the next partition index from the Kernel struct.
         ///
         /// Called by the Rust shim from PendSV assembly to read context-switch
-        /// state. Uses `interrupt::free` to safely access KERNEL.
+        /// state. Uses `interrupt::free` to safely access kernel state.
         ///
-        /// Returns `u32::MAX` if KERNEL is not initialized.
+        /// Returns `u32::MAX` if the kernel is not initialized.
         #[cfg_attr(not(test), no_mangle)]
         #[allow(dead_code)] // Called from assembly, not Rust
         extern "C" fn get_next_partition() -> u32 {
@@ -709,9 +702,9 @@ macro_rules! define_unified_kernel {
         ///
         /// Called by the Rust shim from PendSV assembly to read/write saved
         /// stack pointers during context switch. Uses `interrupt::free` to
-        /// safely access KERNEL.
+        /// safely access kernel state.
         ///
-        /// Returns null pointer if KERNEL is not initialized.
+        /// Returns null pointer if the kernel is not initialized.
         ///
         /// # Safety
         ///
@@ -728,9 +721,9 @@ macro_rules! define_unified_kernel {
         /// Returns the stack pointer for a partition by index.
         ///
         /// Called by PendSV assembly to read saved stack pointers during
-        /// context switch. Uses `interrupt::free` to safely access KERNEL.
+        /// context switch. Uses `interrupt::free` to safely access kernel state.
         ///
-        /// Returns 0 if KERNEL is not initialized or index is out of bounds.
+        /// Returns 0 if the kernel is not initialized or index is out of bounds.
         #[cfg_attr(not(test), no_mangle)]
         #[allow(dead_code)] // Called from assembly, not Rust
         extern "C" fn get_partition_sp(idx: u32) -> u32 {
@@ -740,9 +733,9 @@ macro_rules! define_unified_kernel {
         /// Sets the stack pointer for a partition by index.
         ///
         /// Called by PendSV assembly to save stack pointers during context
-        /// switch. Uses `interrupt::free` to safely access KERNEL.
+        /// switch. Uses `interrupt::free` to safely access kernel state.
         ///
-        /// No-op if KERNEL is not initialized or index is out of bounds.
+        /// No-op if the kernel is not initialized or index is out of bounds.
         #[cfg_attr(not(test), no_mangle)]
         #[allow(dead_code)] // Called from assembly, not Rust
         extern "C" fn set_partition_sp(idx: u32, sp: u32) {
@@ -753,9 +746,9 @@ macro_rules! define_unified_kernel {
         ///
         /// Called by PendSV assembly after context switch to update the
         /// kernel's current partition. Uses `interrupt::free` to safely
-        /// access KERNEL.
+        /// access kernel state.
         ///
-        /// Does nothing if KERNEL is not initialized.
+        /// Does nothing if the kernel is not initialized.
         #[cfg_attr(not(test), no_mangle)]
         #[allow(dead_code)] // Called from assembly, not Rust
         extern "C" fn set_current_partition(pid: u32) {
@@ -6395,7 +6388,6 @@ mod tests {
     /// Test module for `define_unified_kernel!` macro.
     ///
     /// The macro generates:
-    /// - `static KERNEL: Mutex<RefCell<Option<Kernel<$Config>>>>`
     /// - `unsafe extern "C" fn dispatch_hook(f: &mut ExceptionFrame)`
     /// - `fn store_kernel(k: Kernel<$Config>)`
     ///
@@ -6444,8 +6436,8 @@ mod tests {
         }
 
         // Module to test basic macro invocation compiles.
-        // The generated items (KERNEL, dispatch_hook, store_kernel) are scoped
-        // to this module and don't conflict with other tests.
+        // The generated items (dispatch_hook, store_kernel, accessors) are
+        // scoped to this module and don't conflict with other tests.
         mod basic_expansion {
             use super::*;
 
@@ -6458,16 +6450,6 @@ mod tests {
                 // We can't call it because it requires cortex-m runtime, but
                 // we can verify the function exists by taking its pointer.
                 let _: fn(Kernel<UnifiedTestConfig>) = store_kernel;
-            }
-
-            #[test]
-            fn macro_generates_kernel_static() {
-                // Verify KERNEL static exists and has expected type.
-                // We can't borrow it without cortex-m runtime, but we can
-                // verify the type via pointer conversion.
-                let _: &cortex_m::interrupt::Mutex<
-                    core::cell::RefCell<Option<Kernel<UnifiedTestConfig>>>,
-                > = &KERNEL;
             }
 
             #[test]
@@ -6507,10 +6489,9 @@ mod tests {
 
             #[test]
             fn get_current_partition_returns_max_when_uninitialized() {
-                // When KERNEL is None, should return u32::MAX as sentinel.
-                // Note: KERNEL starts as None (RefCell<Option<...>>), so
-                // without calling store_kernel, it remains uninitialized.
-                // We use a fresh module scope, so KERNEL is None.
+                // When kernel storage is uninitialized, should return u32::MAX
+                // as sentinel. Without calling store_kernel, it remains
+                // uninitialized. We use a fresh module scope.
                 let result = get_current_partition();
                 assert_eq!(result, u32::MAX);
             }
@@ -6529,14 +6510,14 @@ mod tests {
 
             #[test]
             fn get_partition_sp_returns_zero_when_uninitialized() {
-                // When KERNEL is None, should return 0 as sentinel.
+                // When kernel is uninitialized, should return 0 as sentinel.
                 let result = get_partition_sp(0);
                 assert_eq!(result, 0);
             }
 
             #[test]
             fn set_partition_sp_noop_when_uninitialized() {
-                // When KERNEL is None, should silently do nothing.
+                // When kernel is uninitialized, should silently do nothing.
                 // This test just verifies no panic occurs.
                 set_partition_sp(0, 0x2000_0000);
             }
@@ -6547,8 +6528,8 @@ mod tests {
         mod pendsv_accessor_functional_tests {
             use super::*;
 
-            // Separate module to get a fresh KERNEL static.
-            // Some generated items (dispatch_hook, store_kernel, CURRENT_PARTITION)
+            // Separate module to get a fresh kernel storage scope.
+            // Some generated items (dispatch_hook, store_kernel)
             // are not used in tests but are needed for the macro expansion.
             crate::define_unified_kernel!(UnifiedTestConfig);
 
