@@ -3992,6 +3992,48 @@ mod tests {
         assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0100, 16));
     }
 
+    /// Test that revoking a dynamic MPU window invalidates pointers that were
+    /// previously valid in that window.
+    ///
+    /// This verifies the dynamic nature of pointer validation: when a window
+    /// is removed via `remove_window`, `validate_user_ptr_dynamic` correctly
+    /// rejects pointers that were valid before revocation.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn validate_ptr_dynamic_window_revocation() {
+        use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
+
+        // Stack: 0x2000_0000..0x2000_0400, Data: 0x2000_1000..0x2000_2000
+        let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_1000, 0x1000);
+        let s = DynamicStrategy::new();
+
+        // Add a dynamic window for partition 0 at 0x3000_0000 (256 bytes).
+        let region_id = s.add_window(0x3000_0000, 256, 0, 0).unwrap();
+        assert_eq!(region_id, 5); // First dynamic slot is R5
+
+        // Pointer at start of window is valid.
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x3000_0000, 16));
+        // Pointer in middle of window is valid.
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x3000_0080, 64));
+        // Pointer at end of window is valid.
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x3000_00F0, 16));
+
+        // Revoke the window.
+        s.remove_window(region_id);
+
+        // Verify window is removed from the strategy.
+        assert!(s.slot(region_id).is_none());
+
+        // Same pointers that were valid before are now invalid.
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x3000_0000, 16));
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x3000_0080, 64));
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x3000_00F0, 16));
+
+        // Static regions still work after window revocation.
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0000, 16)); // stack
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_1000, 16)); // data
+    }
+
     // ---- all_accessible_regions tests (dynamic-mpu feature) ----
 
     /// Comprehensive test for all_accessible_regions covering static/dynamic
