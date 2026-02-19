@@ -32,27 +32,9 @@ static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 2;
-    const SCHED: usize = 4;
-    const STACK_WORDS: usize = 256;
-    const S: usize = 1;
-    const SW: usize = 1;
-    const MS: usize = 1;
-    const MW: usize = 1;
-    const QS: usize = 1;
-    const QD: usize = 1;
-    const QM: usize = 1;
-    const QW: usize = 1;
-    const SP: usize = 1;
     const SM: usize = 1;
-    const BS: usize = 1;
     const BM: usize = 1;
-    const BW: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
+
     type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
     type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
