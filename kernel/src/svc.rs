@@ -1371,7 +1371,7 @@ where
                     .semaphores_mut()
                     .wait(pt, frame.r1 as usize, frame.r2 as usize)
                 {
-                    Ok(()) => 0,
+                    Ok(_) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }

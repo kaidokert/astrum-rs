@@ -52,14 +52,14 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
         parts: &mut PartitionTable<N>,
         sem_id: usize,
         caller: usize,
-    ) -> Result<(), SemaphoreError> {
+    ) -> Result<bool, SemaphoreError> {
         let sem = self
             .slots
             .get_mut(sem_id)
             .ok_or(SemaphoreError::InvalidSemaphore)?;
         if sem.count > 0 {
             sem.count -= 1;
-            return Ok(());
+            return Ok(true);
         }
         if sem.wait_queue.is_full() {
             return Err(SemaphoreError::WaitQueueFull);
@@ -70,7 +70,7 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
         pcb.transition(PartitionState::Waiting)?;
         // push cannot fail: we checked is_full above and hold &mut self.
         let _ = sem.wait_queue.push(caller as u8);
-        Ok(())
+        Ok(false)
     }
     pub fn signal<const N: usize>(
         &mut self,
@@ -110,10 +110,10 @@ mod tests {
     #[test] fn wait_signal_overflow_invalid() {
         let (mut t, mut p) = (tbl::<4>(3), SemaphorePool::<4, 4>::new());
         p.add(Semaphore::new(2, 3)).unwrap();
-        p.wait(&mut t, 0, 0).unwrap(); assert_eq!(p.get(0).unwrap().count(), 1);
-        p.wait(&mut t, 0, 0).unwrap(); assert_eq!(p.get(0).unwrap().count(), 0);
+        assert_eq!(p.wait(&mut t, 0, 0), Ok(true)); assert_eq!(p.get(0).unwrap().count(), 1);
+        assert_eq!(p.wait(&mut t, 0, 0), Ok(true)); assert_eq!(p.get(0).unwrap().count(), 0);
         p.add(Semaphore::new(0, 1)).unwrap();
-        p.wait(&mut t, 1, 1).unwrap(); assert_eq!(t.get(1).unwrap().state(), Waiting);
+        assert_eq!(p.wait(&mut t, 1, 1), Ok(false)); assert_eq!(t.get(1).unwrap().state(), Waiting);
         p.signal(&mut t, 1).unwrap(); assert_eq!(t.get(1).unwrap().state(), Ready);
         p.signal(&mut t, 0).unwrap(); assert_eq!(p.get(0).unwrap().count(), 1);
         p.add(Semaphore::new(3, 3)).unwrap();
@@ -123,12 +123,12 @@ mod tests {
     #[test] fn fifo_and_queue_full() {
         let (mut t, mut p) = (tbl::<8>(8), SemaphorePool::<1, 4>::new());
         p.add(Semaphore::new(0, 1)).unwrap();
-        for i in 0..3usize { p.wait(&mut t, 0, i).unwrap(); }
+        for i in 0..3usize { assert_eq!(p.wait(&mut t, 0, i), Ok(false)); }
         p.signal(&mut t, 0).unwrap(); assert_eq!(t.get(0).unwrap().state(), Ready);
         assert_eq!(t.get(1).unwrap().state(), Waiting);
         p.signal(&mut t, 0).unwrap(); assert_eq!(t.get(1).unwrap().state(), Ready);
         p.signal(&mut t, 0).unwrap(); assert_eq!(t.get(2).unwrap().state(), Ready);
-        for i in 3..7u8 { p.wait(&mut t, 0, i as usize).unwrap(); }
+        for i in 3..7u8 { assert_eq!(p.wait(&mut t, 0, i as usize), Ok(false)); }
         assert_eq!(p.wait(&mut t, 0, 7), Err(SemaphoreError::WaitQueueFull));
     }
 }
