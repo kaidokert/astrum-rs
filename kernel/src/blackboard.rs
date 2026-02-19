@@ -1,5 +1,7 @@
+#[cfg(feature = "ipc-blackboard")]
 use crate::waitqueue::TimedWaitQueue;
 
+#[cfg(feature = "ipc-blackboard")]
 #[derive(Debug, PartialEq, Eq)]
 pub enum BlackboardError {
     PoolFull,
@@ -10,6 +12,7 @@ pub enum BlackboardError {
 }
 
 /// Outcome of a blackboard read operation.
+#[cfg(feature = "ipc-blackboard")]
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReadBlackboardOutcome {
     /// Data was available and copied into the caller's buffer.
@@ -20,6 +23,7 @@ pub enum ReadBlackboardOutcome {
 
 /// Single-message buffer with wake-all semantics.
 /// `M` = max message size, `W` = wait-queue capacity.
+#[cfg(feature = "ipc-blackboard")]
 #[derive(Debug)]
 pub struct Blackboard<const M: usize, const W: usize> {
     id: usize,
@@ -29,6 +33,7 @@ pub struct Blackboard<const M: usize, const W: usize> {
     wait_queue: TimedWaitQueue<W>,
 }
 
+#[cfg(feature = "ipc-blackboard")]
 #[allow(clippy::new_without_default)]
 impl<const M: usize, const W: usize> Blackboard<M, W> {
     pub const fn new(id: usize) -> Self {
@@ -152,10 +157,12 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
 }
 
 /// Fixed-capacity pool. `S` = max boards, `M` = message size, `W` = wait-queue cap.
+#[cfg(feature = "ipc-blackboard")]
 pub struct BlackboardPool<const S: usize, const M: usize, const W: usize> {
     boards: heapless::Vec<Blackboard<M, W>, S>,
 }
 
+#[cfg(feature = "ipc-blackboard")]
 #[allow(clippy::new_without_default)]
 impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
     pub const fn new() -> Self {
@@ -243,7 +250,27 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
     }
 }
 
-#[cfg(test)]
+// --- Stub when ipc-blackboard is disabled ---
+
+/// Zero-sized stub so `PortPools` and `PortsOps` compile without the feature.
+#[cfg(not(feature = "ipc-blackboard"))]
+pub struct BlackboardPool<const S: usize, const M: usize, const W: usize>;
+
+#[cfg(not(feature = "ipc-blackboard"))]
+impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
+    pub const fn new() -> Self {
+        Self
+    }
+
+    pub fn tick_timeouts<const E: usize>(
+        &mut self,
+        _current_tick: u64,
+        _out: &mut heapless::Vec<u8, E>,
+    ) {
+    }
+}
+
+#[cfg(all(test, feature = "ipc-blackboard"))]
 mod tests {
     use super::*;
 
