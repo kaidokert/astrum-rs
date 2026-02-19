@@ -3938,6 +3938,60 @@ mod tests {
         assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x4000_00F8, 16));
     }
 
+    /// Test that validate_user_ptr_dynamic rejects pointers in kernel code region.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn validate_ptr_dynamic_in_kernel_code_fails() {
+        use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
+        // MPU region covers flash including kernel code area
+        let t = ptr_table(0x0000_0000, 0x0002_0000);
+        let s = DynamicStrategy::new();
+        // Add a dynamic window that also covers kernel code
+        s.add_window(0x0000_0000, 0x0001_0000, 0, 0).unwrap();
+
+        // Kernel code region [0, KERNEL_CODE_END) must be rejected
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x0000_0000, 16));
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x0000_8000, 64));
+        assert!(!validate_user_ptr_dynamic(
+            &t,
+            &s,
+            0,
+            KERNEL_CODE_END - 16,
+            16
+        ));
+        // Spanning boundary: starts in kernel code, ends outside
+        assert!(!validate_user_ptr_dynamic(
+            &t,
+            &s,
+            0,
+            KERNEL_CODE_END - 8,
+            16
+        ));
+    }
+
+    /// Test kernel data region check when KERNEL_DATA_END equals SRAM start (empty range).
+    ///
+    /// KERNEL_DATA_END is currently 0x2000_0000 (SRAM start), making the kernel data
+    /// region [0x2000_0000, 0x2000_0000) empty. This test verifies SRAM pointers are
+    /// allowed when no kernel data region is configured.
+    ///
+    /// TODO: Add rejection tests when KERNEL_DATA_END is set to an actual value
+    /// (e.g., 0x2000_1000) to reserve kernel BSS/data at SRAM start.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn validate_ptr_dynamic_kernel_data_empty_range() {
+        use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
+        // MPU region covers SRAM
+        let t = ptr_table(0x2000_0000, 0x0001_0000);
+        let s = DynamicStrategy::new();
+        s.add_window(0x2000_0000, 0x0001_0000, 0, 0).unwrap();
+
+        // With KERNEL_DATA_END == 0x2000_0000, the kernel data region is empty,
+        // so SRAM addresses are allowed (assuming valid MPU coverage).
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0000, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0100, 16));
+    }
+
     // ---- all_accessible_regions tests (dynamic-mpu feature) ----
 
     /// Comprehensive test for all_accessible_regions covering static/dynamic
