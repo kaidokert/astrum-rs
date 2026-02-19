@@ -251,7 +251,7 @@ where
                 }
             }
         }
-        ScheduleEvent::None => {}
+        ScheduleEvent::Idle | ScheduleEvent::None => {}
     }
     kernel.expire_timed_waits::<{ C::N }>(current_tick);
 

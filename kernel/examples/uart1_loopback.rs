@@ -182,7 +182,7 @@ fn SysTick() {
             ScheduleEvent::SystemWindow => {
                 do_bottom_half(k, current_tick);
             }
-            ScheduleEvent::None => {}
+            ScheduleEvent::Idle | ScheduleEvent::None => {}
         }
         k.expire_timed_waits::<{ <DemoConfig as kernel::config::KernelConfig>::N }>(current_tick);
     });

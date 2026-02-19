@@ -318,7 +318,7 @@ where
     // The pointer cast from *mut KernelStorageBuffer to *mut Kernel<C> is valid
     // because init_kernel_state() wrote a Kernel<C> at this location, and
     // KernelStorageBuffer has sufficient size (MAX_KERNEL_SIZE, verified at
-    // compile time in init_kernel_state) and alignment (8 bytes via repr(align(8))).
+    // compile time in init_kernel_state) and alignment (1024 bytes via repr(C, align(1024))).
     // The caller must ensure init_kernel_state() was called before dereferencing
     // the returned pointer, and must provide proper synchronization for access.
     addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>
