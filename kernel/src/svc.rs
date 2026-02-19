@@ -4551,17 +4551,22 @@ mod tests {
             .get_mut(dst)
             .unwrap()
             .enqueue_blocked_sender(1, u64::MAX);
-        let ptr = low32_buf(0);
-        // Zero the buffer to eliminate stale data from parallel tests
-        // sharing the same mmap page, so we verify dispatch actually wrote.
-        // SAFETY: `ptr` was obtained from `low32_buf(0)` which returns a valid,
-        // mmap-backed pointer with at least 4096 bytes; writing 2 bytes is in-bounds.
+        let page = low32_buf(0);
+        // Byte offset within the shared mmap page, chosen to avoid data
+        // races with parallel tests that also use low32_buf(0).
+        // The resulting address (MMAP_BASE + RECV_BUF_OFFSET = 0x2000_0200)
+        // falls within partition 0's data region.
+        const RECV_BUF_OFFSET: usize = 512;
+        // SAFETY: page is a 4096-byte mmap; RECV_BUF_OFFSET (512) + max
+        // message length (4) is well within bounds.
+        let ptr = unsafe { page.add(RECV_BUF_OFFSET) };
+        // SAFETY: ptr is within the mmap page; zeroing 2 bytes is in-bounds.
         unsafe { core::ptr::write_bytes(ptr, 0, 2) };
         let mut ef = frame4(SYS_QUEUING_RECV_TIMED, dst as u32, 100, ptr as u32);
+        // SAFETY: ef is a valid ExceptionFrame and k is a valid Kernel.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 2, "should return msg_len=2");
-        // Verify message data was delivered to the buffer.
-        // SAFETY: ptr was mmap'd by low32_buf and dispatch wrote into it.
+        // SAFETY: ptr points into a valid mmap page and dispatch wrote 2 bytes.
         let delivered = unsafe { core::slice::from_raw_parts(ptr, 2) };
         assert_eq!(
             delivered,
