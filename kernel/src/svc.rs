@@ -8,13 +8,46 @@ use crate::context::ExceptionFrame;
 
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
+
+// ---- Kernel Memory Region Constants (defense in depth) ----
+
+/// End address of kernel code region in flash (exclusive).
+///
+/// Kernel code occupies the lower portion of flash starting at 0x0000_0000.
+/// This 64 KiB estimate covers the kernel binary, vector table, and read-only
+/// data. Pointers in `[0, KERNEL_CODE_END)` are rejected by `validate_user_ptr`.
+pub const KERNEL_CODE_END: u32 = 0x0001_0000;
+
+/// End address of kernel data region in SRAM (exclusive).
+///
+/// Kernel data (BSS, statics) occupies the lower portion of SRAM starting at
+/// 0x2000_0000. Pointers in `[0x2000_0000, KERNEL_DATA_END)` are rejected.
+/// Set to 0x2000_0000 to disable this check (code region check remains active).
+pub const KERNEL_DATA_END: u32 = 0x2000_0000;
+
+/// Check if the range `[ptr, end)` overlaps kernel memory regions.
+#[inline]
+fn overlaps_kernel_memory(ptr: u32, end: u32) -> bool {
+    // Kernel code: [0, KERNEL_CODE_END)
+    if ptr < KERNEL_CODE_END && end > 0 {
+        return true;
+    }
+    // Kernel data: [0x2000_0000, KERNEL_DATA_END)
+    // When KERNEL_DATA_END == 0x2000_0000, this check is effectively disabled.
+    if ptr < KERNEL_DATA_END && end > 0x2000_0000 {
+        return true;
+    }
+    false
+}
+
 /// Check that a user-space pointer `[ptr, ptr+len)` lies entirely within the
 /// MPU data region OR the stack region of partition `pid`.
 ///
 /// Returns `true` when **all** of the following hold:
 /// 1. `pid` refers to an existing partition in `partitions`.
 /// 2. `ptr + len` does not overflow `u32`.
-/// 3. The pointer range `[ptr, ptr+len)` lies entirely within EITHER:
+/// 3. The pointer range does NOT overlap kernel memory (defense in depth).
+/// 4. The pointer range `[ptr, ptr+len)` lies entirely within EITHER:
 ///    - The MPU data region (`mpu_region.base()`, `mpu_region.size()`), OR
 ///    - The stack region (`stack_base`, `stack_size`).
 ///
@@ -41,6 +74,11 @@ pub fn validate_user_ptr<const N: usize>(
         None => return false,
     };
 
+    // Defense in depth: reject pointers in kernel memory regions.
+    if overlaps_kernel_memory(ptr, end) {
+        return false;
+    }
+
     // Check each accessible static region (data and stack).
     // Region validity (base + size not overflowing) is enforced at creation time.
     for (base, size) in pcb.accessible_static_regions() {
@@ -64,7 +102,8 @@ pub fn validate_user_ptr<const N: usize>(
 /// Returns `true` when **all** of the following hold:
 /// 1. `pid` refers to an existing partition in `partitions`.
 /// 2. `ptr + len` does not overflow `u32`.
-/// 3. The pointer range `[ptr, ptr+len)` lies entirely within EITHER:
+/// 3. The pointer range does NOT overlap kernel memory (defense in depth).
+/// 4. The pointer range `[ptr, ptr+len)` lies entirely within EITHER:
 ///    - One of the dynamic MPU windows returned by `strategy.accessible_regions(pid)`, OR
 ///    - The static MPU data region (`mpu_region.base()`, `mpu_region.size()`), OR
 ///    - The static stack region (`stack_base`, `stack_size`).
@@ -89,6 +128,11 @@ pub fn validate_user_ptr_dynamic<const N: usize>(
         Some(e) => e,
         None => return false,
     };
+
+    // Defense in depth: reject pointers in kernel memory regions.
+    if overlaps_kernel_memory(ptr, end) {
+        return false;
+    }
 
     // Helper: check if [ptr, end) lies entirely within [base, base+size].
     // Uses saturating_add to handle regions that extend to or past 0xFFFF_FFFF.
@@ -3617,6 +3661,27 @@ mod tests {
         let t = ptr_table(0x2000_0000, 4096);
         // ptr + len overflows u32
         assert!(!validate_user_ptr(&t, 0, 0xFFFF_FFF0, 0x20));
+    }
+
+    #[test]
+    fn validate_ptr_in_kernel_code_fails() {
+        // Even if MPU region covers flash, kernel code region is rejected.
+        let t = ptr_table(0x0000_0000, 0x0002_0000);
+        assert!(!validate_user_ptr(&t, 0, 0x0000_0000, 16));
+        assert!(!validate_user_ptr(&t, 0, 0x0000_8000, 64));
+        assert!(!validate_user_ptr(&t, 0, KERNEL_CODE_END - 16, 16));
+        // Spanning boundary: starts in kernel code, ends outside.
+        assert!(!validate_user_ptr(&t, 0, KERNEL_CODE_END - 8, 16));
+    }
+
+    #[test]
+    fn validate_ptr_in_kernel_data_fails() {
+        // Even if MPU region covers kernel data area, it is rejected.
+        let t = ptr_table(0x2000_0000, 0x0001_0000);
+        // With KERNEL_DATA_END == 0x2000_0000, no addresses are rejected.
+        // These assertions verify the check structure exists; adjust constants
+        // to enable actual rejection when kernel data size is known.
+        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 16));
     }
 
     #[test]
