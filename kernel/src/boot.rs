@@ -270,11 +270,17 @@ where
     .ok_or(BootError::NoReadyPartition)?;
     let _ = first;
 
-    // Select the processor core clock (CLKSOURCE = 1) as the SysTick
-    // clock source.  SYSTICK_CYCLES and CORE_CLOCK_HZ assume this setting.
-    // To use an external reference clock instead, override CORE_CLOCK_HZ to
-    // match the external frequency and change this to SystClkSource::External.
-    peripherals.SYST.set_clock_source(SystClkSource::Core);
+    // Select SysTick clock source based on KernelConfig::USE_PROCESSOR_CLOCK.
+    // CLKSOURCE = 1 (Core) is the default; BSPs needing the external
+    // reference clock set USE_PROCESSOR_CLOCK = false and adjust
+    // CORE_CLOCK_HZ to match the external frequency.
+    peripherals
+        .SYST
+        .set_clock_source(if C::USE_PROCESSOR_CLOCK {
+            SystClkSource::Core
+        } else {
+            SystClkSource::External
+        });
     peripherals.SYST.set_reload(C::SYSTICK_CYCLES - 1);
     peripherals.SYST.clear_current();
     peripherals.SYST.enable_counter();

@@ -1,3 +1,115 @@
+//! Kernel configuration traits and clock setup.
+//!
+//! # Clock Configuration
+//!
+//! The [`KernelConfig`] trait controls the SysTick timer through three
+//! associated constants:
+//!
+//! | Constant | Default | Purpose |
+//! |---|---|---|
+//! | `CORE_CLOCK_HZ` | 12 MHz (QEMU lm3s6965evb) | Processor core clock frequency |
+//! | `TICK_PERIOD_US` | 1000 µs (1 ms) | Desired interval between ticks |
+//! | `SYSTICK_CYCLES` | auto-calculated | Reload cycle count (leave as default) |
+//! | `USE_PROCESSOR_CLOCK` | `true` | SysTick clock source (`true` = core, `false` = external) |
+//!
+//! `SYSTICK_CYCLES` is derived automatically:
+//!
+//! ```text
+//! SYSTICK_CYCLES = CORE_CLOCK_HZ * TICK_PERIOD_US / 1_000_000
+//! ```
+//!
+//! ## BSP Override Examples
+//!
+//! Each BSP crate provides a [`KernelConfig`] implementation that sets
+//! `CORE_CLOCK_HZ` to match the target's core clock. `TICK_PERIOD_US`
+//! can also be adjusted, but 1000 µs (1 ms) is typical.
+//!
+//! **nRF52840 — 64 MHz core clock, default 1 ms tick:**
+//!
+//! ```ignore
+//! struct Nrf52840Config;
+//! impl KernelConfig for Nrf52840Config {
+//!     const N: usize = 4;
+//!     const CORE_CLOCK_HZ: u32 = 64_000_000;
+//!     const TICK_PERIOD_US: u32 = 1000; // 1 ms tick (same as default)
+//!     // SYSTICK_CYCLES auto-computes to 64_000 → reload 63_999
+//!     # // ... type aliases omitted for brevity
+//! }
+//! ```
+//!
+//! **STM32F4 — 168 MHz core clock, 500 µs tick:**
+//!
+//! ```ignore
+//! struct Stm32f4Config;
+//! impl KernelConfig for Stm32f4Config {
+//!     const N: usize = 4;
+//!     const CORE_CLOCK_HZ: u32 = 168_000_000;
+//!     const TICK_PERIOD_US: u32 = 500; // 500 µs tick for finer scheduling
+//!     // SYSTICK_CYCLES auto-computes to 84_000 → reload 83_999
+//!     # // ... type aliases omitted for brevity
+//! }
+//! ```
+//!
+//! **SAMD51 — 120 MHz core clock, external reference clock:**
+//!
+//! ```ignore
+//! struct Samd51Config;
+//! impl KernelConfig for Samd51Config {
+//!     const N: usize = 4;
+//!     const CORE_CLOCK_HZ: u32 = 15_000_000; // HCLK/8 external ref
+//!     const TICK_PERIOD_US: u32 = 2000; // 2 ms tick
+//!     const USE_PROCESSOR_CLOCK: bool = false; // external reference
+//!     // SYSTICK_CYCLES auto-computes to 30_000 → reload 29_999
+//!     # // ... type aliases omitted for brevity
+//! }
+//! ```
+//!
+//! ## Consequences of Incorrect `CORE_CLOCK_HZ`
+//!
+//! The SysTick reload value is computed from `CORE_CLOCK_HZ`. If this
+//! constant does not match the actual hardware clock frequency:
+//!
+//! - **Value too high** — The reload value is too large, so ticks fire
+//!   slower than expected. A 1 ms tick becomes, say, 2.6 ms. Schedule
+//!   windows run long and deadlines are missed late.
+//!
+//! - **Value too low** — The reload value is too small, so ticks fire
+//!   faster than expected. A 1 ms tick becomes, say, 0.38 ms.
+//!   Partitions are preempted early and real-time budgets shrink.
+//!
+//! In both cases every time-dependent kernel service — schedule
+//! advancement, timeout expiration, partition budgets — drifts from
+//! wall-clock time. This is silent; no assertion fires at runtime.
+//! Always verify `CORE_CLOCK_HZ` against the BSP's actual clock-tree
+//! setup (PLL configuration, prescalers, etc.).
+//!
+//! ## SysTick Clock Source (`CLKSOURCE` Bit)
+//!
+//! The ARM SysTick timer (`SYST_CSR` register, bit 2) supports two
+//! clock sources:
+//!
+//! | CLKSOURCE | Source | Typical use |
+//! |---|---|---|
+//! | 1 | Processor clock (HCLK) | **Default — used by this kernel** |
+//! | 0 | External reference clock | Vendor-specific, often HCLK/8 |
+//!
+//! The [`USE_PROCESSOR_CLOCK`](KernelConfig::USE_PROCESSOR_CLOCK)
+//! constant controls this selection. When `true` (the default),
+//! [`boot()`](crate::boot::boot) sets `CLKSOURCE = 1` (processor
+//! clock). When `false`, it sets `CLKSOURCE = 0` (external reference).
+//!
+//! To use an external reference clock instead, a BSP should:
+//!
+//! 1. Set `USE_PROCESSOR_CLOCK` to `false`.
+//! 2. Set `CORE_CLOCK_HZ` to the external reference frequency (e.g.,
+//!    HCLK / 8 on STM32).
+//!
+//! See the SAMD51 example above for a complete configuration.
+//!
+//! Most BSPs should use the processor clock (the default). The
+//! external reference is only useful when the implementation-defined
+//! reference provides a more stable or lower-frequency timebase.
+
 use crate::tick::TickCounterOps;
 
 /// Trait for core partition/schedule sub-structs.
@@ -198,6 +310,17 @@ pub trait KernelConfig {
     /// [`TICK_PERIOD_US`]: Self::TICK_PERIOD_US
     const SYSTICK_CYCLES: u32 =
         (Self::CORE_CLOCK_HZ as u64 * Self::TICK_PERIOD_US as u64 / 1_000_000) as u32;
+
+    /// SysTick clock source selection.
+    ///
+    /// When `true` (the default), the SysTick timer is clocked from the
+    /// processor core clock (`CLKSOURCE = 1`). When `false`, it uses the
+    /// external reference clock (`CLKSOURCE = 0`), which is
+    /// vendor-specific (often HCLK/8).
+    ///
+    /// When set to `false`, [`CORE_CLOCK_HZ`](Self::CORE_CLOCK_HZ) must
+    /// reflect the external reference frequency, not the core clock.
+    const USE_PROCESSOR_CLOCK: bool = true;
 
     /// Partition/schedule state operations. Must implement `CoreOps` to
     /// allow dispatch() and other methods to call sub-struct methods.
