@@ -69,6 +69,40 @@ pub fn build_rasr(size_field: u32, ap: u32, xn: bool, scb: (bool, bool, bool)) -
         | 1
 }
 
+// -- Decode helpers --
+// Extract logical fields from hardware RBAR/RASR register values.
+
+/// Extract the base address from an RBAR value (mask off bits [4:0]).
+pub fn decode_rbar_base(rbar: u32) -> u32 {
+    rbar & RBAR_ADDR_MASK
+}
+
+/// Check the enable bit (bit 0) of an RASR value.
+pub fn decode_rasr_enabled(rasr: u32) -> bool {
+    rasr & 1 != 0
+}
+
+/// Extract the SIZE field from RASR and compute the region size in bytes.
+/// Returns `None` if the region is disabled (enable bit = 0) or if
+/// the size overflows `u32` (SIZE = 31 → 4 GiB).
+pub fn decode_rasr_size_bytes(rasr: u32) -> Option<u32> {
+    if !decode_rasr_enabled(rasr) {
+        return None;
+    }
+    let size_field = (rasr >> RASR_SIZE_SHIFT) & RASR_SIZE_MASK;
+    1u32.checked_shl(size_field + 1)
+}
+
+/// Extract the AP field (bits [26:24]) from an RASR value.
+pub fn decode_rasr_ap(rasr: u32) -> u32 {
+    (rasr >> RASR_AP_SHIFT) & RASR_AP_MASK
+}
+
+/// Returns true if the given AP value grants unprivileged access.
+pub fn is_unprivileged_accessible(ap: u32) -> bool {
+    ap == AP_RO_RO || ap == AP_FULL_ACCESS
+}
+
 /// Write RBAR and RASR to configure a single MPU region.
 pub fn configure_region(mpu: &cortex_m::peripheral::MPU, rbar: u32, rasr: u32) {
     // SAFETY: Writing to the MPU RBAR (0xE000_ED9C) and RASR (0xE000_EDA0)
@@ -750,5 +784,97 @@ mod tests {
         // entry_point near end of address space + large region causes overflow
         let pcb = make_pcb(0xFFFF_0000, 0x2000_0000, 0x0001_0000);
         assert!(partition_mpu_regions(&pcb).is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // decode helpers
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn decode_rbar_base_masks_lower_bits() {
+        assert_eq!(decode_rbar_base(0x2000_0010), 0x2000_0000);
+        assert_eq!(decode_rbar_base(0x0800_0017), 0x0800_0000);
+        assert_eq!(decode_rbar_base(0x0000_001F), 0x0000_0000);
+        assert_eq!(decode_rbar_base(0xFFFF_FFE0), 0xFFFF_FFE0);
+        assert_eq!(decode_rbar_base(0), 0);
+    }
+
+    #[test]
+    fn decode_rasr_enabled_checks_bit0() {
+        assert!(decode_rasr_enabled(0x0600_0009));
+        assert!(decode_rasr_enabled(1));
+        assert!(!decode_rasr_enabled(0));
+        assert!(!decode_rasr_enabled(0x0600_0008));
+    }
+
+    #[test]
+    fn decode_rasr_size_bytes_known_values() {
+        // SIZE=4 → 2^5 = 32 bytes
+        let rasr = build_rasr(4, AP_FULL_ACCESS, false, (false, false, false));
+        assert_eq!(decode_rasr_size_bytes(rasr), Some(32));
+        // SIZE=11 → 2^12 = 4096 bytes
+        let rasr = build_rasr(11, AP_RO_RO, false, (false, false, false));
+        assert_eq!(decode_rasr_size_bytes(rasr), Some(4096));
+        // SIZE=7 → 2^8 = 256 bytes
+        let rasr = build_rasr(7, AP_PRIV_RW, true, (true, true, false));
+        assert_eq!(decode_rasr_size_bytes(rasr), Some(256));
+    }
+
+    #[test]
+    fn decode_rasr_size_bytes_disabled_returns_none() {
+        assert_eq!(decode_rasr_size_bytes(0), None);
+        // Manually craft RASR with enable bit cleared
+        assert_eq!(decode_rasr_size_bytes(0x0600_0008), None);
+    }
+
+    #[test]
+    fn decode_rasr_size_bytes_4gib_returns_none() {
+        // SIZE=31 → 2^32 overflows u32
+        let rasr = build_rasr(31, AP_NO_ACCESS, true, (false, false, false));
+        assert_eq!(decode_rasr_size_bytes(rasr), None);
+    }
+
+    #[test]
+    fn decode_rasr_ap_extracts_all_variants() {
+        for &ap in &[
+            AP_NO_ACCESS,
+            AP_PRIV_RW,
+            AP_FULL_ACCESS,
+            AP_PRIV_RO,
+            AP_RO_RO,
+        ] {
+            let rasr = build_rasr(7, ap, false, (false, false, false));
+            assert_eq!(decode_rasr_ap(rasr), ap);
+        }
+    }
+
+    #[test]
+    fn is_unprivileged_accessible_true_cases() {
+        assert!(is_unprivileged_accessible(AP_RO_RO));
+        assert!(is_unprivileged_accessible(AP_FULL_ACCESS));
+    }
+
+    #[test]
+    fn is_unprivileged_accessible_false_cases() {
+        assert!(!is_unprivileged_accessible(AP_NO_ACCESS));
+        assert!(!is_unprivileged_accessible(AP_PRIV_RW));
+        assert!(!is_unprivileged_accessible(AP_PRIV_RO));
+        // Also test out-of-range values
+        assert!(!is_unprivileged_accessible(0b010));
+        assert!(!is_unprivileged_accessible(0b100));
+        assert!(!is_unprivileged_accessible(0b111));
+    }
+
+    #[test]
+    fn decode_roundtrip_with_build() {
+        let base = 0x2000_0000u32;
+        let rbar = build_rbar(base, 2).unwrap();
+        assert_eq!(decode_rbar_base(rbar), base);
+
+        let rasr = build_rasr(11, AP_FULL_ACCESS, true, (true, true, false));
+        assert_eq!(decode_rasr_ap(rasr), AP_FULL_ACCESS);
+        assert!(decode_rasr_enabled(rasr));
+        assert_eq!(decode_rasr_size_bytes(rasr), Some(4096));
+        assert!(is_unprivileged_accessible(decode_rasr_ap(rasr)));
     }
 }
