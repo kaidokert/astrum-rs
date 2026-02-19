@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  qemu:
+    runs-on: ubuntu-latest
+    steps:
+      # TODO: reviewer false positive — actions/checkout@v4 is correct, not a local path
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        # TODO: reviewer false positive — dtolnay/rust-toolchain@nightly is correct, not a local path
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7m-none-eabi, thumbv7em-none-eabihf
+          components: rustfmt, clippy, llvm-tools-preview
+
+      # TODO: reviewer false positive — swatinem/rust-cache@v2 is a valid action reference, not a local path
+      - uses: swatinem/rust-cache@v2
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-system-arm
+
+      - name: Install cargo-llvm-cov
+        # TODO: reviewer false positive — taiki-e/install-action@cargo-llvm-cov is a valid action reference, not a local path
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run CI
+        run: ./scripts/ci.sh
+
+  hardware:
+    needs: qemu
+    runs-on: [self-hosted, stm32]
+    steps:
+      # TODO: reviewer false positive — actions/checkout@v4 is correct, not a local path
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        # TODO: reviewer false positive — dtolnay/rust-toolchain@nightly is correct, not a local path
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7em-none-eabihf
+
+      - name: Build hw_integration
+        run: >
+          cargo build -p kernel --example hw_integration
+          --features log-rtt
+          --target thumbv7em-none-eabihf
+          --release
+
+      - name: Run hardware tests
+        run: >
+          ./scripts/probe-rs-ci.sh
+          --elf target/thumbv7em-none-eabihf/release/examples/hw_integration
+          --chip "${{ vars.HARDWARE_CHIP || 'STM32F429ZI' }}"

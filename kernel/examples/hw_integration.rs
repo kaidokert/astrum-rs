@@ -55,7 +55,7 @@ static PARTS_RAN: AtomicU32 = AtomicU32::new(0);
 kernel::define_unified_harness!(no_boot, Cfg, NP, SW, |tick, k| {
     let addr = k as *const _ as usize;
     if (addr & 1023) != 0 { kexit!(failure); }
-    if tick % 5 == 0 {
+    if tick.is_multiple_of(5) {
         let s = P0_SENT.load(Ordering::Acquire);
         let r = P1_RECV_OK.load(Ordering::Acquire);
         let p = PARTS_RAN.load(Ordering::Acquire);
@@ -85,6 +85,7 @@ extern "C" fn p1_main() -> ! {
     loop { kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32); }
 }
 #[cortex_m_rt::entry]
+#[allow(clippy::never_loop)] // kexit! diverges via inner loop on catch-all backend
 fn main() -> ! {
     let mut p = match cortex_m::Peripherals::take() {
         Some(p) => p,
