@@ -2,6 +2,7 @@ use crate::config::KernelConfig;
 use crate::context::ExceptionFrame;
 use crate::partition::{ConfigError, MpuRegion, PartitionConfig, PartitionState, TransitionError};
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
+use crate::semaphore::Semaphore;
 use crate::svc::Kernel;
 use heapless::Vec;
 
@@ -112,6 +113,37 @@ impl KernelTestHarness {
         Ok(Self { kernel })
     }
 
+    /// Create a harness with two partitions and semaphores initialised at the
+    /// given counts.  Each entry in `counts` adds one semaphore whose initial
+    /// value is `count` and whose maximum is `count + 1`.
+    pub fn with_semaphores(counts: &[u32]) -> Result<Self, HarnessError> {
+        let mut h = Self::with_partitions(2)?;
+        for &c in counts {
+            h.kernel
+                .semaphores_mut()
+                .add(Semaphore::new(c, c + 1))
+                .map_err(|_| HarnessError::ConfigsFull)?;
+        }
+        Ok(h)
+    }
+
+    /// Create a harness with two partitions suitable for mutex testing.
+    ///
+    /// Mutexes are pre-allocated at pool capacity in `SyncPools::default()`,
+    /// so `count` documents how many the caller intends to use but does not
+    /// change pool contents.
+    pub fn with_mutexes(_count: usize) -> Result<Self, HarnessError> {
+        Self::with_partitions(2)
+    }
+
+    /// Create a harness with two partitions suitable for event-flag testing.
+    ///
+    /// Event flags are per-partition fields, so no additional pool setup is
+    /// needed.
+    pub fn with_events() -> Result<Self, HarnessError> {
+        Self::with_partitions(2)
+    }
+
     pub fn kernel(&self) -> &Kernel<HarnessConfig> {
         &self.kernel
     }
@@ -162,7 +194,7 @@ impl KernelTestHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syscall::SYS_YIELD;
+    use crate::syscall::{SYS_EVT_SET, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_WAIT, SYS_YIELD};
 
     #[test]
     fn two_partitions_count_and_state() {
@@ -226,6 +258,62 @@ mod tests {
         assert!(
             h.kernel().yield_requested,
             "yield_requested must be set after SYS_YIELD via dispatch_as"
+        );
+    }
+
+    #[test]
+    fn with_semaphores_creates_semaphore_at_given_count() {
+        let mut h = KernelTestHarness::with_semaphores(&[3]).expect("harness setup");
+        // SYS_SEM_WAIT: r1 = sem_id(0), r2 = caller_pid(0)
+        // Semaphore has initial count 3, so wait should succeed (count → 2).
+        let frame = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(
+            frame.r0, 0,
+            "SYS_SEM_WAIT on count-3 semaphore must succeed"
+        );
+        assert!(
+            !h.kernel().yield_requested,
+            "non-blocking wait must not trigger deschedule"
+        );
+        let sem = h.kernel().semaphores().get(0).expect("semaphore 0 exists");
+        assert_eq!(
+            sem.count(),
+            2,
+            "count must decrement from 3 to 2 after wait"
+        );
+    }
+
+    #[test]
+    fn with_mutexes_allows_lock_unlock() {
+        let mut h = KernelTestHarness::with_mutexes(1).expect("harness setup");
+        // SYS_MTX_LOCK: r1 = mutex_id(0), r2 = caller_pid(0)
+        let frame = h.dispatch(SYS_MTX_LOCK, 0, 0, 0);
+        assert_eq!(frame.r0, 1, "MTX_LOCK must return 1 (acquired)");
+        assert_eq!(
+            h.kernel().mutexes().owner(0).unwrap(),
+            Some(0),
+            "partition 0 must own mutex 0 after lock"
+        );
+        // SYS_MTX_UNLOCK: r1 = mutex_id(0), r2 = caller_pid(0)
+        let frame = h.dispatch(SYS_MTX_UNLOCK, 0, 0, 0);
+        assert_eq!(frame.r0, 0, "MTX_UNLOCK must return 0 (success)");
+        assert_eq!(
+            h.kernel().mutexes().owner(0).unwrap(),
+            None,
+            "mutex 0 must be unowned after unlock"
+        );
+    }
+
+    #[test]
+    fn with_events_allows_event_set() {
+        let mut h = KernelTestHarness::with_events().expect("harness setup");
+        // SYS_EVT_SET: r1 = target_pid(1), r2 = mask(0b0101)
+        let frame = h.dispatch(SYS_EVT_SET, 1, 0b0101, 0);
+        assert_eq!(frame.r0, 0, "EVT_SET must return 0 (success)");
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().event_flags(),
+            0b0101,
+            "target partition must have event flags set"
         );
     }
 }
