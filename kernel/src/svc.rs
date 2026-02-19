@@ -1375,7 +1375,11 @@ where
                     .semaphores_mut()
                     .wait(pt, frame.r1 as usize, frame.r2 as usize)
                 {
-                    Ok(_) => 0,
+                    Ok(true) => 0,
+                    Ok(false) => {
+                        self.trigger_deschedule();
+                        0
+                    }
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }
@@ -2972,6 +2976,28 @@ mod tests {
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
+    }
+
+    #[test]
+    fn dispatch_sem_wait_blocking_triggers_deschedule() {
+        let mut k = kernel(1, 0, 0);
+        // First wait: semaphore has count=1, so this acquires immediately (Ok(true)).
+        let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert!(!k.yield_requested());
+
+        // Second wait: count is now 0, so partition 0 blocks (Ok(false)).
+        let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert!(k.yield_requested());
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
     }
 
     #[test]
