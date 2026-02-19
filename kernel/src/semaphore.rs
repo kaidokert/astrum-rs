@@ -131,4 +131,13 @@ mod tests {
         for i in 3..7u8 { assert_eq!(p.wait(&mut t, 0, i as usize), Ok(false)); }
         assert_eq!(p.wait(&mut t, 0, 7), Err(SemaphoreError::WaitQueueFull));
     }
+    #[test]
+    fn sem_wait_returns_false_when_blocking() {
+        let mut t = tbl::<4>(1);
+        let mut p = SemaphorePool::<4, 4>::new();
+        p.add(Semaphore::new(0, 1)).unwrap();
+        let result = p.wait(&mut t, 0, 0);
+        assert_eq!(result, Ok(false), "wait() on zero-count semaphore must return Ok(false)");
+        assert_eq!(t.get(0).unwrap().state(), Waiting, "blocked partition must be in Waiting state");
+    }
 }
