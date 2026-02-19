@@ -189,6 +189,42 @@ impl KernelTestHarness {
         self.kernel.current_partition = pid as u8;
         self.dispatch(syscall, r1, r2, r3)
     }
+
+    /// Assert that a blocking syscall correctly triggered a deschedule.
+    ///
+    /// Checks the invariant: if partition `pid` is in `PartitionState::Waiting`,
+    /// then `yield_requested` must be `true`. Panics with a descriptive message
+    /// if the invariant is violated.
+    pub fn assert_blocking_triggered_deschedule(&self, pid: usize) {
+        let partition = self
+            .kernel
+            .partitions()
+            .get(pid)
+            .unwrap_or_else(|| panic!("partition {pid} does not exist"));
+        if partition.state() == PartitionState::Waiting {
+            assert!(
+                self.kernel.yield_requested,
+                "invariant violation: partition {pid} is Waiting but yield_requested is false — \
+                 the dispatch handler likely forgot to call trigger_deschedule()"
+            );
+        }
+    }
+
+    /// Assert that the syscall return value is consistent with blocking.
+    ///
+    /// If `blocked` is true, `frame.r0` must be 0 (the value returned by
+    /// `trigger_deschedule()`). Panics with a descriptive message if a
+    /// blocking path returned a non-zero value.
+    pub fn assert_return_distinguishes_blocking(&self, frame: &ExceptionFrame, blocked: bool) {
+        if blocked {
+            assert_eq!(
+                frame.r0, 0,
+                "invariant violation: syscall blocked but frame.r0 is {} instead of 0 — \
+                 the return value must come from trigger_deschedule() which always returns 0",
+                frame.r0
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -315,5 +351,100 @@ mod tests {
             0b0101,
             "target partition must have event flags set"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // assert_blocking_triggered_deschedule
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn assert_blocking_deschedule_passes_when_waiting_and_yield_requested() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        // Transition partition 0: Running → Waiting
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        h.kernel_mut().yield_requested = true;
+        // Should not panic
+        h.assert_blocking_triggered_deschedule(0);
+    }
+
+    #[test]
+    fn assert_blocking_deschedule_passes_when_not_waiting() {
+        let h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        // Partition 0 is Running, yield_requested is false — no check needed
+        h.assert_blocking_triggered_deschedule(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "forgot to call trigger_deschedule()")]
+    fn assert_blocking_deschedule_panics_when_waiting_without_yield() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        // Transition partition 0: Running → Waiting
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        // yield_requested is still false — invariant violated
+        h.assert_blocking_triggered_deschedule(0);
+    }
+
+    // ------------------------------------------------------------------
+    // assert_return_distinguishes_blocking
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn assert_return_blocking_passes_when_r0_zero_and_blocked() {
+        let h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        let frame = ExceptionFrame {
+            r0: 0,
+            r1: 0,
+            r2: 0,
+            r3: 0,
+            r12: 0,
+            lr: 0,
+            pc: 0,
+            xpsr: 0,
+        };
+        h.assert_return_distinguishes_blocking(&frame, true);
+    }
+
+    #[test]
+    fn assert_return_blocking_passes_when_not_blocked() {
+        let h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        let frame = ExceptionFrame {
+            r0: 42,
+            r1: 0,
+            r2: 0,
+            r3: 0,
+            r12: 0,
+            lr: 0,
+            pc: 0,
+            xpsr: 0,
+        };
+        // Non-blocking path — no constraint on r0
+        h.assert_return_distinguishes_blocking(&frame, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "trigger_deschedule() which always returns 0")]
+    fn assert_return_blocking_panics_when_r0_nonzero_and_blocked() {
+        let h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        let frame = ExceptionFrame {
+            r0: 1,
+            r1: 0,
+            r2: 0,
+            r3: 0,
+            r12: 0,
+            lr: 0,
+            pc: 0,
+            xpsr: 0,
+        };
+        h.assert_return_distinguishes_blocking(&frame, true);
     }
 }
