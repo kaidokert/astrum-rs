@@ -40,6 +40,33 @@ pub fn assert_partition_state_consistency(partitions: &[PartitionControlBlock]) 
 #[inline(always)]
 pub fn assert_partition_state_consistency(_partitions: &[PartitionControlBlock]) {}
 
+/// Assert that partition IDs match their array indices.
+///
+/// The partition table must maintain the invariant that `partitions[i].id() == i`
+/// for all partitions. This ensures O(1) lookup by partition ID and prevents
+/// corruption of partition identity.
+///
+/// # Panics
+///
+/// Panics if any partition's ID does not match its array index.
+#[cfg(any(debug_assertions, test))]
+pub fn assert_partition_table_integrity(partitions: &[PartitionControlBlock]) {
+    for (index, partition) in partitions.iter().enumerate() {
+        let pid = partition.id();
+        if pid as usize != index {
+            panic!(
+                "invariant violation: partition at index {} has id {} (expected id == index)",
+                index, pid
+            );
+        }
+    }
+}
+
+/// No-op version for release builds.
+#[cfg(not(any(debug_assertions, test)))]
+#[inline(always)]
+pub fn assert_partition_table_integrity(_partitions: &[PartitionControlBlock]) {}
+
 /// Assert all kernel invariants hold.
 ///
 /// In debug builds and tests, this function performs runtime validation of
@@ -147,5 +174,34 @@ mod tests {
         p2.transition(PartitionState::Running).unwrap();
         let partitions = [p0, p1, p2];
         assert_partition_state_consistency(&partitions);
+    }
+
+    #[test]
+    fn partition_table_integrity_empty_slice() {
+        // Empty partition list is valid.
+        assert_partition_table_integrity(&[]);
+    }
+
+    #[test]
+    fn partition_table_integrity_valid_ids() {
+        // Partitions with IDs matching their indices are valid.
+        let partitions = [make_pcb(0), make_pcb(1), make_pcb(2)];
+        assert_partition_table_integrity(&partitions);
+    }
+
+    #[test]
+    #[should_panic(expected = "partition at index 0 has id 1")]
+    fn partition_table_integrity_mismatch_at_index_0() {
+        // Partition at index 0 with id 1 violates the invariant.
+        let partitions = [make_pcb(1), make_pcb(1)];
+        assert_partition_table_integrity(&partitions);
+    }
+
+    #[test]
+    #[should_panic(expected = "partition at index 1 has id 5")]
+    fn partition_table_integrity_mismatch_at_index_1() {
+        // Partition at index 1 with id 5 violates the invariant.
+        let partitions = [make_pcb(0), make_pcb(5)];
+        assert_partition_table_integrity(&partitions);
     }
 }
