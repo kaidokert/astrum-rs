@@ -105,14 +105,14 @@ pub fn validate_user_ptr_dynamic<const N: usize>(
         }
     }
 
-    // Fall back to static regions (data + stack).
-    let data_region = pcb.mpu_region();
-    if in_region(data_region.base(), data_region.size()) {
-        return true;
+    // Fall back to static regions (data, stack, and peripheral regions).
+    for (base, size) in pcb.accessible_static_regions() {
+        if in_region(base, size) {
+            return true;
+        }
     }
 
-    let (stack_base, stack_size) = pcb.stack_region();
-    in_region(stack_base, stack_size)
+    false
 }
 
 /// Return all memory regions accessible to a partition, combining static and dynamic regions.
@@ -3843,6 +3843,36 @@ mod tests {
         assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x2003_0000, 16));
     }
 
+    /// Test validate_user_ptr_dynamic with peripheral regions.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn validate_ptr_dynamic_in_peripheral_region_passes() {
+        use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
+        // Stack: 0x2000_0000..0x2000_0400
+        // Data:  0x2000_1000..0x2000_2000
+        // Peripheral: 0x4000_0000..0x4000_0100 (UART)
+        let periph = [MpuRegion::new(0x4000_0000, 0x100, 0)];
+        let t = ptr_table_with_peripherals(0x2000_0000, 0x400, 0x2000_1000, 0x1000, &periph);
+        let s = DynamicStrategy::new();
+        // Add a dynamic window for P0.
+        s.add_window(0x2001_0000, 256, 0, 0).unwrap();
+
+        // Dynamic window passes.
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2001_0000, 16));
+        // Static data region passes.
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_1000, 16));
+        // Static stack region passes.
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0000, 16));
+        // Peripheral region passes.
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x4000_0000, 4));
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x4000_0080, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x4000_00F0, 16));
+        // Outside peripheral region fails.
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x4000_0100, 16));
+        // Spanning peripheral boundary fails.
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x4000_00F8, 16));
+    }
+
     // ---- all_accessible_regions tests (dynamic-mpu feature) ----
 
     /// Comprehensive test for all_accessible_regions covering static/dynamic
@@ -4282,10 +4312,11 @@ mod tests {
             .unwrap()
             .enqueue_blocked_receiver(1, u64::MAX);
         let ptr = low32_buf(0);
-        // Write two bytes of data into the buffer at an offset to avoid race
-        // with other tests. Use offset 64 within the page.
+        // TODO: Offset change (64 -> 512) to avoid test interference is outside original
+        // subtask scope; consider moving to separate commit.
+        // SAFETY: test-only, ptr.add within known-mapped page bounds.
+        let data_ptr = unsafe { ptr.add(512) };
         // SAFETY: test-only, writing to a known-mapped page.
-        let data_ptr = unsafe { ptr.add(64) };
         unsafe {
             *data_ptr = 0xAA;
             *data_ptr.add(1) = 0xBB;
@@ -4375,12 +4406,16 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         let (s, d) = connected_send_pair(&mut k);
         let ptr = low32_buf(0);
+        // TODO: Offset change (0 -> 768) and variable rename (*ptr -> *data_ptr) to avoid
+        // test interference is outside original subtask scope; consider moving to separate commit.
+        // SAFETY: test-only, ptr.add within known-mapped page bounds.
+        let data_ptr = unsafe { ptr.add(768) };
         // SAFETY: test-only, writing to a known-mapped page.
         unsafe {
-            *ptr = 0x42;
+            *data_ptr = 0x42;
         }
         let r2 = pack_r2(100, 1);
-        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
+        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, data_ptr as u32);
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0, "send should return 0 on delivery");
         assert_queued_message(&mut k, d, &[0x42]);
