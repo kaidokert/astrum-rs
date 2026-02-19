@@ -180,6 +180,46 @@ pub fn assert_schedule_indices_in_bounds(entries: &[ScheduleEntry], partition_co
 #[inline(always)]
 pub fn assert_schedule_indices_in_bounds(_entries: &[ScheduleEntry], _partition_count: usize) {}
 
+/// Assert that no two partitions have overlapping MPU regions.
+///
+/// For every pair of distinct partitions, checks that none of their
+/// accessible static regions (data, stack, peripherals) overlap in memory.
+///
+/// # Panics
+///
+/// Panics if any two regions from different partitions overlap.
+#[cfg(any(debug_assertions, test))]
+pub fn assert_no_overlapping_mpu_regions(partitions: &[PartitionControlBlock]) {
+    for i in 0..partitions.len() {
+        let regions_i = partitions[i].accessible_static_regions();
+        for j in (i + 1)..partitions.len() {
+            let regions_j = partitions[j].accessible_static_regions();
+            for &(base_a, size_a) in regions_i.iter() {
+                for &(base_b, size_b) in regions_j.iter() {
+                    if base_a < base_b.wrapping_add(size_b) && base_b < base_a.wrapping_add(size_a)
+                    {
+                        panic!(
+                            "invariant violation: partition {} region [0x{:08x}, 0x{:08x}) \
+                             overlaps partition {} region [0x{:08x}, 0x{:08x})",
+                            partitions[i].id(),
+                            base_a,
+                            base_a.wrapping_add(size_a),
+                            partitions[j].id(),
+                            base_b,
+                            base_b.wrapping_add(size_b),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// No-op version for release builds.
+#[cfg(not(any(debug_assertions, test)))]
+#[inline(always)]
+pub fn assert_no_overlapping_mpu_regions(_partitions: &[PartitionControlBlock]) {}
+
 /// Assert all kernel invariants hold.
 ///
 /// In debug builds and tests, this function performs runtime validation of
@@ -518,5 +558,89 @@ mod tests {
     #[should_panic(expected = "entry 0 index 4 >= 4")]
     fn schedule_indices_boundary_invalid() {
         assert_schedule_indices_in_bounds(&[ScheduleEntry::new(4, 100)], 4);
+    }
+
+    // ------------------------------------------------------------------
+    // assert_no_overlapping_mpu_regions
+    // ------------------------------------------------------------------
+
+    /// Build a PCB with explicit data-region base/size and stack base/size.
+    fn make_region_pcb(
+        id: u8,
+        data_base: u32,
+        data_size: u32,
+        sb: u32,
+        ss: u32,
+    ) -> PartitionControlBlock {
+        PartitionControlBlock::new(
+            id,
+            0x0800_0000,
+            sb,
+            sb.wrapping_add(ss),
+            MpuRegion::new(data_base, data_size, 0),
+        )
+    }
+
+    #[test]
+    fn no_overlap_empty_and_single() {
+        assert_no_overlapping_mpu_regions(&[]);
+        assert_no_overlapping_mpu_regions(&[make_region_pcb(
+            0,
+            0x2000_0000,
+            4096,
+            0x2000_1000,
+            1024,
+        )]);
+    }
+
+    #[test]
+    fn no_overlap_disjoint_partitions() {
+        let p0 = make_region_pcb(0, 0x2000_0000, 4096, 0x2000_1000, 1024);
+        let p1 = make_region_pcb(1, 0x2000_2000, 4096, 0x2000_3000, 1024);
+        assert_no_overlapping_mpu_regions(&[p0, p1]);
+    }
+
+    #[test]
+    fn no_overlap_adjacent_regions() {
+        // End of one == start of next — not overlapping.
+        let p0 = make_region_pcb(0, 0x2000_0000, 0x1000, 0x2000_1000, 0x1000);
+        let p1 = make_region_pcb(1, 0x2000_2000, 0x1000, 0x2000_3000, 0x1000);
+        assert_no_overlapping_mpu_regions(&[p0, p1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "overlaps partition 1")]
+    fn overlap_data_data() {
+        // Both partitions have data regions at the same address.
+        let p0 = make_region_pcb(0, 0x2000_0000, 4096, 0x2001_0000, 1024);
+        let p1 = make_region_pcb(1, 0x2000_0800, 4096, 0x2002_0000, 1024);
+        assert_no_overlapping_mpu_regions(&[p0, p1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "overlaps partition 1")]
+    fn overlap_data_stack() {
+        // Partition 0's data region overlaps partition 1's stack.
+        let p0 = make_region_pcb(0, 0x2000_0000, 0x2000, 0x2001_0000, 1024);
+        let p1 = make_region_pcb(1, 0x2002_0000, 4096, 0x2000_0800, 1024);
+        assert_no_overlapping_mpu_regions(&[p0, p1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "overlaps partition 1")]
+    fn overlap_peripheral() {
+        let p0 = make_region_pcb(0, 0x2000_0000, 4096, 0x2000_1000, 1024)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
+        let p1 = make_region_pcb(1, 0x2000_2000, 4096, 0x2000_3000, 1024)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0800, 4096, 0)]);
+        assert_no_overlapping_mpu_regions(&[p0, p1]);
+    }
+
+    #[test]
+    fn no_overlap_three_disjoint_partitions() {
+        let p0 = make_region_pcb(0, 0x2000_0000, 0x1000, 0x2000_1000, 0x1000);
+        let p1 = make_region_pcb(1, 0x2000_2000, 0x1000, 0x2000_3000, 0x1000);
+        let p2 = make_region_pcb(2, 0x2000_4000, 0x1000, 0x2000_5000, 0x1000);
+        assert_no_overlapping_mpu_regions(&[p0, p1, p2]);
     }
 }
