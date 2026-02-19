@@ -20,6 +20,9 @@ pub trait TickCounterOps {
 /// Monotonic tick counter incremented on every SysTick interrupt.
 pub struct TickCounter {
     ticks: u64,
+    /// Previous tick value seen by `assert_monotonic`, for backward-jump detection.
+    #[cfg(any(debug_assertions, test))]
+    prev_check_tick: u64,
 }
 
 impl Default for TickCounter {
@@ -31,7 +34,11 @@ impl Default for TickCounter {
 impl TickCounter {
     /// Create a new counter starting at zero.
     pub const fn new() -> Self {
-        Self { ticks: 0 }
+        Self {
+            ticks: 0,
+            #[cfg(any(debug_assertions, test))]
+            prev_check_tick: 0,
+        }
     }
 
     /// Increment the counter by one tick.
@@ -48,6 +55,22 @@ impl TickCounter {
     pub fn sync(&mut self, value: u64) {
         self.ticks = value;
     }
+
+    /// Panic if the tick counter has gone backwards since the last check.
+    #[cfg(any(debug_assertions, test))]
+    pub fn assert_monotonic(&mut self) {
+        assert!(
+            self.ticks >= self.prev_check_tick,
+            "tick counter went backwards: {} < {}",
+            self.ticks,
+            self.prev_check_tick,
+        );
+        self.prev_check_tick = self.ticks;
+    }
+
+    /// Release-build no-op.
+    #[cfg(not(any(debug_assertions, test)))]
+    pub fn assert_monotonic(&mut self) {}
 }
 
 impl TickCounterOps for TickCounter {
@@ -425,7 +448,10 @@ mod tests {
 
     #[test]
     fn tick_counter_wraps_at_max() {
-        let mut tc = TickCounter { ticks: u64::MAX };
+        let mut tc = TickCounter {
+            ticks: u64::MAX,
+            prev_check_tick: 0,
+        };
         tc.increment();
         assert_eq!(tc.get(), 0);
     }
@@ -439,6 +465,54 @@ mod tests {
         assert_eq!(tc.get(), 0);
         tc.sync(u64::MAX);
         assert_eq!(tc.get(), u64::MAX);
+    }
+
+    #[test]
+    fn assert_monotonic_passes_at_construction() {
+        let mut tc = TickCounter::new();
+        tc.assert_monotonic(); // both ticks and prev_check_tick are 0
+        assert_eq!(tc.prev_check_tick, 0);
+    }
+
+    #[test]
+    fn assert_monotonic_passes_on_normal_increments() {
+        let mut tc = TickCounter::new();
+        tc.increment();
+        tc.assert_monotonic();
+        assert_eq!(tc.prev_check_tick, 1);
+        tc.increment();
+        tc.increment();
+        tc.assert_monotonic();
+        assert_eq!(tc.prev_check_tick, 3);
+    }
+
+    #[test]
+    fn assert_monotonic_passes_on_equal_tick() {
+        let mut tc = TickCounter::new();
+        tc.increment();
+        tc.assert_monotonic();
+        // Call again without increment — ticks == prev_check_tick, should pass
+        tc.assert_monotonic();
+        assert_eq!(tc.prev_check_tick, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "tick counter went backwards")]
+    fn assert_monotonic_panics_on_backward_sync() {
+        let mut tc = TickCounter::new();
+        tc.sync(100);
+        tc.assert_monotonic();
+        // Sync backwards
+        tc.sync(50);
+        tc.assert_monotonic(); // should panic
+    }
+
+    #[test]
+    fn assert_monotonic_default_starts_at_zero() {
+        let mut tc = TickCounter::default();
+        assert_eq!(tc.prev_check_tick, 0);
+        tc.assert_monotonic();
+        assert_eq!(tc.prev_check_tick, 0);
     }
 
     #[cfg(feature = "dynamic-mpu")]
