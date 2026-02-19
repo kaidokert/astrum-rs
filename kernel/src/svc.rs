@@ -297,7 +297,7 @@ impl YieldResult for ScheduleEvent {
     }
 }
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
-use crate::mutex::MutexPool;
+use crate::mutex::{MutexError, MutexPool};
 use crate::partition::{ConfigError, PartitionConfig, PartitionState, PartitionTable};
 use crate::queuing::{QueuingPortPool, QueuingPortStatus, SendQueuingOutcome};
 use crate::sampling::SamplingPortPool;
@@ -1139,12 +1139,36 @@ where
     }
 
     // -------------------------------------------------------------------------
+    // Runtime alignment assertion
+    // -------------------------------------------------------------------------
+
+    /// Assert that `self` is properly aligned at runtime.
+    ///
+    /// This check catches linker script or manual placement errors that could
+    /// misalign the kernel storage. Compile-time `align_of::<T>()` checks only
+    /// verify type requirements, not whether the linker or manual placement
+    /// actually honored those requirements for the specific memory symbol.
+    ///
+    /// In debug builds, this panics if the kernel instance is misaligned.
+    /// In release builds, this compiles to nothing.
+    #[inline(always)]
+    pub fn debug_assert_self_aligned(&self) {
+        debug_assert!(
+            (self as *const Self as usize).is_multiple_of(core::mem::align_of::<Self>()),
+            "Kernel<C> instance at {:p} is not aligned to {} bytes",
+            self as *const Self,
+            core::mem::align_of::<Self>()
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // Facade methods delegating to self.sync (SyncPools)
     // -------------------------------------------------------------------------
 
     /// Returns a shared reference to the semaphore pool.
     #[inline(always)]
     pub fn semaphores(&self) -> &<C::Sync as SyncOps>::SemPool {
+        self.debug_assert_self_aligned();
         self.sync.semaphores()
     }
 
@@ -1365,8 +1389,15 @@ where
                     .mutexes_mut()
                     .lock(pt, frame.r1 as usize, frame.r2 as usize)
                 {
-                    Ok(()) => 0,
-                    Err(_) => SvcError::InvalidResource.to_u32(),
+                    Ok(acquired) => u32::from(acquired),
+                    Err(e) => match e {
+                        MutexError::InvalidMutex => SvcError::InvalidResource.to_u32(),
+                        MutexError::InvalidPartition => SvcError::InvalidPartition.to_u32(),
+                        MutexError::WaitQueueFull => SvcError::WaitQueueFull.to_u32(),
+                        MutexError::AlreadyOwned => SvcError::OperationFailed.to_u32(),
+                        MutexError::NotOwner => SvcError::OperationFailed.to_u32(),
+                        MutexError::Transition(_) => SvcError::TransitionFailed.to_u32(),
+                    },
                 }
             }
             Some(SyscallId::MutexUnlock) => {
@@ -1377,7 +1408,14 @@ where
                     .unlock(pt, frame.r1 as usize, frame.r2 as usize)
                 {
                     Ok(()) => 0,
-                    Err(_) => SvcError::InvalidResource.to_u32(),
+                    Err(e) => match e {
+                        MutexError::InvalidMutex => SvcError::InvalidResource.to_u32(),
+                        MutexError::InvalidPartition => SvcError::InvalidPartition.to_u32(),
+                        MutexError::WaitQueueFull => SvcError::WaitQueueFull.to_u32(),
+                        MutexError::AlreadyOwned => SvcError::OperationFailed.to_u32(),
+                        MutexError::NotOwner => SvcError::OperationFailed.to_u32(),
+                        MutexError::Transition(_) => SvcError::TransitionFailed.to_u32(),
+                    },
                 }
             }
             Some(SyscallId::MsgSend) => validated_ptr!(self, frame.r3, C::QM, {
@@ -2601,6 +2639,35 @@ mod tests {
         k
     }
 
+    // -------------------------------------------------------------------------
+    // Runtime alignment assertion tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn debug_assert_self_aligned_does_not_panic_for_aligned_kernel() {
+        // Create a kernel on the stack - Rust guarantees proper alignment.
+        let k = kernel(0, 0, 0);
+        // This should not panic since the kernel is properly aligned.
+        k.debug_assert_self_aligned();
+    }
+
+    #[test]
+    fn debug_assert_self_aligned_verifies_runtime_address() {
+        use core::mem::align_of;
+        let k = kernel(0, 0, 0);
+        // Verify the actual address is aligned (same check the method performs).
+        let addr = &k as *const _ as usize;
+        let required = align_of::<Kernel<TestConfig>>();
+        assert!(
+            addr.is_multiple_of(required),
+            "Kernel at 0x{:x} not aligned to {} bytes",
+            addr,
+            required
+        );
+        // The method should succeed for this aligned instance.
+        k.debug_assert_self_aligned();
+    }
+
     #[test]
     fn yield_returns_zero_and_preserves_regs() {
         let mut ef = frame(SYS_YIELD, 0xAA, 0xBB);
@@ -2858,7 +2925,7 @@ mod tests {
         let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 0);
+        assert_eq!(ef.r0, 1); // 1 = acquired immediately
         assert_eq!(k.mutexes().owner(0), Ok(Some(0)));
         let mut ef = frame(crate::syscall::SYS_MTX_UNLOCK, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.

@@ -46,16 +46,21 @@ impl<const S: usize, const W: usize> MutexPool<S, W> {
         parts: &mut PartitionTable<N>,
         id: usize,
         caller: usize,
-    ) -> Result<(), MutexError> {
+    ) -> Result<bool, MutexError> {
         self.slot(id)?;
-        if self.owners[id] == Some(caller as u8) {
+        // Validate caller fits in u8 before any cast (partition IDs are stored as u8)
+        let caller_u8 = u8::try_from(caller).map_err(|_| MutexError::InvalidPartition)?;
+        // Use .get()/.get_mut() per Panic-Free Policy even though slot() validated bounds
+        let owner = self.owners.get(id).ok_or(MutexError::InvalidMutex)?;
+        if *owner == Some(caller_u8) {
             return Err(MutexError::AlreadyOwned);
         }
-        if self.owners[id].is_none() {
-            self.owners[id] = Some(caller as u8);
-            return Ok(());
+        if owner.is_none() {
+            *self.owners.get_mut(id).ok_or(MutexError::InvalidMutex)? = Some(caller_u8);
+            return Ok(true);
         }
-        if self.queues[id].is_full() {
+        let queue = self.queues.get(id).ok_or(MutexError::InvalidMutex)?;
+        if queue.is_full() {
             return Err(MutexError::WaitQueueFull);
         }
         parts
@@ -63,8 +68,12 @@ impl<const S: usize, const W: usize> MutexPool<S, W> {
             .ok_or(MutexError::InvalidPartition)?
             .transition(PartitionState::Waiting)?;
         // push cannot fail: we checked is_full above and hold &mut self.
-        let _ = self.queues[id].push(caller as u8);
-        Ok(())
+        let _ = self
+            .queues
+            .get_mut(id)
+            .ok_or(MutexError::InvalidMutex)?
+            .push(caller_u8);
+        Ok(false)
     }
     pub fn unlock<const N: usize>(
         &mut self,
@@ -73,18 +82,27 @@ impl<const S: usize, const W: usize> MutexPool<S, W> {
         caller: usize,
     ) -> Result<(), MutexError> {
         self.slot(id)?;
-        if self.owners[id] != Some(caller as u8) {
+        // Validate caller fits in u8 before any cast (partition IDs are stored as u8)
+        let caller_u8 = u8::try_from(caller).map_err(|_| MutexError::InvalidPartition)?;
+        // Use .get()/.get_mut() per Panic-Free Policy even though slot() validated bounds
+        let owner = self.owners.get(id).ok_or(MutexError::InvalidMutex)?;
+        if *owner != Some(caller_u8) {
             return Err(MutexError::NotOwner);
         }
-        if let Some(pid) = self.queues[id].pop_front() {
+        if let Some(pid) = self
+            .queues
+            .get_mut(id)
+            .ok_or(MutexError::InvalidMutex)?
+            .pop_front()
+        {
             parts
                 .get_mut(pid as usize)
                 .ok_or(MutexError::InvalidPartition)?
                 .transition(PartitionState::Ready)?;
-            self.owners[id] = Some(pid);
+            *self.owners.get_mut(id).ok_or(MutexError::InvalidMutex)? = Some(pid);
             return Ok(());
         }
-        self.owners[id] = None;
+        *self.owners.get_mut(id).ok_or(MutexError::InvalidMutex)? = None;
         Ok(())
     }
 }
@@ -105,7 +123,7 @@ mod tests {
         assert_eq!(p.lock(&mut t, 99, 0), Err(MutexError::InvalidMutex));
         assert_eq!(p.unlock(&mut t, 99, 0), Err(MutexError::InvalidMutex));
         assert_eq!(p.unlock(&mut t, 0, 0), Err(MutexError::NotOwner));
-        p.lock(&mut t, 0, 0).unwrap();
+        assert_eq!(p.lock(&mut t, 0, 0), Ok(true));
         assert_eq!(p.owner(0), Ok(Some(0)));
         assert_eq!(p.lock(&mut t, 0, 0), Err(MutexError::AlreadyOwned));
         assert_eq!(p.unlock(&mut t, 0, 1), Err(MutexError::NotOwner));
@@ -114,9 +132,9 @@ mod tests {
     }
     #[test] fn wait_queue_transfer() {
         let (mut t, mut p) = (tbl::<4>(3), MutexPool::<1, 4>::new(1));
-        p.lock(&mut t, 0, 0).unwrap();
-        p.lock(&mut t, 0, 1).unwrap(); assert_eq!(t.get(1).unwrap().state(), Waiting);
-        p.lock(&mut t, 0, 2).unwrap(); assert_eq!(t.get(2).unwrap().state(), Waiting);
+        assert_eq!(p.lock(&mut t, 0, 0), Ok(true));
+        assert_eq!(p.lock(&mut t, 0, 1), Ok(false)); assert_eq!(t.get(1).unwrap().state(), Waiting);
+        assert_eq!(p.lock(&mut t, 0, 2), Ok(false)); assert_eq!(t.get(2).unwrap().state(), Waiting);
         p.unlock(&mut t, 0, 0).unwrap();
         assert_eq!(p.owner(0), Ok(Some(1)));
         assert_eq!(t.get(1).unwrap().state(), Ready);
@@ -127,8 +145,8 @@ mod tests {
     }
     #[test] fn wait_queue_full() {
         let (mut t, mut p) = (tbl::<8>(6), MutexPool::<1, 4>::new(1));
-        p.lock(&mut t, 0, 0).unwrap();
-        for i in 1..5usize { p.lock(&mut t, 0, i).unwrap(); }
+        assert_eq!(p.lock(&mut t, 0, 0), Ok(true));
+        for i in 1..5usize { assert_eq!(p.lock(&mut t, 0, i), Ok(false)); }
         assert_eq!(p.lock(&mut t, 0, 5), Err(MutexError::WaitQueueFull));
     }
 }
