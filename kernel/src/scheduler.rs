@@ -1,21 +1,9 @@
 //! Static schedule table for ARINC 653-style partition scheduling.
 //!
-//! # State-Agnostic Scheduling
-//!
 //! The [`ScheduleTable`] returns partition IDs unconditionally, without
-//! checking [`PartitionState`](crate::partition::PartitionState). This is
-//! intentional: state checking happens in the harness/tick handler, not here.
-//!
-//! When a partition is in `Waiting` state:
-//! - The schedule table still returns that partition's ID on its slot
-//! - The harness triggers PendSV, which switches context to the partition
-//! - The partition immediately re-enters the kernel (yields) because it's
-//!   blocked on an IPC primitive
-//! - This "busy yield" continues until the blocking condition clears or
-//!   the slot expires
-//!
-//! This design keeps the scheduler simple and stateless. The harness and
-//! IPC primitives handle the complexity of blocked partitions.
+//! checking [`PartitionState`](crate::partition::PartitionState). State
+//! checking is performed by [`Kernel::advance_schedule_tick`](crate::svc::Kernel::advance_schedule_tick),
+//! which skips partitions in `Waiting` state (returning `ScheduleEvent::None`).
 
 /// A single slot in the schedule table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +36,11 @@ pub enum ScheduleEvent {
     /// System window for kernel bottom-half processing (dynamic-mpu only).
     #[cfg(feature = "dynamic-mpu")]
     SystemWindow,
+    /// Idle slot (reserved for future use).
+    ///
+    /// **Note:** Currently unused. When the target partition is `Waiting`,
+    /// `advance_schedule_tick` returns `ScheduleEvent::None` instead.
+    Idle,
     /// No event (tick within current slot).
     None,
 }

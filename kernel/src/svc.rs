@@ -2119,16 +2119,32 @@ where
             }
         }
         let event = self.schedule_mut().advance_tick();
-        if let ScheduleEvent::PartitionSwitch(pid) = event {
-            self.active_partition = Some(pid);
-            self.set_next_partition(pid);
+        match event {
+            ScheduleEvent::PartitionSwitch(pid) => {
+                // Check if target partition is ready to run.
+                // If Waiting (blocked on IPC), skip the switch entirely.
+                let is_waiting = self
+                    .partitions()
+                    .get(pid as usize)
+                    .map(|pcb| pcb.state() == PartitionState::Waiting)
+                    .unwrap_or(false);
+                if is_waiting {
+                    // Don't update active_partition or next_partition.
+                    // Return None to indicate no switch occurred.
+                    return ScheduleEvent::None;
+                }
+                self.active_partition = Some(pid);
+                self.set_next_partition(pid);
+                event
+            }
+            #[cfg(feature = "dynamic-mpu")]
+            ScheduleEvent::SystemWindow => {
+                self.ticks_since_bottom_half = 0;
+                self.bottom_half_stale = false;
+                event
+            }
+            _ => event,
         }
-        #[cfg(feature = "dynamic-mpu")]
-        if matches!(event, ScheduleEvent::SystemWindow) {
-            self.ticks_since_bottom_half = 0;
-            self.bottom_half_stale = false;
-        }
-        event
     }
 
     /// Force-advance the schedule to the next slot, forfeiting remaining
@@ -5689,6 +5705,48 @@ mod tests {
         assert_eq!(k.tick().get(), 1);
         k.advance_schedule_tick();
         assert_eq!(k.tick().get(), 2);
+    }
+
+    /// Tests advance_schedule_tick skips Waiting partitions (returns None,
+    /// doesn't update active_partition or next_partition).
+    #[test]
+    fn advance_schedule_tick_skips_waiting_partition() {
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+        let (initial_next, initial_active) = (k.next_partition(), k.active_partition());
+
+        // Advance to boundary before P1's slot
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+        // Transition P1 to Waiting (Ready -> Running -> Waiting)
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // Tick that would switch to P1 returns None instead
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(k.active_partition(), initial_active);
+        assert_eq!(k.next_partition(), initial_next);
+    }
+
+    /// Tests advance_schedule_tick switches to Ready partitions normally.
+    #[test]
+    fn advance_schedule_tick_switches_to_ready_partition() {
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
+
+        // Advance to P1's slot boundary
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+        // Switch to P1 (Ready partition)
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(k.active_partition(), Some(1));
     }
 
     #[test]
