@@ -79,45 +79,45 @@ pub trait PortsOps {
 ///
 /// [`Kernel`]: crate::svc::Kernel
 pub trait KernelConfig {
-    /// Maximum number of partitions.
+    /// Maximum number of partitions (no default - must be specified explicitly).
     const N: usize;
     /// Schedule table capacity (number of schedule entries).
-    const SCHED: usize;
+    const SCHED: usize = 4;
     /// Stack word count per partition (256 = 1024 bytes for MPU alignment).
-    const STACK_WORDS: usize;
+    const STACK_WORDS: usize = 256;
     /// Semaphore pool capacity.
-    const S: usize;
+    const S: usize = 1;
     /// Semaphore wait-queue depth.
-    const SW: usize;
+    const SW: usize = 1;
     /// Mutex pool capacity.
-    const MS: usize;
+    const MS: usize = 1;
     /// Mutex wait-queue depth.
-    const MW: usize;
+    const MW: usize = 1;
     /// Message-queue pool capacity (also used for queuing ports).
-    const QS: usize;
+    const QS: usize = 1;
     /// Message-queue depth (messages per queue).
-    const QD: usize;
+    const QD: usize = 1;
     /// Maximum message size in bytes (message queues & queuing ports).
-    const QM: usize;
+    const QM: usize = 1;
     /// Message-queue / queuing-port wait-queue depth.
-    const QW: usize;
+    const QW: usize = 1;
     /// Sampling-port pool capacity.
-    const SP: usize;
+    const SP: usize = 1;
     /// Sampling-port maximum message size in bytes.
-    const SM: usize;
+    const SM: usize = 64;
     /// Blackboard pool capacity.
-    const BS: usize;
+    const BS: usize = 1;
     /// Blackboard maximum message size in bytes.
-    const BM: usize;
+    const BM: usize = 64;
     /// Blackboard wait-queue depth.
-    const BW: usize;
+    const BW: usize = 1;
 
     /// Buffer pool slot count (only used with `dynamic-mpu` feature).
     #[cfg(feature = "dynamic-mpu")]
-    const BP: usize;
+    const BP: usize = 1;
     /// Buffer slot size in bytes (only used with `dynamic-mpu` feature).
     #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize;
+    const BZ: usize = 32;
     /// Device registry capacity (only used with `dynamic-mpu` feature).
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
@@ -380,32 +380,10 @@ mod tests {
         let _ = compute_systick_reload(100, 1);
     }
 
-    /// Minimal config using all default priority values.
+    /// Minimal config using all default values (only N and type aliases required).
     struct DefaultPriority;
     impl KernelConfig for DefaultPriority {
-        const N: usize = 2;
-        const SCHED: usize = 4;
-        const STACK_WORDS: usize = 256;
-        const S: usize = 1;
-        const SW: usize = 1;
-        const MS: usize = 1;
-        const MW: usize = 1;
-        const QS: usize = 1;
-        const QD: usize = 1;
-        const QM: usize = 1;
-        const QW: usize = 1;
-        const SP: usize = 1;
-        const SM: usize = 1;
-        const BS: usize = 1;
-        const BM: usize = 1;
-        const BW: usize = 1;
-        #[cfg(feature = "dynamic-mpu")]
-        const BP: usize = 1;
-        #[cfg(feature = "dynamic-mpu")]
-        const BZ: usize = 32;
-        #[cfg(feature = "dynamic-mpu")]
-        const DR: usize = 4;
-
+        const N: usize = 2; // N has no default - must be specified
         type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
         type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
         type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
@@ -413,43 +391,17 @@ mod tests {
             PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
     }
 
-    /// Config that overrides priorities but keeps valid ordering.
+    /// Config that overrides priorities (uses default resource pool constants).
     struct CustomPriority;
     impl KernelConfig for CustomPriority {
         const N: usize = 2;
-        const SCHED: usize = 4;
-        const STACK_WORDS: usize = 256;
-        const S: usize = 1;
-        const SW: usize = 1;
-        const MS: usize = 1;
-        const MW: usize = 1;
-        const QS: usize = 1;
-        const QD: usize = 1;
-        const QM: usize = 1;
-        const QW: usize = 1;
-        const SP: usize = 1;
-        const SM: usize = 1;
-        const BS: usize = 1;
-        const BM: usize = 1;
-        const BW: usize = 1;
-        #[cfg(feature = "dynamic-mpu")]
-        const BP: usize = 1;
-        #[cfg(feature = "dynamic-mpu")]
-        const BZ: usize = 32;
-        #[cfg(feature = "dynamic-mpu")]
-        const DR: usize = 4;
-
         const SVCALL_PRIORITY: u8 = 0x00;
         const PENDSV_PRIORITY: u8 = 0xE0;
         const SYSTICK_PRIORITY: u8 = 0xC0;
-        // Custom timing: 10 ms tick at 80 MHz (SYSTICK_CYCLES auto-calculated)
-        const CORE_CLOCK_HZ: u32 = 80_000_000;
+        const CORE_CLOCK_HZ: u32 = 80_000_000; // 10 ms tick at 80 MHz
         const TICK_PERIOD_US: u32 = 10_000;
-
         #[cfg(feature = "partition-debug")]
         const DEBUG_BUFFER_SIZE: usize = 512;
-
-        // Custom system window gap threshold for testing
         #[cfg(feature = "dynamic-mpu")]
         const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 = 200;
 
