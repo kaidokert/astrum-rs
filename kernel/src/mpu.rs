@@ -103,6 +103,36 @@ pub fn is_unprivileged_accessible(ap: u32) -> bool {
     ap == AP_RO_RO || ap == AP_FULL_ACCESS
 }
 
+/// Extract unprivileged-accessible regions from a slice of (RBAR, RASR) pairs.
+///
+/// For each pair, the function checks that the region is enabled and that the
+/// AP field grants unprivileged access (`AP_RO_RO` or `AP_FULL_ACCESS`).
+/// Qualifying regions are returned as `(base_address, size_in_bytes)` tuples.
+///
+/// Returns at most 8 entries (matching the maximum number of ARMv7-M MPU
+/// regions).  Regions whose size overflows `u32` (4 GiB, SIZE=31) are skipped.
+pub fn unprivileged_regions_from_pairs(pairs: &[(u32, u32)]) -> heapless::Vec<(u32, u32), 8> {
+    let mut result = heapless::Vec::new();
+    for &(rbar, rasr) in pairs {
+        if !decode_rasr_enabled(rasr) {
+            continue;
+        }
+        if !is_unprivileged_accessible(decode_rasr_ap(rasr)) {
+            continue;
+        }
+        let size = match decode_rasr_size_bytes(rasr) {
+            Some(s) => s,
+            None => continue,
+        };
+        let base = decode_rbar_base(rbar);
+        // Vec::push returns Err if full; silently stop — caller provided >8 pairs.
+        if result.push((base, size)).is_err() {
+            break;
+        }
+    }
+    result
+}
+
 /// Write RBAR and RASR to configure a single MPU region.
 pub fn configure_region(mpu: &cortex_m::peripheral::MPU, rbar: u32, rasr: u32) {
     // SAFETY: Writing to the MPU RBAR (0xE000_ED9C) and RASR (0xE000_EDA0)
@@ -876,5 +906,74 @@ mod tests {
         assert!(decode_rasr_enabled(rasr));
         assert_eq!(decode_rasr_size_bytes(rasr), Some(4096));
         assert!(is_unprivileged_accessible(decode_rasr_ap(rasr)));
+    }
+
+    // ------------------------------------------------------------------
+    // unprivileged_regions_from_pairs
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn unprivileged_regions_from_partition() {
+        let regions = default_regions();
+        let result = unprivileged_regions_from_pairs(&regions);
+        // Only code (AP_RO_RO) and data (AP_FULL_ACCESS) should pass.
+        // Background (AP_NO_ACCESS) and stack guard (AP_NO_ACCESS) are filtered.
+        assert_eq!(result.len(), 2);
+        // Region 1 = code: base=0x0, size=4096
+        assert_eq!(result[0], (0x0000_0000, 4096));
+        // Region 2 = data: base=0x2000_0000, size=4096
+        assert_eq!(result[1], (0x2000_0000, 4096));
+    }
+
+    #[test]
+    fn unprivileged_regions_deny_all_is_empty() {
+        let regions = deny_all_regions();
+        let result = unprivileged_regions_from_pairs(&regions);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn unprivileged_regions_skips_disabled() {
+        let pairs = [(0u32, 0u32)]; // RASR=0 → disabled
+        let result = unprivileged_regions_from_pairs(&pairs);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn unprivileged_regions_skips_priv_only() {
+        let rbar = build_rbar(0x2000_0000, 0).unwrap();
+        let rasr_priv_rw = build_rasr(11, AP_PRIV_RW, false, (false, false, false));
+        let rasr_priv_ro = build_rasr(11, AP_PRIV_RO, false, (false, false, false));
+        let pairs = [(rbar, rasr_priv_rw), (rbar, rasr_priv_ro)];
+        let result = unprivileged_regions_from_pairs(&pairs);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn unprivileged_regions_includes_both_ap_variants() {
+        let rbar_a = build_rbar(0x0800_0000, 0).unwrap();
+        let rasr_ro = build_rasr(11, AP_RO_RO, false, (false, false, false));
+        let rbar_b = build_rbar(0x2000_0000, 1).unwrap();
+        let rasr_rw = build_rasr(7, AP_FULL_ACCESS, true, (true, true, false));
+        let pairs = [(rbar_a, rasr_ro), (rbar_b, rasr_rw)];
+        let result = unprivileged_regions_from_pairs(&pairs);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], (0x0800_0000, 4096));
+        assert_eq!(result[1], (0x2000_0000, 256));
+    }
+
+    #[test]
+    fn unprivileged_regions_skips_4gib_overflow() {
+        // SIZE=31 → 4 GiB overflows u32; decode_rasr_size_bytes returns None.
+        let rbar = build_rbar(0x0000_0000, 0).unwrap();
+        let rasr = build_rasr(31, AP_FULL_ACCESS, false, (false, false, false));
+        let result = unprivileged_regions_from_pairs(&[(rbar, rasr)]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn unprivileged_regions_empty_input() {
+        let result = unprivileged_regions_from_pairs(&[]);
+        assert!(result.is_empty());
     }
 }
