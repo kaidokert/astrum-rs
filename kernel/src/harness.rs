@@ -152,8 +152,8 @@ macro_rules! _unified_handle_yield {
 ///
 /// # MPU Alignment Constraint
 ///
-/// The stack alignment is hardcoded to 1024 bytes, which requires `$SW == 256`
-/// (256 words × 4 bytes = 1024 bytes). This is enforced by a compile-time
+/// The stack alignment is hardcoded to 4096 bytes, which requires `$SW <= 1024`
+/// (1024 words × 4 bytes = 4096 bytes). This is enforced by a compile-time
 /// assertion. Supporting variable stack sizes would require either:
 /// - A procedural macro that can compute alignment from the size parameter
 /// - Multiple macro variants for different power-of-two sizes

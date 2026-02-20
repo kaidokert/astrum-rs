@@ -108,17 +108,17 @@ use crate::svc::Kernel;
 /// The `init_kernel_state` function includes a compile-time assertion to verify
 /// that the actual kernel size does not exceed this limit.
 ///
-/// Current allocation: 16 KiB, sufficient for typical configurations with
-/// up to 4 partitions (256-word stacks each), 8 schedule entries, and
+/// Current allocation: 32 KiB, sufficient for typical configurations with
+/// up to 4 partitions (1024-word stacks each), 8 schedule entries, and
 /// moderate IPC pool sizes. For larger configurations, increase this value
 /// and ensure the target has sufficient RAM.
-pub const MAX_KERNEL_SIZE: usize = 16 * 1024;
+pub const MAX_KERNEL_SIZE: usize = 32 * 1024;
 
 /// Required alignment for kernel state storage in bytes.
 ///
 /// This must match the alignment requirement of `Kernel<C>`, which contains
-/// `AlignedStack<SW>` fields that require 1024-byte alignment.
-pub const KERNEL_ALIGNMENT: usize = 1024;
+/// `AlignedStack<SW>` fields that require 4096-byte alignment.
+pub const KERNEL_ALIGNMENT: usize = 4096;
 
 /// Check pointer alignment to [`KERNEL_ALIGNMENT`]. Returns `Err(offset)` if misaligned.
 #[inline]
@@ -148,7 +148,7 @@ pub static mut UNIFIED_KERNEL_STORAGE: MaybeUninit<KernelStorageBuffer> = MaybeU
 /// The actual `Kernel<C>` is written into this buffer at initialization time.
 // Note: #[repr(align(...))] requires a literal, so we cannot use KERNEL_ALIGNMENT directly.
 // The const assertion below verifies this value matches KERNEL_ALIGNMENT at compile time.
-#[repr(C, align(1024))]
+#[repr(C, align(4096))]
 pub struct KernelStorageBuffer {
     _data: [u8; MAX_KERNEL_SIZE],
 }
@@ -255,7 +255,7 @@ where
 /// - Compile-time assertion fails if `size_of::<Kernel<C>>()` exceeds
 ///   [`MAX_KERNEL_SIZE`].
 /// - Runtime panic if `UNIFIED_KERNEL_STORAGE` address is not aligned to
-///   [`KERNEL_ALIGNMENT`] (1024 bytes). The panic message includes the actual
+///   [`KERNEL_ALIGNMENT`] (4096 bytes). The panic message includes the actual
 ///   alignment offset.
 #[allow(dead_code)]
 pub unsafe fn init_kernel_state<C: KernelConfig>(kernel: Kernel<C>)
@@ -318,7 +318,7 @@ where
     // The pointer cast from *mut KernelStorageBuffer to *mut Kernel<C> is valid
     // because init_kernel_state() wrote a Kernel<C> at this location, and
     // KernelStorageBuffer has sufficient size (MAX_KERNEL_SIZE, verified at
-    // compile time in init_kernel_state) and alignment (1024 bytes via repr(C, align(1024))).
+    // compile time in init_kernel_state) and alignment (4096 bytes via repr(C, align(4096))).
     // The caller must ensure init_kernel_state() was called before dereferencing
     // the returned pointer, and must provide proper synchronization for access.
     addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>
@@ -554,7 +554,7 @@ mod tests {
     // tests would require making panic-halt optional or restructuring the crate.
     #[test]
     fn init_kernel_state_at_succeeds_with_aligned_pointer() {
-        #[repr(C, align(1024))]
+        #[repr(C, align(4096))]
         struct AlignedStorage {
             data: MaybeUninit<[u8; MAX_KERNEL_SIZE]>,
         }
@@ -570,17 +570,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "offset 512 from required 1024 byte alignment")]
+    #[should_panic(expected = "offset 512 from required 4096 byte alignment")]
     fn init_kernel_state_at_panics_with_misaligned_pointer() {
-        #[repr(C, align(1024))]
+        #[repr(C, align(4096))]
         struct AlignedStorage {
-            data: MaybeUninit<[u8; MAX_KERNEL_SIZE + 1024]>,
+            data: MaybeUninit<[u8; MAX_KERNEL_SIZE + 4096]>,
         }
         let mut storage = AlignedStorage {
             data: MaybeUninit::uninit(),
         };
         let aligned_ptr = storage.data.as_mut_ptr() as *mut u8;
-        // SAFETY: aligned_ptr has MAX_KERNEL_SIZE + 1024 bytes; offset 512 is in bounds.
+        // SAFETY: aligned_ptr has MAX_KERNEL_SIZE + 4096 bytes; offset 512 is in bounds.
         let misaligned_ptr = unsafe { aligned_ptr.add(512) } as *mut Kernel<TestConfig>;
         let kernel = create_test_kernel();
         // SAFETY: Testing panic on misaligned pointer; memory is valid but misaligned.

@@ -6,7 +6,7 @@ MEMORY
 
 /* Kernel state section — reserves a fixed address for assembly access.
  * NOLOAD: not initialized by the C runtime (kernel initializes it).
- * ALIGN(1024): must match repr(C, align(1024)) on KernelStorageBuffer so
+ * ALIGN(4096): must match repr(C, align(4096)) on KernelStorageBuffer so
  *   the linker-placed section satisfies the Rust type's alignment requirement.
  *
  * Symbols defined:
@@ -18,7 +18,7 @@ MEMORY
  */
 SECTIONS
 {
-  .kernel_state (NOLOAD) : ALIGN(1024)
+  .kernel_state (NOLOAD) : ALIGN(4096)
   {
     __kernel_state_start = .;
     KEEP(*(.kernel_state .kernel_state.*))
