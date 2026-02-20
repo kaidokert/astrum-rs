@@ -564,7 +564,7 @@ macro_rules! define_unified_kernel {
                 const BZ: usize = $bz;
             )?
 
-            type Core = $crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }>;
+            type Core = $crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }, $crate::partition_core::AlignedStack1K>;
             type Sync = $crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
             type Msg = $crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
             type Ports = $crate::port_pools::PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
@@ -2507,6 +2507,7 @@ mod tests {
     use crate::config::KernelConfig;
     use crate::message::MessageQueue;
     use crate::partition::{MpuRegion, PartitionControlBlock};
+    use crate::partition_core::{AlignedStack1K, PartitionCore};
     use crate::scheduler::ScheduleEntry;
     use crate::semaphore::Semaphore;
     use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_YIELD};
@@ -2535,11 +2536,7 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         const BZ: usize = 32;
 
-        type Core = crate::partition_core::PartitionCore<
-            { Self::N },
-            { Self::SCHED },
-            { Self::STACK_WORDS },
-        >;
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
         type Sync =
             crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
         type Msg =
@@ -6613,7 +6610,11 @@ mod tests {
             #[cfg(feature = "dynamic-mpu")]
             const BZ: usize = 32;
 
-            type Core = crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }>;
+            type Core = crate::partition_core::PartitionCore<
+                { Self::N },
+                { Self::SCHED },
+                crate::partition_core::AlignedStack1K,
+            >;
             type Sync =
                 crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
             type Msg =

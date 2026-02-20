@@ -284,7 +284,7 @@ mod tests {
     use crate::config::KernelConfig;
     use crate::msg_pools::MsgPools;
     use crate::partition::PartitionConfig;
-    use crate::partition_core::PartitionCore;
+    use crate::partition_core::{AlignedStack1K, PartitionCore};
     use crate::port_pools::PortPools;
     use crate::scheduler::{ScheduleEntry, ScheduleTable};
     use crate::sync_pools::SyncPools;
@@ -315,7 +315,7 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         const DR: usize = 4;
 
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
         type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
         type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
         type Ports =

@@ -1,6 +1,7 @@
 use crate::config::KernelConfig;
 use crate::context::ExceptionFrame;
 use crate::partition::{ConfigError, MpuRegion, PartitionConfig, PartitionState, TransitionError};
+use crate::partition_core::{AlignedStack1K, PartitionCore};
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
 use crate::semaphore::Semaphore;
 use crate::svc::Kernel;
@@ -29,8 +30,7 @@ impl KernelConfig for HarnessConfig {
     const BP: usize = 4;
     #[cfg(feature = "dynamic-mpu")]
     const BZ: usize = 32;
-    type Core =
-        crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
     type Sync = crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
     type Ports = crate::port_pools::PortPools<
