@@ -2064,6 +2064,20 @@ where
         }
     }
 
+    /// Updates the PCB MPU data region base for a partition.
+    ///
+    /// Returns `true` if the partition exists and was updated, `false` if the
+    /// partition index is out of bounds.
+    #[inline(always)]
+    pub fn fix_mpu_data_region(&mut self, index: usize, base: u32) -> bool {
+        if let Some(pcb) = self.core.partitions_mut().get_mut(index) {
+            pcb.fix_mpu_data_region(base);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Returns a reference to the partition_sp array.
     #[inline(always)]
     pub fn partition_sp(&self) -> &[u32] {

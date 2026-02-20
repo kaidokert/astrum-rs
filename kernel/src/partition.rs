@@ -224,6 +224,17 @@ impl PartitionControlBlock {
         Ok(())
     }
 
+    /// Updates the MPU data region base address.
+    ///
+    /// After boot-time stack relocation, the PCB's `mpu_region.base` (set from
+    /// `PartitionConfig`) may not match the actual stack buffer address inside
+    /// `PartitionCore`. This method patches the base to the real runtime
+    /// address, preserving the original size and permissions.
+    pub fn fix_mpu_data_region(&mut self, base: u32) {
+        self.mpu_region =
+            MpuRegion::new(base, self.mpu_region.size(), self.mpu_region.permissions());
+    }
+
     pub fn event_flags(&self) -> u32 {
         self.event_flags
     }
@@ -744,6 +755,63 @@ mod tests {
         // Verify mpu_region is unchanged (stack and data are independent)
         assert_eq!(pcb.mpu_region().base(), original_mpu_base);
         assert_eq!(pcb.mpu_region().size(), original_mpu_size);
+    }
+
+    // ------------------------------------------------------------------
+    // fix_mpu_data_region
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn fix_mpu_data_region_updates_base() {
+        let mut pcb = make_pcb();
+        assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
+
+        pcb.fix_mpu_data_region(0x2001_0000);
+        assert_eq!(pcb.mpu_region().base(), 0x2001_0000);
+    }
+
+    #[test]
+    fn fix_mpu_data_region_preserves_size() {
+        let mut pcb = make_pcb();
+        let original_size = pcb.mpu_region().size();
+        assert_eq!(original_size, 4096);
+
+        pcb.fix_mpu_data_region(0x2002_0000);
+        assert_eq!(pcb.mpu_region().size(), original_size);
+    }
+
+    #[test]
+    fn fix_mpu_data_region_preserves_permissions() {
+        let mut pcb = make_pcb();
+        let original_perms = pcb.mpu_region().permissions();
+        assert_eq!(original_perms, 0x0306_0000);
+
+        pcb.fix_mpu_data_region(0x2003_0000);
+        assert_eq!(pcb.mpu_region().permissions(), original_perms);
+    }
+
+    #[test]
+    fn fix_mpu_data_region_does_not_affect_stack_fields() {
+        let mut pcb = make_pcb();
+        let original_stack_base = pcb.stack_base();
+        let original_stack_size = pcb.stack_size();
+
+        pcb.fix_mpu_data_region(0x2004_0000);
+
+        assert_eq!(pcb.stack_base(), original_stack_base);
+        assert_eq!(pcb.stack_size(), original_stack_size);
+    }
+
+    #[test]
+    fn fix_mpu_data_region_post_condition_base_matches_stack_base() {
+        let mut pcb = make_pcb();
+        let new_base = 0x2005_0000;
+
+        // Simulate boot-time relocation: fix stack, then fix MPU data region.
+        pcb.fix_stack_region(new_base, pcb.stack_size()).unwrap();
+        pcb.fix_mpu_data_region(new_base);
+
+        assert_eq!(pcb.mpu_region().base(), pcb.stack_base());
     }
 
     // ------------------------------------------------------------------

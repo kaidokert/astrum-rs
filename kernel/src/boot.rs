@@ -42,6 +42,8 @@ pub enum BootError {
     },
     /// Failed to update PCB stack region fields.
     StackRegionError { partition_index: usize },
+    /// Failed to update PCB MPU data region base.
+    MpuRegionError { partition_index: usize },
 }
 
 impl core::fmt::Display for BootError {
@@ -86,6 +88,12 @@ impl core::fmt::Display for BootError {
                 write!(
                     f,
                     "failed to update PCB stack region: partition {partition_index}"
+                )
+            }
+            Self::MpuRegionError { partition_index } => {
+                write!(
+                    f,
+                    "failed to update PCB MPU data region: partition {partition_index}"
                 )
             }
         }
@@ -244,6 +252,10 @@ where
             // Sync PCB stack fields with actual relocated stack memory.
             if !k.fix_stack_region(i, base, size) {
                 return Err(BootError::StackRegionError { partition_index: i });
+            }
+            // Sync PCB MPU data region base with actual stack buffer address.
+            if !k.fix_mpu_data_region(i, base) {
+                return Err(BootError::MpuRegionError { partition_index: i });
             }
         }
         Ok::<(), BootError>(())
