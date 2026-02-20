@@ -230,7 +230,9 @@ impl KernelTestHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syscall::{SYS_EVT_SET, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_WAIT, SYS_YIELD};
+    use crate::syscall::{
+        SYS_EVT_SET, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
+    };
 
     #[test]
     fn two_partitions_count_and_state() {
@@ -304,8 +306,8 @@ mod tests {
         // Semaphore has initial count 3, so wait should succeed (count → 2).
         let frame = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
         assert_eq!(
-            frame.r0, 0,
-            "SYS_SEM_WAIT on count-3 semaphore must succeed"
+            frame.r0, 1,
+            "SYS_SEM_WAIT on count-3 semaphore must return 1 (acquired)"
         );
         assert!(
             !h.kernel().yield_requested,
@@ -317,6 +319,52 @@ mod tests {
             2,
             "count must decrement from 3 to 2 after wait"
         );
+    }
+
+    #[test]
+    fn dispatch_sem_wait_blocking_deschedules_and_returns_zero() {
+        // Create a semaphore with initial count 0 so the first wait blocks.
+        let mut h = KernelTestHarness::with_semaphores(&[0]).expect("harness setup");
+        let frame = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(frame.r0, 0, "blocking SYS_SEM_WAIT must return 0");
+        assert!(
+            h.kernel().yield_requested,
+            "blocking wait must trigger deschedule"
+        );
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "partition must transition to Waiting when blocked on semaphore"
+        );
+    }
+
+    #[test]
+    fn dispatch_sem_wait_nonblocking_acquires_and_returns_one() {
+        // Signal the semaphore so count > 0, then wait should acquire immediately.
+        let mut h = KernelTestHarness::with_semaphores(&[0]).expect("harness setup");
+        // Signal to raise count from 0 → 1.
+        let sig_frame = h.dispatch(SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(sig_frame.r0, 0, "SYS_SEM_SIGNAL must succeed");
+        let sem = h.kernel().semaphores().get(0).expect("semaphore 0 exists");
+        assert_eq!(sem.count(), 1, "count must be 1 after signal");
+
+        // Non-blocking wait: count 1 → 0.
+        let frame = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(
+            frame.r0, 1,
+            "non-blocking SYS_SEM_WAIT must return 1 (acquired)"
+        );
+        assert!(
+            !h.kernel().yield_requested,
+            "non-blocking wait must not trigger deschedule"
+        );
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "partition must remain Running after non-blocking wait"
+        );
+        let sem = h.kernel().semaphores().get(0).expect("semaphore 0 exists");
+        assert_eq!(sem.count(), 0, "count must decrement to 0 after wait");
     }
 
     #[test]

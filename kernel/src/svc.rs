@@ -1368,7 +1368,7 @@ where
                     .semaphores_mut()
                     .wait(pt, frame.r1 as usize, frame.r2 as usize)
                 {
-                    Ok(true) => 0,
+                    Ok(true) => 1,
                     Ok(false) => {
                         self.trigger_deschedule();
                         0
@@ -2998,7 +2998,7 @@ mod tests {
         let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 0);
+        assert_eq!(ef.r0, 1);
         let mut ef = frame(crate::syscall::SYS_SEM_SIGNAL, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
@@ -3012,7 +3012,7 @@ mod tests {
         let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 0);
+        assert_eq!(ef.r0, 1);
         assert!(!k.yield_requested());
 
         // Second wait: count is now 0, so partition 0 blocks (Ok(false)).
