@@ -231,7 +231,8 @@ impl KernelTestHarness {
 mod tests {
     use super::*;
     use crate::syscall::{
-        SYS_EVT_SET, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
+        SYS_EVT_SET, SYS_EVT_WAIT, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
+        SYS_YIELD,
     };
 
     #[test]
@@ -494,5 +495,49 @@ mod tests {
             xpsr: 0,
         };
         h.assert_return_distinguishes_blocking(&frame, true);
+    }
+
+    // ------------------------------------------------------------------
+    // EventWait → EventSet full blocking/wake cycle
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn event_wait_blocks_then_event_set_wakes() {
+        let mask: u32 = 0b1010;
+        let mut h = KernelTestHarness::with_events().expect("harness setup");
+
+        // Step 1: P0 dispatches SYS_EVT_WAIT — no flags set, so it blocks.
+        // SYS_EVT_WAIT encoding: r1 = caller_pid, r2 = mask
+        let wait_frame = h.dispatch_as(0, SYS_EVT_WAIT, 0, mask, 0);
+
+        // P0 must now be Waiting.
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must transition to Waiting when no event flags match"
+        );
+
+        // Validate deschedule invariant.
+        h.assert_blocking_triggered_deschedule(0);
+
+        // Validate return value is 0 for blocking path.
+        h.assert_return_distinguishes_blocking(&wait_frame, true);
+
+        // Step 2: P1 dispatches SYS_EVT_SET targeting P0 — wakes P0.
+        // SYS_EVT_SET encoding: r1 = target_pid, r2 = mask
+        let set_frame = h.dispatch_as(1, SYS_EVT_SET, 0, mask, 0);
+        assert_eq!(set_frame.r0, 0, "EVT_SET must return 0 (success)");
+
+        // Step 3: Verify P0 is now Ready and event flags contain the set bits.
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Ready,
+            "P0 must transition from Waiting to Ready after EVT_SET with matching mask"
+        );
+        assert_ne!(
+            h.kernel().partitions().get(0).unwrap().event_flags() & mask,
+            0,
+            "P0 event flags must contain the bits set by P1"
+        );
     }
 }
