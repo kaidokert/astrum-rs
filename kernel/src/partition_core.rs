@@ -53,6 +53,62 @@ impl<const SW: usize> Default for AlignedStack<SW> {
     }
 }
 
+/// Trait abstracting over stack storage for MPU-aligned partition stacks.
+pub trait StackStorage: Copy + Default {
+    const ZERO: Self;
+    const WORDS: usize;
+    const SIZE_BYTES: usize;
+    const ALIGNMENT: usize;
+    fn as_u32_slice(&self) -> &[u32];
+    fn as_u32_slice_mut(&mut self) -> &mut [u32];
+}
+
+impl<const SW: usize> StackStorage for AlignedStack<SW> {
+    const ZERO: Self = Self([0u32; SW]);
+    const WORDS: usize = SW;
+    const SIZE_BYTES: usize = SW * 4;
+    const ALIGNMENT: usize = 4096;
+    fn as_u32_slice(&self) -> &[u32] {
+        &self.0
+    }
+    fn as_u32_slice_mut(&mut self) -> &mut [u32] {
+        &mut self.0
+    }
+}
+
+macro_rules! define_tiered_stack {
+    ($name:ident, $words:expr, $align:expr) => {
+        #[repr(C, align($align))]
+        #[derive(Clone, Copy)]
+        pub struct $name(pub [u32; $words]);
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self([0u32; $words])
+            }
+        }
+
+        impl StackStorage for $name {
+            const ZERO: Self = Self([0u32; $words]);
+            const WORDS: usize = $words;
+            const SIZE_BYTES: usize = $words * 4;
+            const ALIGNMENT: usize = $align;
+            fn as_u32_slice(&self) -> &[u32] {
+                &self.0
+            }
+            fn as_u32_slice_mut(&mut self) -> &mut [u32] {
+                &mut self.0
+            }
+        }
+    };
+}
+
+define_tiered_stack!(AlignedStack256B, 64, 256);
+define_tiered_stack!(AlignedStack512B, 128, 512);
+define_tiered_stack!(AlignedStack1K, 256, 1024);
+define_tiered_stack!(AlignedStack2K, 512, 2048);
+define_tiered_stack!(AlignedStack4K, 1024, 4096);
+
 /// Narrow interface for partition/schedule state access without const bounds.
 pub trait PartitionCoreOps {
     /// Returns a slice of partition control blocks.
@@ -642,5 +698,54 @@ mod tests {
         // SW=1024 is the maximum valid size: 1024 * 4 = 4096 == ALIGNMENT
         let stack = AlignedStack::<1024>::new();
         assert_eq!(stack.0.len() * 4, AlignedStack::<1024>::ALIGNMENT);
+    }
+
+    macro_rules! tiered_stack_tests {
+        ($name:ident, $ty:ty, $words:expr, $align:expr) => {
+            mod $name {
+                use super::*;
+                #[test]
+                fn layout_and_constants() {
+                    assert_eq!(
+                        core::mem::size_of::<$ty>(),
+                        <$ty as StackStorage>::SIZE_BYTES
+                    );
+                    assert_eq!(
+                        core::mem::align_of::<$ty>(),
+                        <$ty as StackStorage>::ALIGNMENT
+                    );
+                    assert_eq!(
+                        <$ty as StackStorage>::ALIGNMENT,
+                        <$ty as StackStorage>::SIZE_BYTES
+                    );
+                    assert_eq!(<$ty as StackStorage>::WORDS, $words);
+                }
+                #[test]
+                fn zero_init_and_slice_roundtrip() {
+                    let z = <$ty as StackStorage>::ZERO;
+                    assert!(z.as_u32_slice().iter().all(|&w| w == 0));
+                    assert_eq!(z.as_u32_slice().len(), $words);
+                    let d = <$ty>::default();
+                    assert!(d.as_u32_slice().iter().all(|&w| w == 0));
+                    let mut s = <$ty>::default();
+                    s.as_u32_slice_mut()[0] = 0xDEAD_BEEF;
+                    assert_eq!(s.as_u32_slice()[0], 0xDEAD_BEEF);
+                }
+            }
+        };
+    }
+    tiered_stack_tests!(stack_256b, AlignedStack256B, 64, 256);
+    tiered_stack_tests!(stack_512b, AlignedStack512B, 128, 512);
+    tiered_stack_tests!(stack_1k, AlignedStack1K, 256, 1024);
+    tiered_stack_tests!(stack_2k, AlignedStack2K, 512, 2048);
+    tiered_stack_tests!(stack_4k, AlignedStack4K, 1024, 4096);
+
+    #[test]
+    fn legacy_aligned_stack_implements_stack_storage() {
+        let s = AlignedStack::<256>::default();
+        assert_eq!(<AlignedStack<256> as StackStorage>::WORDS, 256);
+        assert_eq!(<AlignedStack<256> as StackStorage>::SIZE_BYTES, 1024);
+        assert_eq!(<AlignedStack<256> as StackStorage>::ALIGNMENT, 4096);
+        assert!(s.as_u32_slice().iter().all(|&w| w == 0));
     }
 }

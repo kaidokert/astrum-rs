@@ -46,6 +46,10 @@ pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
 pub mod partition_core;
+pub use partition_core::{
+    AlignedStack1K, AlignedStack256B, AlignedStack2K, AlignedStack4K, AlignedStack512B,
+    StackStorage,
+};
 #[cfg(feature = "partition-debug")]
 pub mod partition_debug;
 pub mod pendsv;
