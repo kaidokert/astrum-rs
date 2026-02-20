@@ -160,6 +160,21 @@ const _: () = assert!(
     "KERNEL_ALIGNMENT constant does not match KernelStorageBuffer repr(align) value"
 );
 
+/// Minimum alignment required by the ARMv7-M MPU for kernel state region.
+///
+/// The MPU requires power-of-two-sized regions aligned to their own size.
+/// The kernel state region is 4096 bytes minimum, so the buffer must be
+/// at least 4096-byte aligned regardless of what `KERNEL_ALIGNMENT` is set to.
+const MPU_MIN_ALIGNMENT: usize = 4096;
+
+// Compile-time assertion: KernelStorageBuffer alignment must meet MPU hardware requirement.
+// This is independent of KERNEL_ALIGNMENT — it enforces the MPU's minimum directly,
+// catching regressions even if both KERNEL_ALIGNMENT and repr(align) are lowered together.
+const _: () = assert!(
+    core::mem::align_of::<KernelStorageBuffer>() >= MPU_MIN_ALIGNMENT,
+    "KernelStorageBuffer alignment must be >= 4096 for MPU compatibility"
+);
+
 /// Unified kernel state containing all kernel subsystems.
 ///
 /// Merges: partitions, schedule, current/next indices, partition SPs, tick,
@@ -546,6 +561,16 @@ mod tests {
         // Verify alignment matches KERNEL_ALIGNMENT exactly.
         // This mirrors the compile-time const assertion in the module.
         assert_eq!(align_of::<KernelStorageBuffer>(), KERNEL_ALIGNMENT);
+    }
+
+    #[test]
+    fn storage_buffer_mpu_alignment() {
+        use core::mem::align_of;
+        // Verify alignment meets the MPU hardware minimum (4096 bytes).
+        // This mirrors the compile-time MPU_MIN_ALIGNMENT const assertion.
+        assert!(align_of::<KernelStorageBuffer>() >= MPU_MIN_ALIGNMENT);
+        // Also verify MPU_MIN_ALIGNMENT matches expected value.
+        assert_eq!(MPU_MIN_ALIGNMENT, 4096);
     }
 
     // TODO: These alignment tests are unit tests rather than integration tests because
