@@ -5529,10 +5529,15 @@ mod tests {
             peripheral_regions: heapless::Vec::new(),
         };
 
-        let k = try_kernel_new(s, &[cfg]).unwrap();
+        let k = try_kernel_new(s, std::slice::from_ref(&cfg)).unwrap();
 
         assert_eq!(k.partitions().len(), 1);
-        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
+        let pcb = k.partitions().get(0).unwrap();
+        assert_eq!(pcb.id(), cfg.id);
+        assert_eq!(pcb.entry_point(), cfg.entry_point);
+        assert_eq!(pcb.mpu_region().base(), cfg.mpu_region.base());
+        assert_eq!(pcb.mpu_region().size(), cfg.mpu_region.size());
+        assert_eq!(pcb.mpu_region().permissions(), cfg.mpu_region.permissions());
     }
 
     #[test]
@@ -5572,9 +5577,14 @@ mod tests {
         let k = try_kernel_new(s, &cfgs).unwrap();
 
         assert_eq!(k.partitions().len(), 3);
-        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
-        assert_eq!(k.partitions().get(1).unwrap().id(), 1);
-        assert_eq!(k.partitions().get(2).unwrap().id(), 2);
+        for (i, cfg) in cfgs.iter().enumerate() {
+            let pcb = k.partitions().get(i).unwrap();
+            assert_eq!(pcb.id(), cfg.id);
+            assert_eq!(pcb.entry_point(), cfg.entry_point);
+            assert_eq!(pcb.mpu_region().base(), cfg.mpu_region.base());
+            assert_eq!(pcb.mpu_region().size(), cfg.mpu_region.size());
+            assert_eq!(pcb.mpu_region().permissions(), cfg.mpu_region.permissions());
+        }
     }
 
     #[test]
