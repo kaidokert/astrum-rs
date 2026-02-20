@@ -584,4 +584,60 @@ mod tests {
             "semaphore count must stay 0 when signal wakes a blocked waiter"
         );
     }
+
+    #[test]
+    fn mtx_lock_blocks_then_mtx_unlock_wakes_with_ownership_transfer() {
+        let mut h = KernelTestHarness::with_mutexes(1).expect("harness setup");
+
+        // Step 1: P1 dispatches SYS_MTX_LOCK — mutex is free, so it acquires.
+        // SYS_MTX_LOCK encoding: r1 = mutex_id, r2 = caller_pid
+        let lock_frame = h.dispatch_as(1, SYS_MTX_LOCK, 0, 1, 0);
+        assert_eq!(lock_frame.r0, 1, "MTX_LOCK must return 1 (acquired)");
+        assert_eq!(
+            h.kernel().mutexes().owner(0).unwrap(),
+            Some(1),
+            "P1 must own mutex 0 after successful lock"
+        );
+
+        // Step 2: P0 dispatches SYS_MTX_LOCK on same mutex — P1 holds it, so P0 blocks.
+        let wait_frame = h.dispatch_as(0, SYS_MTX_LOCK, 0, 0, 0);
+
+        // P0 must now be Waiting.
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must transition to Waiting when mutex is held by P1"
+        );
+
+        // Validate deschedule invariant.
+        h.assert_blocking_triggered_deschedule(0);
+
+        // Validate return value is 0 for blocking path.
+        h.assert_return_distinguishes_blocking(&wait_frame, true);
+
+        // Mutex must still be owned by P1 while P0 waits.
+        assert_eq!(
+            h.kernel().mutexes().owner(0).unwrap(),
+            Some(1),
+            "P1 must still own mutex 0 while P0 is blocked"
+        );
+
+        // Step 3: P1 dispatches SYS_MTX_UNLOCK — wakes P0 and transfers ownership.
+        let unlock_frame = h.dispatch_as(1, SYS_MTX_UNLOCK, 0, 1, 0);
+        assert_eq!(unlock_frame.r0, 0, "MTX_UNLOCK must return 0 (success)");
+
+        // Verify P0 transitioned from Waiting to Ready.
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Ready,
+            "P0 must transition from Waiting to Ready after MTX_UNLOCK"
+        );
+
+        // Verify ownership transferred to P0.
+        assert_eq!(
+            h.kernel().mutexes().owner(0).unwrap(),
+            Some(0),
+            "P0 must own mutex 0 after ownership transfer from P1 unlock"
+        );
+    }
 }
