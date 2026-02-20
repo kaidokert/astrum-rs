@@ -220,6 +220,26 @@ pub fn assert_no_overlapping_mpu_regions(partitions: &[PartitionControlBlock]) {
 #[inline(always)]
 pub fn assert_no_overlapping_mpu_regions(_partitions: &[PartitionControlBlock]) {}
 
+/// Assert that no semaphore's current count exceeds its configured maximum.
+///
+/// Each entry in `semaphore_counts` is a `(current_count, max_count)` pair.
+#[cfg(any(debug_assertions, test))]
+pub fn assert_semaphore_count_bounded(semaphore_counts: &[(u32, u32)]) {
+    for (i, &(count, max)) in semaphore_counts.iter().enumerate() {
+        if count > max {
+            panic!(
+                "invariant violation: semaphore {} count {} exceeds max {}",
+                i, count, max
+            );
+        }
+    }
+}
+
+/// No-op version for release builds.
+#[cfg(not(any(debug_assertions, test)))]
+#[inline(always)]
+pub fn assert_semaphore_count_bounded(_semaphore_counts: &[(u32, u32)]) {}
+
 /// Assert all kernel invariants hold.
 ///
 /// In debug builds and tests, this function performs runtime validation of
@@ -232,9 +252,11 @@ pub fn assert_no_overlapping_mpu_regions(_partitions: &[PartitionControlBlock]) 
 pub fn assert_kernel_invariants(
     partitions: &[PartitionControlBlock],
     active_partition: Option<u8>,
+    semaphore_counts: &[(u32, u32)],
 ) {
     assert_partition_state_consistency(partitions);
     assert_running_matches_active(partitions, active_partition);
+    assert_semaphore_count_bounded(semaphore_counts);
 }
 
 /// No-op version for release builds.
@@ -245,6 +267,7 @@ pub fn assert_kernel_invariants(
 pub fn assert_kernel_invariants(
     _partitions: &[PartitionControlBlock],
     _active_partition: Option<u8>,
+    _semaphore_counts: &[(u32, u32)],
 ) {
 }
 
@@ -266,14 +289,14 @@ mod tests {
     #[test]
     fn kernel_invariants_empty_partitions_none_active() {
         // No partitions with no active partition is valid.
-        assert_kernel_invariants(&[], None);
+        assert_kernel_invariants(&[], None, &[]);
     }
 
     #[test]
     fn kernel_invariants_all_ready_none_active() {
         // All Ready partitions with no active partition is valid.
         let partitions = [make_pcb(0), make_pcb(1), make_pcb(2)];
-        assert_kernel_invariants(&partitions, None);
+        assert_kernel_invariants(&partitions, None, &[]);
     }
 
     #[test]
@@ -281,7 +304,7 @@ mod tests {
         // One Running partition matching active_partition is valid.
         let mut p0 = make_pcb(0);
         p0.transition(PartitionState::Running).unwrap();
-        assert_kernel_invariants(&[p0, make_pcb(1), make_pcb(2)], Some(0));
+        assert_kernel_invariants(&[p0, make_pcb(1), make_pcb(2)], Some(0), &[]);
     }
 
     #[test]
@@ -291,7 +314,7 @@ mod tests {
         p1.transition(PartitionState::Running).unwrap();
         let partitions = [make_pcb(0), p1, make_pcb(2)];
         for _ in 0..10 {
-            assert_kernel_invariants(&partitions, Some(1));
+            assert_kernel_invariants(&partitions, Some(1), &[]);
         }
     }
 
@@ -303,14 +326,14 @@ mod tests {
         let mut p1 = make_pcb(1);
         p0.transition(PartitionState::Running).unwrap();
         p1.transition(PartitionState::Running).unwrap();
-        assert_kernel_invariants(&[p0, p1], Some(0));
+        assert_kernel_invariants(&[p0, p1], Some(0), &[]);
     }
 
     #[test]
     #[should_panic(expected = "active 0 is Ready")]
     fn kernel_invariants_active_not_running_panics() {
         // active_partition points to a non-Running partition.
-        assert_kernel_invariants(&[make_pcb(0), make_pcb(1)], Some(0));
+        assert_kernel_invariants(&[make_pcb(0), make_pcb(1)], Some(0), &[]);
     }
 
     #[test]
@@ -680,5 +703,33 @@ mod tests {
         let p1 = make_region_pcb(1, 0x2000_2000, 0x1000, 0x2000_3000, 0x1000);
         let p2 = make_region_pcb(2, 0x2000_4000, 0x1000, 0x2000_5000, 0x1000);
         assert_no_overlapping_mpu_regions(&[p0, p1, p2]);
+    }
+
+    #[test]
+    fn semaphore_count_bounded_valid_counts() {
+        // count < max for all semaphores.
+        assert_semaphore_count_bounded(&[(0, 5), (3, 10), (0, 1)]);
+    }
+
+    #[test]
+    fn semaphore_count_bounded_at_max() {
+        // count == max is the boundary: valid (signal would overflow, but
+        // the invariant only checks current state).
+        assert_semaphore_count_bounded(&[(5, 5), (1, 1), (0, 0)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "semaphore 0 count 6 exceeds max 5")]
+    fn semaphore_count_bounded_exceeds_max() {
+        assert_semaphore_count_bounded(&[(6, 5)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "semaphore 0 count 3 exceeds max 2")]
+    fn kernel_invariants_catches_semaphore_violation() {
+        // Valid partition state but invalid semaphore count.
+        let mut p0 = make_pcb(0);
+        p0.transition(PartitionState::Running).unwrap();
+        assert_kernel_invariants(&[p0, make_pcb(1)], Some(0), &[(3, 2)]);
     }
 }

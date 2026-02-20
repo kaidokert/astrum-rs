@@ -30,6 +30,9 @@ impl<const W: usize> Semaphore<W> {
     pub fn count(&self) -> u32 {
         self.count
     }
+    pub fn max_count(&self) -> u32 {
+        self.max_count
+    }
 }
 pub struct SemaphorePool<const S: usize, const W: usize> {
     slots: heapless::Vec<Semaphore<W>, S>,
