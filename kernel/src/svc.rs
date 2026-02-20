@@ -1390,7 +1390,11 @@ where
                     .mutexes_mut()
                     .lock(pt, frame.r1 as usize, frame.r2 as usize)
                 {
-                    Ok(acquired) => u32::from(acquired),
+                    Ok(true) => 1,
+                    Ok(false) => {
+                        self.trigger_deschedule();
+                        0
+                    }
                     Err(e) => match e {
                         MutexError::InvalidMutex => SvcError::InvalidResource.to_u32(),
                         MutexError::InvalidPartition => SvcError::InvalidPartition.to_u32(),
@@ -3039,6 +3043,29 @@ mod tests {
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         assert_eq!(k.mutexes().owner(0), Ok(None));
+    }
+
+    #[test]
+    fn dispatch_mutex_lock_blocking_triggers_deschedule() {
+        let mut k = kernel(0, 1, 0);
+        // Partition 0 acquires mutex 0 immediately.
+        let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 1); // 1 = acquired immediately
+        assert!(!k.yield_requested());
+
+        // Switch to partition 1 and attempt to lock the same mutex.
+        k.set_current_partition(1);
+        let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 1);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0); // 0 = blocked
+        assert!(k.yield_requested());
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting
+        );
     }
 
     #[test]
