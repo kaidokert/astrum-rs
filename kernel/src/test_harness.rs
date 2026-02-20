@@ -727,4 +727,95 @@ mod tests {
             "P0 must transition from Waiting to Ready after MsgSend wakes it"
         );
     }
+
+    // ------------------------------------------------------------------
+    // Cross-primitive: semaphore block + event set + semaphore wake
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn sem_block_then_event_set_does_not_wake_then_sem_signal_wakes() {
+        // Semaphore with initial count 1 so P0 can acquire, then P1 blocks.
+        let mut h = KernelTestHarness::with_semaphores(&[1]).expect("harness setup");
+        let event_mask: u32 = 0b0110;
+
+        // Step 1: P0 acquires the semaphore (count 1 → 0, non-blocking).
+        let acq_frame = h.dispatch_as(0, SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(acq_frame.r0, 1, "P0 SEM_WAIT must return 1 (acquired)");
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "P0 must remain Running after non-blocking acquire"
+        );
+        assert!(
+            !h.kernel().yield_requested,
+            "non-blocking acquire must not trigger deschedule"
+        );
+        let sem = h.kernel().semaphores().get(0).expect("sem 0");
+        assert_eq!(sem.count(), 0, "semaphore count must be 0 after acquire");
+
+        // Step 2: P1 waits on the same semaphore (count 0 → blocks).
+        let wait_frame = h.dispatch_as(1, SYS_SEM_WAIT, 0, 1, 0);
+        assert_eq!(wait_frame.r0, 0, "P1 SEM_WAIT must return 0 (blocked)");
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().state(),
+            PartitionState::Waiting,
+            "P1 must transition to Waiting on empty semaphore"
+        );
+        h.assert_blocking_triggered_deschedule(1);
+        h.assert_return_distinguishes_blocking(&wait_frame, true);
+
+        // Reset yield_requested so subsequent steps start clean.
+        h.kernel_mut().yield_requested = false;
+
+        // Step 3: P0 sets event flags on P1 while P1 is blocked on semaphore.
+        // P1 is NOT waiting on events, so this must NOT wake P1.
+        let set_frame = h.dispatch_as(0, SYS_EVT_SET, 1, event_mask, 0);
+        assert_eq!(set_frame.r0, 0, "EVT_SET must return 0 (success)");
+
+        // Verify event flags are stored on P1.
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().event_flags() & event_mask,
+            event_mask,
+            "P1 event flags must contain bits set by P0"
+        );
+
+        // P1 must STILL be Waiting (blocked on semaphore, not on events).
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().state(),
+            PartitionState::Waiting,
+            "P1 must remain Waiting — event_set must not wake a semaphore-blocked partition"
+        );
+
+        // yield_requested must still be false (EVT_SET is non-blocking for caller).
+        assert!(
+            !h.kernel().yield_requested,
+            "EVT_SET must not trigger deschedule on the caller"
+        );
+
+        // Step 4: P0 signals the semaphore — wakes P1.
+        let sig_frame = h.dispatch_as(0, SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(sig_frame.r0, 0, "SEM_SIGNAL must return 0 (success)");
+
+        // P1 must transition from Waiting to Ready.
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().state(),
+            PartitionState::Ready,
+            "P1 must transition from Waiting to Ready after SEM_SIGNAL"
+        );
+
+        // Semaphore count must remain 0 (signal woke a waiter, didn't increment).
+        let sem = h.kernel().semaphores().get(0).expect("sem 0");
+        assert_eq!(
+            sem.count(),
+            0,
+            "semaphore count must stay 0 when signal wakes a blocked waiter"
+        );
+
+        // Event flags must still be intact after the semaphore wake.
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().event_flags() & event_mask,
+            event_mask,
+            "P1 event flags must survive the semaphore wake — primitives are independent"
+        );
+    }
 }
