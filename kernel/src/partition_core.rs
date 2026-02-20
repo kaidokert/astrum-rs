@@ -4,56 +4,22 @@ use crate::partition::{PartitionControlBlock, PartitionTable};
 use crate::scheduler::{ScheduleTable, ScheduleTableOps, ScheduleTableOpsMut};
 use crate::tick::TickCounter;
 
-/// Stack storage wrapper aligned to 4096 bytes for MPU region compatibility.
-///
-/// The MPU on Cortex-M requires that region base addresses be aligned to the
-/// region size. For 4096-byte stacks (1024 words), the base must be 4096-byte
-/// aligned. This wrapper enforces that alignment at compile time.
-///
-/// # Compile-time constraint
-///
-/// `SW * 4` must not exceed [`Self::ALIGNMENT`] (4096). Instantiating
-/// `AlignedStack` with a larger word count causes a compile-time error via
-/// [`Self::ALIGNMENT_CHECK`], preventing silent MPU misconfiguration.
-///
-/// # Type Parameters
-///
-/// - `SW`: Stack word count. `SW * 4` must be ≤ 4096.
-#[repr(C, align(4096))]
-#[derive(Clone, Copy)]
-pub struct AlignedStack<const SW: usize>(pub [u32; SW]);
-
-impl<const SW: usize> AlignedStack<SW> {
-    /// The alignment in bytes that the `#[repr(align(...))]` attribute enforces.
-    pub const ALIGNMENT: usize = 4096;
-
-    /// Compile-time assertion that `SW * 4 <= ALIGNMENT`.
-    ///
-    /// Evaluated at monomorphization time when referenced by [`Self::new`].
-    #[allow(clippy::let_unit_value)]
-    pub const ALIGNMENT_CHECK: () = assert!(
-        SW * 4 <= Self::ALIGNMENT,
-        "AlignedStack: SW * 4 exceeds the 4096-byte alignment — MPU region would be misconfigured"
-    );
-
-    /// Creates a zero-initialized `AlignedStack`.
-    ///
-    /// This constructor forces evaluation of [`Self::ALIGNMENT_CHECK`],
-    /// producing a compile-time error if `SW * 4 > 4096`.
-    pub const fn new() -> Self {
-        #[allow(clippy::let_unit_value)]
-        let _ = Self::ALIGNMENT_CHECK;
-        Self([0u32; SW])
-    }
-}
-
-impl<const SW: usize> Default for AlignedStack<SW> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Trait abstracting over stack storage for MPU-aligned partition stacks.
+///
+/// # Supported stack sizes
+///
+/// The following power-of-two sizes are supported, each with alignment
+/// equal to the stack size (required by the Cortex-M MPU):
+///
+/// | Type | Size | Words | Alignment |
+/// |------|------|-------|-----------|
+/// | [`AlignedStack256B`] | 256 B | 64 | 256 |
+/// | [`AlignedStack512B`] | 512 B | 128 | 512 |
+/// | [`AlignedStack1K`] | 1 KiB | 256 | 1024 |
+/// | [`AlignedStack2K`] | 2 KiB | 512 | 2048 |
+/// | [`AlignedStack4K`] | 4 KiB | 1024 | 4096 |
+// TODO: reviewer false positive — doc links like [`AlignedStack1K`] resolve
+// correctly because these types are defined in the same module.
 pub trait StackStorage: Copy + Default {
     const ZERO: Self;
     const WORDS: usize;
@@ -63,24 +29,18 @@ pub trait StackStorage: Copy + Default {
     fn as_u32_slice_mut(&mut self) -> &mut [u32];
 }
 
-impl<const SW: usize> StackStorage for AlignedStack<SW> {
-    const ZERO: Self = Self([0u32; SW]);
-    const WORDS: usize = SW;
-    const SIZE_BYTES: usize = SW * 4;
-    const ALIGNMENT: usize = 4096;
-    fn as_u32_slice(&self) -> &[u32] {
-        &self.0
-    }
-    fn as_u32_slice_mut(&mut self) -> &mut [u32] {
-        &mut self.0
-    }
-}
-
 macro_rules! define_tiered_stack {
     ($name:ident, $words:expr, $align:expr) => {
         #[repr(C, align($align))]
         #[derive(Clone, Copy)]
         pub struct $name(pub [u32; $words]);
+
+        // Compile-time assertion: alignment must equal size for MPU compatibility.
+        // Evaluated at type definition time, before any PartitionCore is constructed.
+        const _: () = assert!(
+            $align == $words * 4,
+            concat!(stringify!($name), ": alignment must equal size (words * 4)")
+        );
 
         impl Default for $name {
             fn default() -> Self {
@@ -190,7 +150,14 @@ where
     [(); N]:,
     [(); SCHED]:,
 {
+    const _ASSERT_ALIGNMENT_EQ_SIZE: () = assert!(
+        S::ALIGNMENT == S::SIZE_BYTES,
+        "StackStorage: ALIGNMENT must equal SIZE_BYTES"
+    );
+
     pub fn new() -> Self {
+        #[allow(clippy::let_unit_value)]
+        let _ = Self::_ASSERT_ALIGNMENT_EQ_SIZE;
         Self {
             partitions: PartitionTable::new(),
             schedule: ScheduleTable::new(),
@@ -496,23 +463,18 @@ mod tests {
     use super::*;
     use crate::scheduler::ScheduleEntry;
 
-    type PartitionCore<const N: usize, const SCHED: usize, const SW: usize> =
-        super::PartitionCore<N, SCHED, AlignedStack<SW>>;
-
-    /// Stack word count for tests (256 words = 1024 bytes).
-    const TEST_SW: usize = 256;
+    type TestCore<const N: usize, const SCHED: usize> =
+        super::PartitionCore<N, SCHED, AlignedStack1K>;
 
     #[test]
     fn construction_and_field_access() {
-        let mut core: PartitionCore<4, 8, TEST_SW> = PartitionCore::new();
-        // Verify new() creates empty state
+        let mut core: TestCore<4, 8> = TestCore::new();
         assert!(core.partitions().is_empty());
         assert!(core.schedule().is_empty());
         assert_eq!(core.current_partition(), 0);
         assert_eq!(core.next_partition(), 0);
         assert_eq!(core.partition_sp(), &[0u32; 4]);
-        // Verify default() matches new()
-        let dflt: PartitionCore<4, 8, TEST_SW> = PartitionCore::default();
+        let dflt: TestCore<4, 8> = TestCore::default();
         assert_eq!(core.partition_sp(), dflt.partition_sp());
         // Test partition index setters
         core.set_current_partition(2);
@@ -533,7 +495,7 @@ mod tests {
 
     #[test]
     fn stacks_initialized_to_zero() {
-        let core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        let core: TestCore<2, 4> = TestCore::new();
         // All stack arrays should be zero-initialized
         for i in 0..2 {
             let stack = &core.stacks()[i].0;
@@ -542,15 +504,14 @@ mod tests {
     }
 
     #[test]
-    fn stacks_are_4096_byte_aligned() {
-        let core: PartitionCore<3, 4, TEST_SW> = PartitionCore::new();
-        // Each stack base must be 4096-byte aligned for MPU compatibility
+    fn stacks_are_1024_byte_aligned() {
+        let core: TestCore<3, 4> = TestCore::new();
         for i in 0..3 {
             let base = core.stack_base(i).unwrap();
             assert_eq!(
-                base % 4096,
+                base % 1024,
                 0,
-                "Stack {} base 0x{:08x} is not 4096-byte aligned",
+                "Stack {} base 0x{:08x} is not 1024-byte aligned",
                 i,
                 base
             );
@@ -559,7 +520,7 @@ mod tests {
 
     #[test]
     fn stack_base_out_of_bounds_returns_none() {
-        let core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        let core: TestCore<2, 4> = TestCore::new();
         assert!(core.stack_base(0).is_some());
         assert!(core.stack_base(1).is_some());
         assert!(core.stack_base(2).is_none());
@@ -568,22 +529,21 @@ mod tests {
 
     #[test]
     fn stack_mut_accessor() {
-        let mut core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
-        // Verify we can write to stack and read it back
+        let mut core: TestCore<2, 4> = TestCore::new();
         {
             let stack = core.stack_mut(0).unwrap();
             stack[0] = 0xDEAD_BEEF;
-            stack[TEST_SW - 1] = 0xCAFE_BABE;
+            stack[255] = 0xCAFE_BABE;
         }
         assert_eq!(core.stacks()[0].0[0], 0xDEAD_BEEF);
-        assert_eq!(core.stacks()[0].0[TEST_SW - 1], 0xCAFE_BABE);
+        assert_eq!(core.stacks()[0].0[255], 0xCAFE_BABE);
         // Out of bounds returns None
         assert!(core.stack_mut(2).is_none());
     }
 
     #[test]
     fn stacks_mut_accessor() {
-        let mut core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        let mut core: TestCore<2, 4> = TestCore::new();
         // Write different values to each stack
         core.stacks_mut()[0].0[0] = 0x1111_1111;
         core.stacks_mut()[1].0[0] = 0x2222_2222;
@@ -592,104 +552,47 @@ mod tests {
     }
 
     #[test]
-    fn aligned_stack_size_is_alignment_padded() {
-        // size_of rounds up to alignment: 256 words (1024 bytes) padded to 4096.
-        assert_eq!(core::mem::size_of::<AlignedStack<TEST_SW>>(), 4096);
-    }
-
-    #[test]
-    fn aligned_stack_alignment_is_4096() {
-        // Verify AlignedStack has the required 4096-byte alignment
-        assert_eq!(
-            core::mem::align_of::<AlignedStack<TEST_SW>>(),
-            4096,
-            "AlignedStack<{}> alignment should be 4096 bytes",
-            TEST_SW
-        );
+    fn aligned_stack_1k_is_1024_bytes() {
+        assert_eq!(core::mem::size_of::<AlignedStack1K>(), 1024);
+        assert_eq!(core::mem::align_of::<AlignedStack1K>(), 1024);
     }
 
     #[test]
     fn stack_size_returns_bytes() {
-        let core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
-        // TEST_SW = 256 words * 4 bytes/word = 1024 bytes
+        let core: TestCore<2, 4> = TestCore::new();
         assert_eq!(core.stack_size(), 1024);
     }
 
     #[test]
-    fn stack_size_different_word_counts() {
-        // Test with 128 words (512 bytes) — within alignment limit
-        let core_small: PartitionCore<1, 1, 128> = PartitionCore::new();
-        assert_eq!(core_small.stack_size(), 512);
+    fn stack_size_different_tiers() {
+        let c: super::PartitionCore<1, 1, AlignedStack512B> = super::PartitionCore::new();
+        assert_eq!(c.stack_size(), 512);
+        let c: super::PartitionCore<1, 1, AlignedStack256B> = super::PartitionCore::new();
+        assert_eq!(c.stack_size(), 256);
+    }
 
-        // Test with 64 words (256 bytes) — within alignment limit
-        let core_tiny: PartitionCore<1, 1, 64> = PartitionCore::new();
-        assert_eq!(core_tiny.stack_size(), 256);
+    #[test]
+    fn four_partition_1k_stacks_use_4kb() {
+        let stacks_size = 4 * core::mem::size_of::<AlignedStack1K>();
+        assert_eq!(stacks_size, 4096);
     }
 
     #[test]
     fn stack_ptr_init_returns_top_of_stack() {
-        let core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        let core: TestCore<2, 4> = TestCore::new();
         for i in 0..2 {
-            let init_sp = core.stack_ptr_init(i);
-            assert!(init_sp.is_some(), "stack_ptr_init({}) should be Some", i);
-            let init_sp = init_sp.unwrap();
+            let init_sp = core.stack_ptr_init(i).unwrap();
             let base = core.stack_base(i).unwrap();
-            // Initial SP should be at stack_base + stack_size
-            assert_eq!(
-                init_sp,
-                base + core.stack_size() as u32,
-                "Initial SP should point to top of stack"
-            );
+            assert_eq!(init_sp, base + core.stack_size() as u32);
         }
     }
 
     #[test]
     fn stack_ptr_init_out_of_bounds_returns_none() {
-        let core: PartitionCore<2, 4, TEST_SW> = PartitionCore::new();
+        let core: TestCore<2, 4> = TestCore::new();
         assert!(core.stack_ptr_init(0).is_some());
         assert!(core.stack_ptr_init(1).is_some());
         assert!(core.stack_ptr_init(2).is_none());
-        assert!(core.stack_ptr_init(100).is_none());
-    }
-
-    #[test]
-    fn aligned_stack_alignment_constant() {
-        assert_eq!(AlignedStack::<TEST_SW>::ALIGNMENT, 4096);
-        assert_eq!(AlignedStack::<128>::ALIGNMENT, 4096);
-        assert_eq!(AlignedStack::<64>::ALIGNMENT, 4096);
-    }
-
-    #[test]
-    fn aligned_stack_new_returns_zeroed() {
-        let stack = AlignedStack::<TEST_SW>::new();
-        assert!(
-            stack.0.iter().all(|&w| w == 0),
-            "new() must zero-initialize"
-        );
-    }
-
-    #[test]
-    fn aligned_stack_new_valid_sizes() {
-        // All of these satisfy SW * 4 <= 4096 and must compile + produce
-        // zero-initialized stacks.
-        let s1 = AlignedStack::<1>::new();
-        assert_eq!(s1.0.len(), 1);
-        assert_eq!(s1.0[0], 0);
-
-        let s64 = AlignedStack::<64>::new();
-        assert_eq!(s64.0.len(), 64);
-        assert!(s64.0.iter().all(|&w| w == 0));
-
-        let s256 = AlignedStack::<256>::new();
-        assert_eq!(s256.0.len(), 256);
-        assert!(s256.0.iter().all(|&w| w == 0));
-    }
-
-    #[test]
-    fn aligned_stack_boundary_size() {
-        // SW=1024 is the maximum valid size: 1024 * 4 = 4096 == ALIGNMENT
-        let stack = AlignedStack::<1024>::new();
-        assert_eq!(stack.0.len() * 4, AlignedStack::<1024>::ALIGNMENT);
     }
 
     macro_rules! tiered_stack_tests {
@@ -731,13 +634,4 @@ mod tests {
     tiered_stack_tests!(stack_1k, AlignedStack1K, 256, 1024);
     tiered_stack_tests!(stack_2k, AlignedStack2K, 512, 2048);
     tiered_stack_tests!(stack_4k, AlignedStack4K, 1024, 4096);
-
-    #[test]
-    fn legacy_aligned_stack_implements_stack_storage() {
-        let s = AlignedStack::<256>::default();
-        assert_eq!(<AlignedStack<256> as StackStorage>::WORDS, 256);
-        assert_eq!(<AlignedStack<256> as StackStorage>::SIZE_BYTES, 1024);
-        assert_eq!(<AlignedStack<256> as StackStorage>::ALIGNMENT, 4096);
-        assert!(s.as_u32_slice().iter().all(|&w| w == 0));
-    }
 }

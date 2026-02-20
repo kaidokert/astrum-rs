@@ -150,14 +150,12 @@ macro_rules! _unified_handle_yield {
 /// });
 /// ```
 ///
-/// # MPU Alignment Constraint
+/// # Supported Stack Sizes
 ///
-/// The stack alignment is hardcoded to 4096 bytes, which requires `$SW <= 1024`
-/// (1024 words × 4 bytes = 4096 bytes). This is enforced by a compile-time
-/// assertion. Supporting variable stack sizes would require either:
-/// - A procedural macro that can compute alignment from the size parameter
-/// - Multiple macro variants for different power-of-two sizes
-/// - A build.rs script to generate the appropriate alignment
+/// The `KernelConfig::Core` type parameter selects the stack tier via one of
+/// the pre-defined `AlignedStack*` types (256B, 512B, 1K, 2K, 4K). Each
+/// type has alignment equal to its size, as required by the Cortex-M MPU.
+/// A compile-time assertion in `PartitionCore::new()` verifies this invariant.
 #[macro_export]
 macro_rules! define_unified_harness {
     // Basic form: no SysTick hook

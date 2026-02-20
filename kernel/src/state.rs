@@ -108,16 +108,16 @@ use crate::svc::Kernel;
 /// The `init_kernel_state` function includes a compile-time assertion to verify
 /// that the actual kernel size does not exceed this limit.
 ///
-/// Current allocation: 32 KiB, sufficient for typical configurations with
-/// up to 4 partitions (1024-word stacks each), 8 schedule entries, and
-/// moderate IPC pool sizes. For larger configurations, increase this value
-/// and ensure the target has sufficient RAM.
-pub const MAX_KERNEL_SIZE: usize = 32 * 1024;
+/// Current allocation: 16 KiB, sufficient for typical configurations with
+/// up to 4 partitions using `AlignedStack1K` (4 × 1 KiB = 4 KiB for stacks)
+/// plus metadata, schedule entries, and moderate IPC pool sizes. For larger
+/// configurations, increase this value and ensure the target has sufficient RAM.
+pub const MAX_KERNEL_SIZE: usize = 16 * 1024;
 
 /// Required alignment for kernel state storage in bytes.
 ///
 /// This must match the alignment requirement of `Kernel<C>`, which contains
-/// `AlignedStack<SW>` fields that require 4096-byte alignment.
+/// stack storage fields that may require up to 4096-byte alignment.
 pub const KERNEL_ALIGNMENT: usize = 4096;
 
 /// Check pointer alignment to [`KERNEL_ALIGNMENT`]. Returns `Err(offset)` if misaligned.
@@ -281,7 +281,7 @@ where
     //
     // The storage buffer is properly sized (MAX_KERNEL_SIZE bytes) and aligned
     // (KERNEL_ALIGNMENT-byte alignment via repr(C, align(...)). This alignment
-    // matches the requirement of Kernel<C> which contains AlignedStack<SW>
+    // matches the requirement of Kernel<C> which contains stack storage
     // fields that require KERNEL_ALIGNMENT-byte alignment. The compile-time
     // assertion above guarantees that Kernel<C> fits within this buffer. The
     // pointer cast from *mut KernelStorageBuffer to *mut Kernel<C> is valid
