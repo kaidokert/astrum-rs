@@ -161,11 +161,10 @@ pub trait PartitionCoreOps {
 /// direct memory access from PendSV assembly. The `current_partition`,
 /// `next_partition`, and `partition_sp` fields are accessed at known offsets.
 #[repr(C)]
-pub struct PartitionCore<const N: usize, const SCHED: usize, const SW: usize>
+pub struct PartitionCore<const N: usize, const SCHED: usize, S: StackStorage>
 where
     [(); N]:,
     [(); SCHED]:,
-    [(); SW]:,
 {
     partitions: PartitionTable<N>,
     schedule: ScheduleTable<SCHED>,
@@ -175,7 +174,7 @@ where
     /// Per-partition saved stack pointers. Public for `offset_of!` in PendSV assembly.
     pub partition_sp: [u32; N],
     /// Per-partition stack storage, aligned for MPU region base requirements.
-    stacks: [AlignedStack<SW>; N],
+    stacks: [S; N],
     /// Currently active partition index, if any.
     active_partition: Option<u8>,
     /// Monotonic tick counter.
@@ -186,25 +185,19 @@ where
     yield_requested: bool,
 }
 
-impl<const N: usize, const SCHED: usize, const SW: usize> PartitionCore<N, SCHED, SW>
+impl<const N: usize, const SCHED: usize, S: StackStorage> PartitionCore<N, SCHED, S>
 where
     [(); N]:,
     [(); SCHED]:,
-    [(); SW]:,
 {
-    /// Zero-initialized stack constant for const array initialization.
-    ///
-    /// Uses [`AlignedStack::new`] to trigger the compile-time size check.
-    const ZERO_STACK: AlignedStack<SW> = AlignedStack::new();
-
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             partitions: PartitionTable::new(),
             schedule: ScheduleTable::new(),
             current_partition: 0,
             next_partition: 0,
             partition_sp: [0u32; N],
-            stacks: [Self::ZERO_STACK; N],
+            stacks: [S::ZERO; N],
             active_partition: None,
             tick: TickCounter::new(),
             yield_requested: false,
@@ -255,35 +248,34 @@ where
     }
 
     /// Returns a reference to all partition stacks.
-    pub fn stacks(&self) -> &[AlignedStack<SW>; N] {
+    pub fn stacks(&self) -> &[S; N] {
         &self.stacks
     }
 
     /// Returns a mutable reference to all partition stacks.
-    pub fn stacks_mut(&mut self) -> &mut [AlignedStack<SW>; N] {
+    pub fn stacks_mut(&mut self) -> &mut [S; N] {
         &mut self.stacks
     }
 
     /// Returns a mutable reference to a specific partition's stack array.
     ///
     /// Returns `None` if the index is out of bounds.
-    pub fn stack_mut(&mut self, index: usize) -> Option<&mut [u32; SW]> {
-        self.stacks.get_mut(index).map(|s| &mut s.0)
+    pub fn stack_mut(&mut self, index: usize) -> Option<&mut [u32]> {
+        self.stacks.get_mut(index).map(|s| s.as_u32_slice_mut())
     }
 
     /// Returns the base address of a partition's stack as an integer.
     ///
     /// Returns `None` if the index is out of bounds.
     pub fn stack_base(&self, index: usize) -> Option<u32> {
-        self.stacks.get(index).map(|s| s.0.as_ptr() as u32)
+        self.stacks
+            .get(index)
+            .map(|s| s.as_u32_slice().as_ptr() as u32)
     }
 
     /// Returns the stack size in bytes for each partition.
-    ///
-    /// This is constant for all partitions and equals `SW * 4` where SW
-    /// is the stack word count.
-    pub const fn stack_size(&self) -> usize {
-        SW * 4
+    pub fn stack_size(&self) -> usize {
+        S::SIZE_BYTES
     }
 
     /// Returns the initial stack pointer for a partition.
@@ -335,23 +327,21 @@ where
     }
 }
 
-impl<const N: usize, const SCHED: usize, const SW: usize> Default for PartitionCore<N, SCHED, SW>
+impl<const N: usize, const SCHED: usize, S: StackStorage> Default for PartitionCore<N, SCHED, S>
 where
     [(); N]:,
     [(); SCHED]:,
-    [(); SW]:,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const N: usize, const SCHED: usize, const SW: usize> crate::config::CoreOps
-    for PartitionCore<N, SCHED, SW>
+impl<const N: usize, const SCHED: usize, S: StackStorage> crate::config::CoreOps
+    for PartitionCore<N, SCHED, S>
 where
     [(); N]:,
     [(); SCHED]:,
-    [(); SW]:,
 {
     type PartTable = PartitionTable<N>;
     type SchedTable = ScheduleTable<SCHED>;
@@ -417,16 +407,15 @@ where
         self.yield_requested = requested;
     }
     fn stack_mut(&mut self, index: usize) -> Option<&mut [u32]> {
-        self.stacks.get_mut(index).map(|s| s.0.as_mut_slice())
+        self.stacks.get_mut(index).map(|s| s.as_u32_slice_mut())
     }
 }
 
-impl<const N: usize, const SCHED: usize, const SW: usize> PartitionCoreOps
-    for PartitionCore<N, SCHED, SW>
+impl<const N: usize, const SCHED: usize, S: StackStorage> PartitionCoreOps
+    for PartitionCore<N, SCHED, S>
 where
     [(); N]:,
     [(); SCHED]:,
-    [(); SW]:,
 {
     fn partitions(&self) -> &[PartitionControlBlock] {
         self.partitions.as_slice()
@@ -506,6 +495,9 @@ where
 mod tests {
     use super::*;
     use crate::scheduler::ScheduleEntry;
+
+    type PartitionCore<const N: usize, const SCHED: usize, const SW: usize> =
+        super::PartitionCore<N, SCHED, AlignedStack<SW>>;
 
     /// Stack word count for tests (256 words = 1024 bytes).
     const TEST_SW: usize = 256;
