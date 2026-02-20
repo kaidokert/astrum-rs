@@ -229,13 +229,12 @@ pub fn assert_no_overlapping_mpu_regions(_partitions: &[PartitionControlBlock]) 
 ///
 /// Panics if any kernel invariant is violated (debug/test builds only).
 #[cfg(any(debug_assertions, test))]
-pub fn assert_kernel_invariants() {
-    // Invariant checks will be added in subsequent commits.
-    // This is the entry point that will call individual check functions.
-    //
-    // TODO: integrate assert_stack_pointer_bounds here once assert_kernel_invariants
-    // gains access to kernel state (partitions and partition_sp slices). Currently
-    // this function has no parameters to pass to the individual checks.
+pub fn assert_kernel_invariants(
+    partitions: &[PartitionControlBlock],
+    active_partition: Option<u8>,
+) {
+    assert_partition_state_consistency(partitions);
+    assert_running_matches_active(partitions, active_partition);
 }
 
 /// No-op version for release builds.
@@ -243,7 +242,11 @@ pub fn assert_kernel_invariants() {
 /// This function compiles to nothing, ensuring zero runtime overhead.
 #[cfg(not(any(debug_assertions, test)))]
 #[inline(always)]
-pub fn assert_kernel_invariants() {}
+pub fn assert_kernel_invariants(
+    _partitions: &[PartitionControlBlock],
+    _active_partition: Option<u8>,
+) {
+}
 
 #[cfg(test)]
 mod tests {
@@ -261,18 +264,53 @@ mod tests {
     }
 
     #[test]
-    fn test_assert_kernel_invariants_does_not_panic() {
-        // The stub should complete without panicking.
-        // Once invariants are added, this test verifies the happy path.
-        assert_kernel_invariants();
+    fn kernel_invariants_empty_partitions_none_active() {
+        // No partitions with no active partition is valid.
+        assert_kernel_invariants(&[], None);
     }
 
     #[test]
-    fn test_assert_kernel_invariants_is_callable_multiple_times() {
+    fn kernel_invariants_all_ready_none_active() {
+        // All Ready partitions with no active partition is valid.
+        let partitions = [make_pcb(0), make_pcb(1), make_pcb(2)];
+        assert_kernel_invariants(&partitions, None);
+    }
+
+    #[test]
+    fn kernel_invariants_one_running_matches_active() {
+        // One Running partition matching active_partition is valid.
+        let mut p0 = make_pcb(0);
+        p0.transition(PartitionState::Running).unwrap();
+        assert_kernel_invariants(&[p0, make_pcb(1), make_pcb(2)], Some(0));
+    }
+
+    #[test]
+    fn kernel_invariants_idempotent() {
         // Invariant checks should be idempotent and safe to call repeatedly.
+        let mut p1 = make_pcb(1);
+        p1.transition(PartitionState::Running).unwrap();
+        let partitions = [make_pcb(0), p1, make_pcb(2)];
         for _ in 0..10 {
-            assert_kernel_invariants();
+            assert_kernel_invariants(&partitions, Some(1));
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "2 partitions in Running state")]
+    fn kernel_invariants_two_running_panics() {
+        // Two Running partitions triggers assert_partition_state_consistency.
+        let mut p0 = make_pcb(0);
+        let mut p1 = make_pcb(1);
+        p0.transition(PartitionState::Running).unwrap();
+        p1.transition(PartitionState::Running).unwrap();
+        assert_kernel_invariants(&[p0, p1], Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "active 0 is Ready")]
+    fn kernel_invariants_active_not_running_panics() {
+        // active_partition points to a non-Running partition.
+        assert_kernel_invariants(&[make_pcb(0), make_pcb(1)], Some(0));
     }
 
     #[test]
