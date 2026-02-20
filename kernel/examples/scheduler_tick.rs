@@ -10,7 +10,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::config::KernelConfig;
 use kernel::msg_pools::MsgPools;
 use kernel::partition::{MpuRegion, PartitionConfig};
-use kernel::partition_core::PartitionCore;
+use kernel::partition_core::{AlignedStack1K, PartitionCore};
 use kernel::port_pools::PortPools;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
@@ -22,7 +22,6 @@ struct TestConfig;
 impl KernelConfig for TestConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
-    const STACK_WORDS: usize = 256;
     const S: usize = 4;
     const SW: usize = 4;
     const MS: usize = 1;
@@ -43,7 +42,7 @@ impl KernelConfig for TestConfig {
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
     type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
