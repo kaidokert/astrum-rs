@@ -87,7 +87,7 @@ impl KernelConfig for TestConfig {
     const BZ: usize = 32;
     const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, { Self::STACK_WORDS }>;
+    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, kernel::partition_core::AlignedStack1K>;
     type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
     type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
