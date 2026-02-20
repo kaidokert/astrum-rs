@@ -1,5 +1,6 @@
 use crate::config::KernelConfig;
 use crate::context::ExceptionFrame;
+use crate::message::MessageQueue;
 use crate::partition::{ConfigError, MpuRegion, PartitionConfig, PartitionState, TransitionError};
 use crate::partition_core::{AlignedStack1K, PartitionCore};
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
@@ -18,7 +19,7 @@ impl KernelConfig for HarnessConfig {
     const MS: usize = 4;
     const MW: usize = 4;
     const QS: usize = 4;
-    const QD: usize = 4;
+    const QD: usize = 2;
     const QM: usize = 4;
     const QW: usize = 4;
     const SP: usize = 4;
@@ -144,6 +145,18 @@ impl KernelTestHarness {
         Self::with_partitions(2)
     }
 
+    /// Create a harness with two partitions and one message queue.
+    ///
+    /// The queue depth and message size come from `HarnessConfig` (QD=2, QM=4).
+    pub fn with_messages() -> Result<Self, HarnessError> {
+        let mut h = Self::with_partitions(2)?;
+        h.kernel
+            .messages_mut()
+            .add(MessageQueue::new())
+            .map_err(|_| HarnessError::ConfigsFull)?;
+        Ok(h)
+    }
+
     pub fn kernel(&self) -> &Kernel<HarnessConfig> {
         &self.kernel
     }
@@ -231,9 +244,24 @@ impl KernelTestHarness {
 mod tests {
     use super::*;
     use crate::syscall::{
-        SYS_EVT_SET, SYS_EVT_WAIT, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
-        SYS_YIELD,
+        SYS_EVT_SET, SYS_EVT_WAIT, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK,
+        SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
     };
+
+    /// Allocate a page at a fixed low address via `mmap` so that
+    /// `ptr as u32` round-trips correctly on 64-bit test hosts.
+    /// Each call site must use a distinct `page` offset. Leaked.
+    fn low32_buf(page: usize) -> *mut u8 {
+        extern "C" {
+            fn mmap(a: *mut u8, l: usize, p: i32, f: i32, d: i32, o: i64) -> *mut u8;
+        }
+        let addr = 0x2000_0000 + page * 4096;
+        // SAFETY: MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED at a known-free
+        // low address. The mapping is intentionally leaked (test-only).
+        let ptr = unsafe { mmap(addr as *mut u8, 4096, 0x3, 0x32, -1, 0) };
+        assert_eq!(ptr as usize, addr, "mmap MAP_FIXED failed");
+        ptr
+    }
 
     #[test]
     fn two_partitions_count_and_state() {
@@ -638,6 +666,65 @@ mod tests {
             h.kernel().mutexes().owner(0).unwrap(),
             Some(0),
             "P0 must own mutex 0 after ownership transfer from P1 unlock"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // MsgRecv → MsgSend full blocking/wake cycle
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn with_messages_creates_queue() {
+        let h = KernelTestHarness::with_messages().expect("harness setup");
+        assert!(
+            h.kernel().messages().get(0).is_some(),
+            "message queue 0 must exist after with_messages()"
+        );
+    }
+
+    #[test]
+    fn msg_recv_blocks_then_msg_send_wakes() {
+        let mut h = KernelTestHarness::with_messages().expect("harness setup");
+
+        // Map host memory at the partition MPU region so pointer-based
+        // syscalls pass validated_ptr! and can actually read/write data.
+        let buf_ptr = low32_buf(0);
+
+        // Step 1: P0 dispatches SYS_MSG_RECV on empty queue — blocks.
+        // SYS_MSG_RECV encoding: r1=queue_id, r2=caller_pid, r3=buf_ptr
+        let recv_frame = h.dispatch_as(0, SYS_MSG_RECV, 0, 0, buf_ptr as u32);
+
+        // P0 must now be Waiting.
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must transition to Waiting when queue is empty"
+        );
+
+        // Validate deschedule invariant (yield_requested == true).
+        h.assert_blocking_triggered_deschedule(0);
+
+        // Validate return value: kernel sets r0=0 on blocking path.
+        h.assert_return_distinguishes_blocking(&recv_frame, true);
+
+        // Reset yield_requested so the send dispatch starts clean.
+        h.kernel_mut().yield_requested = false;
+
+        // Step 2: P1 dispatches SYS_MSG_SEND on queue 0 — wakes P0.
+        // SYS_MSG_SEND encoding: r1=queue_id, r2=sender_pid, r3=data_ptr
+        // Use partition 1's MPU region (page 1) for the send pointer.
+        let send_ptr = low32_buf(1);
+        let data = [0xAB_u8; 4];
+        // SAFETY: send_ptr is valid for 4096 bytes via low32_buf.
+        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), send_ptr, 4) };
+        let send_frame = h.dispatch_as(1, SYS_MSG_SEND, 0, 1, send_ptr as u32);
+        assert_eq!(send_frame.r0, 0, "SYS_MSG_SEND must return 0 (success)");
+
+        // Step 3: Verify P0 transitioned Waiting → Ready.
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Ready,
+            "P0 must transition from Waiting to Ready after MsgSend wakes it"
         );
     }
 }
