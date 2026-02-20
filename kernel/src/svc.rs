@@ -6018,6 +6018,114 @@ mod tests {
         assert_eq!(k.active_partition(), Some(1));
     }
 
+    /// Regression: multiple simultaneously Waiting partitions must all be
+    /// skipped. Only non-Waiting partitions produce PartitionSwitch events.
+    #[test]
+    #[cfg(not(feature = "dynamic-mpu"))]
+    fn multi_partition_waiting_scheduler_skip() {
+        use crate::scheduler::ScheduleEvent;
+
+        // Build a 4-partition schedule: P0(3), P1(2), P2(2), P3(3) = 10 ticks
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 3)).unwrap();
+        schedule.add(ScheduleEntry::new(1, 2)).unwrap();
+        schedule.add(ScheduleEntry::new(2, 2)).unwrap();
+        schedule.add(ScheduleEntry::new(3, 3)).unwrap();
+        schedule.start();
+
+        let cfgs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0000,
+                stack_base: 0x2000_0000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
+            },
+            PartitionConfig {
+                id: 1,
+                entry_point: 0x0800_1000,
+                stack_base: 0x2000_1000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
+            },
+            PartitionConfig {
+                id: 2,
+                entry_point: 0x0800_2000,
+                stack_base: 0x2000_2000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
+            },
+            PartitionConfig {
+                id: 3,
+                entry_point: 0x0800_3000,
+                stack_base: 0x2000_3000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_3000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
+            },
+        ];
+        let mut k = Kernel::<TestConfig>::new(schedule, &cfgs).unwrap();
+
+        // Transition P1 and P2 to Waiting (Ready -> Running -> Waiting).
+        for pid in [1u8, 2] {
+            let pcb = k.partitions_mut().get_mut(pid as usize).unwrap();
+            pcb.transition(PartitionState::Running).unwrap();
+            pcb.transition(PartitionState::Waiting).unwrap();
+            assert_eq!(pcb.state(), PartitionState::Waiting);
+        }
+
+        // Walk through a full major frame (10 ticks) and record events.
+        // Schedule layout:
+        //   tick 1-2: interior of P0 slot (None)
+        //   tick 3:   boundary -> P1 slot (Waiting -> None)
+        //   tick 4:   interior of P1 slot (None)
+        //   tick 5:   boundary -> P2 slot (Waiting -> None)
+        //   tick 6:   interior of P2 slot (None)
+        //   tick 7:   boundary -> P3 slot (PartitionSwitch(3))
+        //   tick 8-9: interior of P3 slot (None)
+        //   tick 10:  boundary -> P0 slot (PartitionSwitch(0)) [wraps]
+        let mut events = [ScheduleEvent::None; 10];
+        for i in 0..10 {
+            events[i] = k.advance_schedule_tick();
+            // active_partition must never point to a Waiting partition.
+            if let Some(ap) = k.active_partition() {
+                assert!(ap != 1 && ap != 2, "active_partition was set to P{ap}");
+            }
+        }
+
+        // P0 slot (3 ticks): ticks 1-2 interior, tick 3 = boundary to P1.
+        assert_eq!(events[0], ScheduleEvent::None);
+        assert_eq!(events[1], ScheduleEvent::None);
+        // P1 boundary (Waiting -> skipped).
+        assert_eq!(events[2], ScheduleEvent::None, "P1 slot must be skipped");
+        // P1 interior tick.
+        assert_eq!(events[3], ScheduleEvent::None);
+        // P2 boundary (Waiting -> skipped).
+        assert_eq!(events[4], ScheduleEvent::None, "P2 slot must be skipped");
+        // P2 interior tick.
+        assert_eq!(events[5], ScheduleEvent::None);
+        // P3 boundary (Ready -> PartitionSwitch).
+        assert_eq!(
+            events[6],
+            ScheduleEvent::PartitionSwitch(3),
+            "P3 slot must produce PartitionSwitch(3)"
+        );
+        // P3 interior ticks.
+        assert_eq!(events[7], ScheduleEvent::None);
+        assert_eq!(events[8], ScheduleEvent::None);
+        // Major frame wraps -> P0 boundary (Ready -> PartitionSwitch).
+        assert_eq!(
+            events[9],
+            ScheduleEvent::PartitionSwitch(0),
+            "P0 slot must produce PartitionSwitch(0) on wrap"
+        );
+        // Final state: active_partition must be P0 (last successful switch).
+        assert_eq!(k.active_partition(), Some(0));
+    }
+
     #[test]
     #[cfg(feature = "dynamic-mpu")]
     fn ticks_since_bottom_half_tracks_staleness() {
