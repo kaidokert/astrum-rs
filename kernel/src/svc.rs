@@ -967,7 +967,7 @@ where
             { C::DR },
         >,
     ) -> Result<Self, ConfigError> {
-        use crate::partition::{MpuRegion, PartitionControlBlock};
+        use crate::partition::PartitionControlBlock;
         if schedule.is_empty() {
             return Err(ConfigError::ScheduleEmpty);
         }
@@ -1012,10 +1012,16 @@ where
                     actual_id: c.id,
                 });
             }
-            // Note: We skip c.validate() here because stack_base, stack_size, and
-            // mpu_region from PartitionConfig are NOT used - they are replaced with
-            // values derived from the internal PartitionCore stack. Only validate
-            // peripheral_regions which ARE used in the final PCB.
+            // Note: We skip c.validate() here because stack_base and stack_size
+            // from PartitionConfig are NOT used — they are replaced with values
+            // derived from the internal PartitionCore stack. We must still validate
+            // mpu_region and peripheral_regions, which ARE used in the final PCB.
+            crate::mpu::validate_mpu_region(c.mpu_region.base(), c.mpu_region.size()).map_err(
+                |detail| ConfigError::MpuRegionInvalid {
+                    partition_id: c.id,
+                    detail,
+                },
+            )?;
             for (j, region) in c.peripheral_regions.iter().enumerate() {
                 crate::mpu::validate_mpu_region(region.base(), region.size()).map_err(
                     |detail| ConfigError::PeripheralRegionInvalid {
@@ -1033,12 +1039,12 @@ where
             let internal_stack_base = internal_stack.as_ptr() as u32;
             let internal_stack_size = (internal_stack.len() * 4) as u32;
             let sp = align_down_8(internal_stack_base.wrapping_add(internal_stack_size));
-            // Override MpuRegion base with internal stack base for correct MPU config.
-            let mpu_region = MpuRegion::new(
-                internal_stack_base,
-                internal_stack_size,
-                c.mpu_region.permissions(),
-            );
+            // TODO: c.mpu_region may not cover the internal stack. The old code
+            // constructed mpu_region from internal_stack_base/size, guaranteeing
+            // coverage by construction. With mpu_region sourced from config, the
+            // caller cannot know the internal stack address, so a bounds check
+            // is not feasible without redesigning how mpu_region is provided.
+            let mpu_region = c.mpu_region;
             let pcb = PartitionControlBlock::new(
                 c.id,
                 c.entry_point,
