@@ -5874,6 +5874,120 @@ mod tests {
         assert_eq!(k.active_partition(), Some(1));
     }
 
+    /// Regression: SYS_YIELD dispatch sets yield_requested only when the
+    /// current partition is Running (not Ready or Waiting).
+    #[test]
+    fn dispatch_yield_sets_flag_when_partition_running() {
+        let mut k = kernel(0, 0, 0);
+        // kernel() creates partitions via tbl(), which transitions them to Running.
+        assert_eq!(
+            k.partitions()
+                .get(k.current_partition() as usize)
+                .unwrap()
+                .state(),
+            PartitionState::Running,
+        );
+        assert!(!k.yield_requested());
+        let mut ef = frame(SYS_YIELD, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert!(k.yield_requested());
+    }
+
+    /// Regression: a Waiting partition must not execute when its schedule
+    /// slot arrives. The scheduler returns None and preserves the previous
+    /// active/next partition values throughout the entire skipped slot.
+    #[test]
+    fn waiting_partition_skipped_for_entire_slot() {
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+        // Schedule: P0(5 ticks), P1(3 ticks). Partitions start Ready.
+
+        // Advance through P0's slot (4 interior ticks).
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+        // Before P1's slot: transition P1 Ready -> Running -> Waiting.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting
+        );
+
+        let prev_active = k.active_partition();
+        let prev_next = k.next_partition();
+
+        // Tick 5 would switch to P1 — must be suppressed.
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(k.active_partition(), prev_active);
+        assert_eq!(k.next_partition(), prev_next);
+
+        // Remaining 2 ticks of P1's slot: still no switch.
+        for _ in 0..2 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(k.active_partition(), prev_active);
+        }
+    }
+
+    /// Regression: once a Waiting partition transitions back to Ready, it
+    /// must be scheduled normally when its next slot comes up.
+    #[test]
+    #[cfg(not(feature = "dynamic-mpu"))]
+    fn waiting_partition_resumes_after_transition_to_ready() {
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+        // Schedule: P0(5 ticks), P1(3 ticks), major frame = 8 ticks.
+
+        // Advance 4 ticks into P0's first slot.
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+        // Put P1 into Waiting before its slot.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // Tick 5: P1's slot boundary — skipped because Waiting.
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+
+        // Advance through rest of P1's slot (2 ticks) + P0's next slot (5 ticks).
+        // Total: 7 more ticks to reach P1's next slot boundary.
+        for _ in 0..7 {
+            k.advance_schedule_tick();
+        }
+
+        // Unblock P1: Waiting -> Ready.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Ready).unwrap();
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
+
+        // Next tick enters P1's second slot — should switch to P1.
+        // We are at tick 12, which is 4 ticks into P0's second slot.
+        // Need to reach P1's next boundary at tick 13 (5+3+5 = 13).
+        // Actually let me recalculate: we did 4+1+7 = 12 ticks total.
+        // Major frame = 8, so 12 mod 8 = 4 ticks into 2nd major frame.
+        // P0 slot ends at tick 5 of each frame. We need 1 more tick.
+
+        // The schedule wraps: P0(5), P1(3), P0(5), P1(3)...
+        // Tick 1-4: interior of P0 slot 1
+        // Tick 5: switch to P1 (skipped)
+        // Tick 6-7: interior of P1 slot
+        // Tick 8: switch to P0 (wraps to slot 0)
+        // Tick 9-12: interior of P0 slot 2
+        // Tick 13: switch to P1
+
+        // We've done 12 ticks. One more should switch to P1.
+        let event = k.advance_schedule_tick();
+        assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(k.active_partition(), Some(1));
+    }
+
     #[test]
     #[cfg(feature = "dynamic-mpu")]
     fn ticks_since_bottom_half_tracks_staleness() {
