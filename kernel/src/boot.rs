@@ -163,7 +163,7 @@ pub fn check_stack_mpu_alignment(
 /// `Err(BootError::StorageMisaligned)` with address and required alignment.
 #[inline]
 pub fn check_storage_alignment(address: u32, required: u32) -> Result<(), BootError> {
-    if !address.is_multiple_of(required) {
+    if address & (required - 1) != 0 {
         return Err(BootError::StorageMisaligned { address, required });
     }
     Ok(())
@@ -519,6 +519,38 @@ mod tests {
                 required: 1024,
             })
         );
+    }
+
+    // TODO: boot() is #[cfg(not(test))] so we cannot directly test that
+    // boot() returns Err(StorageMisaligned). This test covers the helper;
+    // an integration test on a real target would be needed to verify boot().
+    #[test]
+    fn check_storage_alignment_returns_misaligned_for_kernel_alignment() {
+        use crate::state::KERNEL_ALIGNMENT;
+        let required = KERNEL_ALIGNMENT as u32;
+        // Address offset by 1 byte from alignment boundary.
+        let addr = required + 1;
+        let result = check_storage_alignment(addr, required);
+        assert_eq!(
+            result,
+            Err(BootError::StorageMisaligned {
+                address: addr,
+                required,
+            })
+        );
+        // Address at half the alignment (e.g., 2048 for 4096 alignment).
+        let half = required / 2;
+        let result = check_storage_alignment(half, required);
+        assert_eq!(
+            result,
+            Err(BootError::StorageMisaligned {
+                address: half,
+                required,
+            })
+        );
+        // Properly aligned address succeeds.
+        assert!(check_storage_alignment(required, required).is_ok());
+        assert!(check_storage_alignment(required * 3, required).is_ok());
     }
 
     #[test]
