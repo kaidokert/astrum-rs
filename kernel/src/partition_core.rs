@@ -10,12 +10,48 @@ use crate::tick::TickCounter;
 /// region size. For 1024-byte stacks (256 words), the base must be 1024-byte
 /// aligned. This wrapper enforces that alignment at compile time.
 ///
+/// # Compile-time constraint
+///
+/// `SW * 4` must not exceed [`Self::ALIGNMENT`] (1024). Instantiating
+/// `AlignedStack` with a larger word count causes a compile-time error via
+/// [`Self::ALIGNMENT_CHECK`], preventing silent MPU misconfiguration.
+///
 /// # Type Parameters
 ///
-/// - `SW`: Stack word count. Must be 256 for 1024-byte alignment (256 * 4 = 1024).
+/// - `SW`: Stack word count. `SW * 4` must be ≤ 1024.
 #[repr(C, align(1024))]
 #[derive(Clone, Copy)]
 pub struct AlignedStack<const SW: usize>(pub [u32; SW]);
+
+impl<const SW: usize> AlignedStack<SW> {
+    /// The alignment in bytes that the `#[repr(align(...))]` attribute enforces.
+    pub const ALIGNMENT: usize = 1024;
+
+    /// Compile-time assertion that `SW * 4 <= ALIGNMENT`.
+    ///
+    /// Evaluated at monomorphization time when referenced by [`Self::new`].
+    #[allow(clippy::let_unit_value)]
+    pub const ALIGNMENT_CHECK: () = assert!(
+        SW * 4 <= Self::ALIGNMENT,
+        "AlignedStack: SW * 4 exceeds the 1024-byte alignment — MPU region would be misconfigured"
+    );
+
+    /// Creates a zero-initialized `AlignedStack`.
+    ///
+    /// This constructor forces evaluation of [`Self::ALIGNMENT_CHECK`],
+    /// producing a compile-time error if `SW * 4 > 1024`.
+    pub const fn new() -> Self {
+        #[allow(clippy::let_unit_value)]
+        let _ = Self::ALIGNMENT_CHECK;
+        Self([0u32; SW])
+    }
+}
+
+impl<const SW: usize> Default for AlignedStack<SW> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Narrow interface for partition/schedule state access without const bounds.
 pub trait PartitionCoreOps {
@@ -101,7 +137,9 @@ where
     [(); SW]:,
 {
     /// Zero-initialized stack constant for const array initialization.
-    const ZERO_STACK: AlignedStack<SW> = AlignedStack([0u32; SW]);
+    ///
+    /// Uses [`AlignedStack::new`] to trigger the compile-time size check.
+    const ZERO_STACK: AlignedStack<SW> = AlignedStack::new();
 
     pub const fn new() -> Self {
         Self {
@@ -537,13 +575,13 @@ mod tests {
 
     #[test]
     fn stack_size_different_word_counts() {
-        // Test with 128 words (512 bytes)
+        // Test with 128 words (512 bytes) — within alignment limit
         let core_small: PartitionCore<1, 1, 128> = PartitionCore::new();
         assert_eq!(core_small.stack_size(), 512);
 
-        // Test with 512 words (2048 bytes)
-        let core_large: PartitionCore<1, 1, 512> = PartitionCore::new();
-        assert_eq!(core_large.stack_size(), 2048);
+        // Test with 64 words (256 bytes) — within alignment limit
+        let core_tiny: PartitionCore<1, 1, 64> = PartitionCore::new();
+        assert_eq!(core_tiny.stack_size(), 256);
     }
 
     #[test]
@@ -570,5 +608,45 @@ mod tests {
         assert!(core.stack_ptr_init(1).is_some());
         assert!(core.stack_ptr_init(2).is_none());
         assert!(core.stack_ptr_init(100).is_none());
+    }
+
+    #[test]
+    fn aligned_stack_alignment_constant() {
+        assert_eq!(AlignedStack::<TEST_SW>::ALIGNMENT, 1024);
+        assert_eq!(AlignedStack::<128>::ALIGNMENT, 1024);
+        assert_eq!(AlignedStack::<64>::ALIGNMENT, 1024);
+    }
+
+    #[test]
+    fn aligned_stack_new_returns_zeroed() {
+        let stack = AlignedStack::<TEST_SW>::new();
+        assert!(
+            stack.0.iter().all(|&w| w == 0),
+            "new() must zero-initialize"
+        );
+    }
+
+    #[test]
+    fn aligned_stack_new_valid_sizes() {
+        // All of these satisfy SW * 4 <= 1024 and must compile + produce
+        // zero-initialized stacks.
+        let s1 = AlignedStack::<1>::new();
+        assert_eq!(s1.0.len(), 1);
+        assert_eq!(s1.0[0], 0);
+
+        let s64 = AlignedStack::<64>::new();
+        assert_eq!(s64.0.len(), 64);
+        assert!(s64.0.iter().all(|&w| w == 0));
+
+        let s256 = AlignedStack::<256>::new();
+        assert_eq!(s256.0.len(), 256);
+        assert!(s256.0.iter().all(|&w| w == 0));
+    }
+
+    #[test]
+    fn aligned_stack_boundary_size() {
+        // SW=256 is the maximum valid size: 256 * 4 = 1024 == ALIGNMENT
+        let stack = AlignedStack::<256>::new();
+        assert_eq!(stack.0.len() * 4, AlignedStack::<256>::ALIGNMENT);
     }
 }
