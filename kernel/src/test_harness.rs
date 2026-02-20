@@ -540,4 +540,48 @@ mod tests {
             "P0 event flags must contain the bits set by P1"
         );
     }
+
+    #[test]
+    fn sem_wait_blocks_then_sem_signal_wakes() {
+        // Semaphore with initial count 0 so the first wait blocks.
+        let mut h = KernelTestHarness::with_semaphores(&[0]).expect("harness setup");
+
+        // Step 1: P0 dispatches SYS_SEM_WAIT — count is 0, so it blocks.
+        // SYS_SEM_WAIT encoding: r1 = sem_id, r2 = caller_pid
+        let wait_frame = h.dispatch_as(0, SYS_SEM_WAIT, 0, 0, 0);
+
+        // P0 must now be Waiting.
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must transition to Waiting when semaphore count is 0"
+        );
+
+        // Validate deschedule invariant.
+        h.assert_blocking_triggered_deschedule(0);
+
+        // Validate return value is 0 for blocking path.
+        h.assert_return_distinguishes_blocking(&wait_frame, true);
+
+        // Step 2: P1 dispatches SYS_SEM_SIGNAL on the same semaphore — wakes P0.
+        // SYS_SEM_SIGNAL encoding: r1 = sem_id
+        let sig_frame = h.dispatch_as(1, SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(sig_frame.r0, 0, "SEM_SIGNAL must return 0 (success)");
+
+        // Step 3: Verify P0 transitioned from Waiting to Ready.
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Ready,
+            "P0 must transition from Waiting to Ready after SEM_SIGNAL"
+        );
+
+        // Semaphore count must remain 0: the signal woke a waiter
+        // rather than incrementing the count.
+        let sem = h.kernel().semaphores().get(0).expect("semaphore 0 exists");
+        assert_eq!(
+            sem.count(),
+            0,
+            "semaphore count must stay 0 when signal wakes a blocked waiter"
+        );
+    }
 }
