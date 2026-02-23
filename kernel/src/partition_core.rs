@@ -376,6 +376,11 @@ where
     fn stack_mut(&mut self, index: usize) -> Option<&mut [u32]> {
         self.stacks.get_mut(index).map(|s| s.as_u32_slice_mut())
     }
+    fn stack_base(&self, index: usize) -> Option<u32> {
+        self.stacks
+            .get(index)
+            .map(|s| s.as_u32_slice().as_ptr() as u32)
+    }
 }
 
 impl<const N: usize, const SCHED: usize, S: StackStorage> PartitionCoreOps

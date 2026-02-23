@@ -151,6 +151,8 @@ pub trait CoreOps {
     fn set_yield_requested(&mut self, requested: bool);
     /// Returns a mutable reference to a partition's stack array.
     fn stack_mut(&mut self, index: usize) -> Option<&mut [u32]>;
+    /// Returns the base address of a partition's stack storage array.
+    fn stack_base(&self, index: usize) -> Option<u32>;
 }
 
 /// Trait for synchronization primitive sub-structs (semaphores, mutexes).

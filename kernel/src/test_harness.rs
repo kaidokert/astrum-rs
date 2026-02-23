@@ -244,6 +244,41 @@ impl KernelTestHarness {
         );
     }
 
+    /// Assert that every partition has a valid, unique core stack base address.
+    ///
+    /// For each partition index `0..partition_count`:
+    /// - `core_stack_base(i)` returns `Some` (stack storage exists)
+    /// - The address is non-zero
+    /// - The address is word-aligned (multiple of 4)
+    /// - No two partitions share the same core stack base address
+    pub fn assert_stack_bases_valid(&self) {
+        let n = self.kernel.partitions().len();
+        let mut seen: std::vec::Vec<u32> = std::vec::Vec::with_capacity(n);
+        const WORD_SIZE: usize = core::mem::size_of::<u32>();
+        for i in 0..n {
+            let base = self.kernel.core_stack_base(i).unwrap_or_else(|| {
+                panic!(
+                    "invariant violation: core_stack_base({i}) returned None \
+                     but partition exists"
+                )
+            });
+            assert_ne!(base, 0, "invariant violation: core_stack_base({i}) is zero");
+            assert_eq!(
+                base as usize % WORD_SIZE,
+                0,
+                "invariant violation: core_stack_base({i}) = {base:#x} is not word-aligned"
+            );
+            for (j, &prev) in seen.iter().enumerate() {
+                assert_ne!(
+                    base, prev,
+                    "invariant violation: partitions {j} and {i} share \
+                     core stack base {base:#x}"
+                );
+            }
+            seen.push(base);
+        }
+    }
+
     /// Assert that the syscall return value is consistent with blocking.
     ///
     /// If `blocked` is true, `frame.r0` must be 0 (the value returned by
@@ -916,5 +951,35 @@ mod tests {
 
         // This must panic.
         h.assert_no_switch_to_waiting();
+    }
+
+    // ----- core_stack_base accessor tests -----
+
+    #[test]
+    fn core_stack_base_returns_valid_addresses() {
+        let h = KernelTestHarness::with_partitions(3).expect("harness setup");
+        for i in 0..3 {
+            let base = h.kernel().core_stack_base(i);
+            assert!(base.is_some(), "partition {i} should have a stack base");
+            let addr = base.unwrap();
+            assert_ne!(addr, 0, "partition {i} stack base must be non-zero");
+            assert_eq!(addr % 4, 0, "partition {i} stack base must be word-aligned");
+        }
+    }
+
+    #[test]
+    fn core_stack_base_returns_none_for_out_of_bounds() {
+        let h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        // Indices >= N are truly out of bounds (N is the backing storage size).
+        assert!(h.kernel().core_stack_base(HarnessConfig::N).is_none());
+        assert!(h.kernel().core_stack_base(HarnessConfig::N + 100).is_none());
+    }
+
+    // ----- stack_bases_valid invariant tests -----
+
+    #[test]
+    fn stack_bases_valid_after_construction() {
+        let h = KernelTestHarness::with_partitions(4).expect("harness setup");
+        h.assert_stack_bases_valid();
     }
 }
