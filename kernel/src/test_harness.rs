@@ -63,7 +63,7 @@ pub enum HarnessError {
 }
 
 pub struct KernelTestHarness {
-    kernel: Kernel<HarnessConfig>,
+    kernel: Box<Kernel<HarnessConfig>>,
 }
 
 impl KernelTestHarness {
@@ -101,13 +101,15 @@ impl KernelTestHarness {
                 })
                 .map_err(|_| HarnessError::ConfigsFull)?;
         }
-        let mut kernel = Kernel::new(
-            schedule,
-            &configs,
-            #[cfg(feature = "dynamic-mpu")]
-            crate::virtual_device::DeviceRegistry::new(),
-        )
-        .map_err(HarnessError::KernelInit)?;
+        let mut kernel = Box::new(
+            Kernel::new(
+                schedule,
+                &configs,
+                #[cfg(feature = "dynamic-mpu")]
+                crate::virtual_device::DeviceRegistry::new(),
+            )
+            .map_err(HarnessError::KernelInit)?,
+        );
         // Only partition 0 starts Running; others remain Ready (at-most-one-Running invariant).
         kernel
             .partitions_mut()
@@ -117,6 +119,19 @@ impl KernelTestHarness {
             .map_err(HarnessError::Transition)?;
         kernel.current_partition = 0;
         kernel.active_partition = Some(0);
+        // Reconcile mpu_region bases with actual core stack addresses.
+        // On 64-bit test hosts, addresses captured during Kernel::new become
+        // stale when the struct moves. Boxing pins the kernel on the heap so
+        // core_stack_base() returns stable addresses we can write into the PCBs.
+        // TODO: Kernel is not move-safe due to internal self-references to stack
+        // buffers. Ideally Kernel::new should return a pinned/boxed type or use
+        // relative offsets, eliminating this post-move fixup.
+        for i in 0..n {
+            let base = kernel
+                .core_stack_base(i)
+                .ok_or(HarnessError::PartitionNotFound)?;
+            kernel.fix_mpu_data_region(i, base);
+        }
         Ok(Self { kernel })
     }
 
@@ -1069,6 +1084,32 @@ mod tests {
     fn stack_bases_valid_after_construction() {
         let h = KernelTestHarness::with_partitions(4).expect("harness setup");
         h.assert_stack_bases_valid();
+    }
+
+    // ------------------------------------------------------------------
+    // PCB mpu_region matches core stack base (regression for commit 2675853)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn pcb_mpu_region_base_matches_core_stack_base() {
+        let h = KernelTestHarness::with_partitions(4).expect("harness setup");
+        for i in 0..h.kernel().partitions().len() {
+            let pcb = h.kernel().partitions().get(i).expect("partition exists");
+            let core_base = h
+                .kernel()
+                .core_stack_base(i)
+                .expect("core_stack_base must be Some");
+            assert_eq!(
+                pcb.mpu_region().base(),
+                core_base,
+                "partition {i}: mpu_region().base() must equal core_stack_base()"
+            );
+            assert_eq!(
+                pcb.mpu_region().size(),
+                STACK_SIZE_BYTES,
+                "partition {i}: mpu_region().size() must equal STACK_SIZE_BYTES"
+            );
+        }
     }
 
     // ------------------------------------------------------------------
