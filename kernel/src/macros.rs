@@ -45,60 +45,6 @@ macro_rules! svc {
     }};
 }
 
-/// Read the value the kernel placed in `r0` before entering this partition.
-///
-/// Partition entry arguments (port IDs, resource handles, etc.) are packed
-/// into a single `u32` and passed via `r0` at partition entry.  This macro
-/// extracts that value so partition code can unpack it.
-///
-/// On non-ARM hosts the macro returns `0`.
-///
-/// # Deprecation
-///
-/// Use [`partition_trampoline!`] instead.  A `#[naked]` trampoline
-/// preserves `r0` without inline-asm tricks and is immune to
-/// dead-store elimination.
-#[macro_export]
-#[deprecated(note = "use partition_trampoline! instead — it is immune to dead-store elimination")]
-macro_rules! unpack_r0 {
-    () => {{
-        let p: u32;
-        #[cfg(target_arch = "arm")]
-        {
-            // The `compiler_fence(Acquire)` after the read prevents the
-            // compiler from reordering subsequent memory accesses before
-            // the register capture.  Without it, the compiler is free to
-            // move later loads/stores above the asm block, potentially
-            // reading stale or uninitialised data.
-            //
-            // SAFETY: At partition entry the kernel has placed the
-            // initialisation argument in r0.  We use an explicit
-            // `mov {0}, r0` to capture it into a general-purpose register
-            // because `out("r0")` with an empty asm template lets the
-            // compiler assume r0 is already in the output, which can be
-            // optimised away.  Reading r0 here, before any other code has
-            // clobbered it, is the defined ABI.
-            // `options(nomem, nostack, preserves_flags)` tells the compiler
-            // this asm block does not touch memory, the stack, or flags.
-            unsafe {
-                core::arch::asm!(
-                    "mov {0}, r0",
-                    out(reg) p,
-                    options(nomem, nostack, preserves_flags),
-                );
-            }
-            core::sync::atomic::compiler_fence(
-                core::sync::atomic::Ordering::Acquire,
-            );
-        }
-        #[cfg(not(target_arch = "arm"))]
-        {
-            p = 0;
-        }
-        p
-    }};
-}
-
 /// Complete kernel runtime setup macro.
 ///
 /// Generates kernel storage, accessor functions, and PendSV handler in a
@@ -202,11 +148,10 @@ macro_rules! define_kernel_runtime {
 /// On ARM targets the trampoline is a single `b` (branch) instruction.
 /// Because the function is `#[naked]`, the compiler emits no prologue and
 /// `r0` is guaranteed to still hold the value the kernel placed there at
-/// partition entry.  This eliminates the compiler-reordering hazard that
-/// would exist if `unpack_r0!` were used in a non-naked function.
+/// partition entry.  This eliminates any compiler-reordering hazard that
+/// would exist in a non-naked function.
 ///
-/// On non-ARM test hosts the trampoline calls `$body(0)`, matching the
-/// existing `unpack_r0!` host behaviour (always returns 0).
+/// On non-ARM test hosts the trampoline calls `$body(0)`.
 ///
 /// # Usage
 ///
@@ -244,8 +189,7 @@ macro_rules! partition_trampoline {
         // TODO: migrate to #[unsafe(no_mangle)] when moving to edition 2024.
         #[no_mangle]
         pub extern "C" fn $name() -> ! {
-            // On host targets, call the body with 0 (matching unpack_r0!
-            // host behaviour).
+            // On host targets, call the body with 0.
             let body: extern "C" fn(u32) -> ! = $body;
             body(0)
         }
@@ -287,19 +231,12 @@ macro_rules! define_systick {
 
 #[cfg(test)]
 mod tests {
-    // On non-ARM test hosts both macros must compile and return 0.
+    // On non-ARM test hosts the svc! macro must compile and return 0.
 
     #[test]
     fn svc_returns_zero_on_host() {
         let r = svc!(1u32, 2u32, 3u32, 4u32);
         assert_eq!(r, 0);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn unpack_r0_returns_zero_on_host() {
-        let p = unpack_r0!();
-        assert_eq!(p, 0);
     }
 
     #[allow(clippy::empty_loop)]
