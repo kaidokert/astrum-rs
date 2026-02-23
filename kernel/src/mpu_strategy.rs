@@ -190,6 +190,49 @@ impl DynamicStrategy {
         })
     }
 
+    /// Populate dynamic slots 1-3 (R5-R7) with deduplicated peripheral
+    /// regions from the given partitions.  Each region is configured as
+    /// device memory (S/C/B=0/0/0, XN, AP_FULL_ACCESS).  Returns the
+    /// number wired; stops at 3 (slot exhaustion).
+    pub fn wire_boot_peripherals(
+        &self,
+        partitions: &[crate::partition::PartitionControlBlock],
+    ) -> usize {
+        // Deduplicate by (base, size). At most 3 slots available (R5-R7),
+        // so a small inline set suffices.
+        let mut seen: heapless::Vec<(u32, u32), 3> = heapless::Vec::new();
+        let mut wired = 0usize;
+
+        for part in partitions.iter() {
+            for region in part.peripheral_regions().iter() {
+                let base = region.base();
+                let size = region.size();
+                if size < 32 || !size.is_power_of_two() {
+                    continue;
+                }
+                let key = (base, size);
+                if seen.contains(&key) {
+                    continue;
+                }
+                let rasr = crate::mpu::build_rasr(
+                    size.trailing_zeros() - 1,
+                    crate::mpu::AP_FULL_ACCESS,
+                    true,
+                    (false, false, false),
+                );
+                match self.add_window(base, size, rasr, part.id()) {
+                    Ok(_) => {
+                        let _ = seen.push(key);
+                        wired += 1;
+                    }
+                    Err(MpuError::SlotExhausted) => return wired,
+                    Err(_) => continue,
+                }
+            }
+        }
+        wired
+    }
+
     /// Program regions R4-R7 into the MPU hardware.
     ///
     /// Uses [`mpu::configure_region`] to write each of the four dynamic
@@ -1197,5 +1240,55 @@ mod tests {
         ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
         assert!(ds.accessible_regions(0).is_empty());
         assert!(ds.accessible_regions(2).is_empty());
+    }
+
+    fn periph(base: u32, size: u32) -> MpuRegion {
+        MpuRegion::new(base, size, 0)
+    }
+
+    #[test]
+    fn wire_boot_peripherals_correctness() {
+        let ds = DynamicStrategy::new();
+        let (rb, rs) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rb, rs)]).unwrap();
+        let pcbs = [
+            make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]),
+            make_pcb(0x0, 0x2000_8000, 4096).with_peripheral_regions(&[periph(0x4001_0000, 256)]),
+        ];
+        assert_eq!(ds.wire_boot_peripherals(&pcbs), 2);
+        assert_eq!(ds.slot(4).unwrap().base, 0x2000_0000); // R4 unchanged
+        let d5 = ds.slot(5).unwrap();
+        assert_eq!((d5.base, d5.size), (0x4000_0000, 4096));
+        // Verify device-memory RASR: AP=full, XN=1, S/C/B=0/0/0.
+        let r = d5.permissions;
+        assert_eq!((r >> 24) & 0x7, AP_FULL_ACCESS);
+        assert_eq!((r >> 28) & 1, 1);
+        assert_eq!((r >> 16) & 0x7, 0);
+        assert_eq!(ds.slot(6).unwrap().base, 0x4001_0000);
+        assert!(ds.slot(7).is_none());
+        // Invalid size (100) skipped; valid 256 wired.
+        let ds2 = DynamicStrategy::new();
+        let p = make_pcb(0x0, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[periph(0x4000_0000, 100), periph(0x4001_0000, 256)]);
+        assert_eq!(ds2.wire_boot_peripherals(&[p]), 1);
+        assert_eq!(ds2.slot(5).unwrap().base, 0x4001_0000);
+        // Dedup: same (base,size) across partitions → one slot.
+        let ds3 = DynamicStrategy::new();
+        let dup = [
+            make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]),
+            make_pcb(0x0, 0x2000_8000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]),
+        ];
+        assert_eq!(ds3.wire_boot_peripherals(&dup), 1);
+        assert!(ds3.slot(6).is_none());
+        // Exhaustion: 4 unique regions, 3 dynamic slots.
+        let ds4 = DynamicStrategy::new();
+        let many = [
+            make_pcb(0x0, 0x2000_0000, 4096)
+                .with_peripheral_regions(&[periph(0x4000_0000, 4096), periph(0x4001_0000, 4096)]),
+            make_pcb(0x0, 0x2000_8000, 4096)
+                .with_peripheral_regions(&[periph(0x4002_0000, 4096), periph(0x4003_0000, 4096)]),
+        ];
+        assert_eq!(ds4.wire_boot_peripherals(&many), 3);
+        assert!(ds4.slot(5).is_some() && ds4.slot(6).is_some() && ds4.slot(7).is_some());
     }
 }
