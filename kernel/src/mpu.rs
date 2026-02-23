@@ -158,7 +158,7 @@ pub fn configure_region(mpu: &cortex_m::peripheral::MPU, rbar: u32, rasr: u32) {
     }
 }
 
-use crate::partition::PartitionControlBlock;
+use crate::partition::{MpuRegion, PartitionControlBlock};
 
 /// MPU CTRL value: enable MPU (bit 0) + PRIVDEFENA (bit 2).
 ///
@@ -254,6 +254,58 @@ pub fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> [(u32, 
     partition_mpu_regions(pcb).unwrap_or_else(deny_all_regions)
 }
 
+/// (RBAR, RASR) pair for a disabled MPU region targeting slot 4.
+/// RBAR carries the VALID bit and region number so the MPU targets R4
+/// instead of overwriting whatever is in MPU_RNR.  RASR = 0 disables.
+/// Precomputed at compile time — no runtime panic possible.
+const DISABLED_R4: (u32, u32) = (
+    match build_rbar(0, 4) {
+        Some(v) => v,
+        None => panic!("invariant: base=0 aligned, region=4 in range"),
+    },
+    0,
+);
+
+/// (RBAR, RASR) pair for a disabled MPU region targeting slot 5.
+const DISABLED_R5: (u32, u32) = (
+    match build_rbar(0, 5) {
+        Some(v) => v,
+        None => panic!("invariant: base=0 aligned, region=5 in range"),
+    },
+    0,
+);
+
+/// Build an (RBAR, RASR) pair for an active peripheral MPU region.
+///
+/// Peripheral attributes: AP = full access, XN = execute never,
+/// TEX=0 S=1 C=0 B=1 (Shareable Device memory).
+///
+/// Returns `None` if the region's base or size is invalid for the MPU.
+fn peripheral_region_pair(region: &MpuRegion, slot: u32) -> Option<(u32, u32)> {
+    let size_field = encode_size(region.size())?;
+    let rbar = build_rbar(region.base(), slot)?;
+    let rasr = build_rasr(size_field, AP_FULL_ACCESS, true, (true, false, true));
+    Some((rbar, rasr))
+}
+
+/// Build (RBAR, RASR) pairs for peripheral regions R4-R5.
+///
+/// Returns up to 2 pairs from the PCB's peripheral regions.  Unused
+/// slots are disabled (RASR enable bit = 0).  Returns `None` if a
+/// configured peripheral region has invalid MPU parameters.
+pub fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 2]> {
+    let periph = pcb.peripheral_regions();
+    let r4 = match periph.first() {
+        Some(r) => peripheral_region_pair(r, 4)?,
+        None => DISABLED_R4,
+    };
+    let r5 = match periph.get(1) {
+        Some(r) => peripheral_region_pair(r, 5)?,
+        None => DISABLED_R5,
+    };
+    Some([r4, r5])
+}
+
 /// Index of the first dynamic region within the array returned by
 /// [`partition_mpu_regions`].  Regions before this index (background,
 /// code, stack guard) are static; the region at this index (data RW)
@@ -309,6 +361,13 @@ pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionContr
     for &(rbar, rasr) in &regions {
         configure_region(mpu, rbar, rasr);
     }
+    // Program peripheral regions R4-R5 (disabled if not configured).
+    // Fallback uses compile-time constants with the VALID bit so disabled
+    // slots target the correct region index.
+    let periph = peripheral_mpu_regions(pcb).unwrap_or([DISABLED_R4, DISABLED_R5]);
+    for &(rbar, rasr) in &periph {
+        configure_region(mpu, rbar, rasr);
+    }
 
     // Verify PRIVDEFENA (bit 2) is set — the kernel relies on the default
     // memory map for privileged access.  Evaluated at compile time.
@@ -320,6 +379,32 @@ pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionContr
     // privileged code to use the default memory map, while unprivileged access
     // is restricted to the explicitly configured regions (or denied entirely
     // by the deny-all fallback).
+    unsafe { mpu.ctrl.write(MPU_CTRL_ENABLE_PRIVDEFENA) };
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+}
+
+/// Apply deny-all MPU configuration (R0-R5).
+///
+/// Programmes the MPU with [`deny_all_regions`] and disables peripheral
+/// slots R4-R5 so that all unprivileged memory accesses fault.  Used as
+/// a panic fallback when the next partition ID is invalid.
+#[cfg(not(test))]
+pub fn apply_deny_all_mpu(mpu: &cortex_m::peripheral::MPU) {
+    let regions = deny_all_regions();
+    // SAFETY: Disabling MPU before reprogramming (same rationale as
+    // apply_partition_mpu).  We hold exclusive `&MPU`.
+    unsafe { mpu.ctrl.write(0) };
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+    for &(rbar, rasr) in &regions {
+        configure_region(mpu, rbar, rasr);
+    }
+    // Disable peripheral region slots R4-R5.
+    configure_region(mpu, DISABLED_R4.0, DISABLED_R4.1);
+    configure_region(mpu, DISABLED_R5.0, DISABLED_R5.1);
+    // SAFETY: Re-enabling MPU with PRIVDEFENA after all deny-all regions
+    // are programmed.  Same safety argument as apply_partition_mpu.
     unsafe { mpu.ctrl.write(MPU_CTRL_ENABLE_PRIVDEFENA) };
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
@@ -814,6 +899,58 @@ mod tests {
         // entry_point near end of address space + large region causes overflow
         let pcb = make_pcb(0xFFFF_0000, 0x2000_0000, 0x0001_0000);
         assert!(partition_mpu_regions(&pcb).is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // peripheral_mpu_regions R4/R5
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn peripheral_mpu_regions_none_when_empty() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        let r = peripheral_mpu_regions(&pcb).unwrap();
+        // Disabled slots must still carry the correct region index with
+        // VALID bit set so the MPU targets R4/R5 instead of overwriting
+        // whatever region is currently in MPU_RNR.
+        assert_eq!(
+            r,
+            [
+                (build_rbar(0, 4).unwrap(), 0),
+                (build_rbar(0, 5).unwrap(), 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn peripheral_mpu_regions_one_peripheral() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
+        let r = peripheral_mpu_regions(&pcb).unwrap();
+        // R4 enabled with correct base and Device memory attrs
+        assert_eq!(r[0].0, build_rbar(0x4000_0000, 4).unwrap());
+        assert_eq!((r[0].1 >> RASR_AP_SHIFT) & RASR_AP_MASK, AP_FULL_ACCESS);
+        assert_eq!(r[0].1 & 1, 1); // enabled
+        assert_eq!((r[0].1 >> 28) & 1, 1); // XN
+        assert_eq!((r[0].1 >> 16) & 0x7, 0b101); // S=1,C=0,B=1
+                                                 // R5 disabled — still targets slot 5 via VALID bit
+        assert_eq!(r[1], (build_rbar(0, 5).unwrap(), 0));
+    }
+
+    #[test]
+    fn peripheral_mpu_regions_two_peripherals() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096).with_peripheral_regions(&[
+            MpuRegion::new(0x4000_0000, 4096, 0),
+            MpuRegion::new(0x4000_1000, 256, 0),
+        ]);
+        let r = peripheral_mpu_regions(&pcb).unwrap();
+        assert_eq!(r[0].0, build_rbar(0x4000_0000, 4).unwrap());
+        assert_eq!(r[0].1 & 1, 1);
+        assert_eq!(r[1].0, build_rbar(0x4000_1000, 5).unwrap());
+        assert_eq!(
+            (r[1].1 >> RASR_SIZE_SHIFT) & RASR_SIZE_MASK,
+            encode_size(256).unwrap()
+        );
+        assert_eq!(r[1].1 & 1, 1);
     }
 
     // ------------------------------------------------------------------
