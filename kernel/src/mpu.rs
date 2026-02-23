@@ -1009,6 +1009,95 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // peripheral_mpu_regions: encoding-level verification
+    // ------------------------------------------------------------------
+
+    /// Verify that RBAR region number bits [3:0] encode 4 and 5 (not 0-3),
+    /// and that the VALID bit (bit 4) is set for direct region targeting.
+    #[test]
+    fn peripheral_rbar_region_numbers_are_4_and_5() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096).with_peripheral_regions(&[
+            MpuRegion::new(0x4000_0000, 4096, 0),
+            MpuRegion::new(0x4000_1000, 256, 0),
+        ]);
+        let r = peripheral_mpu_regions(&pcb).unwrap();
+
+        // RBAR bits [3:0] = region number, bit 4 = VALID
+        assert_eq!(r[0].0 & 0xF, 4, "R4 RBAR region number must be 4");
+        assert_eq!(r[1].0 & 0xF, 5, "R5 RBAR region number must be 5");
+        assert_eq!((r[0].0 >> 4) & 1, 1, "R4 RBAR VALID bit must be set");
+        assert_eq!((r[1].0 >> 4) & 1, 1, "R5 RBAR VALID bit must be set");
+
+        // Also verify disabled R5 still targets region 5 (single-peripheral case)
+        let pcb1 = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
+        let r1 = peripheral_mpu_regions(&pcb1).unwrap();
+        assert_eq!(r1[1].0 & 0xF, 5, "Disabled R5 must still target region 5");
+        assert_eq!((r1[1].0 >> 4) & 1, 1, "Disabled R5 VALID bit must be set");
+    }
+
+    /// Verify full RASR encoding for both R4 and R5 when two peripheral
+    /// regions are configured: Device memory (TEX=0, S=1, C=0, B=1),
+    /// AP=full-access, XN=1, correct sizes, and correct base addresses.
+    #[test]
+    fn peripheral_two_regions_full_rasr_encoding() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096).with_peripheral_regions(&[
+            MpuRegion::new(0x4000_0000, 4096, 0),
+            MpuRegion::new(0x4000_1000, 256, 0),
+        ]);
+        let r = peripheral_mpu_regions(&pcb).unwrap();
+
+        let expected_bases: [u32; 2] = [0x4000_0000, 0x4000_1000];
+        let expected_sizes: [u32; 2] = [4096, 256];
+
+        for (i, &(_rbar, rasr)) in r.iter().enumerate() {
+            let slot = i as u32 + 4;
+            // Enable bit
+            assert_eq!(rasr & 1, 1, "R{slot} must be enabled");
+            // Device memory: TEX=0 (bits [21:19]), S=1, C=0, B=1
+            assert_eq!((rasr >> 19) & 0x7, 0, "R{slot} TEX must be 0");
+            assert_eq!((rasr >> 16) & 0x7, 0b101, "R{slot} S/C/B must be 101");
+            // AP = full access
+            assert_eq!(
+                (rasr >> RASR_AP_SHIFT) & RASR_AP_MASK,
+                AP_FULL_ACCESS,
+                "R{slot} AP must be full-access"
+            );
+            // XN = 1
+            assert_eq!((rasr >> 28) & 1, 1, "R{slot} XN must be set");
+            // Correct base address
+            assert_eq!(
+                decode_rbar_base(r[i].0),
+                expected_bases[i],
+                "R{slot} base address mismatch"
+            );
+            // Correct size
+            assert_eq!(
+                decode_rasr_size_bytes(rasr),
+                Some(expected_sizes[i]),
+                "R{slot} size mismatch"
+            );
+        }
+    }
+
+    /// Verify that a PCB with no peripheral regions produces disabled
+    /// entries with region numbers 4 and 5 and RASR = 0 (not enabled).
+    #[test]
+    fn peripheral_no_regions_disabled_with_correct_slots() {
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        let r = peripheral_mpu_regions(&pcb).unwrap();
+
+        // Both RASR values must be 0 (disabled)
+        assert_eq!(r[0].1, 0, "R4 RASR must be 0 (disabled)");
+        assert_eq!(r[1].1, 0, "R5 RASR must be 0 (disabled)");
+        // RBAR must still target slots 4 and 5
+        assert_eq!(r[0].0 & 0xF, 4, "Disabled R4 region number must be 4");
+        assert_eq!(r[1].0 & 0xF, 5, "Disabled R5 region number must be 5");
+        assert!(!decode_rasr_enabled(r[0].1), "R4 must not be enabled");
+        assert!(!decode_rasr_enabled(r[1].1), "R5 must not be enabled");
+    }
+
+    // ------------------------------------------------------------------
     // decode helpers
     // ------------------------------------------------------------------
 
