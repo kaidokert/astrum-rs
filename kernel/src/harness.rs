@@ -272,7 +272,7 @@ macro_rules! define_unified_harness {
             #[cfg(feature = "dynamic-mpu")]
             $crate::mpu::mpu_disable(&p.MPU);
 
-            $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+            let _periph = $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
                 let pcb = match k.partitions().get(pid as usize) {
                     Some(pcb) => pcb,
@@ -291,7 +291,7 @@ macro_rules! define_unified_harness {
                 $crate::mpu::apply_partition_mpu(&p.MPU, pcb);
 
                 // Dynamic mode: write only R0-R3 base partition regions
-                // (MPU already disabled above; R4-R7 written below).
+                // (MPU already disabled above; R4-R5 overridden below).
                 #[cfg(feature = "dynamic-mpu")]
                 {
                     let regions = $crate::mpu::partition_mpu_regions_or_deny_all(pcb);
@@ -299,15 +299,28 @@ macro_rules! define_unified_harness {
                         $crate::mpu::configure_region(&p.MPU, rbar, rasr);
                     }
                 }
+
+                // Return peripheral regions for dynamic-mode R4-R5
+                // override.  In static mode this is unused but keeps
+                // the closure return type unified across cfg variants.
+                $crate::mpu::peripheral_mpu_regions_or_disabled(pcb)
             });
 
-            // Dynamic mode: write R4-R7 strategy regions and re-enable.
+            // Dynamic mode: write R4-R7 strategy regions, then
+            // override R4-R5 with peripheral regions and re-enable.
             #[cfg(feature = "dynamic-mpu")]
             {
                 let values = HARNESS_STRATEGY.compute_region_values();
                 for &(rbar, rasr) in &values {
                     $crate::mpu::configure_region(&p.MPU, rbar, rasr);
                 }
+
+                // Overwrite R4-R5 with per-partition peripheral regions.
+                // Partitions without peripherals get disabled R4/R5.
+                for &(rbar, rasr) in &_periph {
+                    $crate::mpu::configure_region(&p.MPU, rbar, rasr);
+                }
+
                 $crate::mpu::mpu_enable(&p.MPU);
             }
         }

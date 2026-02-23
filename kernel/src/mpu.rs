@@ -306,6 +306,18 @@ pub fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32)
     Some([r4, r5])
 }
 
+/// Return peripheral (RBAR, RASR) pairs for R4-R5, falling back to
+/// disabled regions if the partition's peripheral MPU parameters are
+/// invalid.
+///
+/// This is the infallible counterpart of [`peripheral_mpu_regions`].
+/// When `peripheral_mpu_regions` returns `None` (e.g. non-power-of-2
+/// peripheral size), the disabled fallback ensures R4-R5 are explicitly
+/// cleared rather than retaining stale grants from a previous partition.
+pub fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) -> [(u32, u32); 2] {
+    peripheral_mpu_regions(pcb).unwrap_or([DISABLED_R4, DISABLED_R5])
+}
+
 /// Index of the first dynamic region within the array returned by
 /// [`partition_mpu_regions`].  Regions before this index (background,
 /// code, stack guard) are static; the region at this index (data RW)
@@ -1155,5 +1167,52 @@ mod tests {
     fn unprivileged_regions_empty_input() {
         let result = unprivileged_regions_from_pairs(&[]);
         assert!(result.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // peripheral_mpu_regions: dynamic-mpu context-switch integration
+    // ------------------------------------------------------------------
+
+    /// Verify that peripheral_mpu_regions produces the correct R4 RBAR/RASR
+    /// for a PCB with one peripheral region, and that R5 is disabled.
+    /// This is the exact sequence written by __pendsv_program_mpu after
+    /// strategy regions to override R4-R5 with per-partition peripherals.
+    #[test]
+    fn peripheral_mpu_regions_dynamic_one_peripheral() {
+        let periph_base: u32 = 0x4000_0000;
+        let periph_size: u32 = 4096;
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(periph_base, periph_size, 0)]);
+
+        let regions =
+            peripheral_mpu_regions(&pcb).expect("valid peripheral region must produce Some");
+
+        // R4: correct RBAR with base, VALID bit, and region number 4
+        let expected_rbar = build_rbar(periph_base, 4).unwrap();
+        assert_eq!(regions[0].0, expected_rbar, "R4 RBAR mismatch");
+
+        // R4 RASR: enabled, correct size, Device memory (S=1,C=0,B=1),
+        // AP=full-access, XN=1
+        let rasr = regions[0].1;
+        assert_eq!(rasr & 1, 1, "R4 must be enabled");
+        assert_eq!(
+            (rasr >> RASR_SIZE_SHIFT) & RASR_SIZE_MASK,
+            encode_size(periph_size).unwrap(),
+            "R4 SIZE field mismatch"
+        );
+        assert_eq!(
+            (rasr >> RASR_AP_SHIFT) & RASR_AP_MASK,
+            AP_FULL_ACCESS,
+            "R4 AP must be full-access"
+        );
+        assert_eq!((rasr >> 28) & 1, 1, "R4 XN must be set");
+        // S=1 (bit 18), C=0 (bit 17), B=1 (bit 16)
+        assert_eq!((rasr >> 16) & 0x7, 0b101, "R4 S/C/B must be 101 (Device)");
+
+        // R5: disabled — RBAR targets slot 5, RASR = 0
+        assert_eq!(
+            regions[1], DISABLED_R5,
+            "R5 must be disabled when only one peripheral configured"
+        );
     }
 }
