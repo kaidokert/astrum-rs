@@ -1039,12 +1039,11 @@ where
             let internal_stack_base = internal_stack.as_ptr() as u32;
             let internal_stack_size = (internal_stack.len() * 4) as u32;
             let sp = align_down_8(internal_stack_base.wrapping_add(internal_stack_size));
-            // TODO: c.mpu_region may not cover the internal stack. The old code
-            // constructed mpu_region from internal_stack_base/size, guaranteeing
-            // coverage by construction. With mpu_region sourced from config, the
-            // caller cannot know the internal stack address, so a bounds check
-            // is not feasible without redesigning how mpu_region is provided.
-            let mpu_region = c.mpu_region;
+            let mpu_region = crate::partition::MpuRegion::new(
+                internal_stack_base,
+                c.mpu_region.size(),
+                c.mpu_region.permissions(),
+            );
             let pcb = PartitionControlBlock::new(
                 c.id,
                 c.entry_point,
@@ -5397,6 +5396,41 @@ mod tests {
         assert_eq!(k.active_partition(), None);
     }
 
+    /// Kernel::new() constructs mpu_region from internal_stack_base.
+    /// Both stack_base and mpu_region.base are captured from the same
+    /// address, so they must be equal (even if stale after a move).
+    #[test]
+    fn kernel_new_mpu_region_base_matches_internal_stack() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 50)).unwrap();
+        s.add(ScheduleEntry::new(1, 50)).unwrap();
+        let cfgs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0000,
+                stack_base: 0x2000_0000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+                peripheral_regions: heapless::Vec::new(),
+            },
+            PartitionConfig {
+                id: 1,
+                entry_point: 0x0800_1000,
+                stack_base: 0x2000_1000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_1000, 1024, 0x0306_0000),
+                peripheral_regions: heapless::Vec::new(),
+            },
+        ];
+        let k = try_kernel_new(s, &cfgs).unwrap();
+        for i in 0..2 {
+            let pcb = k.partitions().get(i).unwrap();
+            assert_eq!(pcb.mpu_region().base(), pcb.stack_base());
+            assert_eq!(pcb.mpu_region().size(), 1024);
+            assert_eq!(pcb.mpu_region().permissions(), 0x0306_0000);
+        }
+    }
+
     /// Helper to call `Kernel::new` with correct feature-flag arguments.
     ///
     /// For `dynamic-mpu` builds, this adds a system window to the schedule
@@ -5559,7 +5593,8 @@ mod tests {
         let pcb = k.partitions().get(0).unwrap();
         assert_eq!(pcb.id(), cfg.id);
         assert_eq!(pcb.entry_point(), cfg.entry_point);
-        assert_eq!(pcb.mpu_region().base(), cfg.mpu_region.base());
+        // mpu_region.base comes from internal stack, not config; verify via stack_base.
+        assert_eq!(pcb.mpu_region().base(), pcb.stack_base());
         assert_eq!(pcb.mpu_region().size(), cfg.mpu_region.size());
         assert_eq!(pcb.mpu_region().permissions(), cfg.mpu_region.permissions());
     }
@@ -5605,7 +5640,8 @@ mod tests {
             let pcb = k.partitions().get(i).unwrap();
             assert_eq!(pcb.id(), cfg.id);
             assert_eq!(pcb.entry_point(), cfg.entry_point);
-            assert_eq!(pcb.mpu_region().base(), cfg.mpu_region.base());
+            // mpu_region.base comes from internal stack, not config.
+            assert_eq!(pcb.mpu_region().base(), pcb.stack_base());
             assert_eq!(pcb.mpu_region().size(), cfg.mpu_region.size());
             assert_eq!(pcb.mpu_region().permissions(), cfg.mpu_region.permissions());
         }
