@@ -274,10 +274,13 @@ pub fn assert_kernel_invariants(
     active_partition: Option<u8>,
     semaphore_counts: &[(u32, u32)],
     next_partition: Option<u8>,
+    partition_sp: &[u32],
 ) {
+    assert_partition_table_integrity(partitions);
     assert_partition_state_consistency(partitions);
     assert_running_matches_active(partitions, active_partition);
     assert_semaphore_count_bounded(semaphore_counts);
+    assert_stack_pointer_bounds(partitions, partition_sp);
     if let Some(np) = next_partition {
         assert_next_partition_not_waiting(partitions, np);
     }
@@ -293,6 +296,7 @@ pub fn assert_kernel_invariants(
     _active_partition: Option<u8>,
     _semaphore_counts: &[(u32, u32)],
     _next_partition: Option<u8>,
+    _partition_sp: &[u32],
 ) {
 }
 
@@ -314,14 +318,14 @@ mod tests {
     #[test]
     fn kernel_invariants_empty_partitions_none_active() {
         // No partitions with no active partition is valid.
-        assert_kernel_invariants(&[], None, &[], None);
+        assert_kernel_invariants(&[], None, &[], None, &[]);
     }
 
     #[test]
     fn kernel_invariants_all_ready_none_active() {
         // All Ready partitions with no active partition is valid.
         let partitions = [make_pcb(0), make_pcb(1), make_pcb(2)];
-        assert_kernel_invariants(&partitions, None, &[], None);
+        assert_kernel_invariants(&partitions, None, &[], None, &[0; 3]);
     }
 
     #[test]
@@ -329,7 +333,7 @@ mod tests {
         // One Running partition matching active_partition is valid.
         let mut p0 = make_pcb(0);
         p0.transition(PartitionState::Running).unwrap();
-        assert_kernel_invariants(&[p0, make_pcb(1), make_pcb(2)], Some(0), &[], None);
+        assert_kernel_invariants(&[p0, make_pcb(1), make_pcb(2)], Some(0), &[], None, &[0; 3]);
     }
 
     #[test]
@@ -339,7 +343,7 @@ mod tests {
         p1.transition(PartitionState::Running).unwrap();
         let partitions = [make_pcb(0), p1, make_pcb(2)];
         for _ in 0..10 {
-            assert_kernel_invariants(&partitions, Some(1), &[], None);
+            assert_kernel_invariants(&partitions, Some(1), &[], None, &[0; 3]);
         }
     }
 
@@ -351,14 +355,14 @@ mod tests {
         let mut p1 = make_pcb(1);
         p0.transition(PartitionState::Running).unwrap();
         p1.transition(PartitionState::Running).unwrap();
-        assert_kernel_invariants(&[p0, p1], Some(0), &[], None);
+        assert_kernel_invariants(&[p0, p1], Some(0), &[], None, &[0; 2]);
     }
 
     #[test]
     #[should_panic(expected = "active 0 is Ready")]
     fn kernel_invariants_active_not_running_panics() {
         // active_partition points to a non-Running partition.
-        assert_kernel_invariants(&[make_pcb(0), make_pcb(1)], Some(0), &[], None);
+        assert_kernel_invariants(&[make_pcb(0), make_pcb(1)], Some(0), &[], None, &[0; 2]);
     }
 
     #[test]
@@ -755,7 +759,7 @@ mod tests {
         // Valid partition state but invalid semaphore count.
         let mut p0 = make_pcb(0);
         p0.transition(PartitionState::Running).unwrap();
-        assert_kernel_invariants(&[p0, make_pcb(1)], Some(0), &[(3, 2)], None);
+        assert_kernel_invariants(&[p0, make_pcb(1)], Some(0), &[(3, 2)], None, &[0; 2]);
     }
 
     #[test]
@@ -778,7 +782,7 @@ mod tests {
     fn kernel_invariants_with_next_partition_ready() {
         let mut p0 = make_pcb(0);
         p0.transition(PartitionState::Running).unwrap();
-        assert_kernel_invariants(&[p0, make_pcb(1)], Some(0), &[], Some(1));
+        assert_kernel_invariants(&[p0, make_pcb(1)], Some(0), &[], Some(1), &[0; 2]);
     }
 
     #[test]
@@ -789,6 +793,34 @@ mod tests {
         let mut p1 = make_pcb(1);
         p1.transition(PartitionState::Running).unwrap();
         p1.transition(PartitionState::Waiting).unwrap();
-        assert_kernel_invariants(&[p0, p1], Some(0), &[], Some(1));
+        assert_kernel_invariants(&[p0, p1], Some(0), &[], Some(1), &[0; 2]);
+    }
+
+    #[test]
+    #[should_panic(expected = "partition at index 0 has id 1")]
+    fn kernel_invariants_catches_table_integrity_violation() {
+        assert_kernel_invariants(&[make_pcb(1), make_pcb(1)], None, &[], None, &[0; 2]);
+    }
+
+    #[test]
+    fn kernel_invariants_delegates_stack_pointer_bounds() {
+        // Valid SP within stack region passes through master check.
+        let mut p0 = make_pcb(0);
+        p0.transition(PartitionState::Running).unwrap();
+        assert_kernel_invariants(&[p0, make_pcb(1)], Some(0), &[], None, &[0x2000_0200, 0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "partition 0 SP 0x10000000 outside stack bounds")]
+    fn kernel_invariants_catches_stack_pointer_violation() {
+        let mut p0 = make_pcb(0);
+        p0.transition(PartitionState::Running).unwrap();
+        assert_kernel_invariants(&[p0, make_pcb(1)], Some(0), &[], None, &[0x1000_0000, 0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "partitions.len() (2) != partition_sp.len() (1)")]
+    fn kernel_invariants_catches_sp_length_mismatch() {
+        assert_kernel_invariants(&[make_pcb(0), make_pcb(1)], None, &[], None, &[0]);
     }
 }
