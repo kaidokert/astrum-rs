@@ -29,7 +29,6 @@ use kernel::{
     svc::{try_transition, Kernel},
     sync_pools::SyncPools,
     syscall::{SYS_GET_TIME, SYS_QUEUING_RECV_TIMED, SYS_YIELD},
-    unpack_r0,
 };
 use panic_semihosting as _;
 
@@ -95,8 +94,8 @@ static BLOCK_TICK: AtomicU32 = AtomicU32::new(0);
 static BLOCKED: AtomicU32 = AtomicU32::new(0);
 
 /// Partition: waits a bit, then calls blocking recv on empty queue.
-extern "C" fn partition_main() -> ! {
-    let port = unpack_r0!();
+extern "C" fn partition_main_body(r0: u32) -> ! {
+    let port = r0;
     // Wait for a few ticks
     while kernel::svc!(SYS_GET_TIME, 0u32, 0u32, 0u32) < 5 {
         kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
@@ -120,6 +119,7 @@ extern "C" fn partition_main() -> ! {
         kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
+kernel::partition_trampoline!(partition_main => partition_main_body);
 
 #[exception]
 fn SysTick() {

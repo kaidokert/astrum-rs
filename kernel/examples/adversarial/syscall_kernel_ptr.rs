@@ -89,9 +89,9 @@ kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
 // ---------------------------------------------------------------------------
 
 /// Partition entry: invoke SYS_SAMPLING_WRITE with kernel address as data ptr.
-extern "C" fn test_partition_main() -> ! {
+extern "C" fn test_partition_main_body(r0: u32) -> ! {
     // Unpack the port ID passed via r0.
-    let port_id = kernel::unpack_r0!();
+    let port_id = r0;
 
     // Issue SYS_SAMPLING_WRITE with:
     //   r1 = port_id (valid sampling port)
@@ -119,6 +119,7 @@ extern "C" fn test_partition_main() -> ! {
         cortex_m::asm::wfi();
     }
 }
+kernel::partition_trampoline!(test_partition_main => test_partition_main_body);
 
 // ---------------------------------------------------------------------------
 // Entry point

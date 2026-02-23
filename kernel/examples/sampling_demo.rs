@@ -28,7 +28,6 @@ use kernel::{
     svc::Kernel,
     sync_pools::SyncPools,
     syscall::{SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_YIELD},
-    unpack_r0,
 };
 use panic_semihosting as _;
 
@@ -119,8 +118,8 @@ kernel::define_unified_harness!(
     }
 );
 
-extern "C" fn sensor_main() -> ! {
-    let (src, mut v) = (unpack_r0!() >> 16, 0u8);
+extern "C" fn sensor_main_body(r0: u32) -> ! {
+    let (src, mut v) = (r0 >> 16, 0u8);
     loop {
         v = v.wrapping_add(1);
         SENSOR_VALUE.store(v as u32, Ordering::Release);
@@ -128,8 +127,9 @@ extern "C" fn sensor_main() -> ! {
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
-extern "C" fn control_main() -> ! {
-    let packed = unpack_r0!();
+kernel::partition_trampoline!(sensor_main => sensor_main_body);
+extern "C" fn control_main_body(r0: u32) -> ! {
+    let packed = r0;
     let (src, dst) = (packed >> 16, packed & 0xFFFF);
     loop {
         let mut buf = [0u8; 1];
@@ -147,8 +147,9 @@ extern "C" fn control_main() -> ! {
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
-extern "C" fn display_main() -> ! {
-    let dst = unpack_r0!() & 0xFFFF;
+kernel::partition_trampoline!(control_main => control_main_body);
+extern "C" fn display_main_body(r0: u32) -> ! {
+    let dst = r0 & 0xFFFF;
     let mut cyc: u32 = 0;
     loop {
         let mut buf = [0u8; 1];
@@ -164,6 +165,7 @@ extern "C" fn display_main() -> ! {
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
+kernel::partition_trampoline!(display_main => display_main_body);
 #[entry]
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();

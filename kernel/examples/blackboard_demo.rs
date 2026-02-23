@@ -35,7 +35,6 @@ use kernel::{
         SYS_BB_DISPLAY, SYS_BB_READ, SYS_EVT_SET, SYS_EVT_WAIT, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
         SYS_YIELD,
     },
-    unpack_r0,
 };
 use panic_semihosting as _;
 
@@ -152,8 +151,8 @@ kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, 
 // ---------------------------------------------------------------------------
 // Config partition: displays config on blackboard, waits for worker acks
 // ---------------------------------------------------------------------------
-extern "C" fn config_main() -> ! {
-    let packed = unpack_r0!();
+extern "C" fn config_main_body(r0: u32) -> ! {
+    let packed = r0;
     let bb = packed & 0xFFFF;
 
     for round in 0..2u8 {
@@ -176,6 +175,7 @@ extern "C" fn config_main() -> ! {
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
+kernel::partition_trampoline!(config_main => config_main_body);
 
 // ---------------------------------------------------------------------------
 // Worker: reads config from blackboard, acquires semaphore, signals event
@@ -202,8 +202,8 @@ fn worker(
     }
 }
 
-extern "C" fn worker_a() -> ! {
-    let p = unpack_r0!();
+extern "C" fn worker_a_body(r0: u32) -> ! {
+    let p = r0;
     worker(
         &WORKER_A_READS,
         &WORKER_A_SEM,
@@ -213,9 +213,10 @@ extern "C" fn worker_a() -> ! {
         0x01,
     )
 }
+kernel::partition_trampoline!(worker_a => worker_a_body);
 
-extern "C" fn worker_b() -> ! {
-    let p = unpack_r0!();
+extern "C" fn worker_b_body(r0: u32) -> ! {
+    let p = r0;
     worker(
         &WORKER_B_READS,
         &WORKER_B_SEM,
@@ -225,6 +226,7 @@ extern "C" fn worker_b() -> ! {
         0x02,
     )
 }
+kernel::partition_trampoline!(worker_b => worker_b_body);
 
 // ---------------------------------------------------------------------------
 // Entry point: create resources, configure partitions and scheduler, start OS

@@ -88,11 +88,11 @@ kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
 // ---------------------------------------------------------------------------
 
 /// Partition 0 entry: invoke SYS_SAMPLING_WRITE with pointer into P1's region.
-extern "C" fn p0_main() -> ! {
+extern "C" fn p0_main_body(r0: u32) -> ! {
     // Retrieve packed argument: upper 16 bits = port_id, lower 16 bits = P1 offset index.
     // Actually, we pack: port_id in bits [31:16], p1_base high bits in [15:0].
     // For simplicity, we pass the full p1_base as a second word via a static.
-    let packed = kernel::unpack_r0!();
+    let packed = r0;
     let port_id = packed >> 16;
     let p1_base = (packed & 0xFFFF) << 16; // Reconstruct upper half (lower half is 0 for aligned stacks)
 
@@ -125,6 +125,7 @@ extern "C" fn p0_main() -> ! {
         cortex_m::asm::wfi();
     }
 }
+kernel::partition_trampoline!(p0_main => p0_main_body);
 
 /// Partition 1 entry: idle loop (never scheduled in this test, exists for
 /// separate MPU region).

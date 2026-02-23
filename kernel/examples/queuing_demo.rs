@@ -28,7 +28,6 @@ use kernel::{
     svc::Kernel,
     sync_pools::SyncPools,
     syscall::{SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_YIELD},
-    unpack_r0,
 };
 use panic_semihosting as _;
 
@@ -194,9 +193,9 @@ kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, 
 // ---------------------------------------------------------------------------
 // Commander partition: sends commands, detects queue-full, receives responses
 // ---------------------------------------------------------------------------
-extern "C" fn commander_main() -> ! {
+extern "C" fn commander_main_body(r0: u32) -> ! {
     // Unpack port IDs: upper 16 bits = command Source port, lower 16 = response Destination port.
-    let packed = unpack_r0!();
+    let packed = r0;
     let (cmd_port, rsp_port) = (packed >> 16, packed & 0xFFFF);
 
     // Phase 1: Flood the command queue to demonstrate queue-full detection.
@@ -280,13 +279,14 @@ extern "C" fn commander_main() -> ! {
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
+kernel::partition_trampoline!(commander_main => commander_main_body);
 
 // ---------------------------------------------------------------------------
 // Worker partition: receives commands, maps to responses, sends back
 // ---------------------------------------------------------------------------
-extern "C" fn worker_main() -> ! {
+extern "C" fn worker_main_body(r0: u32) -> ! {
     // Unpack port IDs: upper 16 bits = response Source port, lower 16 = command Destination port.
-    let packed = unpack_r0!();
+    let packed = r0;
     let (rsp_port, cmd_port) = (packed >> 16, packed & 0xFFFF);
 
     // Phase 1-2: Process the initial batch of commands using non-blocking recv.
@@ -364,6 +364,7 @@ extern "C" fn worker_main() -> ! {
         svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
+kernel::partition_trampoline!(worker_main => worker_main_body);
 
 // ---------------------------------------------------------------------------
 // Entry point: create ports, configure partitions and scheduler, start OS

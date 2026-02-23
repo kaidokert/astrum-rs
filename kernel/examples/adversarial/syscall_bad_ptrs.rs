@@ -83,8 +83,8 @@ kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
 // ---------------------------------------------------------------------------
 
 /// Partition 0 entry: test null pointer and wrapping pointer syscalls.
-extern "C" fn test_partition_main() -> ! {
-    let port_id = kernel::unpack_r0!();
+extern "C" fn test_partition_main_body(r0: u32) -> ! {
+    let port_id = r0;
 
     // Test 1: Null pointer
     let result = kernel::svc!(SYS_SAMPLING_WRITE, port_id, 4u32, NULL_PTR);
@@ -119,6 +119,7 @@ extern "C" fn test_partition_main() -> ! {
         cortex_m::asm::wfi();
     }
 }
+kernel::partition_trampoline!(test_partition_main => test_partition_main_body);
 
 // ---------------------------------------------------------------------------
 // Entry point

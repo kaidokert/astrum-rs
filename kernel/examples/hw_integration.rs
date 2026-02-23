@@ -23,7 +23,6 @@ use kernel::{
     svc::Kernel,
     sync_pools::SyncPools,
     syscall::{SYS_QUEUING_RECV, SYS_QUEUING_SEND, SYS_YIELD},
-    unpack_r0,
 };
 #[cfg(panic_backend = "halt")]
 use panic_halt as _;
@@ -64,16 +63,17 @@ kernel::define_unified_harness!(no_boot, Cfg, NP, SW, |tick, k| {
         if tick > 100 { klog!("FAIL: timeout"); kexit!(failure); }
     }
 });
-extern "C" fn p0_main() -> ! {
+extern "C" fn p0_main_body(r0: u32) -> ! {
     PARTS_RAN.fetch_or(1, Ordering::Release);
-    let (port, msg) = (unpack_r0!() >> 16, [0xDE_u8, 0xAD, 0xBE, 0xEF]);
+    let (port, msg) = (r0 >> 16, [0xDE_u8, 0xAD, 0xBE, 0xEF]);
     let rc = kernel::svc!(SYS_QUEUING_SEND, port, 4u32, msg.as_ptr() as u32);
     if rc & ERR == 0 { P0_SENT.store(1, Ordering::Release); }
     loop { kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32); }
 }
-extern "C" fn p1_main() -> ! {
+kernel::partition_trampoline!(p0_main => p0_main_body);
+extern "C" fn p1_main_body(r0: u32) -> ! {
     PARTS_RAN.fetch_or(2, Ordering::Release);
-    let port = unpack_r0!() & 0xFFFF;
+    let port = r0 & 0xFFFF;
     loop {
         let mut buf = [0u8; 4];
         let sz = kernel::svc!(SYS_QUEUING_RECV, port, 4u32, buf.as_mut_ptr() as u32);
@@ -84,6 +84,7 @@ extern "C" fn p1_main() -> ! {
     }
     loop { kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32); }
 }
+kernel::partition_trampoline!(p1_main => p1_main_body);
 #[cortex_m_rt::entry]
 #[allow(clippy::never_loop)] // kexit! diverges via inner loop on catch-all backend
 fn main() -> ! {

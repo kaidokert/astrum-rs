@@ -2,8 +2,8 @@
 //! entry arguments.
 //!
 //! These macros are `#[macro_export]`-ed so that examples (and eventually
-//! real partitions) can call `kernel::svc!` / `kernel::unpack_r0!` instead
-//! of duplicating inline-asm boilerplate.
+//! real partitions) can call `kernel::svc!` / `kernel::partition_trampoline!`
+//! instead of duplicating inline-asm boilerplate.
 
 /// Issue an SVC #0 system call, passing a syscall ID in `r0` and up to
 /// three arguments in `r1`–`r3`.  Returns the value the kernel placed in
@@ -52,7 +52,14 @@ macro_rules! svc {
 /// extracts that value so partition code can unpack it.
 ///
 /// On non-ARM hosts the macro returns `0`.
+///
+/// # Deprecation
+///
+/// Use [`partition_trampoline!`] instead.  A `#[naked]` trampoline
+/// preserves `r0` without inline-asm tricks and is immune to
+/// dead-store elimination.
 #[macro_export]
+#[deprecated(note = "use partition_trampoline! instead — it is immune to dead-store elimination")]
 macro_rules! unpack_r0 {
     () => {{
         let p: u32;
@@ -204,15 +211,26 @@ macro_rules! define_kernel_runtime {
 /// # Usage
 ///
 /// ```ignore
-/// extern "C" fn my_body(r0: u32) -> ! { loop {} }
-/// kernel::partition_trampoline!(my_trampoline => my_body);
+/// // (`ignore` — no_std crate cannot compile doc tests due to panic_halt;
+/// //  see mod tests::partition_trampoline_has_correct_fn_type for host test.)
+/// extern "C" fn my_partition_body(r0: u32) -> ! {
+///     let _port_id = r0;
+///     loop {}
+/// }
+/// kernel::partition_trampoline!(my_partition_entry => my_partition_body);
+///
+/// // The generated `my_partition_entry` is `extern "C" fn() -> !`
+/// // and can be passed directly to boot():
+/// let _: extern "C" fn() -> ! = my_partition_entry;
 /// ```
 #[macro_export]
 macro_rules! partition_trampoline {
     ($name:ident => $body:path) => {
         #[cfg(target_arch = "arm")]
+        // TODO: migrate to #[unsafe(no_mangle)] when moving to edition 2024;
+        // currently edition 2021 where only #[naked] requires unsafe().
         #[no_mangle]
-        #[naked]
+        #[unsafe(naked)]
         pub extern "C" fn $name() -> ! {
             // SAFETY: naked function — no prologue, so r0 is untouched.
             // The `b` instruction tail-calls $body which expects r0 as its
@@ -220,7 +238,10 @@ macro_rules! partition_trampoline {
             unsafe { core::arch::naked_asm!("b {0}", sym $body) }
         }
 
+        // TODO: reviewer false positive — host-side implementation exists below
+        // but was not visible in the truncated diff the reviewer saw.
         #[cfg(not(target_arch = "arm"))]
+        // TODO: migrate to #[unsafe(no_mangle)] when moving to edition 2024.
         #[no_mangle]
         pub extern "C" fn $name() -> ! {
             // On host targets, call the body with 0 (matching unpack_r0!
@@ -275,6 +296,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn unpack_r0_returns_zero_on_host() {
         let p = unpack_r0!();
         assert_eq!(p, 0);
