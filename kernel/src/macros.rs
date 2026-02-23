@@ -58,23 +58,25 @@ macro_rules! unpack_r0 {
         let p: u32;
         #[cfg(target_arch = "arm")]
         {
-            // SAFETY: At partition entry the kernel has placed the
-            // initialisation argument in r0.  Reading the register here,
-            // before any other code has clobbered it, is the defined ABI.
-            //
-            // `options(nomem, nostack, preserves_flags)` tells the compiler
-            // this asm block does not touch memory, the stack, or flags,
-            // allowing better optimisation while keeping the register read.
-            //
             // The `compiler_fence(Acquire)` after the read prevents the
             // compiler from reordering subsequent memory accesses before
             // the register capture.  Without it, the compiler is free to
             // move later loads/stores above the asm block, potentially
             // reading stale or uninitialised data.
+            //
+            // SAFETY: At partition entry the kernel has placed the
+            // initialisation argument in r0.  We use an explicit
+            // `mov {0}, r0` to capture it into a general-purpose register
+            // because `out("r0")` with an empty asm template lets the
+            // compiler assume r0 is already in the output, which can be
+            // optimised away.  Reading r0 here, before any other code has
+            // clobbered it, is the defined ABI.
+            // `options(nomem, nostack, preserves_flags)` tells the compiler
+            // this asm block does not touch memory, the stack, or flags.
             unsafe {
                 core::arch::asm!(
-                    "",
-                    out("r0") p,
+                    "mov {0}, r0",
+                    out(reg) p,
                     options(nomem, nostack, preserves_flags),
                 );
             }
