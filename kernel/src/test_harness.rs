@@ -5,7 +5,7 @@ use crate::partition::{ConfigError, MpuRegion, PartitionConfig, PartitionState, 
 use crate::partition_core::{AlignedStack1K, PartitionCore};
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
 use crate::semaphore::Semaphore;
-use crate::svc::Kernel;
+use crate::svc::{Kernel, YieldResult};
 use heapless::Vec;
 
 pub struct HarnessConfig;
@@ -223,6 +223,27 @@ impl KernelTestHarness {
         }
     }
 
+    /// Assert that `next_partition` does not reference a `Waiting` partition.
+    ///
+    /// This invariant ensures the scheduler never selects a blocked partition
+    /// for execution. If `next_partition` points to a partition in
+    /// `PartitionState::Waiting`, it means the scheduler failed to skip
+    /// a blocked partition and the system would switch to it on the next PendSV.
+    pub fn assert_no_switch_to_waiting(&self) {
+        let next = self.kernel.next_partition() as usize;
+        let partition = self
+            .kernel
+            .partitions()
+            .get(next)
+            .unwrap_or_else(|| panic!("next_partition {next} does not exist"));
+        assert_ne!(
+            partition.state(),
+            PartitionState::Waiting,
+            "invariant violation: next_partition ({next}) is Waiting — \
+             the scheduler failed to skip a blocked partition"
+        );
+    }
+
     /// Assert that the syscall return value is consistent with blocking.
     ///
     /// If `blocked` is true, `frame.r0` must be 0 (the value returned by
@@ -243,6 +264,7 @@ impl KernelTestHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scheduler::ScheduleEvent;
     use crate::syscall::{
         SYS_EVT_SET, SYS_EVT_WAIT, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK,
         SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
@@ -817,5 +839,82 @@ mod tests {
             event_mask,
             "P1 event flags must survive the semaphore wake — primitives are independent"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // assert_no_switch_to_waiting — scheduler invariant tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn advance_schedule_skips_waiting() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        h.kernel_mut().start_schedule();
+
+        // Transition P1 to Waiting (simulating a blocking syscall).
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+
+        // Advance 10 ticks to cross into P1's slot (each slot is 10 ticks).
+        for i in 0..10 {
+            let event = h.kernel_mut().advance_schedule_tick();
+            // The scheduler must not emit a PartitionSwitch to the Waiting P1.
+            assert_ne!(
+                event,
+                ScheduleEvent::PartitionSwitch(1),
+                "tick {i}: scheduler must not switch to Waiting P1"
+            );
+        }
+
+        // The invariant must hold: next_partition must not point to Waiting P1.
+        h.assert_no_switch_to_waiting();
+    }
+
+    #[test]
+    fn yield_current_slot_skips_waiting() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        h.kernel_mut().start_schedule();
+
+        // Transition P1 to Waiting.
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+
+        // Yield from P0's slot — scheduler should skip Waiting P1.
+        let event = h.kernel_mut().yield_current_slot();
+        assert_eq!(
+            event.partition_id(),
+            None,
+            "yield must not produce a partition switch to Waiting P1"
+        );
+
+        // The invariant must hold.
+        h.assert_no_switch_to_waiting();
+    }
+
+    #[test]
+    #[should_panic(expected = "scheduler failed to skip a blocked partition")]
+    fn assert_no_switch_to_waiting_fires_on_waiting_next() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+
+        // Transition P1 to Waiting.
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+
+        // Manually set next_partition to the Waiting P1 (bypassing scheduler logic).
+        h.kernel_mut().core.set_next_partition(1);
+
+        // This must panic.
+        h.assert_no_switch_to_waiting();
     }
 }
