@@ -67,7 +67,13 @@ pub struct KernelTestHarness {
 }
 
 impl KernelTestHarness {
-    pub fn with_partitions(n: usize) -> Result<Self, HarnessError> {
+    /// Shared kernel construction: builds schedule, configs, kernel, and
+    /// transitions all partitions to Running. The `peripheral_fn` callback
+    /// supplies peripheral regions for each partition index.
+    fn build_kernel(
+        n: usize,
+        mut peripheral_fn: impl FnMut(usize) -> Vec<MpuRegion, 2>,
+    ) -> Result<Self, HarnessError> {
         if n == 0 || n > HarnessConfig::N {
             return Err(HarnessError::InvalidPartitionCount);
         }
@@ -91,7 +97,7 @@ impl KernelTestHarness {
                     stack_base: RAM_BASE + o,
                     stack_size: STACK_SIZE_BYTES,
                     mpu_region: MpuRegion::new(RAM_BASE + o, STACK_SIZE_BYTES, 0),
-                    peripheral_regions: Vec::new(),
+                    peripheral_regions: peripheral_fn(i),
                 })
                 .map_err(|_| HarnessError::ConfigsFull)?;
         }
@@ -112,6 +118,10 @@ impl KernelTestHarness {
         }
         kernel.current_partition = 0;
         Ok(Self { kernel })
+    }
+
+    pub fn with_partitions(n: usize) -> Result<Self, HarnessError> {
+        Self::build_kernel(n, |_| Vec::new())
     }
 
     /// Create a harness with two partitions and semaphores initialised at the
@@ -143,6 +153,23 @@ impl KernelTestHarness {
     /// needed.
     pub fn with_events() -> Result<Self, HarnessError> {
         Self::with_partitions(2)
+    }
+
+    /// Create a harness with two partitions where partition 0 has one
+    /// peripheral region (0x4000_0000, size 256, permissions 0x03).
+    ///
+    /// This exercises the full peripheral-region pipeline: PartitionConfig →
+    /// Kernel::new → PCB.with_peripheral_regions → accessor / MPU programming.
+    pub fn with_peripheral_regions() -> Result<Self, HarnessError> {
+        Self::build_kernel(2, |i| {
+            let mut periph = Vec::new();
+            if i == 0 {
+                periph
+                    .push(MpuRegion::new(0x4000_0000, 256, 0x03))
+                    .expect("peripheral region vec has capacity");
+            }
+            periph
+        })
     }
 
     /// Create a harness with two partitions and one message queue.
@@ -743,9 +770,19 @@ mod tests {
     fn msg_recv_blocks_then_msg_send_wakes() {
         let mut h = KernelTestHarness::with_messages().expect("harness setup");
 
-        // Map host memory at the partition MPU region so pointer-based
-        // syscalls pass validated_ptr! and can actually read/write data.
+        // TODO: reviewer false positive — fix_mpu_data_region calls are required
+        // because Kernel::new now constructs mpu_region from internal stack bases
+        // (commit 2675853), so the default harness MPU regions no longer cover the
+        // mmap'd low addresses that validated_ptr! checks on 64-bit hosts.
         let buf_ptr = low32_buf(0);
+        for i in 0..2 {
+            let base = 0x2000_0000 + (i as u32) * 0x1000;
+            h.kernel_mut()
+                .partitions_mut()
+                .get_mut(i)
+                .unwrap()
+                .fix_mpu_data_region(base);
+        }
 
         // Step 1: P0 dispatches SYS_MSG_RECV on empty queue — blocks.
         // SYS_MSG_RECV encoding: r1=queue_id, r2=caller_pid, r3=buf_ptr
@@ -981,5 +1018,54 @@ mod tests {
     fn stack_bases_valid_after_construction() {
         let h = KernelTestHarness::with_partitions(4).expect("harness setup");
         h.assert_stack_bases_valid();
+    }
+
+    // ------------------------------------------------------------------
+    // Peripheral region pipeline tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn peripheral_regions_stored_in_pcb_after_kernel_new() {
+        let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
+        let p0 = h.kernel().partitions().get(0).expect("partition 0");
+        let regions = p0.peripheral_regions();
+        assert_eq!(regions.len(), 1, "P0 must have exactly 1 peripheral region");
+        assert_eq!(regions[0].base(), 0x4000_0000);
+        assert_eq!(regions[0].size(), 256);
+        assert_eq!(regions[0].permissions(), 0x03);
+
+        // P1 must have no peripheral regions.
+        let p1 = h.kernel().partitions().get(1).expect("partition 1");
+        assert!(
+            p1.peripheral_regions().is_empty(),
+            "P1 must have no peripheral regions"
+        );
+    }
+
+    #[test]
+    fn accessible_static_regions_includes_peripheral_region() {
+        let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
+        let p0 = h.kernel().partitions().get(0).expect("partition 0");
+        let regions = p0.accessible_static_regions();
+        // Expected: data region, stack region, peripheral region = 3
+        assert_eq!(
+            regions.len(),
+            3,
+            "P0 accessible_static_regions must include data + stack + peripheral"
+        );
+        // The peripheral region must appear somewhere in the list.
+        assert!(
+            regions.iter().any(|&(b, s)| b == 0x4000_0000 && s == 256),
+            "accessible_static_regions must contain the peripheral region (0x4000_0000, 256)"
+        );
+
+        // P1 must have only data + stack (no peripheral).
+        let p1 = h.kernel().partitions().get(1).expect("partition 1");
+        let p1_regions = p1.accessible_static_regions();
+        assert_eq!(
+            p1_regions.len(),
+            2,
+            "P1 accessible_static_regions must include only data + stack"
+        );
     }
 }
