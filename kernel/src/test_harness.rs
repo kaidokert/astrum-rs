@@ -108,15 +108,15 @@ impl KernelTestHarness {
             crate::virtual_device::DeviceRegistry::new(),
         )
         .map_err(HarnessError::KernelInit)?;
-        for i in 0..n {
-            kernel
-                .partitions_mut()
-                .get_mut(i)
-                .ok_or(HarnessError::PartitionNotFound)?
-                .transition(PartitionState::Running)
-                .map_err(HarnessError::Transition)?;
-        }
+        // Only partition 0 starts Running; others remain Ready (at-most-one-Running invariant).
+        kernel
+            .partitions_mut()
+            .get_mut(0)
+            .ok_or(HarnessError::PartitionNotFound)?
+            .transition(PartitionState::Running)
+            .map_err(HarnessError::Transition)?;
         kernel.current_partition = 0;
+        kernel.active_partition = Some(0);
         Ok(Self { kernel })
     }
 
@@ -184,6 +184,50 @@ impl KernelTestHarness {
         Ok(h)
     }
 
+    fn switch_to(&mut self, pid: usize) {
+        let old = self.kernel.current_partition as usize;
+        if old != pid {
+            let parts = self.kernel.partitions();
+            let deact = parts.get(old).map(|p| p.state()) == Some(PartitionState::Running);
+            let act = parts.get(pid).map(|p| p.state()) == Some(PartitionState::Ready);
+            if deact {
+                let p = self.kernel.partitions_mut().get_mut(old).unwrap();
+                p.transition(PartitionState::Ready).unwrap();
+            }
+            if act {
+                let p = self.kernel.partitions_mut().get_mut(pid).unwrap();
+                p.transition(PartitionState::Running).unwrap();
+                self.kernel.active_partition = Some(pid as u8);
+            } else if deact {
+                self.kernel.active_partition = None;
+            }
+        }
+        self.kernel.current_partition = pid as u8;
+    }
+
+    /// Assert all kernel invariants hold for the current kernel state.
+    pub fn assert_invariants(&self) {
+        let parts = self.kernel.partitions().as_slice();
+        let active = self.kernel.active_partition;
+        let mut sem_pairs = [(0u32, 0u32); HarnessConfig::S];
+        let sem_len = (0..HarnessConfig::S)
+            .map_while(|i| {
+                self.kernel.semaphores().get(i).map(|s| {
+                    sem_pairs[i] = (s.count(), s.max_count());
+                })
+            })
+            .count();
+        // When yield_requested is set, next_partition is stale (PendSV hasn't
+        // advanced the schedule yet). Skip the next-partition check.
+        let next = if self.kernel.yield_requested {
+            None
+        } else {
+            Some(self.kernel.next_partition())
+        };
+        let sp = &self.kernel.partition_sp()[..parts.len()];
+        crate::invariants::assert_kernel_invariants(parts, active, &sem_pairs[..sem_len], next, sp);
+    }
+
     pub fn kernel(&self) -> &Kernel<HarnessConfig> {
         &self.kernel
     }
@@ -211,6 +255,14 @@ impl KernelTestHarness {
         // SAFETY: stack-local frame, properly constructed kernel,
         // single-threaded test environment.
         unsafe { self.kernel.dispatch(&mut frame) };
+        // Reconcile active_partition: blocking syscalls transition the current
+        // partition to Waiting without updating active_partition (PendSV's job
+        // in the real system). Since the harness has no PendSV, fix it here.
+        let pid = self.kernel.current_partition as usize;
+        if self.kernel.partitions().get(pid).map(|p| p.state()) != Some(PartitionState::Running) {
+            self.kernel.active_partition = None;
+        }
+        self.assert_invariants();
         frame
     }
 
@@ -226,7 +278,7 @@ impl KernelTestHarness {
         r2: u32,
         r3: u32,
     ) -> ExceptionFrame {
-        self.kernel.current_partition = pid as u8;
+        self.switch_to(pid);
         self.dispatch(syscall, r1, r2, r3)
     }
 
@@ -350,25 +402,21 @@ mod tests {
     #[test]
     fn two_partitions_count_and_state() {
         let h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        let st = |i| h.kernel().partitions().get(i).unwrap().state();
         assert_eq!(h.kernel().partitions().len(), 2);
         assert_eq!(h.kernel().current_partition, 0);
-        for i in 0..2 {
-            assert_eq!(
-                h.kernel().partitions().get(i).unwrap().state(),
-                PartitionState::Running
-            );
-        }
+        assert_eq!(st(0), PartitionState::Running);
+        assert_eq!(st(1), PartitionState::Ready);
     }
 
     #[test]
     fn four_partitions_count_and_state() {
         let h = KernelTestHarness::with_partitions(4).expect("harness setup");
+        let st = |i| h.kernel().partitions().get(i).unwrap().state();
         assert_eq!(h.kernel().partitions().len(), 4);
-        for i in 0..4 {
-            assert_eq!(
-                h.kernel().partitions().get(i).unwrap().state(),
-                PartitionState::Running
-            );
+        assert_eq!(st(0), PartitionState::Running);
+        for i in 1..4 {
+            assert_eq!(st(i), PartitionState::Ready);
         }
     }
 
@@ -923,6 +971,7 @@ mod tests {
         h.kernel_mut().start_schedule();
 
         // Transition P1 to Waiting (simulating a blocking syscall).
+        h.switch_to(1);
         h.kernel_mut()
             .partitions_mut()
             .get_mut(1)
@@ -951,6 +1000,7 @@ mod tests {
         h.kernel_mut().start_schedule();
 
         // Transition P1 to Waiting.
+        h.switch_to(1);
         h.kernel_mut()
             .partitions_mut()
             .get_mut(1)
@@ -976,6 +1026,7 @@ mod tests {
         let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
 
         // Transition P1 to Waiting.
+        h.switch_to(1);
         h.kernel_mut()
             .partitions_mut()
             .get_mut(1)
