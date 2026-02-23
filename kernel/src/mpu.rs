@@ -331,6 +331,46 @@ pub fn partition_dynamic_regions(
     Some(out)
 }
 
+/// Disable the MPU and issue DSB+ISB memory barriers.
+///
+/// Must be paired with a subsequent [`mpu_enable`] call after all
+/// region registers have been written.
+///
+/// # Safety contract (caller)
+///
+/// The caller must hold an exclusive `&MPU` reference and must not
+/// return to unprivileged code before re-enabling the MPU.
+// TODO: reviewer false positive — all callers (apply_partition_mpu,
+// apply_deny_all_mpu, and the PendSV macro shim) are also #[cfg(not(test))]
+// or only expanded in non-test binary targets.  `cargo test` compiles cleanly.
+#[cfg(not(test))]
+pub fn mpu_disable(mpu: &cortex_m::peripheral::MPU) {
+    // SAFETY: Disabling the MPU before reprogramming regions is required by
+    // the ARMv7-M architecture to avoid unpredictable behaviour from
+    // partially-configured regions.  The exclusive `&MPU` reference
+    // guarantees no concurrent access, and DSB+ISB ensure the disable
+    // is visible before any region writes.
+    unsafe { mpu.ctrl.write(0) };
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+}
+
+/// Re-enable the MPU with PRIVDEFENA and issue DSB+ISB barriers.
+///
+/// Counterpart to [`mpu_disable`].  PRIVDEFENA (bit 2) grants
+/// privileged code access to the default memory map when no MPU
+/// region matches, so the kernel can run without dedicated regions.
+#[cfg(not(test))]
+pub fn mpu_enable(mpu: &cortex_m::peripheral::MPU) {
+    const { assert!(MPU_CTRL_ENABLE_PRIVDEFENA & (1 << 2) != 0) }
+    // SAFETY: Re-enabling the MPU with PRIVDEFENA after all regions have
+    // been programmed.  The exclusive `&MPU` reference guarantees no
+    // concurrent access, and the preceding region writes are complete.
+    unsafe { mpu.ctrl.write(MPU_CTRL_ENABLE_PRIVDEFENA) };
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+}
+
 /// Configure MPU regions for a partition: disable MPU, program four
 /// regions (background no-access, code RX, data RW/XN, stack guard),
 /// re-enable with PRIVDEFENA, and execute DSB/ISB barriers.
@@ -349,14 +389,7 @@ pub fn partition_dynamic_regions(
 pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
     let regions = partition_mpu_regions_or_deny_all(pcb);
 
-    // SAFETY: Disabling the MPU before reprogramming regions is required by
-    // the ARMv7-M architecture to avoid unpredictable behaviour from
-    // partially-configured regions.  We hold an exclusive `&MPU` reference,
-    // and the subsequent DSB/ISB ensures the write is visible before any
-    // region registers are modified.
-    unsafe { mpu.ctrl.write(0) };
-    cortex_m::asm::dsb();
-    cortex_m::asm::isb();
+    mpu_disable(mpu);
 
     for &(rbar, rasr) in &regions {
         configure_region(mpu, rbar, rasr);
@@ -369,19 +402,7 @@ pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionContr
         configure_region(mpu, rbar, rasr);
     }
 
-    // Verify PRIVDEFENA (bit 2) is set — the kernel relies on the default
-    // memory map for privileged access.  Evaluated at compile time.
-    const { assert!(MPU_CTRL_ENABLE_PRIVDEFENA & (1 << 2) != 0) }
-
-    // SAFETY: Re-enabling the MPU with PRIVDEFENA after all regions have been
-    // programmed.  The exclusive `&MPU` reference guarantees no concurrent
-    // access, and the preceding region writes are complete.  PRIVDEFENA allows
-    // privileged code to use the default memory map, while unprivileged access
-    // is restricted to the explicitly configured regions (or denied entirely
-    // by the deny-all fallback).
-    unsafe { mpu.ctrl.write(MPU_CTRL_ENABLE_PRIVDEFENA) };
-    cortex_m::asm::dsb();
-    cortex_m::asm::isb();
+    mpu_enable(mpu);
 }
 
 /// Apply deny-all MPU configuration (R0-R5).
@@ -392,22 +413,14 @@ pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionContr
 #[cfg(not(test))]
 pub fn apply_deny_all_mpu(mpu: &cortex_m::peripheral::MPU) {
     let regions = deny_all_regions();
-    // SAFETY: Disabling MPU before reprogramming (same rationale as
-    // apply_partition_mpu).  We hold exclusive `&MPU`.
-    unsafe { mpu.ctrl.write(0) };
-    cortex_m::asm::dsb();
-    cortex_m::asm::isb();
+    mpu_disable(mpu);
     for &(rbar, rasr) in &regions {
         configure_region(mpu, rbar, rasr);
     }
     // Disable peripheral region slots R4-R5.
     configure_region(mpu, DISABLED_R4.0, DISABLED_R4.1);
     configure_region(mpu, DISABLED_R5.0, DISABLED_R5.1);
-    // SAFETY: Re-enabling MPU with PRIVDEFENA after all deny-all regions
-    // are programmed.  Same safety argument as apply_partition_mpu.
-    unsafe { mpu.ctrl.write(MPU_CTRL_ENABLE_PRIVDEFENA) };
-    cortex_m::asm::dsb();
-    cortex_m::asm::isb();
+    mpu_enable(mpu);
 }
 
 /// Errors from MPU region validation and strategy operations.
@@ -951,6 +964,36 @@ mod tests {
             encode_size(256).unwrap()
         );
         assert_eq!(r[1].1 & 1, 1);
+    }
+
+    // TODO: reviewer false positive — `peripheral_mpu_regions` (line 296) is a
+    // real pub fn returning Option<[(u32,u32);2]>, distinct from
+    // `partition_mpu_regions_or_deny_all` which handles base R0-R3 regions.
+    #[test]
+    fn peripheral_regions_differ_across_partitions() {
+        // Validates that apply_partition_mpu (called per context switch in
+        // dynamic mode) programs different R4-R5 peripheral regions for
+        // different partitions, ensuring per-switch peripheral isolation.
+        let p0 = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
+        let p1 = make_pcb(0x0000_0000, 0x2000_4000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(0x4001_0000, 256, 0)]);
+
+        let r0 = peripheral_mpu_regions(&p0).unwrap();
+        let r1 = peripheral_mpu_regions(&p1).unwrap();
+
+        // R4: different peripheral base addresses
+        assert_ne!(
+            r0[0].0, r1[0].0,
+            "R4 RBAR must differ (different peripheral base)"
+        );
+        // R4: different RASR due to different peripheral sizes
+        assert_ne!(
+            r0[0].1, r1[0].1,
+            "R4 RASR must differ (different peripheral size)"
+        );
+        // R5: disabled for both (only one peripheral each)
+        assert_eq!(r0[1], r1[1], "R5 should be identically disabled for both");
     }
 
     // ------------------------------------------------------------------

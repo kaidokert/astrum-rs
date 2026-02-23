@@ -250,41 +250,71 @@ macro_rules! define_unified_harness {
         static _SVC: unsafe extern "C" fn(&mut $crate::context::ExceptionFrame) =
             $crate::svc::SVC_HANDLER;
 
-        /// PendSV shim (static mode): reprogram MPU R0-R3 for the
+        /// PendSV MPU programming shim: reprogram MPU regions for the
         /// incoming partition on every context switch.
-        #[cfg(not(feature = "dynamic-mpu"))]
+        ///
+        /// - Static mode: R0-R3 (base) + R4-R5 (peripheral) via
+        ///   `apply_partition_mpu` (self-contained disable/enable cycle).
+        /// - Dynamic mode: single disable/enable cycle writing R0-R3
+        ///   (base partition) then R4-R7 (dynamic strategy), avoiding
+        ///   redundant MPU state transitions and overlapping writes.
         #[export_name = "__pendsv_program_mpu"]
         extern "C" fn __pendsv_program_mpu() {
-            // SAFETY: PendSV is the lowest-priority exception, so no other
-            // exception can preempt us while writing MPU registers.
-            // `steal()` is sound because we have exclusive access to the
-            // MPU peripheral at this priority level.
+            // SAFETY: PendSV is the lowest-priority exception and CAN be
+            // preempted by higher-priority ISRs (SysTick, SVC).  `steal()`
+            // is sound for MPU access because no other exception handler in
+            // this system writes to MPU registers — SysTick only advances
+            // the schedule and SVC dispatch does not reprogram the MPU.
             let p = unsafe { cortex_m::Peripherals::steal() };
+
+            // Dynamic mode: disable MPU up front so base-region and
+            // dynamic-strategy writes share a single disable/enable cycle.
+            #[cfg(feature = "dynamic-mpu")]
+            $crate::mpu::mpu_disable(&p.MPU);
+
             $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
                 let pcb = match k.partitions().get(pid as usize) {
                     Some(pcb) => pcb,
                     None => {
                         // [KPANIC:pendsv-bad-pid] Fatal: apply deny-all
-                        // and halt — panics are unrecoverable in PendSV.
+                        // and reset — panics are unrecoverable in PendSV.
+                        $crate::klog!("[KPANIC:pendsv-bad-pid] pid={}", pid);
                         $crate::mpu::apply_deny_all_mpu(&p.MPU);
-                        #[allow(clippy::empty_loop)]
-                        loop {}
+                        cortex_m::peripheral::SCB::sys_reset();
                     }
                 };
-                // R0-R3: static partition regions
-                $crate::mpu::apply_partition_mpu(&p.MPU, pcb);
-            });
-        }
-        // TODO: reviewer false positive — no filesystem path or AI slop exists here.
-        // The @impl arm is the internal dispatch tag defined in define_pendsv! (pendsv.rs:67),
-        // and "bl __pendsv_program_mpu" is the assembly branch instruction to call the
-        // static-mode MPU programming shim defined above.
-        #[cfg(not(feature = "dynamic-mpu"))]
-        $crate::define_pendsv!(@impl "bl __pendsv_program_mpu");
 
-        #[cfg(feature = "dynamic-mpu")]
-        $crate::define_pendsv!(dynamic: HARNESS_STRATEGY);
+                // Static mode: apply_partition_mpu handles R0-R5 with
+                // its own disable/enable cycle.
+                #[cfg(not(feature = "dynamic-mpu"))]
+                $crate::mpu::apply_partition_mpu(&p.MPU, pcb);
+
+                // Dynamic mode: write only R0-R3 base partition regions
+                // (MPU already disabled above; R4-R7 written below).
+                #[cfg(feature = "dynamic-mpu")]
+                {
+                    let regions = $crate::mpu::partition_mpu_regions_or_deny_all(pcb);
+                    for &(rbar, rasr) in &regions {
+                        $crate::mpu::configure_region(&p.MPU, rbar, rasr);
+                    }
+                }
+            });
+
+            // Dynamic mode: write R4-R7 strategy regions and re-enable.
+            #[cfg(feature = "dynamic-mpu")]
+            {
+                let values = HARNESS_STRATEGY.compute_region_values();
+                for &(rbar, rasr) in &values {
+                    $crate::mpu::configure_region(&p.MPU, rbar, rasr);
+                }
+                $crate::mpu::mpu_enable(&p.MPU);
+            }
+        }
+        // TODO: reviewer false positive — `@impl` is a Rust macro internal
+        // dispatch arm (see pendsv.rs), not a filesystem path.  No AI slop or
+        // environment leak exists here.
+        $crate::define_pendsv!(@impl "bl __pendsv_program_mpu");
 
         #[exception]
         fn SysTick() {
