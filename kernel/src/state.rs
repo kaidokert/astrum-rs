@@ -183,11 +183,11 @@ const _: () = assert!(
 /// already contains all these via sub-struct composition.
 pub type UnifiedKernel<C> = Kernel<C>;
 
-/// Helper struct for compile-time size assertion.
+/// Helper struct for compile-time kernel storage invariants.
 ///
-/// Creates a zero-sized constant if `Kernel<C>` fits in `MAX_KERNEL_SIZE`,
-/// otherwise fails to compile due to array size overflow.
-struct AssertKernelFits<C: KernelConfig>
+/// Verifies at compile time that `Kernel<C>` fits within `MAX_KERNEL_SIZE`
+/// and that its alignment does not exceed `KERNEL_ALIGNMENT`.
+struct AssertKernelInvariants<C: KernelConfig>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -201,7 +201,7 @@ where
     _marker: core::marker::PhantomData<C>,
 }
 
-impl<C: KernelConfig> AssertKernelFits<C>
+impl<C: KernelConfig> AssertKernelInvariants<C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -212,12 +212,16 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    /// Zero-sized constant that only compiles if Kernel<C> fits in storage.
+    /// Zero-sized constant that only compiles if Kernel<C> fits in storage
+    /// and its alignment does not exceed the buffer alignment.
     const OK: () = {
-        // This assertion will fail at compile time if Kernel<C> is too large
         assert!(
             size_of::<Kernel<C>>() <= MAX_KERNEL_SIZE,
             "Kernel<C> exceeds MAX_KERNEL_SIZE"
+        );
+        assert!(
+            align_of::<Kernel<C>>() <= KERNEL_ALIGNMENT,
+            "Kernel<C> alignment exceeds KERNEL_ALIGNMENT"
         );
     };
 }
@@ -268,7 +272,8 @@ where
 /// # Panics
 ///
 /// - Compile-time assertion fails if `size_of::<Kernel<C>>()` exceeds
-///   [`MAX_KERNEL_SIZE`].
+///   [`MAX_KERNEL_SIZE`], or if `align_of::<Kernel<C>>()` exceeds
+///   [`KERNEL_ALIGNMENT`].
 /// - Runtime panic if `UNIFIED_KERNEL_STORAGE` address is not aligned to
 ///   [`KERNEL_ALIGNMENT`] (4096 bytes). The panic message includes the actual
 ///   alignment offset.
@@ -284,11 +289,10 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    // Compile-time size check: ensure Kernel<C> fits in the storage buffer.
-    // This creates a zero-sized array if the condition holds, or fails to compile
-    // if Kernel<C> is too large (negative array size).
+    // Compile-time check: ensure Kernel<C> fits in the storage buffer and
+    // its alignment does not exceed KERNEL_ALIGNMENT.
     #[allow(clippy::let_unit_value)]
-    let _ = AssertKernelFits::<C>::OK;
+    let _ = AssertKernelInvariants::<C>::OK;
 
     // SAFETY: The caller guarantees this is called exactly once before any
     // other kernel access. We use addr_of_mut! to obtain a raw pointer without
@@ -571,6 +575,11 @@ mod tests {
         assert!(align_of::<KernelStorageBuffer>() >= MPU_MIN_ALIGNMENT);
         // Also verify MPU_MIN_ALIGNMENT matches expected value.
         assert_eq!(MPU_MIN_ALIGNMENT, 4096);
+    }
+
+    #[test]
+    fn kernel_alignment_within_buffer_alignment() {
+        assert!(align_of::<Kernel<TestConfig>>() <= KERNEL_ALIGNMENT);
     }
 
     // TODO: These alignment tests are unit tests rather than integration tests because
