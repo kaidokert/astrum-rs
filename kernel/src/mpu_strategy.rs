@@ -1425,6 +1425,102 @@ mod tests {
         MpuRegion::new(base, size, 0)
     }
 
+    // ------------------------------------------------------------------
+    // Peripheral partition-switch region emission
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn peripheral_partition_switch_emits_correct_rasr() {
+        let ds = DynamicStrategy::new();
+
+        // Expected device-memory RASR for a 4 KiB peripheral region:
+        // AP=FULL_ACCESS, XN=1, S/C/B=1/0/1 (Device), SIZE=11, ENABLE=1.
+        let periph_rasr = build_rasr(
+            4096u32.trailing_zeros() - 1, // size_field = 11
+            AP_FULL_ACCESS,
+            true,
+            (true, false, true),
+        );
+
+        // ---- Phase 1: peripheral partition (reserved=2) active ----
+        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        let pcb =
+            make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+        assert_eq!(ds.wire_boot_peripherals(&[pcb]), 1);
+
+        let v1 = ds.compute_region_values();
+        assert_eq!(
+            v1[0].0,
+            build_rbar(0x4000_0000, 4).unwrap(),
+            "R4 RBAR must select peripheral base"
+        );
+        assert_eq!(
+            v1[0].1, periph_rasr,
+            "R4 RASR must match device-memory peripheral encoding"
+        );
+        assert_eq!(v1[1].1, 0, "R5 disabled (no second peripheral wired)");
+
+        // ---- Phase 2: non-peripheral partition (reserved=0) active ----
+        // Switch to a partition with 0 peripheral reservations.
+        // configure_partition moves peripheral_reserved from 2→0:
+        //   - clears slot[2] (old RAM at R6)
+        //   - places new RAM in slot[0] (R4), displacing the peripheral
+        // No inject_slot calls — we verify configure_partition's actual
+        // transition logic displaces the old peripheral descriptor.
+        let (rbar_r4, rasr_r4) = data_region(0x2000_8000, 4096, 4);
+        ds.configure_partition(1, &[(rbar_r4, rasr_r4)], 0).unwrap();
+
+        let v2 = ds.compute_region_values();
+        assert_eq!(
+            v2[0].0,
+            build_rbar(0x2000_8000, 4).unwrap(),
+            "R4 must hold new partition's RAM, displacing old peripheral"
+        );
+        assert_eq!(
+            v2[0].1, rasr_r4,
+            "R4 RASR must match partition 1 data region"
+        );
+        assert_eq!(v2[1].1, 0, "R5 disabled (no peripheral reservation)");
+        assert_eq!(v2[2].1, 0, "R6 disabled (old RAM cleared by transition)");
+        assert_eq!(v2[3].1, 0, "R7 disabled (no windows)");
+
+        // ---- Phase 3: switch back to peripheral partition (reserved=2) ----
+        // configure_partition moves peripheral_reserved from 0→2:
+        //   - clears slot[0] (old RAM at R4)
+        //   - places RAM in slot[2] (R6)
+        //   - R4-R5 are now empty (reserved for peripherals)
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+
+        // Verify R4 is properly cleared (peripheral slot empty before wiring).
+        let v3_pre = ds.compute_region_values();
+        assert_eq!(v3_pre[0].1, 0, "R4 empty before peripheral re-wiring");
+        assert_eq!(
+            v3_pre[2].1, rasr_r6,
+            "R6 holds partition RAM after switch-back"
+        );
+
+        // TODO: wire_boot_peripherals must be re-called after each context
+        // switch to populate peripheral slots.  If the strategy cached
+        // per-partition peripheral descriptors and restored them during
+        // configure_partition, this manual re-wiring would be unnecessary.
+        let pcb2 =
+            make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+        assert_eq!(ds.wire_boot_peripherals(&[pcb2]), 1);
+
+        let v3 = ds.compute_region_values();
+        assert_eq!(
+            v3[0].0,
+            build_rbar(0x4000_0000, 4).unwrap(),
+            "R4 RBAR must re-select peripheral base after round-trip"
+        );
+        assert_eq!(
+            v3[0].1, periph_rasr,
+            "R4 RASR must re-emit peripheral encoding after round-trip"
+        );
+        assert_eq!(v3[2].1, rasr_r6, "R6 still holds partition RAM");
+    }
+
     #[test]
     fn wire_boot_peripherals_correctness() {
         let ds = DynamicStrategy::new();
