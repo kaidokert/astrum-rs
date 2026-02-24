@@ -2219,6 +2219,23 @@ where
     // Schedule advance methods
     // -------------------------------------------------------------------------
 
+    /// Transition the active partition from `Running` to `Ready`.
+    ///
+    /// If `active_partition` is `Some` and that partition is currently
+    /// `Running`, it is moved to `Ready`. Otherwise this is a no-op.
+    fn transition_outgoing_ready(&mut self) {
+        if let Some(old_pid) = self.active_partition {
+            let is_running = self
+                .partitions()
+                .get(old_pid as usize)
+                .map(|pcb| pcb.state() == PartitionState::Running)
+                .unwrap_or(false);
+            if is_running {
+                try_transition(self.partitions_mut(), old_pid, PartitionState::Ready);
+            }
+        }
+    }
+
     /// Advance the schedule table by one tick. Returns a [`ScheduleEvent`]
     /// indicating whether a partition switch or system window occurred.
     /// Updates `active_partition` and `next_partition` on partition switches.
@@ -2247,17 +2264,7 @@ where
                     // Return None to indicate no switch occurred.
                     return ScheduleEvent::None;
                 }
-                // Transition outgoing partition from Running to Ready.
-                if let Some(old_pid) = self.active_partition {
-                    let is_running = self
-                        .partitions()
-                        .get(old_pid as usize)
-                        .map(|pcb| pcb.state() == PartitionState::Running)
-                        .unwrap_or(false);
-                    if is_running {
-                        try_transition(self.partitions_mut(), old_pid, PartitionState::Ready);
-                    }
-                }
+                self.transition_outgoing_ready();
                 self.active_partition = Some(pid);
                 self.set_next_partition(pid);
                 event
@@ -2286,17 +2293,7 @@ where
             if is_waiting {
                 return ScheduleEvent::None;
             }
-            // Transition outgoing partition from Running to Ready.
-            if let Some(old_pid) = self.active_partition {
-                let is_running = self
-                    .partitions()
-                    .get(old_pid as usize)
-                    .map(|pcb| pcb.state() == PartitionState::Running)
-                    .unwrap_or(false);
-                if is_running {
-                    try_transition(self.partitions_mut(), old_pid, PartitionState::Ready);
-                }
-            }
+            self.transition_outgoing_ready();
             self.active_partition = Some(pid);
         }
         result
@@ -6877,6 +6874,49 @@ mod tests {
 
         // At most one Running partition.
         assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
+    #[test]
+    fn transition_outgoing_ready_transitions_running_to_ready() {
+        let mut k = kernel_with_schedule();
+
+        // Put P0 into Running via set_next_partition and mark it active.
+        k.set_next_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        k.active_partition = Some(0);
+
+        // Call the helper directly.
+        k.transition_outgoing_ready();
+
+        // P0 should now be Ready.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
+    }
+
+    #[test]
+    fn transition_outgoing_ready_noop_when_no_active_partition() {
+        let mut k = kernel_with_schedule();
+
+        // Ensure active_partition is None (default after construction).
+        assert_eq!(k.active_partition, None);
+
+        // Call the helper — should not panic or change any state.
+        k.transition_outgoing_ready();
+
+        // Both partitions should remain in their initial state (Ready).
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
     }
 
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
