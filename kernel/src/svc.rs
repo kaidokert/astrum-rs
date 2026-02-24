@@ -2601,6 +2601,7 @@ mod tests {
     use super::*;
     use crate::config::KernelConfig;
     use crate::message::MessageQueue;
+    use crate::mpu::MpuError;
     use crate::partition::{MpuRegion, PartitionControlBlock};
     use crate::partition_core::{AlignedStack4K, PartitionCore};
     use crate::scheduler::ScheduleEntry;
@@ -5937,6 +5938,116 @@ mod tests {
 
         // Should succeed: max_gap (100) is not greater than threshold (100).
         assert!(result.is_ok());
+    }
+
+    // -------------------------------------------------------------------------
+    // Kernel::new peripheral region validation tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn kernel_new_rejects_peripheral_region_size_too_small() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        let mut cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
+        };
+        let _ = cfg
+            .peripheral_regions
+            .push(MpuRegion::new(0x4000_0000, 16, 0x03));
+        let result = try_kernel_new(s, core::slice::from_ref(&cfg));
+        assert!(matches!(
+            result,
+            Err(ConfigError::PeripheralRegionInvalid {
+                partition_id: 0,
+                region_index: 0,
+                detail: MpuError::SizeTooSmall,
+            })
+        ));
+    }
+
+    #[test]
+    fn kernel_new_rejects_peripheral_region_not_power_of_two() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        let mut cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
+        };
+        let _ = cfg
+            .peripheral_regions
+            .push(MpuRegion::new(0x4000_0000, 100, 0x03));
+        let result = try_kernel_new(s, core::slice::from_ref(&cfg));
+        assert!(matches!(
+            result,
+            Err(ConfigError::PeripheralRegionInvalid {
+                partition_id: 0,
+                region_index: 0,
+                detail: MpuError::SizeNotPowerOfTwo,
+            })
+        ));
+    }
+
+    #[test]
+    fn kernel_new_rejects_peripheral_region_base_misaligned() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        let mut cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
+        };
+        // base 0x4000_0100 is not aligned to size 4096 (0x1000)
+        let _ = cfg
+            .peripheral_regions
+            .push(MpuRegion::new(0x4000_0100, 4096, 0x03));
+        let result = try_kernel_new(s, core::slice::from_ref(&cfg));
+        assert!(matches!(
+            result,
+            Err(ConfigError::PeripheralRegionInvalid {
+                partition_id: 0,
+                region_index: 0,
+                detail: MpuError::BaseNotAligned,
+            })
+        ));
+    }
+
+    #[test]
+    fn kernel_new_accepts_valid_peripheral_region() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        let mut cfg = PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
+        };
+        let _ = cfg
+            .peripheral_regions
+            .push(MpuRegion::new(0x4000_0000, 4096, 0x03));
+        let k = try_kernel_new(s, core::slice::from_ref(&cfg)).unwrap();
+        assert_eq!(k.partitions().get(0).unwrap().peripheral_regions().len(), 1);
+        assert_eq!(
+            k.partitions().get(0).unwrap().peripheral_regions()[0].base(),
+            0x4000_0000
+        );
+        assert_eq!(
+            k.partitions().get(0).unwrap().peripheral_regions()[0].size(),
+            4096
+        );
     }
 
     // -------------------------------------------------------------------------
