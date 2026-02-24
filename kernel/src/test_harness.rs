@@ -1752,4 +1752,174 @@ mod tests {
         assert_eq!(st(&h, 1), PartitionState::Waiting);
         h.assert_no_switch_to_waiting();
     }
+
+    // TODO: sem_wait_timed_expiry_waiting_to_ready — SYS_SEM_WAIT_TIMED does not
+    // exist yet; the semaphore pool has no timed-wait mechanism and expire_timed_waits
+    // does not drain semaphore timeouts. Add this test once SemWaitTimed is implemented.
+
+    /// Timed IPC expiry: QueuingSendTimed on a full queue blocks P0
+    /// (Running→Waiting), then expire_timed_waits at the expiry tick
+    /// transitions P0 back (Waiting→Ready) and r0 reflects the IPC outcome.
+    #[test]
+    fn queuing_send_timed_expiry_waiting_to_ready() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_SEND_TIMED;
+
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+
+        // Create source→destination route; fill destination to capacity (QD=2).
+        let src = h
+            .kernel_mut()
+            .queuing_mut()
+            .create_port(PortDirection::Source)
+            .expect("create source port");
+        let dst = h
+            .kernel_mut()
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .expect("create destination port");
+        h.kernel_mut()
+            .queuing_mut()
+            .connect_ports(src, dst)
+            .expect("connect ports");
+        h.kernel_mut()
+            .queuing_mut()
+            .get_mut(dst)
+            .unwrap()
+            .inject_message(4, &[0xAA; 4]);
+        h.kernel_mut()
+            .queuing_mut()
+            .get_mut(dst)
+            .unwrap()
+            .inject_message(4, &[0xBB; 4]);
+        assert!(
+            h.kernel().queuing().get(dst).unwrap().is_full(),
+            "destination queue must be full before timed send"
+        );
+
+        h.kernel_mut().sync_tick(100);
+
+        let st = |h: &KernelTestHarness, i| h.kernel().partitions().get(i).unwrap().state();
+
+        // -- Step 1: P0 starts Running --
+        assert_eq!(st(&h, 0), PartitionState::Running, "P0 must start Running");
+
+        // -- Step 2: Dispatch QueuingSendTimed (full queue, timeout=50) → blocks --
+        // r2 encoding: (timeout_hi16 << 16) | data_len_lo16
+        let timeout: u32 = 50;
+        let data_len: u32 = 4;
+        let r2 = (timeout << 16) | data_len;
+        let mpu_base = h.kernel().partitions().get(0).unwrap().mpu_region().base();
+        let frame = h.dispatch(SYS_QUEUING_SEND_TIMED, src as u32, r2, mpu_base);
+
+        // -- Step 3: Verify Running→Waiting transition and yield_requested --
+        assert_eq!(
+            st(&h, 0),
+            PartitionState::Waiting,
+            "P0 must be Waiting after blocking send"
+        );
+        assert!(
+            h.kernel().yield_requested,
+            "yield_requested must be set after blocking send triggers deschedule"
+        );
+
+        // -- Step 4: expire_timed_waits at expiry tick (100+50=150) → Waiting→Ready --
+        h.kernel_mut().expire_timed_waits::<8>(150);
+        assert_eq!(
+            st(&h, 0),
+            PartitionState::Ready,
+            "P0 must be Ready after timeout expiry"
+        );
+
+        // Verify IPC outcome: r0=0 was set by trigger_deschedule() during the
+        // blocking path. expire_timed_waits transitions state only and does not
+        // modify the partition's saved frame.
+        // TODO: The kernel should ideally write a TIMED_OUT error code into the
+        // partition's saved frame on expiry so callers can distinguish timeout
+        // from successful completion.
+        assert_eq!(
+            frame.r0, 0,
+            "r0 must reflect IPC outcome after expiry (currently 0 from trigger_deschedule)"
+        );
+
+        // TODO: yield_requested after expiry — expire_timed_waits does not
+        // re-assert yield_requested; it persists from the original blocking
+        // deschedule. Update once the kernel sets it independently on wake-up.
+        assert!(
+            h.kernel().yield_requested,
+            "yield_requested persists after expiry (not cleared by expire_timed_waits)"
+        );
+    }
+
+    /// Timed IPC expiry: QueuingRecvTimed on an empty queue blocks P0
+    /// (Running→Waiting), then expire_timed_waits at the expiry tick
+    /// transitions P0 back (Waiting→Ready) and r0 reflects the IPC outcome.
+    #[test]
+    fn queuing_recv_timed_expiry_waiting_to_ready() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+
+        // Create an empty destination queuing port.
+        let dst = h
+            .kernel_mut()
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .expect("create destination port");
+        assert!(
+            h.kernel().queuing().get(dst).unwrap().is_empty(),
+            "destination queue must be empty for blocking recv"
+        );
+
+        h.kernel_mut().sync_tick(100);
+
+        let st = |h: &KernelTestHarness, i| h.kernel().partitions().get(i).unwrap().state();
+
+        // -- Step 1: P0 starts Running --
+        assert_eq!(st(&h, 0), PartitionState::Running, "P0 must start Running");
+
+        // -- Step 2: Dispatch QueuingRecvTimed (empty queue, timeout=50) → blocks --
+        let timeout: u32 = 50;
+        let mpu_base = h.kernel().partitions().get(0).unwrap().mpu_region().base();
+        let frame = h.dispatch(SYS_QUEUING_RECV_TIMED, dst as u32, timeout, mpu_base);
+
+        // -- Step 3: Verify Running→Waiting transition and yield_requested --
+        assert_eq!(
+            st(&h, 0),
+            PartitionState::Waiting,
+            "P0 must be Waiting after blocking recv"
+        );
+        assert!(
+            h.kernel().yield_requested,
+            "yield_requested must be set after blocking recv triggers deschedule"
+        );
+
+        // -- Step 4: expire_timed_waits at expiry tick (100+50=150) → Waiting→Ready --
+        h.kernel_mut().expire_timed_waits::<8>(150);
+        assert_eq!(
+            st(&h, 0),
+            PartitionState::Ready,
+            "P0 must be Ready after timeout expiry"
+        );
+
+        // Verify IPC outcome: r0=0 was set by trigger_deschedule() during the
+        // blocking path. expire_timed_waits transitions state only and does not
+        // modify the partition's saved frame.
+        // TODO: The kernel should ideally write a TIMED_OUT error code into the
+        // partition's saved frame on expiry so callers can distinguish timeout
+        // from successful completion.
+        assert_eq!(
+            frame.r0, 0,
+            "r0 must reflect IPC outcome after expiry (currently 0 from trigger_deschedule)"
+        );
+
+        // TODO: yield_requested after expiry — expire_timed_waits does not
+        // re-assert yield_requested; it persists from the original blocking
+        // deschedule. Update once the kernel sets it independently on wake-up.
+        assert!(
+            h.kernel().yield_requested,
+            "yield_requested persists after expiry (not cleared by expire_timed_waits)"
+        );
+    }
 }
