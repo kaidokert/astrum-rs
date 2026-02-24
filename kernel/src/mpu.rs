@@ -189,6 +189,8 @@ pub const MPU_CTRL_ENABLE_PRIVDEFENA: u32 = (1 << 2) | 1;
 pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
     let region_size = pcb.mpu_region().size();
 
+    // Sentinel partitions (size==0, from bug01 fix) intentionally fail
+    // validation here and receive deny-all MPU via the _or_deny_all wrapper.
     // Validate code region (entry_point must be aligned to region_size).
     validate_mpu_region(pcb.entry_point(), region_size).ok()?;
     // Validate data region (base must be aligned to size).
@@ -1420,5 +1422,44 @@ mod tests {
         );
         assert_eq!(fallback[0].1, 0, "Fallback R4 RASR must be 0 (disabled)");
         assert_eq!(fallback[1].1, 0, "Fallback R5 RASR must be 0 (disabled)");
+    }
+
+    // ------------------------------------------------------------------
+    // sentinel PCB (size==0 from bug01 fix)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn sentinel_pcb_size_zero_partition_mpu_regions_returns_none() {
+        // A sentinel PCB has mpu_region.size()==0. validate_mpu_region
+        // rejects size < 32, so partition_mpu_regions must return None.
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,                       // valid entry_point
+            0x2000_0000,                       // valid stack_base
+            0x2000_1000,                       // stack_pointer
+            MpuRegion::new(0x2000_0000, 0, 0), // size==0 sentinel
+        );
+        assert_eq!(
+            partition_mpu_regions(&pcb),
+            None,
+            "sentinel PCB (size==0) must produce None from partition_mpu_regions"
+        );
+    }
+
+    #[test]
+    fn sentinel_pcb_size_zero_or_deny_all_returns_deny_all() {
+        // The _or_deny_all wrapper must map the sentinel's None to deny_all_regions().
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 0, 0),
+        );
+        assert_eq!(
+            partition_mpu_regions_or_deny_all(&pcb),
+            deny_all_regions(),
+            "sentinel PCB must receive deny-all MPU configuration"
+        );
     }
 }
