@@ -2632,6 +2632,7 @@ mod tests {
     use crate::partition::{MpuRegion, PartitionControlBlock};
     use crate::partition_core::{AlignedStack4K, PartitionCore};
     use crate::scheduler::ScheduleEntry;
+    use crate::scheduler::ScheduleEvent;
     use crate::semaphore::Semaphore;
     use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_YIELD};
 
@@ -6224,6 +6225,41 @@ mod tests {
         assert_eq!(k.next_partition(), initial_next);
     }
 
+    /// Verifies that skipping a Waiting partition does NOT transition the
+    /// current active partition from Running to Ready. Covers the early-return
+    /// at svc.rs:2270-2273 when an active Running partition exists.
+    #[test]
+    fn advance_schedule_tick_skips_waiting_preserves_running_state() {
+        let mut k = kernel_with_schedule();
+
+        // Make P0 the active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+
+        // Advance to boundary before P1's slot (P0 has 5 ticks).
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+
+        // Transition P1 to Waiting (Ready -> Running -> Waiting).
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // 5th tick would switch to P1, but P1 is Waiting => skip.
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(k.active_partition(), Some(0));
+        // P0 must still be Running — no Running→Ready transition fired.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+    }
+
     /// Tests advance_schedule_tick switches to Ready partitions normally.
     #[test]
     fn advance_schedule_tick_switches_to_ready_partition() {
@@ -6963,6 +6999,40 @@ mod tests {
         let result = k.yield_current_slot();
         assert_eq!(result.partition_id(), None);
         assert_eq!(k.active_partition(), initial_active);
+    }
+
+    /// Verifies that skipping a Waiting partition on yield does NOT
+    /// transition the current active partition from Running to Ready.
+    /// Covers the early-return at svc.rs:2301-2302.
+    #[test]
+    fn yield_current_slot_skips_waiting_preserves_running_state() {
+        let mut k = kernel_with_schedule();
+
+        // Make P0 the active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+
+        // Transition P1 to Waiting (Ready -> Running -> Waiting).
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // Yield from P0: force_advance targets P1, but P1 is Waiting => skip.
+        // yield_current_slot returns `impl YieldResult` (opaque), so verify
+        // ScheduleEvent::None semantics via both trait methods.
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), None);
+        assert!(!result.is_system_window());
+        assert_eq!(k.active_partition(), Some(0));
+        // P0 must still be Running — no Running→Ready transition fired.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
     }
 
     /// Tests that yield_current_slot transitions the outgoing partition
