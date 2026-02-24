@@ -1298,4 +1298,72 @@ mod tests {
             "P0 and P1 R4 RBAR must differ for peripheral isolation"
         );
     }
+
+    /// Verify that `DynamicStrategy::cached_peripheral_regions()` produces
+    /// correct R4/R5 register pairs after `wire_boot_peripherals()`.
+    /// This tests the actual dynamic-mode runtime path executed during
+    /// PendSV context switches, unlike the static-mode test above.
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn two_peripheral_partitions_cached_peripheral_regions() {
+        use crate::mpu::partition_dynamic_regions;
+        use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
+
+        let h = KernelTestHarness::with_two_peripheral_partitions().expect("harness setup");
+        let strategy = DynamicStrategy::new();
+
+        // Configure each partition's dynamic region with 2 peripheral-reserved slots.
+        for pid in 0..2u8 {
+            let pcb = h
+                .kernel()
+                .partitions()
+                .get(pid as usize)
+                .expect("partition");
+            let regions = partition_dynamic_regions(pcb).expect("dynamic regions");
+            strategy
+                .configure_partition(pid, &regions, 2)
+                .expect("configure_partition");
+        }
+
+        // Wire boot peripherals into the strategy's cache.
+        let wired = strategy.wire_boot_peripherals(h.kernel().partitions().as_slice());
+        assert!(wired > 0, "at least one peripheral must be wired");
+
+        let regions_p0 = strategy.cached_peripheral_regions(0);
+        let regions_p1 = strategy.cached_peripheral_regions(1);
+
+        // --- P0: R4 must encode 0x4000_0000 base, R5 disabled ---
+        let p0_r4_rbar = regions_p0[0].0;
+        let p0_r4_rasr = regions_p0[0].1;
+        assert_eq!(
+            p0_r4_rbar & 0xFFFF_FFE0,
+            0x4000_0000,
+            "P0 cached R4 RBAR base must be 0x4000_0000"
+        );
+        assert_ne!(p0_r4_rasr, 0, "P0 cached R4 RASR must be enabled");
+        assert_eq!(
+            regions_p0[1].1, 0,
+            "P0 cached R5 RASR must be disabled (only one peripheral)"
+        );
+
+        // --- P1: R4 must encode 0x4001_0000 base, R5 disabled ---
+        let p1_r4_rbar = regions_p1[0].0;
+        let p1_r4_rasr = regions_p1[0].1;
+        assert_eq!(
+            p1_r4_rbar & 0xFFFF_FFE0,
+            0x4001_0000,
+            "P1 cached R4 RBAR base must be 0x4001_0000"
+        );
+        assert_ne!(p1_r4_rasr, 0, "P1 cached R4 RASR must be enabled");
+        assert_eq!(
+            regions_p1[1].1, 0,
+            "P1 cached R5 RASR must be disabled (only one peripheral)"
+        );
+
+        // --- Isolation: P0 and P1 R4 RBAR values must differ ---
+        assert_ne!(
+            p0_r4_rbar, p1_r4_rbar,
+            "P0 and P1 cached R4 RBAR must differ for peripheral isolation"
+        );
+    }
 }
