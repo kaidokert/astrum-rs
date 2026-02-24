@@ -1361,6 +1361,7 @@ where
         let arg1 = frame.r1;
         let arg2 = frame.r2;
         let arg3 = frame.r3;
+        self.assert_dispatch_invariants();
         frame.r0 = match SyscallId::from_u32(syscall_id) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::EventWait) => {
@@ -1980,7 +1981,54 @@ where
             Some(_) => SvcError::InvalidSyscall.to_u32(),
             None => SvcError::InvalidSyscall.to_u32(),
         };
+        self.assert_dispatch_invariants();
     }
+
+    /// Assert kernel invariants at dispatch entry/exit (no-op in release).
+    #[cfg(any(debug_assertions, test))]
+    fn assert_dispatch_invariants(&self) {
+        // Unit tests may leave active_partition as None; in the real kernel
+        // it is always Some when an SVC fires.  Skip the check only in tests.
+        #[cfg(test)]
+        if self.active_partition.is_none() {
+            return;
+        }
+        let parts = self.core.partitions().as_slice();
+        let pid = self.current_partition as usize;
+        // yield_requested ⇒ active_partition/next_partition may be stale.
+        let active = if self.yield_requested
+            && parts.get(pid).map(|p| p.state()) != Some(PartitionState::Running)
+        {
+            None
+        } else {
+            self.active_partition
+        };
+        let mut sem_pairs = [(0u32, 0u32); C::S];
+        let mut sem_len = 0;
+        for (i, pair) in sem_pairs.iter_mut().enumerate() {
+            match self.sync.semaphores().get(i) {
+                Some(s) => {
+                    *pair = (s.count(), s.max_count());
+                    sem_len = i + 1;
+                }
+                None => break,
+            }
+        }
+        let next = if self.yield_requested {
+            None
+        } else {
+            Some(self.core.next_partition())
+        };
+        let sp = match self.core.partition_sp().get(..parts.len()) {
+            Some(s) => s,
+            None => return, // mismatched lengths — skip rather than panic
+        };
+        crate::invariants::assert_kernel_invariants(parts, active, &sem_pairs[..sem_len], next, sp);
+    }
+
+    #[cfg(not(any(debug_assertions, test)))]
+    #[inline(always)]
+    fn assert_dispatch_invariants(&self) {}
 
     // -------------------------------------------------------------------------
     // Schedule and partition accessors

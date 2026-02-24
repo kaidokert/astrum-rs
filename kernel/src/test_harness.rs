@@ -866,6 +866,11 @@ mod tests {
 
         // Reset yield_requested so the send dispatch starts clean.
         h.kernel_mut().yield_requested = false;
+        // P0 is now in Waiting state after the blocking receive.  The
+        // dispatch-exit invariant requires next_partition to reference a
+        // non-Waiting partition, so advance it to P1 (the sender) which
+        // is Running.
+        h.kernel_mut().core.set_next_partition(1);
 
         // Step 2: P1 dispatches SYS_MSG_SEND on queue 0 — wakes P0.
         // SYS_MSG_SEND encoding: r1=queue_id, r2=sender_pid, r3=data_ptr
