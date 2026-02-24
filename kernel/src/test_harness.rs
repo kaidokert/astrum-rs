@@ -1189,6 +1189,97 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // fix_mpu_data_region out-of-bounds edge case
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn fix_mpu_data_region_returns_false_for_out_of_bounds() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        assert!(
+            !h.kernel_mut().fix_mpu_data_region(2, 0x2000_0000),
+            "index == partition_count must return false"
+        );
+        assert!(
+            !h.kernel_mut().fix_mpu_data_region(100, 0x2000_0000),
+            "large out-of-bounds index must return false"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // fix_mpu_data_region valid index: returns true, updates base,
+    // preserves size and permissions
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn fix_mpu_data_region_returns_true_and_updates_base() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        let pcb = h.kernel().partitions().get(0).expect("partition 0");
+        let orig_size = pcb.mpu_region().size();
+        let orig_perms = pcb.mpu_region().permissions();
+
+        let new_base: u32 = 0x2008_0000;
+        assert!(
+            h.kernel_mut().fix_mpu_data_region(0, new_base),
+            "valid index must return true"
+        );
+
+        let pcb = h.kernel().partitions().get(0).expect("partition 0");
+        assert_eq!(
+            pcb.mpu_region().base(),
+            new_base,
+            "base must be updated to new value"
+        );
+        assert_eq!(
+            pcb.mpu_region().size(),
+            orig_size,
+            "size must be preserved after base update"
+        );
+        assert_eq!(
+            pcb.mpu_region().permissions(),
+            orig_perms,
+            "permissions must be preserved after base update"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Integration: fix_mpu_data_region is applied during harness build
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn harness_build_applies_fix_mpu_data_region() {
+        // Verifies that build_kernel() calls fix_mpu_data_region for every
+        // partition, reconciling stale MPU bases with actual core_stack_base
+        // addresses after the kernel is boxed on the heap.
+        //
+        // On 64-bit test hosts the heap-allocated core_stack_base differs
+        // from the PartitionConfig value (RAM_BASE + i*PARTITION_OFFSET),
+        // so a successful match proves the fixup actually ran.
+        for &n in &[1, 2, 4] {
+            let h = KernelTestHarness::with_partitions(n).expect("harness setup");
+            for i in 0..n {
+                let pcb = h.kernel().partitions().get(i).expect("partition exists");
+                let core_base = h
+                    .kernel()
+                    .core_stack_base(i)
+                    .expect("core_stack_base must be Some");
+                assert_eq!(
+                    pcb.mpu_region().base(),
+                    core_base,
+                    "n={n} partition {i}: mpu_region().base() must equal core_stack_base() \
+                     after build (fix_mpu_data_region integration)"
+                );
+                let config_base = RAM_BASE + (i as u32) * PARTITION_OFFSET;
+                assert_ne!(
+                    pcb.mpu_region().base(),
+                    config_base,
+                    "n={n} partition {i}: mpu_region().base() must differ from the original \
+                     config value ({config_base:#x}), proving fix_mpu_data_region overwrote it"
+                );
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // PCB stack_base/stack_size match core_stack_base/STACK_SIZE_BYTES
     // ------------------------------------------------------------------
 
