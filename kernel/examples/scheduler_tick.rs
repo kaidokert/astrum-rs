@@ -9,7 +9,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::config::KernelConfig;
 use kernel::msg_pools::MsgPools;
-use kernel::partition::{MpuRegion, PartitionConfig};
+use kernel::partition::{MpuRegion, PartitionConfig, PartitionState};
 use kernel::partition_core::{AlignedStack1K, PartitionCore};
 use kernel::port_pools::PortPools;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
@@ -51,16 +51,62 @@ impl KernelConfig for TestConfig {
 kernel::define_unified_kernel!(TestConfig);
 
 static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
+static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
+/// Tracks the active partition across ticks. `u32::MAX` means no partition yet.
+static ACTIVE_PID: AtomicU32 = AtomicU32::new(u32::MAX);
 const RELOAD: u32 = kernel::config::compute_systick_reload(12_000_000, 10_000);
 const MAX_SWITCHES: u32 = 6;
 
 #[exception]
 fn SysTick() {
     kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {
+        // Read previous active partition's state before advancing the tick.
+        // On the first switch prev_pid is u32::MAX (no previous partition).
+        let prev_pid = ACTIVE_PID.load(Ordering::Acquire);
+        if prev_pid != u32::MAX {
+            let state = k.partitions().get(prev_pid as usize).map(|p| p.state());
+            if state != Some(PartitionState::Running) {
+                hprintln!(
+                    "FAIL: pre-tick partition {} expected Running, got {:?}",
+                    prev_pid,
+                    state
+                );
+                FAIL_COUNT.fetch_add(1, Ordering::Release);
+            }
+        }
+
         let event = k.advance_schedule_tick();
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
+            // (1) Verify outgoing partition is now Ready (not Running).
+            if prev_pid != u32::MAX {
+                let out_state = k.partitions().get(prev_pid as usize).map(|p| p.state());
+                if out_state != Some(PartitionState::Ready) {
+                    hprintln!(
+                        "FAIL: outgoing partition {} expected Ready, got {:?}",
+                        prev_pid,
+                        out_state
+                    );
+                    FAIL_COUNT.fetch_add(1, Ordering::Release);
+                }
+            }
+
+            // (2) Use set_next_partition to transition the incoming partition
+            //     to Running, matching the pattern in tick.rs / blocking_deschedule.rs.
+            k.set_next_partition(pid);
+            let in_state = k.partitions().get(pid as usize).map(|p| p.state());
+            if in_state != Some(PartitionState::Running) {
+                hprintln!(
+                    "FAIL: incoming partition {} expected Running, got {:?}",
+                    pid,
+                    in_state
+                );
+                FAIL_COUNT.fetch_add(1, Ordering::Release);
+            }
+
+            // (3) Track the active partition for the next tick's verification.
+            ACTIVE_PID.store(pid as u32, Ordering::Release);
             hprintln!("switch -> partition {}", pid);
-            SWITCH_COUNT.fetch_add(1, Ordering::Relaxed);
+            SWITCH_COUNT.fetch_add(1, Ordering::Release);
         }
     });
 }
@@ -109,8 +155,13 @@ fn main() -> ! {
     hprintln!("scheduler_tick: started, reload={}", RELOAD);
 
     loop {
-        if SWITCH_COUNT.load(Ordering::Relaxed) >= MAX_SWITCHES {
-            hprintln!("done: {} switches", MAX_SWITCHES);
+        let fails = FAIL_COUNT.load(Ordering::Acquire);
+        if fails > 0 {
+            hprintln!("FAILED: {} assertion failures", fails);
+            debug::exit(debug::EXIT_FAILURE);
+        }
+        if SWITCH_COUNT.load(Ordering::Acquire) >= MAX_SWITCHES {
+            hprintln!("done: {} switches, 0 failures", MAX_SWITCHES);
             debug::exit(debug::EXIT_SUCCESS);
         }
     }
