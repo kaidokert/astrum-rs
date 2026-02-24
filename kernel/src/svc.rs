@@ -1572,8 +1572,9 @@ where
                             }
                             0
                         }
-                        // timeout=0: non-blocking try-send; return immediately.
+                        // timeout=0 (non-timed): non-blocking try-send; return immediately.
                         Ok(SendQueuingOutcome::SenderBlocked { .. }) => 0,
+                        // Transient queue-full: same non-blocking return path as SenderBlocked.
                         Err(QueuingError::QueueFull) => 0,
                         Err(_) => SvcError::InvalidResource.to_u32(),
                     }
@@ -1604,8 +1605,9 @@ where
                         }
                         msg_len as u32
                     }
-                    // timeout=0: non-blocking try-receive; return immediately.
+                    // timeout=0 (non-timed): non-blocking try-receive; return immediately.
                     Ok(RecvQueuingOutcome::ReceiverBlocked { .. }) => 0,
+                    // Transient queue-empty: same non-blocking return path as ReceiverBlocked.
                     Err(QueuingError::QueueEmpty) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
@@ -5323,13 +5325,23 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         let (_s, d) = connected_send_pair(&mut k);
         let ptr = low32_buf(0);
+        assert!(
+            !k.yield_requested(),
+            "yield_requested should be false before non-blocking recv"
+        );
         // Connected empty queue, non-blocking (timeout=0): returns 0 immediately.
         let mut ef = frame4(SYS_QUEUING_RECV, d as u32, 0, ptr as u32);
+        // SAFETY: frame4 built a valid ExceptionFrame and kernel is in test
+        // mode with partition 0 running; dispatch only mutates kernel state.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running
+        );
+        assert!(
+            !k.yield_requested(),
+            "non-blocking recv must not trigger deschedule"
         );
     }
 
@@ -5346,13 +5358,23 @@ mod tests {
                 .inject_message(1, &[0x42]);
         }
         let ptr = low32_buf(0);
+        assert!(
+            !k.yield_requested(),
+            "yield_requested should be false before non-blocking send"
+        );
         // Connected full queue, non-blocking (timeout=0): returns 0 immediately.
         let mut ef = frame4(SYS_QUEUING_SEND, s as u32, 1, ptr as u32);
+        // SAFETY: frame4 built a valid ExceptionFrame and kernel is in test
+        // mode with partition 0 running; dispatch only mutates kernel state.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running
+        );
+        assert!(
+            !k.yield_requested(),
+            "non-blocking send must not trigger deschedule"
         );
     }
 
