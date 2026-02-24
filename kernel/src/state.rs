@@ -183,6 +183,33 @@ const _: () = assert!(
     "MAX_KERNEL_SIZE must be a power of two for MPU region compatibility"
 );
 
+// Compile-time assertion: KERNEL_ALIGNMENT must be >= the alignment of every stack tier.
+// Stack tiers are embedded inside Kernel<C> via PartitionCore, so the kernel storage
+// buffer must be aligned at least as strictly as the most-aligned tier. If a future
+// tier is added with alignment > KERNEL_ALIGNMENT, this fires at compile time.
+const _: () = {
+    use crate::partition_core::{
+        AlignedStack1K, AlignedStack256B, AlignedStack2K, AlignedStack4K, AlignedStack512B,
+    };
+    macro_rules! check_align {
+        ($tier:ty) => {
+            assert!(
+                KERNEL_ALIGNMENT >= core::mem::align_of::<$tier>(),
+                concat!(
+                    "KERNEL_ALIGNMENT must be >= ",
+                    stringify!($tier),
+                    " alignment"
+                )
+            );
+        };
+    }
+    check_align!(AlignedStack256B);
+    check_align!(AlignedStack512B);
+    check_align!(AlignedStack1K);
+    check_align!(AlignedStack2K);
+    check_align!(AlignedStack4K);
+};
+
 /// Unified kernel state containing all kernel subsystems.
 ///
 /// Merges: partitions, schedule, current/next indices, partition SPs, tick,
