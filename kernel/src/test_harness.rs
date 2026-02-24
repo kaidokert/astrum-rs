@@ -1669,4 +1669,87 @@ mod tests {
         let sem = h.kernel().semaphores().get(0).expect("semaphore 0 exists");
         assert_eq!(sem.count(), 0, "semaphore count must be 0 after round-trip");
     }
+
+    /// Stress test: 4 partitions with mixed blocking (semaphore + events).
+    /// Verifies the at-most-one-Running invariant across blocking operations
+    /// and 8+ schedule transitions including major-frame wrap-around.
+    #[test]
+    fn mixed_blocking_four_partition_invariant_stress() {
+        use crate::invariants::assert_partition_state_consistency;
+
+        let mut h = KernelTestHarness::with_partitions(4).expect("harness setup");
+        h.kernel_mut()
+            .semaphores_mut()
+            .add(Semaphore::new(0, 1))
+            .expect("add semaphore");
+        h.kernel_mut().start_schedule();
+
+        let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
+        let check = |h: &KernelTestHarness| {
+            assert_partition_state_consistency(h.kernel().partitions().as_slice());
+        };
+
+        // Initial: P0 Running, P1-P3 Ready.
+        assert_eq!(st(&h, 0), PartitionState::Running);
+        check(&h);
+
+        // P0 blocks on SemWait (count=0).
+        let f = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(f.r0, 0, "blocking SemWait must return 0");
+        assert_eq!(st(&h, 0), PartitionState::Waiting);
+        h.assert_blocking_triggered_deschedule(0);
+        check(&h);
+
+        // Yield → schedule advances to P1.
+        h.process_pending_yield();
+        assert_eq!(st(&h, 1), PartitionState::Running);
+        check(&h);
+
+        // P1 blocks on EventWait (mask=0x1, no flags set → blocks).
+        // SYS_EVT_WAIT encoding: r1 = caller_pid, r2 = mask.
+        let f = h.dispatch_as(1, SYS_EVT_WAIT, 1, 0x1, 0);
+        assert_eq!(f.r0, 0, "blocking EventWait must return 0");
+        assert_eq!(st(&h, 1), PartitionState::Waiting);
+        h.assert_blocking_triggered_deschedule(1);
+        check(&h);
+
+        // Yield → schedule advances to P2.
+        h.process_pending_yield();
+        assert_eq!(st(&h, 2), PartitionState::Running);
+        check(&h);
+
+        // P2 signals semaphore → wakes P0 (Waiting → Ready).
+        let f = h.dispatch_as(2, SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(f.r0, 0, "SemSignal must succeed");
+        assert_eq!(st(&h, 0), PartitionState::Ready);
+        check(&h);
+
+        // Yield P2 → schedule advances to P3.
+        let f = h.dispatch_as(2, SYS_YIELD, 0, 0, 0);
+        assert_eq!(f.r0, 0);
+        h.process_pending_yield();
+        assert_eq!(st(&h, 3), PartitionState::Running);
+        check(&h);
+
+        // Cycle through 8+ schedule transitions via advance_schedule_tick.
+        // Schedule: [P0:10, P1:10, P2:10, P3:10 (+SystemWindow with dynamic-mpu)].
+        // P1 is Waiting → skipped. 200 ticks covers 4+ major frames.
+        let mut transitions = 0u32;
+        for _ in 0..200 {
+            let event = h.kernel_mut().advance_schedule_tick();
+            check(&h);
+            if let ScheduleEvent::PartitionSwitch(pid) = event {
+                transitions += 1;
+                assert_ne!(pid, 1, "scheduler must never switch to Waiting P1");
+            }
+        }
+        assert!(
+            transitions >= 8,
+            "expected 8+ schedule transitions, got {transitions}"
+        );
+
+        // P1 must remain Waiting throughout (never woken).
+        assert_eq!(st(&h, 1), PartitionState::Waiting);
+        h.assert_no_switch_to_waiting();
+    }
 }
