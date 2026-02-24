@@ -6280,6 +6280,116 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    /// Multi-cycle consistency: exercises 3+ consecutive partition switches
+    /// (P0→P1→P0→P1) via advance_schedule_tick to catch regressions where
+    /// transition_outgoing_ready works on the first switch but fails on
+    /// subsequent ones due to stale state.
+    #[test]
+    fn advance_schedule_tick_multi_cycle_consistency() {
+        use crate::invariants::{
+            assert_partition_state_consistency, assert_running_matches_active,
+        };
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+
+        // Bootstrap: put P0 into Running so the first switch has an outgoing.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+
+        // Schedule layout: P0(5 ticks) → P1(3 ticks) [→ SystemWindow(1)]
+        // We will drive through: switch1 P0→P1, switch2 P1→P0, switch3 P0→P1.
+        struct Boundary {
+            interior_ticks: u32,
+            outgoing: u8,
+            incoming: u8,
+        }
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let boundaries = [
+            Boundary {
+                interior_ticks: 4,
+                outgoing: 0,
+                incoming: 1,
+            }, // P0→P1
+            Boundary {
+                interior_ticks: 2,
+                outgoing: 1,
+                incoming: 0,
+            }, // P1→P0
+            Boundary {
+                interior_ticks: 4,
+                outgoing: 0,
+                incoming: 1,
+            }, // P0→P1
+        ];
+        #[cfg(feature = "dynamic-mpu")]
+        let boundaries = [
+            Boundary {
+                interior_ticks: 4,
+                outgoing: 0,
+                incoming: 1,
+            }, // P0→P1
+            // P1(3 ticks) then SystemWindow(1 tick) before P0
+            Boundary {
+                interior_ticks: 3,
+                outgoing: 1,
+                incoming: 0,
+            }, // P1→SW→P0
+            Boundary {
+                interior_ticks: 4,
+                outgoing: 0,
+                incoming: 1,
+            }, // P0→P1
+        ];
+
+        for (i, b) in boundaries.iter().enumerate() {
+            // Advance through interior ticks (no switch expected).
+            for _ in 0..b.interior_ticks {
+                let ev = k.advance_schedule_tick();
+                assert!(
+                    ev != ScheduleEvent::PartitionSwitch(b.incoming),
+                    "unexpected early switch at boundary {i}"
+                );
+            }
+
+            // On dynamic-mpu, the P1→P0 boundary has a SystemWindow tick first.
+            #[cfg(feature = "dynamic-mpu")]
+            if i == 1 {
+                assert_eq!(k.advance_schedule_tick(), ScheduleEvent::SystemWindow);
+            }
+
+            // The next tick triggers the partition switch.
+            assert_eq!(
+                k.advance_schedule_tick(),
+                ScheduleEvent::PartitionSwitch(b.incoming),
+                "expected switch to P{} at boundary {i}",
+                b.incoming
+            );
+
+            // (1) Outgoing partition must be Ready.
+            assert_eq!(
+                k.partitions().get(b.outgoing as usize).unwrap().state(),
+                PartitionState::Ready,
+                "outgoing P{} not Ready at boundary {i}",
+                b.outgoing
+            );
+            // (2) Incoming partition must be Running.
+            assert_eq!(
+                k.partitions().get(b.incoming as usize).unwrap().state(),
+                PartitionState::Running,
+                "incoming P{} not Running at boundary {i}",
+                b.incoming
+            );
+            // (3) At most one Running partition.
+            assert_partition_state_consistency(k.partitions().as_slice());
+            // (4) Running partition matches active_partition.
+            assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
+        }
+    }
+
     /// Regression: SYS_YIELD dispatch sets yield_requested only when the
     /// current partition is Running (not Ready or Waiting).
     #[test]
