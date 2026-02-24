@@ -187,6 +187,26 @@ impl KernelTestHarness {
         })
     }
 
+    /// Create a harness with two partitions where each has a distinct
+    /// peripheral region: P0 has (0x4000_0000, 4096) and P1 has
+    /// (0x4001_0000, 256).
+    ///
+    /// This exercises the full Kernel::new → PCB → MPU emission pipeline
+    /// for multi-partition peripheral differentiation.
+    pub fn with_two_peripheral_partitions() -> Result<Self, HarnessError> {
+        Self::build_kernel(2, |i| {
+            let mut periph = Vec::new();
+            let (base, size) = match i {
+                0 => (0x4000_0000, 4096),
+                _ => (0x4001_0000, 256),
+            };
+            periph
+                .push(MpuRegion::new(base, size, 0x03))
+                .expect("peripheral region vec has capacity");
+            periph
+        })
+    }
+
     /// Create a harness with two partitions and one message queue.
     ///
     /// The queue depth and message size come from `HarnessConfig` (QD=2, QM=4).
@@ -1226,6 +1246,56 @@ mod tests {
         assert!(
             !validate_user_ptr(h.kernel().partitions(), 1, 0x4000_0000, 1),
             "P1 (no peripheral) must not access P0 peripheral address"
+        );
+    }
+
+    /// Verify that the two-peripheral harness produces distinct MPU R4
+    /// encodings for each partition's peripheral region, and that unused
+    /// R5 slots are disabled.
+    #[test]
+    fn two_peripheral_partitions_mpu_context_switch() {
+        use crate::mpu::peripheral_mpu_regions_or_disabled;
+
+        let h = KernelTestHarness::with_two_peripheral_partitions().expect("harness setup");
+
+        let p0 = h.kernel().partitions().get(0).expect("partition 0");
+        let p1 = h.kernel().partitions().get(1).expect("partition 1");
+
+        let regions_p0 = peripheral_mpu_regions_or_disabled(p0);
+        let regions_p1 = peripheral_mpu_regions_or_disabled(p1);
+
+        // --- P0: R4 must encode 0x4000_0000 base, R5 disabled ---
+        let p0_r4_rbar = regions_p0[0].0;
+        let p0_r4_rasr = regions_p0[0].1;
+        assert_eq!(
+            p0_r4_rbar & 0xFFFF_FFE0,
+            0x4000_0000,
+            "P0 R4 RBAR base must be 0x4000_0000"
+        );
+        assert_ne!(p0_r4_rasr, 0, "P0 R4 RASR must be enabled");
+        assert_eq!(
+            regions_p0[1].1, 0,
+            "P0 R5 RASR must be disabled (only one peripheral)"
+        );
+
+        // --- P1: R4 must encode 0x4001_0000 base, R5 disabled ---
+        let p1_r4_rbar = regions_p1[0].0;
+        let p1_r4_rasr = regions_p1[0].1;
+        assert_eq!(
+            p1_r4_rbar & 0xFFFF_FFE0,
+            0x4001_0000,
+            "P1 R4 RBAR base must be 0x4001_0000"
+        );
+        assert_ne!(p1_r4_rasr, 0, "P1 R4 RASR must be enabled");
+        assert_eq!(
+            regions_p1[1].1, 0,
+            "P1 R5 RASR must be disabled (only one peripheral)"
+        );
+
+        // --- Isolation: P0 and P1 R4 RBAR values must differ ---
+        assert_ne!(
+            p0_r4_rbar, p1_r4_rbar,
+            "P0 and P1 R4 RBAR must differ for peripheral isolation"
         );
     }
 }
