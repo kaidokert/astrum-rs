@@ -300,7 +300,9 @@ impl YieldResult for ScheduleEvent {
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
 use crate::mutex::{MutexError, MutexPool};
 use crate::partition::{ConfigError, PartitionConfig, PartitionState, PartitionTable};
-use crate::queuing::{QueuingPortPool, QueuingPortStatus, SendQueuingOutcome};
+use crate::queuing::{
+    QueuingError, QueuingPortPool, QueuingPortStatus, RecvQueuingOutcome, SendQueuingOutcome,
+};
 use crate::sampling::SamplingPortPool;
 use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
@@ -1553,6 +1555,7 @@ where
                             0
                         }
                         Ok(SendQueuingOutcome::SenderBlocked { .. }) => 0,
+                        Err(QueuingError::QueueFull) => 0,
                         Err(_) => SvcError::InvalidResource.to_u32(),
                     }
                 })
@@ -1573,7 +1576,7 @@ where
                     0,
                     tick,
                 ) {
-                    Ok(crate::queuing::RecvQueuingOutcome::Received {
+                    Ok(RecvQueuingOutcome::Received {
                         msg_len,
                         wake_sender: w,
                     }) => {
@@ -1582,7 +1585,8 @@ where
                         }
                         msg_len as u32
                     }
-                    Ok(_) => 0,
+                    Ok(RecvQueuingOutcome::ReceiverBlocked { .. }) => 0,
+                    Err(QueuingError::QueueEmpty) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
                 }
             }),
@@ -1846,7 +1850,7 @@ where
                     arg2 as u64,
                     tick,
                 ) {
-                    Ok(crate::queuing::RecvQueuingOutcome::Received {
+                    Ok(RecvQueuingOutcome::Received {
                         msg_len,
                         wake_sender: w,
                     }) => {
@@ -1855,7 +1859,7 @@ where
                         }
                         msg_len as u32
                     }
-                    Ok(crate::queuing::RecvQueuingOutcome::ReceiverBlocked { .. }) => {
+                    Ok(RecvQueuingOutcome::ReceiverBlocked { .. }) => {
                         try_transition(self.core.partitions_mut(), pid, PartitionState::Waiting);
                         self.trigger_deschedule()
                     }
@@ -5062,10 +5066,10 @@ mod tests {
             .create_port(PortDirection::Destination)
             .unwrap();
         let ptr = low32_buf(0);
-        // Empty queue with original QueuingRecv (timeout=0) → QueueEmpty → InvalidResource
+        // Empty queue with original QueuingRecv (timeout=0) → QueueEmpty → returns 0 (transient)
         let mut ef = frame4(SYS_QUEUING_RECV, dst as u32, 0, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+        assert_eq!(ef.r0, 0);
         // Partition should NOT be in Waiting (no blocking happened)
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
@@ -5108,7 +5112,7 @@ mod tests {
             .receive_queuing_message(1, &mut recv_buf, 0, 0)
             .unwrap();
         match outcome {
-            crate::queuing::RecvQueuingOutcome::Received { msg_len, .. } => {
+            RecvQueuingOutcome::Received { msg_len, .. } => {
                 assert_eq!(msg_len, expected_data.len());
                 assert_eq!(
                     &recv_buf[..expected_data.len()],
@@ -5265,11 +5269,50 @@ mod tests {
         }
         let ptr = low32_buf(0);
         // Original QueuingSend: r2=data_len (used as raw len), timeout=0
-        // Full queue with timeout=0 → QueueFull → InvalidResource
+        // Full queue with timeout=0 → QueueFull → returns 0 (transient, not an error)
         let mut ef = frame4(SYS_QUEUING_SEND, s as u32, 1, ptr as u32);
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+        assert_eq!(ef.r0, 0);
         // Partition should NOT be in Waiting (no blocking with original handler)
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+    }
+
+    #[test]
+    fn queuing_recv_connected_empty_nonblocking_stays_running() {
+        use crate::syscall::SYS_QUEUING_RECV;
+        let mut k = kernel(0, 0, 0);
+        let (_s, d) = connected_send_pair(&mut k);
+        let ptr = low32_buf(0);
+        // Connected empty queue, non-blocking (timeout=0): returns 0 immediately.
+        let mut ef = frame4(SYS_QUEUING_RECV, d as u32, 0, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+    }
+
+    #[test]
+    fn queuing_send_connected_full_nonblocking_stays_running() {
+        use crate::syscall::SYS_QUEUING_SEND;
+        let mut k = kernel(0, 0, 0);
+        let (s, d) = connected_send_pair(&mut k);
+        // Fill destination queue to capacity (QD=4).
+        for _ in 0..4 {
+            k.queuing_mut()
+                .get_mut(d)
+                .unwrap()
+                .inject_message(1, &[0x42]);
+        }
+        let ptr = low32_buf(0);
+        // Connected full queue, non-blocking (timeout=0): returns 0 immediately.
+        let mut ef = frame4(SYS_QUEUING_SEND, s as u32, 1, ptr as u32);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running
