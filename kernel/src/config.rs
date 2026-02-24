@@ -11,6 +11,7 @@
 //! | `TICK_PERIOD_US` | 1000 µs (1 ms) | Desired interval between ticks |
 //! | `SYSTICK_CYCLES` | auto-calculated | Reload cycle count (leave as default) |
 //! | `USE_PROCESSOR_CLOCK` | `true` | SysTick clock source (`true` = core, `false` = external) |
+//! | `MPU_ENFORCE` | `false` | Enable MPU enforcement for partition memory isolation |
 //!
 //! `SYSTICK_CYCLES` is derived automatically:
 //!
@@ -323,6 +324,14 @@ pub trait KernelConfig {
     /// When set to `false`, [`CORE_CLOCK_HZ`](Self::CORE_CLOCK_HZ) must
     /// reflect the external reference frequency, not the core clock.
     const USE_PROCESSOR_CLOCK: bool = true;
+
+    /// Enable MPU enforcement for partition memory isolation.
+    ///
+    /// When `true`, the kernel programs the MPU before each partition
+    /// context switch to restrict memory access to the active partition's
+    /// region. When `false` (the default), the MPU is not programmed and
+    /// partitions share the full address space.
+    const MPU_ENFORCE: bool = false;
 
     /// Partition/schedule state operations. Must implement `CoreOps` to
     /// allow dispatch() and other methods to call sub-struct methods.
@@ -679,4 +688,36 @@ mod tests {
             DefaultPriority::SYSTEM_WINDOW_MAX_GAP_TICKS
         );
     }
+
+    // ============ MPU_ENFORCE tests ============
+
+    #[test]
+    fn default_mpu_enforce_is_false() {
+        let val = DefaultPriority::MPU_ENFORCE;
+        assert!(!val);
+    }
+
+    /// Config that enables MPU enforcement.
+    struct MpuEnabledConfig;
+    impl KernelConfig for MpuEnabledConfig {
+        const N: usize = 2;
+        const MPU_ENFORCE: bool = true;
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
+        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+        type Ports =
+            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    }
+
+    #[test]
+    fn mpu_enabled_config_overrides_default() {
+        let val = MpuEnabledConfig::MPU_ENFORCE;
+        assert!(val);
+    }
+
+    // Compile-time const assertion for MpuEnabledConfig.
+    const _: () = assert!(MpuEnabledConfig::MPU_ENFORCE);
+    const _: () = assert!(!DefaultPriority::MPU_ENFORCE);
+    const _: () = assert_priority_order::<MpuEnabledConfig>();
+    const _: () = assert_systick_reload::<MpuEnabledConfig>();
 }
