@@ -252,18 +252,23 @@ impl DynamicStrategy {
     /// descriptors of `partition_id`, targeting MPU regions R4 and R5.
     ///
     /// Cached descriptors (populated by [`wire_boot_peripherals`]) are
-    /// converted via [`crate::mpu::build_rbar`]; uncached or out-of-range
-    /// partitions yield `(0, 0)` (disabled).
+    /// converted via [`crate::mpu::build_rbar`]; uncached or absent
+    /// entries yield a proper disabled pair (RBAR with VALID bit +
+    /// region number, RASR = 0) so the MPU explicitly targets R4/R5
+    /// instead of overwriting whatever is in MPU_RNR.
     pub fn cached_peripheral_regions(&self, partition_id: u8) -> [(u32, u32); 2] {
         let descs = self.cached_peripherals(partition_id);
         let mut out = [(0u32, 0u32); 2];
-        for (i, slot) in descs.iter().enumerate() {
+        for (slot_out, (i, slot)) in out.iter_mut().zip(descs.iter().enumerate()) {
             let region_id = DYNAMIC_REGION_BASE as u32 + i as u32;
-            out[i] = match slot {
+            // Disabled pair: RBAR with VALID bit (bit 4) + region number,
+            // RASR = 0.  Constructed directly so this path is infallible.
+            let disabled = (region_id | (1 << 4), 0u32);
+            *slot_out = match slot {
                 Some(desc) => crate::mpu::build_rbar(desc.base, region_id)
                     .map(|rbar| (rbar, desc.permissions))
-                    .unwrap_or((0, 0)),
-                None => (0, 0),
+                    .unwrap_or(disabled),
+                None => disabled,
             };
         }
         out
@@ -2042,7 +2047,7 @@ mod tests {
             r[0],
             (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096))
         );
-        assert_eq!(r[1], (0, 0));
+        assert_eq!(r[1], (build_rbar(0, 5).unwrap(), 0));
     }
 
     #[test]
@@ -2069,9 +2074,103 @@ mod tests {
     }
 
     #[test]
-    fn cached_peripheral_regions_uncached_returns_zeros() {
+    fn cached_peripheral_regions_uncached_returns_disabled() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.cached_peripheral_regions(0), [(0, 0), (0, 0)]);
-        assert_eq!(ds.cached_peripheral_regions(255), [(0, 0), (0, 0)]);
+        let disabled_r4 = (build_rbar(0, 4).unwrap(), 0);
+        let disabled_r5 = (build_rbar(0, 5).unwrap(), 0);
+        assert_eq!(ds.cached_peripheral_regions(0), [disabled_r4, disabled_r5],);
+        assert_eq!(
+            ds.cached_peripheral_regions(255),
+            [disabled_r4, disabled_r5],
+        );
+    }
+
+    /// Verify that the dynamic-mode cache path (`cached_peripheral_regions`)
+    /// produces identical (RBAR, RASR) pairs to the static-mode reference
+    /// path (`peripheral_mpu_regions_or_disabled`) for every partition.
+    /// If these two ever diverge, dynamic-mode partitions get wrong MPU
+    /// grants at context-switch time.
+    #[test]
+    fn cache_vs_pcb_peripheral_rbar_rasr_equivalence() {
+        use crate::mpu::peripheral_mpu_regions_or_disabled;
+
+        // Partition 0: UART0 at 0x4000_C000, 4 KiB.
+        let pcb0 = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_C000, 4096)]);
+
+        // Partition 1: GPIO at 0x4002_5000, 4 KiB.
+        let pcb1 = PartitionControlBlock::new(
+            1,
+            0x0,
+            0x2000_8000,
+            0x2000_9000,
+            MpuRegion::new(0x2000_8000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4002_5000, 4096)]);
+
+        // Partition 2: no peripherals.
+        let pcb_none = PartitionControlBlock::new(
+            2,
+            0x0,
+            0x2001_0000,
+            0x2001_1000,
+            MpuRegion::new(0x2001_0000, 4096, 0),
+        );
+
+        let ds = DynamicStrategy::new();
+        // Fully configure all partitions before wiring peripherals.
+        // Reserve 2 peripheral slots (R4-R5) so configure_partition
+        // places RAM in R6.
+        let (rbar_p0, rasr_p0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_p0, rasr_p0)], 2).unwrap();
+        let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
+        let (rbar_p2, rasr_p2) = data_region(0x2001_0000, 4096, 6);
+        ds.configure_partition(2, &[(rbar_p2, rasr_p2)], 2).unwrap();
+
+        let wired = ds.wire_boot_peripherals(&[pcb0.clone(), pcb1.clone(), pcb_none.clone()]);
+        assert_eq!(wired, 2, "both peripherals must be wired");
+
+        // --- Partition 0: one peripheral ---
+        let cached_p0 = ds.cached_peripheral_regions(0);
+        let static_p0 = peripheral_mpu_regions_or_disabled(&pcb0);
+        for i in 0..2 {
+            assert_eq!(
+                cached_p0[i],
+                static_p0[i],
+                "partition 0 R{} mismatch",
+                4 + i
+            );
+        }
+
+        // --- Partition 1: one peripheral ---
+        let cached_p1 = ds.cached_peripheral_regions(1);
+        let static_p1 = peripheral_mpu_regions_or_disabled(&pcb1);
+        for i in 0..2 {
+            assert_eq!(
+                cached_p1[i],
+                static_p1[i],
+                "partition 1 R{} mismatch",
+                4 + i
+            );
+        }
+
+        // --- Partition 2: no peripherals — both paths must yield disabled ---
+        let cached_none = ds.cached_peripheral_regions(2);
+        let static_none = peripheral_mpu_regions_or_disabled(&pcb_none);
+        for i in 0..2 {
+            assert_eq!(
+                cached_none[i],
+                static_none[i],
+                "no-periph R{} mismatch",
+                4 + i
+            );
+        }
     }
 }
