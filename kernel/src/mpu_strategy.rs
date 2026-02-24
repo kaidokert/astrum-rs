@@ -89,6 +89,9 @@ const DYNAMIC_SLOT_COUNT: usize = 4;
 /// First hardware MPU region number used by the dynamic strategy.
 const DYNAMIC_REGION_BASE: u8 = 4;
 
+/// Per-partition peripheral descriptor cache (up to 2 descriptors per partition).
+type PeripheralCache = [Option<[Option<WindowDescriptor>; 2]>; DYNAMIC_SLOT_COUNT];
+
 /// Dynamic MPU strategy — manages regions R4-R7 at runtime.
 ///
 /// Slot 0 (R4) holds the partition's private RAM. Slots 1-3 (R5-R7)
@@ -104,6 +107,10 @@ pub struct DynamicStrategy {
     /// slots with peripheral descriptors so `compute_region_values` emits
     /// them during PendSV context switches.
     peripheral_reserved: Mutex<RefCell<usize>>,
+    /// Per-partition cache of peripheral descriptors (up to 2 per partition).
+    /// Indexed by `partition_id`; avoids re-wiring peripherals on every
+    /// context switch.
+    peripheral_cache: Mutex<RefCell<PeripheralCache>>,
 }
 
 impl Default for DynamicStrategy {
@@ -118,6 +125,7 @@ impl DynamicStrategy {
         Self {
             slots: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
             peripheral_reserved: Mutex::new(RefCell::new(0)),
+            peripheral_cache: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
         }
     }
 
@@ -204,6 +212,32 @@ impl DynamicStrategy {
                 .map(|desc| (desc.base, desc.size))
                 .collect()
         })
+    }
+
+    /// Store peripheral descriptors for a partition in the cache.
+    ///
+    /// `partition_id` indexes into the cache (max `DYNAMIC_SLOT_COUNT - 1`).
+    /// Out-of-range IDs are silently ignored.
+    pub fn cache_peripherals(&self, partition_id: u8, descriptors: [Option<WindowDescriptor>; 2]) {
+        let idx = partition_id as usize;
+        if idx >= DYNAMIC_SLOT_COUNT {
+            return;
+        }
+        with_cs(|cs| {
+            self.peripheral_cache.borrow(cs).borrow_mut()[idx] = Some(descriptors);
+        });
+    }
+
+    /// Retrieve cached peripheral descriptors for a partition.
+    ///
+    /// Returns `[None, None]` if no entry has been cached for `partition_id`
+    /// or if the ID is out of range.
+    pub fn cached_peripherals(&self, partition_id: u8) -> [Option<WindowDescriptor>; 2] {
+        let idx = partition_id as usize;
+        if idx >= DYNAMIC_SLOT_COUNT {
+            return [None; 2];
+        }
+        with_cs(|cs| self.peripheral_cache.borrow(cs).borrow()[idx].unwrap_or([None; 2]))
     }
 
     /// Populate dynamic slots with deduplicated peripheral regions from
@@ -1648,5 +1682,73 @@ mod tests {
             regions_none[1].1, 0,
             "no-peripheral partition R5 RASR must be 0 (disabled)"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // peripheral_cache: cache_peripherals / cached_peripherals
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn peripheral_cache_store_and_retrieve() {
+        let ds = DynamicStrategy::new();
+        let descs = [
+            Some(WindowDescriptor {
+                base: 0x4000_0000,
+                size: 4096,
+                permissions: 0xAB,
+                owner: 0,
+            }),
+            Some(WindowDescriptor {
+                base: 0x4001_0000,
+                size: 256,
+                permissions: 0xCD,
+                owner: 0,
+            }),
+        ];
+        ds.cache_peripherals(0, descs);
+        let got = ds.cached_peripherals(0);
+        assert_eq!(got, descs);
+    }
+
+    #[test]
+    fn peripheral_cache_uncached_returns_none_none() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.cached_peripherals(0), [None, None]);
+        assert_eq!(ds.cached_peripherals(3), [None, None]);
+        // Out-of-range partition IDs also return [None, None].
+        assert_eq!(ds.cached_peripherals(255), [None, None]);
+    }
+
+    #[test]
+    fn peripheral_cache_overwrite_updates_entry() {
+        let ds = DynamicStrategy::new();
+        let first = [
+            Some(WindowDescriptor {
+                base: 0x4000_0000,
+                size: 4096,
+                permissions: 0x11,
+                owner: 1,
+            }),
+            None,
+        ];
+        ds.cache_peripherals(1, first);
+        assert_eq!(ds.cached_peripherals(1), first);
+
+        let second = [
+            Some(WindowDescriptor {
+                base: 0x4002_0000,
+                size: 512,
+                permissions: 0x22,
+                owner: 1,
+            }),
+            Some(WindowDescriptor {
+                base: 0x4003_0000,
+                size: 1024,
+                permissions: 0x33,
+                owner: 1,
+            }),
+        ];
+        ds.cache_peripherals(1, second);
+        assert_eq!(ds.cached_peripherals(1), second);
     }
 }
