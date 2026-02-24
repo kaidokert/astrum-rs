@@ -310,6 +310,7 @@ pub fn assert_kernel_invariants(
     if let Some(np) = next_partition {
         assert_next_partition_not_waiting(partitions, np);
     }
+    assert_no_overlapping_mpu_regions(partitions);
 }
 
 /// No-op version for release builds.
@@ -341,6 +342,20 @@ mod tests {
         )
     }
 
+    /// Like `make_pcb`, but offsets regions by `id * 0x1_0000` so that
+    /// PCBs with distinct IDs never overlap. Use in tests that call
+    /// `assert_kernel_invariants` with multiple partitions.
+    fn make_disjoint_pcb(id: u8) -> PartitionControlBlock {
+        let off = u32::from(id) * 0x0001_0000;
+        PartitionControlBlock::new(
+            id,
+            0x0800_0000,
+            0x2000_0000 + off,
+            0x2000_0400 + off,
+            MpuRegion::new(0x2000_0000 + off, 4096, 0x0306_0000),
+        )
+    }
+
     #[test]
     fn kernel_invariants_empty_partitions_none_active() {
         // No partitions with no active partition is valid.
@@ -350,24 +365,34 @@ mod tests {
     #[test]
     fn kernel_invariants_all_ready_none_active() {
         // All Ready partitions with no active partition is valid.
-        let partitions = [make_pcb(0), make_pcb(1), make_pcb(2)];
+        let partitions = [
+            make_disjoint_pcb(0),
+            make_disjoint_pcb(1),
+            make_disjoint_pcb(2),
+        ];
         assert_kernel_invariants(&partitions, None, &[], None, &[0; 3]);
     }
 
     #[test]
     fn kernel_invariants_one_running_matches_active() {
         // One Running partition matching active_partition is valid.
-        let mut p0 = make_pcb(0);
+        let mut p0 = make_disjoint_pcb(0);
         p0.transition(PartitionState::Running).unwrap();
-        assert_kernel_invariants(&[p0, make_pcb(1), make_pcb(2)], Some(0), &[], None, &[0; 3]);
+        assert_kernel_invariants(
+            &[p0, make_disjoint_pcb(1), make_disjoint_pcb(2)],
+            Some(0),
+            &[],
+            None,
+            &[0; 3],
+        );
     }
 
     #[test]
     fn kernel_invariants_idempotent() {
         // Invariant checks should be idempotent and safe to call repeatedly.
-        let mut p1 = make_pcb(1);
+        let mut p1 = make_disjoint_pcb(1);
         p1.transition(PartitionState::Running).unwrap();
-        let partitions = [make_pcb(0), p1, make_pcb(2)];
+        let partitions = [make_disjoint_pcb(0), p1, make_disjoint_pcb(2)];
         for _ in 0..10 {
             assert_kernel_invariants(&partitions, Some(1), &[], None, &[0; 3]);
         }
@@ -806,9 +831,9 @@ mod tests {
 
     #[test]
     fn kernel_invariants_with_next_partition_ready() {
-        let mut p0 = make_pcb(0);
+        let mut p0 = make_disjoint_pcb(0);
         p0.transition(PartitionState::Running).unwrap();
-        assert_kernel_invariants(&[p0, make_pcb(1)], Some(0), &[], Some(1), &[0; 2]);
+        assert_kernel_invariants(&[p0, make_disjoint_pcb(1)], Some(0), &[], Some(1), &[0; 2]);
     }
 
     #[test]
@@ -831,9 +856,15 @@ mod tests {
     #[test]
     fn kernel_invariants_delegates_stack_pointer_bounds() {
         // Valid SP within stack region passes through master check.
-        let mut p0 = make_pcb(0);
+        let mut p0 = make_disjoint_pcb(0);
         p0.transition(PartitionState::Running).unwrap();
-        assert_kernel_invariants(&[p0, make_pcb(1)], Some(0), &[], None, &[0x2000_0200, 0]);
+        assert_kernel_invariants(
+            &[p0, make_disjoint_pcb(1)],
+            Some(0),
+            &[],
+            None,
+            &[0x2000_0200, 0],
+        );
     }
 
     #[test]
@@ -848,6 +879,18 @@ mod tests {
     #[should_panic(expected = "partitions.len() (2) != partition_sp.len() (1)")]
     fn kernel_invariants_catches_sp_length_mismatch() {
         assert_kernel_invariants(&[make_pcb(0), make_pcb(1)], None, &[], None, &[0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "overlaps partition 1")]
+    fn kernel_invariants_catches_overlapping_mpu_regions() {
+        // Two partitions whose data regions overlap — detected via
+        // the overlap check wired into assert_kernel_invariants.
+        let partitions = [
+            make_region_pcb(0, 0x2000_0000, 0x2000, 0x2001_0000, 1024),
+            make_region_pcb(1, 0x2000_0800, 0x2000, 0x2002_0000, 1024),
+        ];
+        assert_kernel_invariants(&partitions, None, &[], None, &[0; 2]);
     }
 
     // ------------------------------------------------------------------
