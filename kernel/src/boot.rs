@@ -33,7 +33,7 @@ pub enum BootError {
     StackSizeError { partition_index: usize, size: u32 },
     /// Stack size arithmetic overflow.
     StackSizeOverflow { partition_index: usize },
-    /// Kernel storage buffer misaligned (requires 1024-byte alignment).
+    /// Kernel storage buffer misaligned (requires KERNEL_ALIGNMENT-byte alignment).
     StorageMisaligned {
         /// Actual address of the storage buffer.
         address: u32,

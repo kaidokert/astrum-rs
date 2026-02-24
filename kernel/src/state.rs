@@ -183,6 +183,14 @@ const _: () = assert!(
     "MAX_KERNEL_SIZE must be a power of two for MPU region compatibility"
 );
 
+// Compile-time assertion: MAX_KERNEL_SIZE must be >= KERNEL_ALIGNMENT.
+// An MPU region must be at least as large as its alignment. If MAX_KERNEL_SIZE were
+// reduced below KERNEL_ALIGNMENT, the MPU region configuration would be invalid.
+const _: () = assert!(
+    MAX_KERNEL_SIZE >= KERNEL_ALIGNMENT,
+    "MAX_KERNEL_SIZE must be >= KERNEL_ALIGNMENT for valid MPU region configuration"
+);
+
 // Compile-time assertion: KERNEL_ALIGNMENT must be >= the alignment of every stack tier.
 // Stack tiers are embedded inside Kernel<C> via PartitionCore, so the kernel storage
 // buffer must be aligned at least as strictly as the most-aligned tier. If a future
@@ -622,6 +630,19 @@ mod tests {
         assert!(align_of::<KernelStorageBuffer>() >= MPU_MIN_ALIGNMENT);
         // Also verify MPU_MIN_ALIGNMENT matches expected value.
         assert_eq!(MPU_MIN_ALIGNMENT, 4096);
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn max_kernel_size_at_least_kernel_alignment() {
+        // An MPU region must be at least as large as its alignment.
+        // Mirrors the compile-time const assertion added to the module.
+        assert!(
+            MAX_KERNEL_SIZE >= KERNEL_ALIGNMENT,
+            "MAX_KERNEL_SIZE ({}) must be >= KERNEL_ALIGNMENT ({})",
+            MAX_KERNEL_SIZE,
+            KERNEL_ALIGNMENT,
+        );
     }
 
     #[test]

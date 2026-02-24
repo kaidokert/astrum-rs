@@ -53,7 +53,7 @@ static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);
 static PARTS_RAN: AtomicU32 = AtomicU32::new(0);
 kernel::define_unified_harness!(no_boot, Cfg, NP, SW, |tick, k| {
     let addr = k as *const _ as usize;
-    if (addr & 1023) != 0 { kexit!(failure); }
+    if (addr & (kernel::state::KERNEL_ALIGNMENT - 1)) != 0 { kexit!(failure); }
     if tick.is_multiple_of(5) {
         let s = P0_SENT.load(Ordering::Acquire);
         let r = P1_RECV_OK.load(Ordering::Acquire);
