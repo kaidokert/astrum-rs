@@ -44,6 +44,11 @@ pub enum BootError {
     StackRegionError { partition_index: usize },
     /// Failed to update PCB MPU data region base.
     MpuDataRegionError { partition_index: usize },
+    /// Sentinel partition (mpu_region size==0) used with MPU_ENFORCE=true.
+    ///
+    /// Sentinel partitions produce deny-all MPU regions; running them with
+    /// hardware MPU enforcement would immediately fault on first instruction.
+    SentinelMpuWithEnforce { partition_index: usize },
 }
 
 impl core::fmt::Display for BootError {
@@ -94,6 +99,13 @@ impl core::fmt::Display for BootError {
                 write!(
                     f,
                     "failed to update PCB MPU data region: partition {partition_index}"
+                )
+            }
+            Self::SentinelMpuWithEnforce { partition_index } => {
+                write!(
+                    f,
+                    "sentinel partition {partition_index} has mpu_region size==0, \
+                     incompatible with MPU_ENFORCE=true (would deny-all fault)"
                 )
             }
         }
@@ -165,6 +177,24 @@ pub fn check_stack_mpu_alignment(
 pub fn check_storage_alignment(address: u32, required: u32) -> Result<(), BootError> {
     if address & (required - 1) != 0 {
         return Err(BootError::StorageMisaligned { address, required });
+    }
+    Ok(())
+}
+
+/// Reject sentinel partitions (mpu_region size==0) when MPU enforcement is active.
+/// Sentinel partitions produce deny-all MPU regions that would immediately fault.
+#[inline]
+pub fn check_sentinel_mpu_enforce(
+    partitions: &[crate::partition::PartitionControlBlock],
+    mpu_enforce: bool,
+) -> Result<(), BootError> {
+    if !mpu_enforce {
+        return Ok(());
+    }
+    for (i, pcb) in partitions.iter().enumerate() {
+        if pcb.mpu_region().size() == 0 {
+            return Err(BootError::SentinelMpuWithEnforce { partition_index: i });
+        }
     }
     Ok(())
 }
@@ -263,6 +293,8 @@ where
                 return Err(BootError::MpuDataRegionError { partition_index: i });
             }
         }
+        // Reject sentinel partitions when MPU enforcement is active.
+        check_sentinel_mpu_enforce(k.partitions().as_slice(), C::MPU_ENFORCE)?;
         Ok::<(), BootError>(())
     })?;
 
@@ -579,5 +611,86 @@ mod tests {
         // Odd addresses
         assert!(!is_stack_aapcs_aligned(0x0000_0001));
         assert!(!is_stack_aapcs_aligned(0x0000_0002));
+    }
+
+    #[test]
+    fn sentinel_mpu_with_enforce_display() {
+        let err = BootError::SentinelMpuWithEnforce { partition_index: 1 };
+        assert_eq!(
+            std::format!("{err}"),
+            "sentinel partition 1 has mpu_region size==0, \
+             incompatible with MPU_ENFORCE=true (would deny-all fault)"
+        );
+    }
+
+    #[test]
+    fn check_sentinel_mpu_enforce_rejects_sentinel_when_enforced() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+        // Sentinel partition: mpu_region size == 0
+        let sentinel = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0100,
+            MpuRegion::new(0, 0, 0),
+        );
+        let result = check_sentinel_mpu_enforce(&[sentinel], true);
+        assert_eq!(
+            result,
+            Err(BootError::SentinelMpuWithEnforce { partition_index: 0 })
+        );
+    }
+
+    #[test]
+    fn check_sentinel_mpu_enforce_accepts_sentinel_when_not_enforced() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+        // Sentinel partition with MPU_ENFORCE=false should pass.
+        let sentinel = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0100,
+            MpuRegion::new(0, 0, 0),
+        );
+        assert!(check_sentinel_mpu_enforce(&[sentinel], false).is_ok());
+    }
+
+    #[test]
+    fn check_sentinel_mpu_enforce_accepts_non_sentinel_when_enforced() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+        // Non-sentinel partition (size > 0) with MPU_ENFORCE=true should pass.
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0100,
+            MpuRegion::new(0x2000_0000, 1024, 0x03),
+        );
+        assert!(check_sentinel_mpu_enforce(&[pcb], true).is_ok());
+    }
+
+    #[test]
+    fn check_sentinel_mpu_enforce_reports_first_sentinel_index() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+        // Mix of non-sentinel and sentinel; should report the sentinel's index.
+        let good = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0100,
+            MpuRegion::new(0x2000_0000, 256, 0x03),
+        );
+        let sentinel = PartitionControlBlock::new(
+            1,
+            0x0800_1000,
+            0x2000_1000,
+            0x2000_1100,
+            MpuRegion::new(0, 0, 0),
+        );
+        let result = check_sentinel_mpu_enforce(&[good, sentinel], true);
+        assert_eq!(
+            result,
+            Err(BootError::SentinelMpuWithEnforce { partition_index: 1 })
+        );
     }
 }
