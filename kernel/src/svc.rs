@@ -1987,6 +1987,14 @@ where
     /// Assert kernel invariants at dispatch entry/exit (no-op in release).
     #[cfg(any(debug_assertions, test))]
     fn assert_dispatch_invariants(&self) {
+        // In real builds, verify linker-placed 4096-byte alignment. Skipped in
+        // tests because Box only guarantees the type's natural alignment; the
+        // test harness checks type alignment separately.
+        #[cfg(not(test))]
+        crate::invariants::assert_storage_alignment(
+            self as *const Self as usize as u32,
+            crate::state::KERNEL_ALIGNMENT as u32,
+        );
         // Unit tests may leave active_partition as None; in the real kernel
         // it is always Some when an SVC fires.  Skip the check only in tests.
         #[cfg(test)]

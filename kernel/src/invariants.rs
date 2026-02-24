@@ -260,6 +260,32 @@ pub fn assert_next_partition_not_waiting(
 ) {
 }
 
+/// Assert that `address` is aligned to `required_alignment`.
+///
+/// Provides defense-in-depth for kernel storage placement. The linker and
+/// init code guarantee alignment at boot, but this catch-all detects pointer
+/// corruption at dispatch time in debug builds.
+///
+/// # Panics
+///
+/// Panics if `address % required_alignment != 0`.
+#[cfg(any(debug_assertions, test))]
+pub fn assert_storage_alignment(address: u32, required_alignment: u32) {
+    let offset = address % required_alignment;
+    if offset != 0 {
+        panic!(
+            "invariant violation: storage address 0x{:08x} misaligned by {} bytes \
+             (required {} byte alignment)",
+            address, offset, required_alignment
+        );
+    }
+}
+
+/// No-op version for release builds.
+#[cfg(not(any(debug_assertions, test)))]
+#[inline(always)]
+pub fn assert_storage_alignment(_address: u32, _required_alignment: u32) {}
+
 /// Assert all kernel invariants hold.
 ///
 /// In debug builds and tests, this function performs runtime validation of
@@ -822,5 +848,46 @@ mod tests {
     #[should_panic(expected = "partitions.len() (2) != partition_sp.len() (1)")]
     fn kernel_invariants_catches_sp_length_mismatch() {
         assert_kernel_invariants(&[make_pcb(0), make_pcb(1)], None, &[], None, &[0]);
+    }
+
+    // ------------------------------------------------------------------
+    // assert_storage_alignment
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn storage_alignment_power_of_two_aligned() {
+        assert_storage_alignment(0x2000_0000, 4096);
+        assert_storage_alignment(0x2000_0400, 1024);
+        assert_storage_alignment(0x2000_0000, 1);
+        assert_storage_alignment(0, 4096);
+    }
+
+    #[test]
+    fn storage_alignment_exact_multiple() {
+        // 0x2000_1000 == 0x2000_0000 + 4096 — aligned to 4096.
+        assert_storage_alignment(0x2000_1000, 4096);
+        // 0x2000_0800 == 0x2000_0000 + 2048 — aligned to 2048 but not 4096.
+        assert_storage_alignment(0x2000_0800, 2048);
+    }
+
+    #[test]
+    #[should_panic(expected = "storage address 0x20000100 misaligned by 256 bytes \
+             (required 4096 byte alignment)")]
+    fn storage_alignment_misaligned_panics() {
+        // 0x2000_0100 % 4096 == 256.
+        assert_storage_alignment(0x2000_0100, 4096);
+    }
+
+    #[test]
+    #[should_panic(expected = "misaligned by 1 bytes (required 4 byte alignment)")]
+    fn storage_alignment_off_by_one_panics() {
+        assert_storage_alignment(0x2000_0001, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "misaligned by 2048 bytes (required 4096 byte alignment)")]
+    fn storage_alignment_half_aligned_panics() {
+        // Aligned to 2048 but not to 4096.
+        assert_storage_alignment(0x2000_0800, 4096);
     }
 }

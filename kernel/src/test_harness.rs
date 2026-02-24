@@ -241,6 +241,10 @@ impl KernelTestHarness {
         };
         let sp = &self.kernel.partition_sp()[..parts.len()];
         crate::invariants::assert_kernel_invariants(parts, active, &sem_pairs[..sem_len], next, sp);
+        crate::invariants::assert_storage_alignment(
+            &*self.kernel as *const _ as usize as u32,
+            core::mem::align_of::<Kernel<HarnessConfig>>() as u32,
+        );
     }
 
     pub fn kernel(&self) -> &Kernel<HarnessConfig> {
