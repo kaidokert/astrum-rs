@@ -273,7 +273,8 @@ macro_rules! define_unified_harness {
             #[cfg(feature = "dynamic-mpu")]
             $crate::mpu::mpu_disable(&p.MPU);
 
-            let _periph = $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+            #[cfg_attr(not(feature = "dynamic-mpu"), allow(unused_variables))]
+            let pid = $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
                 let pcb = match k.partitions().get(pid as usize) {
                     Some(pcb) => pcb,
@@ -310,14 +311,13 @@ macro_rules! define_unified_harness {
                     }
                 }
 
-                // Return peripheral regions for dynamic-mode R4-R5
-                // override.  In static mode this is unused but keeps
-                // the closure return type unified across cfg variants.
-                $crate::mpu::peripheral_mpu_regions_or_disabled(pcb)
+                // Return pid for dynamic-mode peripheral cache lookup.
+                // In static mode this is unused.
+                pid
             });
 
             // Dynamic mode: write R4-R7 strategy regions, then
-            // override R4-R5 with peripheral regions and re-enable.
+            // override R4-R5 with cached peripheral regions and re-enable.
             #[cfg(feature = "dynamic-mpu")]
             {
                 let values = HARNESS_STRATEGY.compute_region_values();
@@ -325,9 +325,10 @@ macro_rules! define_unified_harness {
                     $crate::mpu::configure_region(&p.MPU, rbar, rasr);
                 }
 
-                // Overwrite R4-R5 with per-partition peripheral regions.
-                // Partitions without peripherals get disabled R4/R5.
-                for &(rbar, rasr) in &_periph {
+                // Overwrite R4-R5 with per-partition peripheral regions
+                // from the DynamicStrategy's boot-time cache.
+                let periph = HARNESS_STRATEGY.cached_peripheral_regions(pid);
+                for &(rbar, rasr) in &periph {
                     $crate::mpu::configure_region(&p.MPU, rbar, rasr);
                 }
 

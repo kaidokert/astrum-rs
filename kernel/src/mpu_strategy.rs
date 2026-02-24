@@ -237,7 +237,36 @@ impl DynamicStrategy {
         if idx >= DYNAMIC_SLOT_COUNT {
             return [None; 2];
         }
-        with_cs(|cs| self.peripheral_cache.borrow(cs).borrow()[idx].unwrap_or([None; 2]))
+        with_cs(|cs| {
+            self.peripheral_cache
+                .borrow(cs)
+                .borrow()
+                .get(idx)
+                .copied()
+                .flatten()
+                .unwrap_or([None; 2])
+        })
+    }
+
+    /// Return (RBAR, RASR) register pairs for the cached peripheral
+    /// descriptors of `partition_id`, targeting MPU regions R4 and R5.
+    ///
+    /// Cached descriptors (populated by [`wire_boot_peripherals`]) are
+    /// converted via [`crate::mpu::build_rbar`]; uncached or out-of-range
+    /// partitions yield `(0, 0)` (disabled).
+    pub fn cached_peripheral_regions(&self, partition_id: u8) -> [(u32, u32); 2] {
+        let descs = self.cached_peripherals(partition_id);
+        let mut out = [(0u32, 0u32); 2];
+        for (i, slot) in descs.iter().enumerate() {
+            let region_id = DYNAMIC_REGION_BASE as u32 + i as u32;
+            out[i] = match slot {
+                Some(desc) => crate::mpu::build_rbar(desc.base, region_id)
+                    .map(|rbar| (rbar, desc.permissions))
+                    .unwrap_or((0, 0)),
+                None => (0, 0),
+            };
+        }
+        out
     }
 
     /// Populate dynamic slots with deduplicated peripheral regions from
@@ -1907,5 +1936,71 @@ mod tests {
             })
         );
         assert_eq!(cached1[1], None);
+    }
+
+    // ------------------------------------------------------------------
+    // cached_peripheral_regions: (RBAR, RASR) from cached descriptors
+    // ------------------------------------------------------------------
+
+    /// Helper: build a device-memory RASR for the given size.
+    fn periph_rasr(size: u32) -> u32 {
+        build_rasr(
+            encode_size(size).unwrap(),
+            AP_FULL_ACCESS,
+            true,
+            (true, false, true),
+        )
+    }
+
+    /// Helper: build a peripheral WindowDescriptor.
+    fn periph_desc(base: u32, size: u32, owner: u8) -> WindowDescriptor {
+        WindowDescriptor {
+            base,
+            size,
+            permissions: periph_rasr(size),
+            owner,
+        }
+    }
+
+    #[test]
+    fn cached_peripheral_regions_one_cached() {
+        let ds = DynamicStrategy::new();
+        ds.cache_peripherals(0, [Some(periph_desc(0x4000_0000, 4096, 0)), None]);
+        let r = ds.cached_peripheral_regions(0);
+        assert_eq!(
+            r[0],
+            (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096))
+        );
+        assert_eq!(r[1], (0, 0));
+    }
+
+    #[test]
+    fn cached_peripheral_regions_two_peripherals_both_enabled() {
+        let ds = DynamicStrategy::new();
+        ds.cache_peripherals(
+            2,
+            [
+                Some(periph_desc(0x4000_0000, 4096, 2)),
+                Some(periph_desc(0x4001_0000, 256, 2)),
+            ],
+        );
+        let r = ds.cached_peripheral_regions(2);
+        assert_eq!(
+            r[0],
+            (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096))
+        );
+        assert_eq!(
+            r[1],
+            (build_rbar(0x4001_0000, 5).unwrap(), periph_rasr(256))
+        );
+        assert_ne!(r[0].1, 0);
+        assert_ne!(r[1].1, 0);
+    }
+
+    #[test]
+    fn cached_peripheral_regions_uncached_returns_zeros() {
+        let ds = DynamicStrategy::new();
+        assert_eq!(ds.cached_peripheral_regions(0), [(0, 0), (0, 0)]);
+        assert_eq!(ds.cached_peripheral_regions(255), [(0, 0), (0, 0)]);
     }
 }
