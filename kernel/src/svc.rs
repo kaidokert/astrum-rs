@@ -8067,6 +8067,130 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    /// Regression test for bug03: a blocking IPC syscall sets Waiting, and
+    /// the partition must remain Waiting through a full schedule cycle wrap.
+    /// Without the fix in `transition_outgoing_ready` (which skips the
+    /// Running→Ready demotion for non-Running partitions), the Waiting state
+    /// would be overwritten to Ready when the schedule switched away from P0.
+    #[test]
+    fn bug03_blocking_ipc_preserves_waiting_across_schedule_wrap() {
+        use crate::invariants::assert_partition_state_consistency;
+        use crate::sampling::PortDirection;
+        use crate::scheduler::ScheduleEvent;
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+
+        let mut k = kernel_with_schedule();
+
+        // --- Step 1: P0 starts Running ---
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.set_current_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // --- Step 2: P0 dispatches blocking QueuingRecvTimed → Waiting ---
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
+        let timeout_ticks: u32 = 500; // large timeout; must not expire during test
+        let mpu_base = k.partitions().get(0).unwrap().mpu_region().base();
+        let ptr = mpu_base as *mut u8;
+        let mut ef = frame4(
+            SYS_QUEUING_RECV_TIMED,
+            dst as u32,
+            timeout_ticks,
+            ptr as u32,
+        );
+        // SAFETY: `ef` is a valid stack-local ExceptionFrame with initialized
+        // r0-r3 fields. `k` is a properly constructed test Kernel with a valid
+        // partition in Running state. Single-threaded test; no data races.
+        unsafe { k.dispatch(&mut ef) };
+        // TODO: dispatch() overwrites ef.r0 with a kernel-internal
+        // "descheduled" indicator (0) even though P0 is now Waiting and
+        // the user-visible r0 should hold the eventual syscall return
+        // value.  This is an architectural state leak in the dispatch
+        // path that should be fixed separately.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must be Waiting after blocking recv",
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // --- Step 3: Advance through P0's remaining slot ticks → P1 ---
+        // Schedule: P0(5 ticks) | P1(3 ticks). set_next_partition consumed
+        // tick 0 implicitly; the schedule cursor is at the start of P0's
+        // slot. Advance until we see PartitionSwitch(1).
+        let mut switched_to_p1 = false;
+        for _ in 0..5 {
+            let ev = k.advance_schedule_tick();
+            assert_partition_state_consistency(k.partitions().as_slice());
+            // P0 must stay Waiting throughout — never demoted to Ready.
+            assert_eq!(
+                k.partitions().get(0).unwrap().state(),
+                PartitionState::Waiting,
+                "P0 must remain Waiting during P0's slot",
+            );
+            if ev == ScheduleEvent::PartitionSwitch(1) {
+                switched_to_p1 = true;
+                break;
+            }
+        }
+        assert!(switched_to_p1, "schedule must switch to P1 after P0's slot");
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Running,
+            "P1 must be Running after switch",
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // --- Step 4: Advance through P1's slot until wrap to P0 boundary ---
+        // P1 has 3 ticks. After those ticks (plus an optional system window
+        // tick on dynamic-mpu), the schedule wraps back to P0's slot.
+        let mut p0_boundary_event = Option::<ScheduleEvent>::None;
+        for _ in 0..6 {
+            let ev = k.advance_schedule_tick();
+            assert_partition_state_consistency(k.partitions().as_slice());
+            // P0 must stay Waiting the entire time.
+            assert_eq!(
+                k.partitions().get(0).unwrap().state(),
+                PartitionState::Waiting,
+                "P0 must remain Waiting during P1's slot / wrap",
+            );
+            #[cfg(feature = "dynamic-mpu")]
+            if ev == ScheduleEvent::SystemWindow {
+                continue;
+            }
+            if matches!(ev, ScheduleEvent::PartitionSwitch(0) | ScheduleEvent::None) {
+                // We reached the boundary where the schedule *would* switch
+                // to P0. Because P0 is Waiting, advance_schedule_tick must
+                // return None (skip).
+                p0_boundary_event = Some(ev);
+                break;
+            }
+        }
+
+        // --- Step 5: Verify the skip ---
+        let ev = p0_boundary_event.expect("schedule must reach P0's slot boundary");
+        assert_eq!(
+            ev,
+            ScheduleEvent::None,
+            "advance_schedule_tick must return None when P0 is Waiting (skip)",
+        );
+
+        // --- Step 6: Final state assertions ---
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must still be Waiting after full schedule wrap",
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Boot guard: fix_mpu_data_region only for sentinel (size==0).
     #[test]
     fn fix_mpu_data_region_skipped_for_user_configured_partition() {
