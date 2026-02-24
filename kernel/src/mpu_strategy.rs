@@ -353,6 +353,40 @@ impl DynamicStrategy {
                 }
             }
             self.cache_peripherals(part.id(), part_descs);
+
+            // Verify cached descriptors match the source PCB data.
+            #[cfg(debug_assertions)]
+            {
+                let cached = self.cached_peripherals(part.id());
+                // TODO: extract a shared `MpuRegion::is_mappable()` predicate so the
+                // main selection loop and this debug check use the same filter;
+                // for now we delegate to `validate_mpu_region` to avoid inlining
+                // the size/power-of-two/alignment rules here.
+                for (ci, region) in part
+                    .peripheral_regions()
+                    .iter()
+                    .filter(|r| crate::mpu::validate_mpu_region(r.base(), r.size()).is_ok())
+                    .take(cached.len())
+                    .enumerate()
+                {
+                    if let Some(Some(desc)) = cached.get(ci) {
+                        debug_assert_eq!(
+                            desc.base,
+                            region.base(),
+                            "cache-PCB base mismatch: partition {} descriptor {}",
+                            part.id(),
+                            ci
+                        );
+                        debug_assert_eq!(
+                            desc.size,
+                            region.size(),
+                            "cache-PCB size mismatch: partition {} descriptor {}",
+                            part.id(),
+                            ci
+                        );
+                    }
+                }
+            }
         }
         wired
     }
@@ -1936,6 +1970,43 @@ mod tests {
             })
         );
         assert_eq!(cached1[1], None);
+    }
+
+    #[test]
+    fn wire_boot_peripherals_cache_pcb_consistency() {
+        // Verifies that the debug_assertions consistency check inside
+        // wire_boot_peripherals does not fire for well-formed inputs:
+        // two partitions each with one valid peripheral region.
+        let ds = DynamicStrategy::new();
+        let pcb0 = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+        let pcb1 = PartitionControlBlock::new(
+            1,
+            0x0,
+            0x2000_8000,
+            0x2000_9000,
+            MpuRegion::new(0x2000_8000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4001_0000, 256)]);
+
+        // Must not panic — cached descriptors match PCB data.
+        let wired = ds.wire_boot_peripherals(&[pcb0, pcb1]);
+        assert_eq!(wired, 2);
+
+        // Explicitly verify base/size of cached descriptors match PCB regions.
+        let cached0 = ds.cached_peripherals(0);
+        assert_eq!(cached0[0].unwrap().base, 0x4000_0000);
+        assert_eq!(cached0[0].unwrap().size, 4096);
+
+        let cached1 = ds.cached_peripherals(1);
+        assert_eq!(cached1[0].unwrap().base, 0x4001_0000);
+        assert_eq!(cached1[0].unwrap().size, 256);
     }
 
     // ------------------------------------------------------------------
