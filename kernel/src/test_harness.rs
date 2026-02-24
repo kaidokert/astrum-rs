@@ -216,6 +216,95 @@ impl KernelTestHarness {
         })
     }
 
+    /// Create a 2-partition harness with mixed MPU data regions:
+    /// P0 uses the sentinel (size==0) and P1 uses a user-configured region.
+    ///
+    /// The post-move fixup replicates boot.rs's inline sentinel guard:
+    /// only sentinel partitions (size==0) have their MPU base updated;
+    /// user-configured partitions keep their original base address.
+    pub fn with_mixed_mpu_regions() -> Result<Self, HarnessError> {
+        let n = 2;
+        let mut schedule = ScheduleTable::new();
+        for i in 0..n {
+            schedule
+                .add(ScheduleEntry::new(i as u8, 10))
+                .map_err(|_| HarnessError::ScheduleFull)?;
+        }
+        #[cfg(feature = "dynamic-mpu")]
+        schedule
+            .add_system_window(10)
+            .map_err(|_| HarnessError::ScheduleFull)?;
+        let mut configs: Vec<PartitionConfig, { HarnessConfig::N }> = Vec::new();
+        configs
+            .push(PartitionConfig {
+                id: 0,
+                entry_point: FLASH_BASE,
+                stack_base: RAM_BASE,
+                stack_size: STACK_SIZE_BYTES,
+                mpu_region: MpuRegion::new(0, 0, 0),
+                peripheral_regions: Vec::new(),
+            })
+            .map_err(|_| HarnessError::ConfigsFull)?;
+        configs
+            .push(PartitionConfig {
+                id: 1,
+                entry_point: FLASH_BASE + PARTITION_OFFSET,
+                stack_base: RAM_BASE + PARTITION_OFFSET,
+                stack_size: STACK_SIZE_BYTES,
+                mpu_region: MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
+                peripheral_regions: Vec::new(),
+            })
+            .map_err(|_| HarnessError::ConfigsFull)?;
+        let mut kernel = Box::new(
+            Kernel::new(
+                schedule,
+                &configs,
+                #[cfg(feature = "dynamic-mpu")]
+                crate::virtual_device::DeviceRegistry::new(),
+            )
+            .map_err(HarnessError::KernelInit)?,
+        );
+        // Verify Kernel::new preserved P1's user-configured base before fixup.
+        assert_eq!(
+            kernel.partitions().get(1).map(|p| p.mpu_region().base()),
+            Some(0x2004_0000),
+            "Kernel::new must preserve user-configured mpu_region base for P1"
+        );
+        kernel
+            .partitions_mut()
+            .get_mut(0)
+            .ok_or(HarnessError::PartitionNotFound)?
+            .transition(PartitionState::Running)
+            .map_err(HarnessError::Transition)?;
+        kernel.current_partition = 0;
+        kernel.active_partition = Some(0);
+        // Post-move fixup: replicate boot.rs's inline sentinel guard.
+        // Only sentinel partitions (size==0) get their MPU base updated;
+        // user-configured partitions keep their original base.
+        for i in 0..n {
+            let base = kernel
+                .core_stack_base(i)
+                .ok_or(HarnessError::PartitionNotFound)?;
+            let sp = base.wrapping_add(STACK_SIZE_BYTES);
+            kernel.set_sp(i, sp);
+            assert!(
+                kernel.fix_stack_region(i, base, STACK_SIZE_BYTES),
+                "fix_stack_region failed for partition {i}"
+            );
+            let is_sentinel = kernel
+                .partitions()
+                .get(i)
+                .is_some_and(|p| p.mpu_region().size() == 0);
+            if is_sentinel {
+                assert!(
+                    kernel.fix_mpu_data_region(i, base),
+                    "fix_mpu_data_region failed for partition {i}"
+                );
+            }
+        }
+        Ok(Self { kernel })
+    }
+
     /// Create a harness with two partitions and one message queue.
     ///
     /// The queue depth and message size come from `HarnessConfig` (QD=2, QM=4).
@@ -885,10 +974,9 @@ mod tests {
     fn msg_recv_blocks_then_msg_send_wakes() {
         let mut h = KernelTestHarness::with_messages().expect("harness setup");
 
-        // TODO: reviewer false positive — fix_mpu_data_region calls are required
-        // because Kernel::new now constructs mpu_region from internal stack bases
-        // (commit 2675853), so the default harness MPU regions no longer cover the
-        // mmap'd low addresses that validated_ptr! checks on 64-bit hosts.
+        // Fix MPU data region bases for 64-bit test hosts: Kernel::new derives
+        // mpu_region from internal stack bases, which are heap addresses on the host.
+        // Reset them to the low-address range that validated_ptr! expects.
         let buf_ptr = low32_buf(0);
         for i in 0..2 {
             let base = 0x2000_0000 + (i as u32) * 0x1000;
@@ -1980,5 +2068,54 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Mixed MPU region config: sentinel + user-configured (bug04)
+    // ------------------------------------------------------------------
+
+    /// Verifies Kernel::new sentinel handling and that the post-move fixup
+    /// (inline sentinel guard, same pattern as boot.rs) preserves
+    /// user-configured bases while updating sentinel bases.
+    // TODO: boot.rs is #[cfg(not(test))]; an integration test on real hardware
+    // would be needed to directly verify the boot path end-to-end.
+    #[test]
+    fn mixed_mpu_region_config_sentinel_and_user() {
+        let h = KernelTestHarness::with_mixed_mpu_regions().expect("harness setup");
+        let k = h.kernel();
+
+        // P0: sentinel — Kernel::new derived base from internal stack,
+        // then the sentinel-guarded fixup updated it to the pinned address.
+        let p0 = k.partitions().get(0).expect("P0");
+        let core_base_0 = k.core_stack_base(0).expect("core_stack_base(0)");
+        assert_eq!(
+            p0.mpu_region().base(),
+            core_base_0,
+            "P0 sentinel: mpu_region.base() must equal core_stack_base"
+        );
+
+        // P1: user-configured — Kernel::new preserved the original base,
+        // and the sentinel-guarded fixup correctly skipped this partition.
+        let p1 = k.partitions().get(1).expect("P1");
+        assert_eq!(
+            p1.mpu_region().base(),
+            0x2004_0000,
+            "P1 user-configured: base must be preserved by Kernel::new and sentinel-guarded fixup"
+        );
+        assert_eq!(
+            p1.mpu_region().size(),
+            2048,
+            "P1 user-configured: size must be preserved"
+        );
+        assert_eq!(
+            p1.mpu_region().permissions(),
+            0x0306_0000,
+            "P1 user-configured: permissions must be preserved"
+        );
+
+        // All partitions in valid state.
+        assert_eq!(p0.state(), PartitionState::Running);
+        assert_eq!(p1.state(), PartitionState::Ready);
+        h.assert_stack_bases_valid();
     }
 }
