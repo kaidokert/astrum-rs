@@ -114,11 +114,46 @@ use crate::svc::Kernel;
 /// configurations, increase this value and ensure the target has sufficient RAM.
 pub const MAX_KERNEL_SIZE: usize = 16 * 1024;
 
-/// Required alignment for kernel state storage in bytes.
+/// Generates an alignment constant and a storage struct from a single
+/// alignment literal, eliminating manual synchronization.
 ///
-/// This must match the alignment requirement of `Kernel<C>`, which contains
-/// stack storage fields that may require up to 4096-byte alignment.
-pub const KERNEL_ALIGNMENT: usize = 4096;
+/// `#[repr(align(...))]` requires a literal, so the alignment value cannot
+/// reference a `const`. This macro expands the same literal into both the
+/// `const` and the `repr` attribute, making desynchronization impossible.
+///
+/// # Generated items
+///
+/// - `pub const $const_name: usize = $align;`
+/// - `#[repr(C, align($align))] pub struct $name` with a `[u8; $size]` payload
+/// - Compile-time assertion that the struct's actual alignment equals `$const_name`
+macro_rules! define_aligned_storage {
+    ($const_name:ident, $name:ident, $align:literal, $size:expr) => {
+        /// Required alignment for the storage struct in bytes.
+        pub const $const_name: usize = $align;
+
+        /// Properly-aligned byte buffer whose size and alignment are set by the
+        /// `define_aligned_storage!` invocation.
+        #[repr(C, align($align))]
+        pub struct $name {
+            _data: [u8; $size],
+        }
+
+        // Compile-time assertion: alignment constant must match actual type alignment.
+        // Belt-and-suspenders check — the macro guarantees this by construction,
+        // but the assertion catches compiler/toolchain surprises.
+        const _: () = assert!(
+            core::mem::align_of::<$name>() == $const_name,
+            concat!(
+                stringify!($const_name),
+                " constant does not match ",
+                stringify!($name),
+                " repr(align) value"
+            )
+        );
+    };
+}
+
+define_aligned_storage!(KERNEL_ALIGNMENT, KernelStorageBuffer, 4096, MAX_KERNEL_SIZE);
 
 /// Check pointer alignment to [`KERNEL_ALIGNMENT`]. Returns `Err(offset)` if misaligned.
 #[inline]
@@ -141,24 +176,6 @@ fn check_kernel_alignment(ptr: *const u8) -> Result<(), usize> {
 /// access. Reading before initialization is undefined behavior.
 #[link_section = ".kernel_state"]
 pub static mut UNIFIED_KERNEL_STORAGE: MaybeUninit<KernelStorageBuffer> = MaybeUninit::uninit();
-
-/// Properly-sized buffer to hold kernel state.
-///
-/// This is a concrete, non-generic type that reserves [`MAX_KERNEL_SIZE`] bytes.
-/// The actual `Kernel<C>` is written into this buffer at initialization time.
-// Note: #[repr(align(...))] requires a literal, so we cannot use KERNEL_ALIGNMENT directly.
-// The const assertion below verifies this value matches KERNEL_ALIGNMENT at compile time.
-#[repr(C, align(4096))]
-pub struct KernelStorageBuffer {
-    _data: [u8; MAX_KERNEL_SIZE],
-}
-
-// Compile-time assertion: KERNEL_ALIGNMENT must match actual type alignment.
-// This prevents silent breakage if KERNEL_ALIGNMENT is changed without updating repr(align).
-const _: () = assert!(
-    core::mem::align_of::<KernelStorageBuffer>() == KERNEL_ALIGNMENT,
-    "KERNEL_ALIGNMENT constant does not match KernelStorageBuffer repr(align) value"
-);
 
 /// Minimum alignment required by the ARMv7-M MPU for kernel state region.
 ///
@@ -380,9 +397,10 @@ where
     // The pointer cast from *mut KernelStorageBuffer to *mut Kernel<C> is valid
     // because init_kernel_state() wrote a Kernel<C> at this location, and
     // KernelStorageBuffer has sufficient size (MAX_KERNEL_SIZE, verified at
-    // compile time in init_kernel_state) and alignment (4096 bytes via repr(C, align(4096))).
-    // The caller must ensure init_kernel_state() was called before dereferencing
-    // the returned pointer, and must provide proper synchronization for access.
+    // compile time in init_kernel_state) and alignment (KERNEL_ALIGNMENT bytes
+    // via repr(C, align(4096))). The caller must ensure init_kernel_state() was
+    // called before dereferencing the returned pointer, and must provide proper
+    // synchronization for access.
     addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>
 }
 
@@ -746,6 +764,22 @@ mod tests {
             MAX_KERNEL_SIZE,
             size_of::<Kernel<TestConfig>>(),
         );
+    }
+
+    /// Verify define_aligned_storage! generates matching const and struct
+    /// alignment by invoking it with independent arguments in a local module.
+    #[test]
+    fn define_aligned_storage_macro_generates_matching_items() {
+        mod local {
+            define_aligned_storage!(TEST_ALIGNMENT, TestBuffer, 512, 1024);
+        }
+        assert_eq!(local::TEST_ALIGNMENT, 512);
+        assert_eq!(
+            core::mem::align_of::<local::TestBuffer>(),
+            512,
+            "struct alignment must equal the literal passed to the macro"
+        );
+        assert_eq!(core::mem::size_of::<local::TestBuffer>(), 1024);
     }
 
     #[cfg(feature = "dynamic-mpu")]
