@@ -3242,11 +3242,15 @@ mod tests {
         let mut ef = frame(SYS_EVT_WAIT, 0, 0b1010);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 0);
-        assert!(k.yield_requested());
+        assert_eq!(ef.r0, 0, "blocking EventWait must return 0");
+        assert!(
+            k.yield_requested(),
+            "blocking EventWait must trigger deschedule"
+        );
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting
+            PartitionState::Waiting,
+            "blocked partition must be in Waiting state"
         );
     }
 
@@ -3361,7 +3365,7 @@ mod tests {
         let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 1); // 1 = acquired immediately
+        assert_eq!(ef.r0, 1, "uncontested MutexLock must return 1 (acquired)");
         assert!(!k.yield_requested());
 
         // Switch to partition 1 and attempt to lock the same mutex.
@@ -3369,11 +3373,15 @@ mod tests {
         let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 1);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 0); // 0 = blocked
-        assert!(k.yield_requested());
+        assert_eq!(ef.r0, 0, "blocking MutexLock must return 0");
+        assert!(
+            k.yield_requested(),
+            "blocking MutexLock must trigger deschedule"
+        );
         assert_eq!(
             k.partitions().get(1).unwrap().state(),
-            PartitionState::Waiting
+            PartitionState::Waiting,
+            "blocked partition must be in Waiting state"
         );
     }
 
