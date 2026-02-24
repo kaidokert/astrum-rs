@@ -1017,12 +1017,15 @@ where
             // from PartitionConfig are NOT used — they are replaced with values
             // derived from the internal PartitionCore stack. We must still validate
             // mpu_region and peripheral_regions, which ARE used in the final PCB.
-            crate::mpu::validate_mpu_region(c.mpu_region.base(), c.mpu_region.size()).map_err(
-                |detail| ConfigError::MpuRegionInvalid {
-                    partition_id: c.id,
-                    detail,
-                },
-            )?;
+            // Size==0 is a sentinel meaning "no user-configured data region".
+            if c.mpu_region.size() > 0 {
+                crate::mpu::validate_mpu_region(c.mpu_region.base(), c.mpu_region.size()).map_err(
+                    |detail| ConfigError::MpuRegionInvalid {
+                        partition_id: c.id,
+                        detail,
+                    },
+                )?;
+            }
             for (j, region) in c.peripheral_regions.iter().enumerate() {
                 crate::mpu::validate_mpu_region(region.base(), region.size()).map_err(
                     |detail| ConfigError::PeripheralRegionInvalid {
@@ -3039,6 +3042,78 @@ mod tests {
             k.partitions().get(1).unwrap().stack_size(),
             expected_size,
             "PCB[1] stack_size must match TestConfig::STACK_WORDS * 4"
+        );
+    }
+
+    /// Kernel::new() succeeds when a partition uses mpu_region size==0
+    /// as a sentinel for "no user-configured data region".
+    #[test]
+    fn kernel_new_accepts_zero_size_mpu_region_sentinel() {
+        use crate::partition::PartitionConfig;
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        schedule.add_system_window(1).unwrap();
+        let configs = [PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0, 0, 0),
+            peripheral_regions: heapless::Vec::new(),
+        }];
+        #[cfg(feature = "dynamic-mpu")]
+        let registry = crate::virtual_device::DeviceRegistry::new();
+        let result = Kernel::<TestConfig>::new(
+            schedule,
+            &configs,
+            #[cfg(feature = "dynamic-mpu")]
+            registry,
+        );
+        assert!(
+            result.is_ok(),
+            "Kernel::new() should accept mpu_region size==0 sentinel"
+        );
+    }
+
+    /// Kernel::new() rejects a partition with non-zero but invalid mpu_region
+    /// (e.g. size=17, not a power of two).
+    #[test]
+    fn kernel_new_rejects_invalid_nonzero_mpu_region() {
+        use crate::partition::PartitionConfig;
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        schedule.add_system_window(1).unwrap();
+        let configs = [PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0, 17, 0),
+            peripheral_regions: heapless::Vec::new(),
+        }];
+        #[cfg(feature = "dynamic-mpu")]
+        let registry = crate::virtual_device::DeviceRegistry::new();
+        let result = Kernel::<TestConfig>::new(
+            schedule,
+            &configs,
+            #[cfg(feature = "dynamic-mpu")]
+            registry,
+        );
+        let err = result
+            .err()
+            .expect("Kernel::new() should reject non-zero invalid mpu_region");
+        assert!(
+            matches!(
+                err,
+                ConfigError::MpuRegionInvalid {
+                    partition_id: 0,
+                    detail: MpuError::SizeTooSmall,
+                }
+            ),
+            "Expected MpuRegionInvalid with SizeTooSmall, got: {:?}",
+            err,
         );
     }
 
