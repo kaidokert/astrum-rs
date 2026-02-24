@@ -235,7 +235,7 @@ impl DynamicStrategy {
                     size.trailing_zeros() - 1,
                     crate::mpu::AP_FULL_ACCESS,
                     true,
-                    (false, false, false),
+                    (true, false, true),
                 );
                 // Populate reserved peripheral slots directly; add_window
                 // skips them so they must be written here.
@@ -1120,7 +1120,7 @@ mod tests {
         assert_ne!(rasr, 0, "R4 RASR must be non-zero (peripheral enabled)");
         assert_eq!((rasr >> 24) & 0x7, AP_FULL_ACCESS);
         assert_eq!((rasr >> 28) & 1, 1, "XN must be set");
-        assert_eq!((rasr >> 16) & 0x7, 0, "S/C/B=0 (device memory)");
+        assert_eq!((rasr >> 16) & 0x7, 0b101, "S/C/B=101 (device memory)");
         assert_eq!(v[1].1, 0, "R5 disabled (no second peripheral)");
         assert_eq!(v[2].0, build_rbar(0x2000_0000, 6).unwrap());
         assert_eq!(v[2].1, rasr_r6, "R6 holds partition RAM");
@@ -1438,11 +1438,11 @@ mod tests {
         assert_eq!(ds.slot(4).unwrap().base, 0x2000_0000); // R4 unchanged
         let d5 = ds.slot(5).unwrap();
         assert_eq!((d5.base, d5.size), (0x4000_0000, 4096));
-        // Verify device-memory RASR: AP=full, XN=1, S/C/B=0/0/0.
+        // Verify device-memory RASR: AP=full, XN=1, S/C/B=1/0/1.
         let r = d5.permissions;
         assert_eq!((r >> 24) & 0x7, AP_FULL_ACCESS);
         assert_eq!((r >> 28) & 1, 1);
-        assert_eq!((r >> 16) & 0x7, 0);
+        assert_eq!((r >> 16) & 0x7, 0b101);
         assert_eq!(ds.slot(6).unwrap().base, 0x4001_0000);
         assert!(ds.slot(7).is_none());
         // Invalid size (100) skipped; valid 256 wired.
