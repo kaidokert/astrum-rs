@@ -7469,6 +7469,96 @@ mod tests {
         assert_eq!(ef.r0, SvcError::BufferFull.to_u32());
     }
 
+    /// Full state lifecycle round-trip: Running→Waiting→Ready→Running via
+    /// blocking queuing recv and timed-wait expiry.
+    #[test]
+    fn partition_lifecycle_roundtrip_via_blocking_ipc() {
+        use crate::invariants::assert_partition_state_consistency;
+        use crate::sampling::PortDirection;
+        use crate::scheduler::ScheduleEvent;
+        use crate::syscall::SYS_QUEUING_RECV_TIMED;
+
+        let mut k = kernel_with_schedule();
+
+        // --- Step 1: P0 starts Running via set_next_partition ---
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.set_current_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // --- Step 2: P0 dispatches blocking queuing recv (Running→Waiting) ---
+        let dst = k
+            .queuing_mut()
+            .create_port(PortDirection::Destination)
+            .unwrap();
+        let timeout_ticks: u32 = 50;
+        // Use P0's actual MPU region base as the buffer pointer.
+        // Kernel::new replaces the config base with the internal stack
+        // address, so low32_buf won't pass pointer validation.
+        let mpu_base = k.partitions().get(0).unwrap().mpu_region().base();
+        let ptr = mpu_base as *mut u8;
+        let mut ef = frame4(
+            SYS_QUEUING_RECV_TIMED,
+            dst as u32,
+            timeout_ticks,
+            ptr as u32,
+        );
+        // SAFETY: ef is a valid ExceptionFrame and k is a valid Kernel.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "blocking recv should return 0");
+
+        // --- Step 3: Verify P0 is Waiting and yield_requested is true ---
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert!(
+            k.yield_requested(),
+            "yield_requested must be true after blocking recv"
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // --- Step 4: expire_timed_waits at timeout tick (Waiting→Ready) ---
+        // The recv was dispatched at tick=1 (set_next_partition didn't advance;
+        // the kernel tick is still 0 when dispatch runs, so expiry = 0 + 50 = 50).
+        let expiry_tick = k.tick().get() + timeout_ticks as u64;
+        k.expire_timed_waits::<8>(expiry_tick);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready,
+            "P0 should be Ready after timeout expiry"
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // --- Step 5: Advance schedule until P0's next slot (Ready→Running) ---
+        // Schedule layout: P0(5 ticks) → P1(3 ticks) [→ SystemWindow on dynamic-mpu]
+        // P0 is currently in slot 0.  Advance through the remaining P0 ticks
+        // and all of P1's slot so the schedule wraps back to P0.
+        let mut switched_to_p0 = false;
+        // Upper bound: one full cycle is 8 ticks (+ 1 system window tick with
+        // dynamic-mpu). Use 12 as a safe ceiling.
+        for _ in 0..12 {
+            let ev = k.advance_schedule_tick();
+            if ev == ScheduleEvent::PartitionSwitch(0) {
+                switched_to_p0 = true;
+                break;
+            }
+        }
+        assert!(switched_to_p0, "schedule must eventually switch back to P0");
+
+        // --- Step 6: Verify P0 is Running again ---
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "P0 should be Running after schedule switches to it"
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Test module for `define_unified_kernel!` macro.
     ///
     /// The macro generates:
