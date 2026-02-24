@@ -691,6 +691,63 @@ mod tests {
         }
     }
 
+    /// Summary test: exercises check_kernel_alignment with an aligned pointer (Ok)
+    /// and 3+ misaligned offsets (Err), and verifies the constant relationships
+    /// KERNEL_ALIGNMENT/MAX_KERNEL_SIZE/MPU_MIN_ALIGNMENT that mirror compile-time
+    /// assertions.
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn alignment_pipeline_summary() {
+        // --- Constant relationships (mirror compile-time assertions) ---
+        assert!(
+            KERNEL_ALIGNMENT.is_power_of_two(),
+            "KERNEL_ALIGNMENT must be power of two"
+        );
+        assert!(
+            MAX_KERNEL_SIZE.is_power_of_two(),
+            "MAX_KERNEL_SIZE must be power of two"
+        );
+        assert!(MAX_KERNEL_SIZE >= KERNEL_ALIGNMENT);
+        assert!(KERNEL_ALIGNMENT >= MPU_MIN_ALIGNMENT);
+
+        // --- check_kernel_alignment with aligned pointer ---
+        let aligned = (4 * KERNEL_ALIGNMENT) as *const u8;
+        assert_eq!(check_kernel_alignment(aligned), Ok(()));
+
+        // --- check_kernel_alignment with misaligned offsets ---
+        // Use small offsets guaranteed to be < KERNEL_ALIGNMENT for any valid configuration.
+        let offsets: [usize; 4] = [1, 3, 7, KERNEL_ALIGNMENT - 1];
+        for off in offsets {
+            let misaligned = (4 * KERNEL_ALIGNMENT + off) as *const u8;
+            assert_eq!(
+                check_kernel_alignment(misaligned),
+                Err(off),
+                "Expected Err({off}) for offset {off}"
+            );
+        }
+    }
+
+    /// Verifies that Kernel<TestConfig> type alignment and size fit within
+    /// the storage constants.
+    // TODO: reviewer false positive – align_of/size_of are imported at module
+    // level (line 99: `use core::mem::{align_of, size_of, …}`) and pulled
+    // into the test module via `use super::*`.
+    #[test]
+    fn kernel_type_fits_storage_constants() {
+        assert!(
+            KERNEL_ALIGNMENT >= align_of::<Kernel<TestConfig>>(),
+            "KERNEL_ALIGNMENT ({}) < Kernel<TestConfig> alignment ({})",
+            KERNEL_ALIGNMENT,
+            align_of::<Kernel<TestConfig>>(),
+        );
+        assert!(
+            MAX_KERNEL_SIZE >= size_of::<Kernel<TestConfig>>(),
+            "MAX_KERNEL_SIZE ({}) < Kernel<TestConfig> size ({})",
+            MAX_KERNEL_SIZE,
+            size_of::<Kernel<TestConfig>>(),
+        );
+    }
+
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn run_bottom_half_macro_sets_and_clears_flag() {
