@@ -1922,4 +1922,63 @@ mod tests {
             "yield_requested persists after expiry (not cleared by expire_timed_waits)"
         );
     }
+
+    /// Regression test: MPU data region bases must remain correct across
+    /// multiple schedule cycles. Guards against schedule advancement,
+    /// context switch logic, or tick handling corrupting PCB mpu_region.base.
+    #[test]
+    fn mpu_base_stable_across_schedule_cycles() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        let n = h.kernel().partitions().len();
+
+        // Capture initial MPU region state for each partition.
+        let mut initial_base = [0u32; 2];
+        let mut initial_size = [0u32; 2];
+        let mut initial_perms = [0u32; 2];
+        for i in 0..n {
+            let expected_base = h.kernel().core_stack_base(i).expect("core_stack_base");
+            let region = h.kernel().partitions().get(i).unwrap().mpu_region();
+            initial_base[i] = region.base();
+            initial_size[i] = region.size();
+            initial_perms[i] = region.permissions();
+            assert_eq!(
+                initial_base[i], expected_base,
+                "partition {i}: initial mpu_region.base() != core_stack_base()"
+            );
+        }
+
+        // Start the schedule and drive 60 ticks — 3 full major frames for
+        // 2 partitions with 10-tick slots each (20 ticks per major frame).
+        h.kernel_mut().start_schedule();
+        let total_ticks: u32 = 60;
+        for tick in 1..=total_ticks {
+            h.kernel_mut().advance_schedule_tick();
+
+            // After every tick, verify all partitions' MPU regions are intact.
+            for i in 0..n {
+                let region = h.kernel().partitions().get(i).unwrap().mpu_region();
+                let expected_base = h.kernel().core_stack_base(i).expect("core_stack_base");
+                assert_eq!(
+                    region.base(),
+                    expected_base,
+                    "tick {tick}: partition {i} mpu_region.base() diverged from core_stack_base()"
+                );
+                assert_eq!(
+                    region.base(),
+                    initial_base[i],
+                    "tick {tick}: partition {i} mpu_region.base() changed"
+                );
+                assert_eq!(
+                    region.size(),
+                    initial_size[i],
+                    "tick {tick}: partition {i} mpu_region.size() changed"
+                );
+                assert_eq!(
+                    region.permissions(),
+                    initial_perms[i],
+                    "tick {tick}: partition {i} mpu_region.permissions() changed"
+                );
+            }
+        }
+    }
 }
