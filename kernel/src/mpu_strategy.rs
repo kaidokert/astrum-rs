@@ -100,9 +100,9 @@ const DYNAMIC_REGION_BASE: u8 = 4;
 pub struct DynamicStrategy {
     slots: Mutex<RefCell<[Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT]>>,
     /// Number of leading slots (0 or 2) reserved for peripheral MMIO regions.
-    /// Set exclusively by `configure_partition`; `compute_region_values` emits
-    /// disabled entries for those slots so PendSV can overwrite them with
-    /// per-partition peripherals.
+    /// Set by `configure_partition`; `wire_boot_peripherals` populates these
+    /// slots with peripheral descriptors so `compute_region_values` emits
+    /// them during PendSV context switches.
     peripheral_reserved: Mutex<RefCell<usize>>,
 }
 
@@ -145,25 +145,18 @@ impl DynamicStrategy {
 
     /// Compute the (RBAR, RASR) register values for regions R4-R7.
     ///
-    /// For occupied slots the RBAR encodes the descriptor's base address and
-    /// region number, while RASR is the stored permissions word.  For empty
-    /// slots RBAR selects the region number and RASR is 0 (disabled).
+    /// Occupied slots (including peripheral-reserved R4/R5 populated by
+    /// [`wire_boot_peripherals`]) emit their stored descriptor; empty
+    /// slots emit a disabled region (RASR = 0).
     ///
     /// This is the testable, hardware-free counterpart of [`Self::program_regions`].
     pub fn compute_region_values(&self) -> [(u32, u32); DYNAMIC_SLOT_COUNT] {
         with_cs(|cs| {
             let slots = self.slots.borrow(cs);
             let slots = slots.borrow();
-            let reserved = *self.peripheral_reserved.borrow(cs).borrow();
             let mut out = [(0u32, 0u32); DYNAMIC_SLOT_COUNT];
             for (idx, slot) in slots.iter().enumerate() {
                 let region = DYNAMIC_REGION_BASE as u32 + idx as u32;
-                // Peripheral-reserved slots are emitted as disabled;
-                // PendSV overwrites them with per-partition peripheral regions.
-                if idx < reserved {
-                    out[idx] = (crate::mpu::build_rbar(0, region).unwrap_or(region), 0);
-                    continue;
-                }
                 // Defense-in-depth: add_window validates alignment before
                 // storing descriptors, so build_rbar should always succeed
                 // for occupied slots.  If a descriptor is somehow invalid
@@ -213,18 +206,19 @@ impl DynamicStrategy {
         })
     }
 
-    /// Populate dynamic slots 1-3 (R5-R7) with deduplicated peripheral
-    /// regions from the given partitions.  Each region is configured as
-    /// device memory (S/C/B=0/0/0, XN, AP_FULL_ACCESS).  Returns the
-    /// number wired; stops at 3 (slot exhaustion).
+    /// Populate dynamic slots with deduplicated peripheral regions from
+    /// the given partitions (device memory: S/C/B=0, XN, AP_FULL_ACCESS).
+    /// Reserved peripheral slots (R4/R5) are written directly; remaining
+    /// regions use [`add_window`].  Returns the number wired.
     pub fn wire_boot_peripherals(
         &self,
         partitions: &[crate::partition::PartitionControlBlock],
     ) -> usize {
-        // Deduplicate by (base, size). At most 3 slots available (R5-R7),
+        // Deduplicate by (base, size). At most 3 slots available,
         // so a small inline set suffices.
         let mut seen: heapless::Vec<(u32, u32), 3> = heapless::Vec::new();
         let mut wired = 0usize;
+        let reserved = with_cs(|cs| *self.peripheral_reserved.borrow(cs).borrow());
 
         for part in partitions.iter() {
             for region in part.peripheral_regions().iter() {
@@ -243,13 +237,31 @@ impl DynamicStrategy {
                     true,
                     (false, false, false),
                 );
-                match self.add_window(base, size, rasr, part.id()) {
-                    Ok(_) => {
-                        let _ = seen.push(key);
-                        wired += 1;
+                // Populate reserved peripheral slots directly; add_window
+                // skips them so they must be written here.
+                if wired < reserved {
+                    if crate::mpu::validate_mpu_region(base, size).is_err() {
+                        continue;
                     }
-                    Err(MpuError::SlotExhausted) => return wired,
-                    Err(_) => continue,
+                    with_cs(|cs| {
+                        self.slots.borrow(cs).borrow_mut()[wired] = Some(WindowDescriptor {
+                            base,
+                            size,
+                            permissions: rasr,
+                            owner: part.id(),
+                        });
+                    });
+                    let _ = seen.push(key);
+                    wired += 1;
+                } else {
+                    match self.add_window(base, size, rasr, part.id()) {
+                        Ok(_) => {
+                            let _ = seen.push(key);
+                            wired += 1;
+                        }
+                        Err(MpuError::SlotExhausted) => return wired,
+                        Err(_) => continue,
+                    }
                 }
             }
         }
@@ -1090,6 +1102,29 @@ mod tests {
         // R7 holds dynamic window.
         assert_eq!(v[3].0, build_rbar(0x2003_0000, 7).unwrap());
         assert_eq!(v[3].1, rasr_win, "R7 holds window");
+    }
+
+    #[test]
+    fn compute_region_values_includes_wired_peripheral() {
+        // peripheral_reserved=2, wire one peripheral → R4 must carry it.
+        let ds = DynamicStrategy::new();
+        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        let pcb =
+            make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+        assert_eq!(ds.wire_boot_peripherals(&[pcb]), 1);
+        let v = ds.compute_region_values();
+        // R4: wired peripheral with device-memory attributes.
+        assert_eq!(v[0].0, build_rbar(0x4000_0000, 4).unwrap());
+        let rasr = v[0].1;
+        assert_ne!(rasr, 0, "R4 RASR must be non-zero (peripheral enabled)");
+        assert_eq!((rasr >> 24) & 0x7, AP_FULL_ACCESS);
+        assert_eq!((rasr >> 28) & 1, 1, "XN must be set");
+        assert_eq!((rasr >> 16) & 0x7, 0, "S/C/B=0 (device memory)");
+        assert_eq!(v[1].1, 0, "R5 disabled (no second peripheral)");
+        assert_eq!(v[2].0, build_rbar(0x2000_0000, 6).unwrap());
+        assert_eq!(v[2].1, rasr_r6, "R6 holds partition RAM");
+        assert_eq!(v[3].1, 0, "R7 disabled (no window)");
     }
 
     #[test]
