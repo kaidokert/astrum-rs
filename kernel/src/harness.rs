@@ -222,8 +222,9 @@ macro_rules! define_unified_harness {
                     .expect("boot: next_partition PID missing from partition table");
                 $crate::mpu::apply_partition_mpu(mpu, pcb);
                 if let Some(regions) = $crate::mpu::partition_dynamic_regions(pcb) {
+                    let periph_reserved = if pcb.peripheral_regions().is_empty() { 0 } else { 2 };
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
-                        &HARNESS_STRATEGY, pid, &regions,
+                        &HARNESS_STRATEGY, pid, &regions, periph_reserved,
                     )
                     .expect("failed to configure boot MPU");
                 }
@@ -297,6 +298,15 @@ macro_rules! define_unified_harness {
                     let regions = $crate::mpu::partition_mpu_regions_or_deny_all(pcb);
                     for &(rbar, rasr) in &regions {
                         $crate::mpu::configure_region(&p.MPU, rbar, rasr);
+                    }
+
+                    // Update dynamic strategy: reconfigure the partition's
+                    // private-RAM slot and peripheral reservation count.
+                    let periph_reserved = if pcb.peripheral_regions().is_empty() { 0 } else { 2 };
+                    if let Some(dyn_regions) = $crate::mpu::partition_dynamic_regions(pcb) {
+                        let _ = $crate::mpu_strategy::MpuStrategy::configure_partition(
+                            &HARNESS_STRATEGY, pid, &dyn_regions, periph_reserved,
+                        );
                     }
                 }
 

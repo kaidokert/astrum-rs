@@ -191,7 +191,7 @@ fn SysTick() {
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             if let Some(pcb) = k.partitions().get(pid as usize) {
                 if let Some(regions) = mpu::partition_dynamic_regions(pcb) {
-                    let _ = STRATEGY.configure_partition(pid, &regions);
+                    let _ = STRATEGY.configure_partition(pid, &regions, 0);
                 }
             }
             // SAFETY: single-core exclusive write; PendSV reads this after

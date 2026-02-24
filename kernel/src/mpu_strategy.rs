@@ -48,8 +48,18 @@ pub trait MpuStrategy {
     /// (RBAR, RASR) pairs to programme into the MPU.  The static strategy
     /// expects exactly 4 pairs; implementations may return `Err` if the
     /// slice length is incorrect.
-    fn configure_partition(&self, partition_id: u8, regions: &[(u32, u32)])
-        -> Result<(), MpuError>;
+    ///
+    /// `peripheral_reserved` specifies how many leading dynamic slots
+    /// (0 or 2) are reserved for peripheral MMIO regions.  When 2, the
+    /// partition's private-RAM region is placed after the reserved slots,
+    /// and `compute_region_values` emits disabled entries for the reserved
+    /// slots so PendSV can overwrite them with per-partition peripherals.
+    fn configure_partition(
+        &self,
+        partition_id: u8,
+        regions: &[(u32, u32)],
+        peripheral_reserved: usize,
+    ) -> Result<(), MpuError>;
 
     /// Dynamically add a temporary memory window.
     ///
@@ -89,6 +99,11 @@ const DYNAMIC_REGION_BASE: u8 = 4;
 /// exclusive access.
 pub struct DynamicStrategy {
     slots: Mutex<RefCell<[Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT]>>,
+    /// Number of leading slots (0 or 2) reserved for peripheral MMIO regions.
+    /// Set exclusively by `configure_partition`; `compute_region_values` emits
+    /// disabled entries for those slots so PendSV can overwrite them with
+    /// per-partition peripherals.
+    peripheral_reserved: Mutex<RefCell<usize>>,
 }
 
 impl Default for DynamicStrategy {
@@ -102,6 +117,7 @@ impl DynamicStrategy {
     pub const fn new() -> Self {
         Self {
             slots: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
+            peripheral_reserved: Mutex::new(RefCell::new(0)),
         }
     }
 
@@ -138,9 +154,16 @@ impl DynamicStrategy {
         with_cs(|cs| {
             let slots = self.slots.borrow(cs);
             let slots = slots.borrow();
+            let reserved = *self.peripheral_reserved.borrow(cs).borrow();
             let mut out = [(0u32, 0u32); DYNAMIC_SLOT_COUNT];
             for (idx, slot) in slots.iter().enumerate() {
                 let region = DYNAMIC_REGION_BASE as u32 + idx as u32;
+                // Peripheral-reserved slots are emitted as disabled;
+                // PendSV overwrites them with per-partition peripheral regions.
+                if idx < reserved {
+                    out[idx] = (crate::mpu::build_rbar(0, region).unwrap_or(region), 0);
+                    continue;
+                }
                 // Defense-in-depth: add_window validates alignment before
                 // storing descriptors, so build_rbar should always succeed
                 // for occupied slots.  If a descriptor is somehow invalid
@@ -297,10 +320,17 @@ impl MpuStrategy for DynamicStrategy {
         &self,
         partition_id: u8,
         regions: &[(u32, u32)],
+        peripheral_reserved: usize,
     ) -> Result<(), MpuError> {
         // The static regions (R0-R3) are handled elsewhere; we only
-        // care about the single private-RAM region destined for R4.
+        // care about the single private-RAM region.
         if regions.len() != 1 {
+            return Err(MpuError::RegionCountMismatch);
+        }
+
+        // Peripheral MMIO slots must be reserved as a pair (R4-R5) or
+        // not at all.  Any other value is a configuration error.
+        if peripheral_reserved != 0 && peripheral_reserved != 2 {
             return Err(MpuError::RegionCountMismatch);
         }
 
@@ -309,13 +339,26 @@ impl MpuStrategy for DynamicStrategy {
         let size_field = (rasr >> crate::mpu::RASR_SIZE_SHIFT) & crate::mpu::RASR_SIZE_MASK;
         let size = 1u32 << (size_field + 1);
 
+        // Place private-RAM after the reserved peripheral slots.
+        // peripheral_reserved=0 → slot 0 (R4), peripheral_reserved=2 → slot 2 (R6).
+        let ram_slot = peripheral_reserved;
+
         with_cs(|cs| {
-            self.slots.borrow(cs).borrow_mut()[0] = Some(WindowDescriptor {
+            let mut slots = self.slots.borrow(cs).borrow_mut();
+            // Clear any previously-occupied RAM slot so the strategy
+            // state doesn't carry stale descriptors when the reservation
+            // count changes between configure_partition calls.
+            let prev_reserved = *self.peripheral_reserved.borrow(cs).borrow();
+            if prev_reserved != peripheral_reserved {
+                slots[prev_reserved] = None;
+            }
+            slots[ram_slot] = Some(WindowDescriptor {
                 base,
                 size,
                 permissions: rasr,
                 owner: partition_id,
             });
+            *self.peripheral_reserved.borrow(cs).borrow_mut() = peripheral_reserved;
         });
         Ok(())
     }
@@ -331,8 +374,12 @@ impl MpuStrategy for DynamicStrategy {
 
         with_cs(|cs| {
             let mut slots = self.slots.borrow(cs).borrow_mut();
-            // Scan slots 1..3 (R5-R7) for a free entry.
-            for (idx, slot) in slots.iter_mut().enumerate().skip(1) {
+            let reserved = *self.peripheral_reserved.borrow(cs).borrow();
+            // Skip peripheral-reserved slots (0..reserved) and the
+            // partition-RAM slot (reserved), scanning from reserved+1
+            // onwards for a free entry.
+            let first_window = reserved + 1;
+            for (idx, slot) in slots.iter_mut().enumerate().skip(first_window) {
                 if slot.is_none() {
                     *slot = Some(WindowDescriptor {
                         base,
@@ -374,6 +421,7 @@ impl MpuStrategy for StaticStrategy {
         &self,
         _partition_id: u8,
         regions: &[(u32, u32)],
+        _peripheral_reserved: usize,
     ) -> Result<(), MpuError> {
         let region_array: [(u32, u32); STATIC_REGION_COUNT] = regions
             .try_into()
@@ -486,7 +534,7 @@ mod tests {
         let strategy = StaticStrategy;
 
         // Passing the 4 computed regions should succeed.
-        assert_eq!(strategy.configure_partition(0, &regions), Ok(()));
+        assert_eq!(strategy.configure_partition(0, &regions, 0), Ok(()));
     }
 
     #[test]
@@ -495,25 +543,25 @@ mod tests {
 
         // Too few regions.
         assert_eq!(
-            strategy.configure_partition(0, &[(0x0, 0x0)]),
+            strategy.configure_partition(0, &[(0x0, 0x0)], 0),
             Err(MpuError::RegionCountMismatch),
         );
 
         // 3 regions is now too few (was the old count).
         assert_eq!(
-            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0)]),
+            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0)], 0),
             Err(MpuError::RegionCountMismatch),
         );
 
         // Too many regions.
         assert_eq!(
-            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0), (0, 0), (0, 0)]),
+            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0), (0, 0), (0, 0)], 0),
             Err(MpuError::RegionCountMismatch),
         );
 
         // Empty.
         assert_eq!(
-            strategy.configure_partition(0, &[]),
+            strategy.configure_partition(0, &[], 0),
             Err(MpuError::RegionCountMismatch),
         );
     }
@@ -556,7 +604,7 @@ mod tests {
         );
 
         // And configure_partition accepts them.
-        assert_eq!(strategy.configure_partition(0, &regions), Ok(()));
+        assert_eq!(strategy.configure_partition(0, &regions, 0), Ok(()));
     }
 
     #[test]
@@ -565,11 +613,11 @@ mod tests {
 
         let pcb0 = make_pcb(0x0000_0000, 0x2000_0000, 1024);
         let r0 = partition_mpu_regions(&pcb0).unwrap();
-        assert_eq!(strategy.configure_partition(0, &r0), Ok(()));
+        assert_eq!(strategy.configure_partition(0, &r0, 0), Ok(()));
 
         let pcb1 = make_pcb(0x0000_0000, 0x2000_8000, 1024);
         let r1 = partition_mpu_regions(&pcb1).unwrap();
-        assert_eq!(strategy.configure_partition(1, &r1), Ok(()));
+        assert_eq!(strategy.configure_partition(1, &r1, 0), Ok(()));
     }
 
     // ------------------------------------------------------------------
@@ -605,7 +653,7 @@ mod tests {
             Err(MpuError::SlotExhausted)
         );
         assert_eq!(
-            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0), (0, 0)]),
+            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0), (0, 0)], 0),
             Ok(()),
         );
     }
@@ -635,7 +683,7 @@ mod tests {
         let size_field = encode_size(4096).unwrap(); // 11
         let rasr = build_rasr(size_field, AP_FULL_ACCESS, true, (true, true, false));
         let rbar = build_rbar(0x2000_0000, 4).unwrap();
-        assert_eq!(ds.configure_partition(2, &[(rbar, rasr)]), Ok(()));
+        assert_eq!(ds.configure_partition(2, &[(rbar, rasr)], 0), Ok(()));
 
         let desc = ds.slot(4).expect("R4 should be occupied");
         assert_eq!(desc.base, 0x2000_0000);
@@ -649,12 +697,12 @@ mod tests {
         let ds = DynamicStrategy::new();
         // Empty.
         assert_eq!(
-            ds.configure_partition(0, &[]),
+            ds.configure_partition(0, &[], 0),
             Err(MpuError::RegionCountMismatch),
         );
         // Multiple regions — only exactly one is accepted.
         assert_eq!(
-            ds.configure_partition(0, &[(0, 0), (0, 0)]),
+            ds.configure_partition(0, &[(0, 0), (0, 0)], 0),
             Err(MpuError::RegionCountMismatch),
         );
     }
@@ -757,12 +805,12 @@ mod tests {
     fn dynamic_configure_partition_overwrites_r4() {
         let ds = DynamicStrategy::new();
         let r1 = data_region(0x2000_0000, 256, 4);
-        ds.configure_partition(1, &[r1]).unwrap();
+        ds.configure_partition(1, &[r1], 0).unwrap();
         assert_eq!(ds.slot(4).unwrap().owner, 1);
 
         // Reconfigure with different partition.
         let r2 = data_region(0x2000_8000, 1024, 4);
-        ds.configure_partition(3, &[r2]).unwrap();
+        ds.configure_partition(3, &[r2], 0).unwrap();
         let d = ds.slot(4).unwrap();
         assert_eq!(d.owner, 3);
         assert_eq!(d.base, 0x2000_8000);
@@ -773,7 +821,7 @@ mod tests {
     fn dynamic_add_window_does_not_touch_r4() {
         let ds = DynamicStrategy::new();
         let r = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[r]).unwrap();
+        ds.configure_partition(0, &[r], 0).unwrap();
 
         // Fill all dynamic slots.
         ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
@@ -815,7 +863,7 @@ mod tests {
     fn compute_region_values_single_window() {
         let ds = DynamicStrategy::new();
         let (rbar_in, rasr_in) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rbar_in, rasr_in)]).unwrap();
+        ds.configure_partition(0, &[(rbar_in, rasr_in)], 0).unwrap();
 
         let vals = ds.compute_region_values();
 
@@ -835,7 +883,7 @@ mod tests {
     fn compute_region_values_multiple_windows() {
         let ds = DynamicStrategy::new();
         let (rbar_r4, rasr_r4) = data_region(0x2000_0000, 1024, 4);
-        ds.configure_partition(1, &[(rbar_r4, rasr_r4)]).unwrap();
+        ds.configure_partition(1, &[(rbar_r4, rasr_r4)], 0).unwrap();
 
         let sf_256 = encode_size(256).unwrap();
         let rasr_r5 = build_rasr(sf_256, AP_FULL_ACCESS, true, (false, false, false));
@@ -865,7 +913,7 @@ mod tests {
     fn compute_region_values_after_removal() {
         let ds = DynamicStrategy::new();
         let (rbar_r4, rasr_r4) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rbar_r4, rasr_r4)]).unwrap();
+        ds.configure_partition(0, &[(rbar_r4, rasr_r4)], 0).unwrap();
 
         let sf = encode_size(256).unwrap();
         let rasr_win = build_rasr(sf, AP_FULL_ACCESS, true, (false, false, false));
@@ -891,7 +939,7 @@ mod tests {
     fn compute_region_values_all_slots_occupied() {
         let ds = DynamicStrategy::new();
         let (rbar_r4, rasr_r4) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rbar_r4, rasr_r4)]).unwrap();
+        ds.configure_partition(0, &[(rbar_r4, rasr_r4)], 0).unwrap();
 
         let sf = encode_size(256).unwrap();
         let rasr_win = build_rasr(sf, AP_FULL_ACCESS, true, (false, false, false));
@@ -957,7 +1005,7 @@ mod tests {
 
         // Configure R4 with a valid partition region.
         let (rbar_r4, rasr_r4) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rbar_r4, rasr_r4)]).unwrap();
+        ds.configure_partition(0, &[(rbar_r4, rasr_r4)], 0).unwrap();
 
         // Add valid windows in R5 and R6.
         let sf = encode_size(256).unwrap();
@@ -993,6 +1041,102 @@ mod tests {
         // R7 — bad descriptor, fallback: disabled region.
         assert_eq!(vals[3].0, 7);
         assert_eq!(vals[3].1, 0); // disabled — RASR must be 0
+    }
+
+    // ------------------------------------------------------------------
+    // compute_region_values: peripheral slot reservation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn compute_region_values_peripheral_reservation_zero() {
+        // peripheral_reserved=0: RAM in slot 0 (R4), windows in slots 1-3.
+        let ds = DynamicStrategy::new();
+        let (rbar_r4, rasr_r4) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rbar_r4, rasr_r4)], 0).unwrap();
+        let sf = encode_size(256).unwrap();
+        let rasr_win = build_rasr(sf, AP_FULL_ACCESS, true, (false, false, false));
+        ds.add_window(0x2001_0000, 256, rasr_win, 0).unwrap(); // R5
+        ds.add_window(0x2002_0000, 256, rasr_win, 0).unwrap(); // R6
+        ds.add_window(0x2003_0000, 256, rasr_win, 0).unwrap(); // R7
+
+        let v = ds.compute_region_values();
+        assert_eq!(v[0].0, build_rbar(0x2000_0000, 4).unwrap());
+        assert_eq!(v[0].1, rasr_r4, "R4 holds partition RAM");
+        assert_eq!(v[1].1, rasr_win, "R5 holds window");
+        assert_eq!(v[2].1, rasr_win, "R6 holds window");
+        assert_eq!(v[3].1, rasr_win, "R7 holds window");
+    }
+
+    #[test]
+    fn compute_region_values_peripheral_reservation_two() {
+        // peripheral_reserved=2: R4-R5 reserved (disabled), RAM in slot 2 (R6),
+        // window in slot 3 (R7).
+        let ds = DynamicStrategy::new();
+        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        let sf = encode_size(256).unwrap();
+        let rasr_win = build_rasr(sf, AP_FULL_ACCESS, true, (false, false, false));
+        ds.add_window(0x2003_0000, 256, rasr_win, 0).unwrap(); // R7
+
+        let v = ds.compute_region_values();
+        // R4-R5 disabled (reserved for peripheral MMIO).
+        assert_eq!(v[0].0, build_rbar(0, 4).unwrap());
+        assert_eq!(v[0].1, 0, "R4 must be disabled (peripheral-reserved)");
+        assert_eq!(v[1].0, build_rbar(0, 5).unwrap());
+        assert_eq!(v[1].1, 0, "R5 must be disabled (peripheral-reserved)");
+        // R6 holds partition RAM.
+        assert_eq!(v[2].0, build_rbar(0x2000_0000, 6).unwrap());
+        assert_eq!(v[2].1, rasr_r6, "R6 holds partition RAM");
+        // R7 holds dynamic window.
+        assert_eq!(v[3].0, build_rbar(0x2003_0000, 7).unwrap());
+        assert_eq!(v[3].1, rasr_win, "R7 holds window");
+    }
+
+    #[test]
+    fn configure_partition_rejects_peripheral_reserved_one() {
+        // Only 0 or 2 are valid; 1 is rejected.
+        let ds = DynamicStrategy::new();
+        let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
+        assert_eq!(
+            ds.configure_partition(0, &[(rbar, rasr)], 1),
+            Err(MpuError::RegionCountMismatch),
+        );
+    }
+
+    #[test]
+    fn configure_partition_rejects_peripheral_reserved_three() {
+        let ds = DynamicStrategy::new();
+        let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
+        assert_eq!(
+            ds.configure_partition(0, &[(rbar, rasr)], 3),
+            Err(MpuError::RegionCountMismatch),
+        );
+    }
+
+    #[test]
+    fn configure_partition_switches_reservation() {
+        // Switching from peripheral_reserved=0 to 2 moves RAM from slot 0 to slot 2.
+        let ds = DynamicStrategy::new();
+        let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rbar, rasr)], 0).unwrap();
+        assert!(ds.slot(4).is_some(), "RAM in R4 with reservation=0");
+
+        // Reconfigure with reservation=2.
+        let (rbar2, rasr2) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rbar2, rasr2)], 2).unwrap();
+        assert!(
+            ds.slot(4).is_none(),
+            "R4 cleared after switch to reservation=2"
+        );
+        let desc = ds.slot(6).expect("RAM should be in R6");
+        assert_eq!(desc.base, 0x2000_8000);
+        assert_eq!(desc.owner, 1);
+
+        // R4-R5 disabled in compute_region_values.
+        let v = ds.compute_region_values();
+        assert_eq!(v[0].1, 0, "R4 disabled");
+        assert_eq!(v[1].1, 0, "R5 disabled");
+        assert_eq!(v[2].1, rasr2, "R6 holds partition RAM");
     }
 
     // ------------------------------------------------------------------
@@ -1200,7 +1344,7 @@ mod tests {
     fn accessible_regions_multiple_slots_same_owner() {
         let ds = DynamicStrategy::new();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(1, &[(rbar, rasr)]).unwrap();
+        ds.configure_partition(1, &[(rbar, rasr)], 0).unwrap();
         ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
         ds.add_window(0x2002_0000, 512, 0, 1).unwrap();
 
@@ -1215,7 +1359,7 @@ mod tests {
     fn accessible_regions_mixed_owners() {
         let ds = DynamicStrategy::new();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rbar, rasr)]).unwrap();
+        ds.configure_partition(0, &[(rbar, rasr)], 0).unwrap();
         ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
         ds.add_window(0x2002_0000, 512, 0, 0).unwrap();
         ds.add_window(0x2003_0000, 1024, 0, 2).unwrap();
@@ -1250,7 +1394,7 @@ mod tests {
     fn wire_boot_peripherals_correctness() {
         let ds = DynamicStrategy::new();
         let (rb, rs) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rb, rs)]).unwrap();
+        ds.configure_partition(0, &[(rb, rs)], 0).unwrap();
         let pcbs = [
             make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]),
             make_pcb(0x0, 0x2000_8000, 4096).with_peripheral_regions(&[periph(0x4001_0000, 256)]),
