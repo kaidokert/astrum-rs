@@ -694,6 +694,139 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------------------
+    // IPC return-value discipline: every dispatch result is asserted
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn sem_signal_invalid_id_returns_error() {
+        let mut h = KernelTestHarness::with_semaphores(&[1]).expect("harness setup");
+        // Signal semaphore ID 99, which does not exist.
+        let frame = h.dispatch(SYS_SEM_SIGNAL, 99, 0, 0);
+        assert_eq!(
+            frame.r0, 0xFFFF_FFFE,
+            "SEM_SIGNAL on invalid ID must return InvalidResource (0xFFFF_FFFE)"
+        );
+    }
+
+    #[test]
+    fn sem_signal_valid_id_returns_ok() {
+        let mut h = KernelTestHarness::with_semaphores(&[0]).expect("harness setup");
+        // Signal semaphore 0 — valid ID, must return 0 (Ok).
+        let frame = h.dispatch(SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(frame.r0, 0, "SEM_SIGNAL on valid ID must return 0 (Ok)");
+        let sem = h.kernel().semaphores().get(0).expect("semaphore 0 exists");
+        assert_eq!(
+            sem.count(),
+            1,
+            "count must increment from 0 to 1 after signal"
+        );
+    }
+
+    #[test]
+    fn sem_wait_available_returns_ok() {
+        let mut h = KernelTestHarness::with_semaphores(&[1]).expect("harness setup");
+        // Semaphore has count 1, so wait should acquire immediately.
+        let frame = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(
+            frame.r0, 1,
+            "SEM_WAIT on available semaphore must return 1 (Ok/acquired)"
+        );
+        let sem = h.kernel().semaphores().get(0).expect("semaphore 0 exists");
+        assert_eq!(
+            sem.count(),
+            0,
+            "count must decrement from 1 to 0 after wait"
+        );
+    }
+
+    #[test]
+    fn sem_wait_unavailable_blocks() {
+        let mut h = KernelTestHarness::with_semaphores(&[0]).expect("harness setup");
+        // Semaphore has count 0, so wait must block (WouldBlock/0).
+        let frame = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(
+            frame.r0, 0,
+            "SEM_WAIT on unavailable semaphore must return 0 (WouldBlock)"
+        );
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "partition must transition to Waiting when semaphore unavailable"
+        );
+    }
+
+    #[test]
+    fn mtx_lock_already_held_by_other_blocks() {
+        let mut h = KernelTestHarness::with_mutexes(1).expect("harness setup");
+        // P0 locks mutex 0.
+        let lock_frame = h.dispatch_as(0, SYS_MTX_LOCK, 0, 0, 0);
+        assert_eq!(lock_frame.r0, 1, "P0 MTX_LOCK must return 1 (acquired)");
+        // Reset yield_requested before P1 dispatch.
+        h.kernel_mut().yield_requested = false;
+        // P1 tries to lock the same mutex — must block.
+        let frame = h.dispatch_as(1, SYS_MTX_LOCK, 0, 1, 0);
+        assert_eq!(
+            frame.r0, 0,
+            "MTX_LOCK by P1 on P0-held mutex must return 0 (blocked)"
+        );
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().state(),
+            PartitionState::Waiting,
+            "P1 must transition to Waiting when mutex is held by P0"
+        );
+    }
+
+    #[test]
+    fn mtx_lock_already_owned_returns_error() {
+        let mut h = KernelTestHarness::with_mutexes(1).expect("harness setup");
+        // P0 locks mutex 0.
+        let lock_frame = h.dispatch(SYS_MTX_LOCK, 0, 0, 0);
+        assert_eq!(lock_frame.r0, 1, "first MTX_LOCK must return 1 (acquired)");
+        // P0 tries to lock it again — AlreadyOwned error.
+        let frame = h.dispatch(SYS_MTX_LOCK, 0, 0, 0);
+        assert_eq!(
+            frame.r0, 0xFFFF_FFFA,
+            "MTX_LOCK by owner must return OperationFailed (0xFFFF_FFFA)"
+        );
+    }
+
+    #[test]
+    fn mtx_unlock_non_owner_returns_error() {
+        let mut h = KernelTestHarness::with_mutexes(1).expect("harness setup");
+        // P0 locks mutex 0.
+        let lock_frame = h.dispatch_as(0, SYS_MTX_LOCK, 0, 0, 0);
+        assert_eq!(lock_frame.r0, 1, "P0 MTX_LOCK must return 1 (acquired)");
+        // P1 tries to unlock it — NotOwner error.
+        let frame = h.dispatch_as(1, SYS_MTX_UNLOCK, 0, 1, 0);
+        assert_eq!(
+            frame.r0, 0xFFFF_FFFA,
+            "MTX_UNLOCK by non-owner must return OperationFailed (0xFFFF_FFFA)"
+        );
+        // Verify P0 still owns the mutex.
+        assert_eq!(
+            h.kernel().mutexes().owner(0).unwrap(),
+            Some(0),
+            "P0 must still own mutex 0 after non-owner unlock attempt"
+        );
+    }
+
+    #[test]
+    fn mtx_unlock_by_owner_returns_ok() {
+        let mut h = KernelTestHarness::with_mutexes(1).expect("harness setup");
+        // P0 locks mutex 0.
+        let lock_frame = h.dispatch(SYS_MTX_LOCK, 0, 0, 0);
+        assert_eq!(lock_frame.r0, 1, "MTX_LOCK must return 1 (acquired)");
+        // P0 unlocks — owner unlock must return 0 (Ok).
+        let frame = h.dispatch(SYS_MTX_UNLOCK, 0, 0, 0);
+        assert_eq!(frame.r0, 0, "MTX_UNLOCK by owner must return 0 (Ok)");
+        assert_eq!(
+            h.kernel().mutexes().owner(0).unwrap(),
+            None,
+            "mutex must be unowned after owner unlock"
+        );
+    }
+
     #[test]
     fn with_events_allows_event_set() {
         let mut h = KernelTestHarness::with_events().expect("harness setup");
