@@ -412,6 +412,24 @@ impl KernelTestHarness {
             );
         }
     }
+
+    /// Process a pending yield request, mirroring PendSV's role on real hardware.
+    ///
+    /// If `yield_requested` is true, clears it, advances the schedule via
+    /// `yield_current_slot()`, and if the result selects a new partition,
+    /// calls `set_next_partition()`.  Finishes by asserting invariants.
+    /// If `yield_requested` is false, this is a no-op.
+    pub fn process_pending_yield(&mut self) {
+        if !self.kernel.yield_requested {
+            return;
+        }
+        self.kernel.yield_requested = false;
+        let result = self.kernel.yield_current_slot();
+        if let Some(pid) = result.partition_id() {
+            self.kernel.set_next_partition(pid);
+        }
+        self.assert_invariants();
+    }
 }
 
 #[cfg(test)]
@@ -1381,6 +1399,72 @@ mod tests {
         assert_ne!(
             p0_r4_rbar, p1_r4_rbar,
             "P0 and P1 cached R4 RBAR must differ for peripheral isolation"
+        );
+    }
+
+    #[test]
+    fn process_pending_yield_advances_schedule_after_sys_yield() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        h.kernel_mut().start_schedule();
+
+        // P0 is Running, P1 is Ready.
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
+
+        // Dispatch SYS_YIELD as P0.
+        let frame = h.dispatch(SYS_YIELD, 0, 0, 0);
+        assert_eq!(frame.r0, 0, "SYS_YIELD must return 0");
+        assert!(h.kernel().yield_requested, "yield_requested must be set");
+
+        // Process the pending yield — should advance to P1.
+        h.process_pending_yield();
+
+        assert!(
+            !h.kernel().yield_requested,
+            "yield_requested must be cleared"
+        );
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Ready,
+            "P0 must transition to Ready after yield"
+        );
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().state(),
+            PartitionState::Running,
+            "P1 must transition to Running after yield"
+        );
+    }
+
+    #[test]
+    fn process_pending_yield_noop_when_not_requested() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        h.kernel_mut().start_schedule();
+
+        assert!(!h.kernel().yield_requested);
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+
+        // Call process_pending_yield without a prior SYS_YIELD — should be a no-op.
+        h.process_pending_yield();
+
+        assert!(!h.kernel().yield_requested);
+        assert_eq!(
+            h.kernel().partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "P0 must remain Running when no yield was requested"
+        );
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().state(),
+            PartitionState::Ready,
+            "P1 must remain Ready when no yield was requested"
         );
     }
 }
