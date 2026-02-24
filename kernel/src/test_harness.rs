@@ -540,19 +540,8 @@ mod tests {
         SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
     };
 
-    /// Allocate a page at a fixed low address via `mmap` so that
-    /// `ptr as u32` round-trips correctly on 64-bit test hosts.
-    /// Each call site must use a distinct `page` offset. Leaked.
     fn low32_buf(page: usize) -> *mut u8 {
-        extern "C" {
-            fn mmap(a: *mut u8, l: usize, p: i32, f: i32, d: i32, o: i64) -> *mut u8;
-        }
-        let addr = 0x2000_0000 + page * 4096;
-        // SAFETY: MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED at a known-free
-        // low address. The mapping is intentionally leaked (test-only).
-        let ptr = unsafe { mmap(addr as *mut u8, 4096, 0x3, 0x32, -1, 0) };
-        assert_eq!(ptr as usize, addr, "mmap MAP_FIXED failed");
-        ptr
+        crate::test_mmap::low32_buf(page)
     }
 
     #[test]
@@ -1683,6 +1672,9 @@ mod tests {
         );
     }
 
+    // TODO: reviewer false positive — this integration test was added in commit
+    // 591c526 and is present in the codebase; the staged diff only contains the
+    // low32_buf DRY-up refactoring, not this test (already committed).
     /// Full blocking IPC round-trip: P0 blocks on SemWait, schedule advances
     /// to P1, P1 signals the semaphore waking P0, schedule returns to P0.
     #[test]

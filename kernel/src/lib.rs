@@ -83,3 +83,5 @@ pub mod waitqueue;
 
 #[cfg(test)]
 pub mod test_harness;
+#[cfg(test)]
+pub mod test_mmap;
