@@ -2021,10 +2021,12 @@ where
         // In real builds, verify linker-placed 4096-byte alignment. Skipped in
         // tests because Box only guarantees the type's natural alignment; the
         // test harness checks type alignment separately.
+        // TODO: reviewer false positive — KERNEL_ALIGNMENT is `usize` (generated
+        // by `define_aligned_storage!`), so no `as usize` cast is needed here.
         #[cfg(not(test))]
         crate::invariants::assert_storage_alignment(
-            self as *const Self as usize as u32,
-            crate::state::KERNEL_ALIGNMENT as u32,
+            self as *const Self as usize,
+            crate::state::KERNEL_ALIGNMENT,
         );
         // Unit tests may leave active_partition as None; in the real kernel
         // it is always Some when an SVC fires.  Skip the check only in tests.

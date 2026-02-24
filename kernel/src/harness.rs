@@ -38,6 +38,13 @@ pub use crate::boot::{BootError, Never};
 #[doc(hidden)]
 macro_rules! _unified_handle_tick {
     ($kernel:expr) => {{
+        // Defense-in-depth: verify kernel storage alignment at every tick
+        // (debug builds only; see TODO(panic-free) in invariants.rs).
+        #[cfg(debug_assertions)]
+        {
+            let addr = $kernel as *const _ as usize;
+            $crate::invariants::assert_storage_alignment(addr, $crate::state::KERNEL_ALIGNMENT);
+        }
         let event = $kernel.advance_schedule_tick();
         if let Some(pid) = event {
             $kernel.set_next_partition(pid);
@@ -51,6 +58,13 @@ macro_rules! _unified_handle_tick {
 #[doc(hidden)]
 macro_rules! _unified_handle_tick {
     ($kernel:expr, $tick:expr, $strategy:expr) => {{
+        // Defense-in-depth: verify kernel storage alignment at every tick
+        // (debug builds only; see TODO(panic-free) in invariants.rs).
+        #[cfg(debug_assertions)]
+        {
+            let addr = $kernel as *const _ as usize;
+            $crate::invariants::assert_storage_alignment(addr, $crate::state::KERNEL_ALIGNMENT);
+        }
         let event = $kernel.advance_schedule_tick();
         $crate::_unified_handle_tick_event!($kernel, event, $tick, $strategy);
         #[cfg(feature = "dynamic-mpu")]

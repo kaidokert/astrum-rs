@@ -360,8 +360,8 @@ impl KernelTestHarness {
         let sp = &self.kernel.partition_sp()[..parts.len()];
         crate::invariants::assert_kernel_invariants(parts, active, &sem_pairs[..sem_len], next, sp);
         crate::invariants::assert_storage_alignment(
-            &*self.kernel as *const _ as usize as u32,
-            core::mem::align_of::<Kernel<HarnessConfig>>() as u32,
+            &*self.kernel as *const _ as usize,
+            core::mem::align_of::<Kernel<HarnessConfig>>(),
         );
     }
 
@@ -1108,6 +1108,38 @@ mod tests {
             event_mask,
             "P1 event flags must survive the semaphore wake — primitives are independent"
         );
+    }
+
+    // Tick-path alignment check
+
+    /// Verify the alignment check that `_unified_handle_tick!` performs at
+    /// every tick does not panic on a properly-aligned kernel over 20 ticks.
+    ///
+    /// The macro itself cannot be invoked in host tests because it calls
+    /// `cortex_m::peripheral::SCB::set_pendsv()`.  This test mirrors the
+    /// macro's check sequence: call `assert_storage_alignment` before
+    /// `advance_schedule_tick()` on every tick.
+    ///
+    /// Uses `align_of::<Kernel<HarnessConfig>>()` instead of `KERNEL_ALIGNMENT`
+    /// because the test harness Box-allocates the kernel, which only
+    /// guarantees the type's natural alignment (not linker-placed 4096).
+    /// The production macro uses `KERNEL_ALIGNMENT` with linker-placed storage.
+    #[test]
+    fn tick_path_alignment_check_no_panic() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        let align = core::mem::align_of::<Kernel<HarnessConfig>>();
+        h.kernel_mut().start_schedule();
+        for tick in 0..20 {
+            // Mirror _unified_handle_tick! macro body: check alignment
+            // before advancing the schedule on every tick.
+            let addr = h.kernel() as *const _ as usize;
+            crate::invariants::assert_storage_alignment(addr, align);
+
+            let event = h.kernel_mut().advance_schedule_tick();
+            if let ScheduleEvent::PartitionSwitch(pid) = event {
+                assert!((pid as usize) < 2, "tick {tick}: invalid pid {pid}");
+            }
+        }
     }
 
     // ------------------------------------------------------------------

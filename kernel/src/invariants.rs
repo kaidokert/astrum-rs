@@ -264,13 +264,17 @@ pub fn assert_next_partition_not_waiting(
 ///
 /// Provides defense-in-depth for kernel storage placement. The linker and
 /// init code guarantee alignment at boot, but this catch-all detects pointer
-/// corruption at dispatch time in debug builds.
+/// corruption at dispatch time in debug builds. Uses `usize` for portability
+/// across 32-bit Cortex-M targets and 64-bit host-side test builds.
 ///
 /// # Panics
 ///
 /// Panics if `address % required_alignment != 0`.
+// TODO(panic-free): convert to Result so callers in handler mode
+// (SysTick via `_unified_handle_tick!`) can degrade gracefully instead
+// of issuing an unrecoverable panic.
 #[cfg(any(debug_assertions, test))]
-pub fn assert_storage_alignment(address: u32, required_alignment: u32) {
+pub fn assert_storage_alignment(address: usize, required_alignment: usize) {
     let offset = address % required_alignment;
     if offset != 0 {
         panic!(
@@ -284,7 +288,7 @@ pub fn assert_storage_alignment(address: u32, required_alignment: u32) {
 /// No-op version for release builds.
 #[cfg(not(any(debug_assertions, test)))]
 #[inline(always)]
-pub fn assert_storage_alignment(_address: u32, _required_alignment: u32) {}
+pub fn assert_storage_alignment(_address: usize, _required_alignment: usize) {}
 
 /// Assert all kernel invariants hold.
 ///
