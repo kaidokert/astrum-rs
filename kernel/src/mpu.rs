@@ -1304,4 +1304,106 @@ mod tests {
             "R5 must be disabled when only one peripheral configured"
         );
     }
+
+    // ------------------------------------------------------------------
+    // peripheral_mpu_regions_or_disabled (infallible wrapper)
+    // ------------------------------------------------------------------
+
+    /// Verify that `peripheral_mpu_regions_or_disabled` returns valid
+    /// RBAR/RASR pairs for a PCB with peripheral regions, and disabled
+    /// regions for a PCB without.  Also verifies the fallback path when
+    /// `peripheral_mpu_regions` returns `None` (invalid peripheral params).
+    #[test]
+    fn test_peripheral_mpu_regions_or_disabled() {
+        // ---- Case 1: PCB with one valid peripheral region ----
+        let periph_base: u32 = 0x4000_0000;
+        let periph_size: u32 = 4096;
+        let pcb_with = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(periph_base, periph_size, 0)]);
+
+        let regions = peripheral_mpu_regions_or_disabled(&pcb_with);
+
+        // R4: valid region with correct base and region number 4
+        assert_eq!(regions[0].0 & 0xF, 4, "R4 RBAR region number must be 4");
+        assert_eq!((regions[0].0 >> 4) & 1, 1, "R4 RBAR VALID bit must be set");
+        assert_eq!(
+            decode_rbar_base(regions[0].0),
+            periph_base,
+            "R4 base address mismatch"
+        );
+        // R4 RASR: enabled, Device memory, AP=full-access, XN=1
+        assert_eq!(regions[0].1 & 1, 1, "R4 must be enabled");
+        assert_eq!(
+            (regions[0].1 >> RASR_AP_SHIFT) & RASR_AP_MASK,
+            AP_FULL_ACCESS,
+            "R4 AP must be full-access"
+        );
+        assert_eq!((regions[0].1 >> 28) & 1, 1, "R4 XN must be set");
+        assert_eq!(
+            decode_rasr_size_bytes(regions[0].1),
+            Some(periph_size),
+            "R4 size mismatch"
+        );
+
+        // R5: disabled, region number 5
+        assert_eq!(regions[1].0 & 0xF, 5, "R5 RBAR region number must be 5");
+        assert_eq!((regions[1].0 >> 4) & 1, 1, "R5 RBAR VALID bit must be set");
+        assert_eq!(regions[1].1, 0, "R5 RASR must be 0 (disabled)");
+
+        // ---- Case 2: PCB without peripheral regions ----
+        let pcb_without = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        let disabled = peripheral_mpu_regions_or_disabled(&pcb_without);
+
+        // Both must be disabled with correct slot targeting
+        assert_eq!(
+            disabled[0].0 & 0xF,
+            4,
+            "Disabled R4 region number must be 4"
+        );
+        assert_eq!(
+            disabled[1].0 & 0xF,
+            5,
+            "Disabled R5 region number must be 5"
+        );
+        assert_eq!(disabled[0].1, 0, "Disabled R4 RASR must be 0");
+        assert_eq!(disabled[1].1, 0, "Disabled R5 RASR must be 0");
+        assert!(
+            !decode_rasr_enabled(disabled[0].1),
+            "R4 must not be enabled"
+        );
+        assert!(
+            !decode_rasr_enabled(disabled[1].1),
+            "R5 must not be enabled"
+        );
+
+        // Must match what peripheral_mpu_regions returns for the same PCB
+        assert_eq!(
+            disabled,
+            peripheral_mpu_regions(&pcb_without).unwrap(),
+            "Infallible wrapper must match fallible version for valid PCB"
+        );
+
+        // ---- Case 3: invalid peripheral (non-power-of-2 size) ----
+        // peripheral_mpu_regions returns None; _or_disabled must still
+        // return disabled regions instead of panicking.
+        let pcb_invalid = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 100, 0)]);
+        assert!(
+            peripheral_mpu_regions(&pcb_invalid).is_none(),
+            "Non-power-of-2 size must make peripheral_mpu_regions return None"
+        );
+        let fallback = peripheral_mpu_regions_or_disabled(&pcb_invalid);
+        assert_eq!(
+            fallback[0].0 & 0xF,
+            4,
+            "Fallback R4 region number must be 4"
+        );
+        assert_eq!(
+            fallback[1].0 & 0xF,
+            5,
+            "Fallback R5 region number must be 5"
+        );
+        assert_eq!(fallback[0].1, 0, "Fallback R4 RASR must be 0 (disabled)");
+        assert_eq!(fallback[1].1, 0, "Fallback R5 RASR must be 0 (disabled)");
+    }
 }
