@@ -5,6 +5,7 @@ use cortex_m::interrupt::Mutex;
 use crate::blackboard::BlackboardPool;
 use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
+use crate::invariants::assert_partition_state_consistency;
 
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
@@ -2234,6 +2235,13 @@ where
                 try_transition(self.partitions_mut(), old_pid, PartitionState::Ready);
             }
         }
+        debug_assert!(
+            {
+                assert_partition_state_consistency(self.partitions().as_slice());
+                true
+            },
+            "at-most-one-Running invariant violated after transition_outgoing_ready"
+        );
     }
 
     /// Advance the schedule table by one tick. Returns a [`ScheduleEvent`]
@@ -6917,6 +6925,21 @@ mod tests {
             k.partitions().get(1).unwrap().state(),
             PartitionState::Ready
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "2 partitions in Running state")]
+    fn transition_outgoing_ready_asserts_on_double_running() {
+        let mut k = kernel_with_schedule();
+
+        // Force both P0 and P1 into Running (violating the invariant).
+        k.set_next_partition(0);
+        k.set_next_partition(1);
+
+        // With active_partition = None the transition is a no-op,
+        // so both partitions remain Running and the debug_assert fires.
+        k.active_partition = None;
+        k.transition_outgoing_ready();
     }
 
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
