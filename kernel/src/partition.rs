@@ -2,7 +2,13 @@ use heapless::Vec;
 
 #[cfg(feature = "partition-debug")]
 use crate::debug::DebugBuffer;
-use crate::mpu::{validate_mpu_region, MpuError};
+use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
+
+/// Default data-region RASR attributes: full read-write access with
+/// Normal memory (TEX=0, S=1, C=1, B=0).  The RASR enable bit and size
+/// field are composed by `build_rasr` when programming the hardware.
+pub const SENTINEL_DATA_PERMISSIONS: u32 =
+    (AP_FULL_ACCESS << RASR_AP_SHIFT) | (1 << 18) | (1 << 17);
 
 /// Wrapper for a reference to a debug buffer trait object.
 ///
@@ -233,6 +239,28 @@ impl PartitionControlBlock {
     pub fn fix_mpu_data_region(&mut self, base: u32) {
         self.mpu_region =
             MpuRegion::new(base, self.mpu_region.size(), self.mpu_region.permissions());
+    }
+
+    /// Replaces a sentinel MPU region (size==0) with a fully specified region
+    /// containing the actual stack buffer base, size, and data-region permissions.
+    ///
+    /// # Errors
+    /// Returns `MpuError::AlreadyInitialized` if this partition's MPU region
+    /// is not a sentinel (i.e., `mpu_region.size() != 0`).
+    /// Returns alignment/size errors from [`validate_mpu_region`] if the
+    /// supplied `base`/`size` violate ARMv7-M MPU constraints.
+    pub fn promote_sentinel_mpu(
+        &mut self,
+        base: u32,
+        size: u32,
+        permissions: u32,
+    ) -> Result<(), MpuError> {
+        if self.mpu_region.size() != 0 {
+            return Err(MpuError::AlreadyInitialized);
+        }
+        validate_mpu_region(base, size)?;
+        self.mpu_region = MpuRegion::new(base, size, permissions);
+        Ok(())
     }
 
     pub fn event_flags(&self) -> u32 {
@@ -815,6 +843,81 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // promote_sentinel_mpu
+    // ------------------------------------------------------------------
+
+    fn make_sentinel_pcb() -> PartitionControlBlock {
+        PartitionControlBlock::new(
+            2,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0400,
+            MpuRegion::new(0, 0, 0), // sentinel: size == 0
+        )
+    }
+
+    #[test]
+    fn promote_sentinel_mpu_succeeds_on_sentinel() {
+        let mut pcb = make_sentinel_pcb();
+        assert_eq!(pcb.mpu_region().size(), 0);
+
+        let result = pcb.promote_sentinel_mpu(0x2000_0000, 4096, SENTINEL_DATA_PERMISSIONS);
+        assert_eq!(result, Ok(()));
+
+        assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
+        assert_eq!(pcb.mpu_region().size(), 4096);
+        assert_eq!(pcb.mpu_region().permissions(), SENTINEL_DATA_PERMISSIONS);
+    }
+
+    #[test]
+    fn promote_sentinel_mpu_fails_on_non_sentinel() {
+        let mut pcb = make_pcb(); // mpu_region.size() == 4096
+        assert_ne!(pcb.mpu_region().size(), 0);
+
+        let result = pcb.promote_sentinel_mpu(0x2000_0000, 2048, SENTINEL_DATA_PERMISSIONS);
+        assert_eq!(result, Err(MpuError::AlreadyInitialized));
+
+        // Verify mpu_region is unchanged after error
+        assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
+        assert_eq!(pcb.mpu_region().size(), 4096);
+        assert_eq!(pcb.mpu_region().permissions(), 0x0306_0000);
+    }
+
+    #[test]
+    fn promote_sentinel_mpu_does_not_modify_stack_fields() {
+        let mut pcb = make_sentinel_pcb();
+        let original_stack_base = pcb.stack_base();
+        let original_stack_size = pcb.stack_size();
+
+        pcb.promote_sentinel_mpu(0x2001_0000, 8192, 0xABCD_0000)
+            .unwrap();
+
+        assert_eq!(pcb.stack_base(), original_stack_base);
+        assert_eq!(pcb.stack_size(), original_stack_size);
+    }
+
+    #[test]
+    fn promote_sentinel_mpu_rejects_invalid_region() {
+        let mut pcb = make_sentinel_pcb();
+        // size 100 is not a power of two
+        let result = pcb.promote_sentinel_mpu(0x2000_0000, 100, SENTINEL_DATA_PERMISSIONS);
+        assert_eq!(result, Err(MpuError::SizeNotPowerOfTwo));
+        // region should remain a sentinel after validation failure
+        assert_eq!(pcb.mpu_region().size(), 0);
+    }
+
+    #[test]
+    fn sentinel_data_permissions_uses_ap_full_access() {
+        let ap_field = (SENTINEL_DATA_PERMISSIONS >> RASR_AP_SHIFT) & 0x7;
+        assert_eq!(ap_field, AP_FULL_ACCESS);
+    }
+
+    #[test]
+    fn sentinel_data_permissions_matches_test_convention() {
+        assert_eq!(SENTINEL_DATA_PERMISSIONS, 0x0306_0000);
+    }
+
+    // ------------------------------------------------------------------
     // accessible_static_regions
     // ------------------------------------------------------------------
 
@@ -1241,6 +1344,7 @@ mod tests {
             MpuError::BaseNotAligned,
             MpuError::AddressOverflow,
             MpuError::SlotExhausted,
+            MpuError::AlreadyInitialized,
         ];
         for detail in mpu_variants {
             let e = ConfigError::MpuRegionInvalid {

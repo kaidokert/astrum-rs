@@ -469,6 +469,8 @@ pub enum MpuError {
     AddressOverflow,
     /// All available MPU region slots are in use.
     SlotExhausted,
+    /// The target region has already been initialised (non-sentinel).
+    AlreadyInitialized,
 }
 
 impl core::fmt::Display for MpuError {
@@ -480,6 +482,7 @@ impl core::fmt::Display for MpuError {
             Self::BaseNotAligned => write!(f, "base address not aligned to size"),
             Self::AddressOverflow => write!(f, "base + size overflows u32"),
             Self::SlotExhausted => write!(f, "no free MPU region slots"),
+            Self::AlreadyInitialized => write!(f, "region already initialized"),
         }
     }
 }
@@ -892,6 +895,10 @@ mod tests {
         assert_eq!(
             format!("{}", MpuError::SlotExhausted),
             "no free MPU region slots"
+        );
+        assert_eq!(
+            format!("{}", MpuError::AlreadyInitialized),
+            "region already initialized"
         );
     }
 
