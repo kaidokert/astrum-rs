@@ -1142,6 +1142,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn mpu_data_region_base_matches_core_stack_base_two_partitions() {
+        let h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        for i in 0..2 {
+            let pcb = h.kernel().partitions().get(i).expect("partition exists");
+            let core_base = h
+                .kernel()
+                .core_stack_base(i)
+                .expect("core_stack_base must be Some");
+            assert_eq!(
+                pcb.mpu_region().base(),
+                core_base,
+                "partition {i}: mpu_region().base() must equal core_stack_base()"
+            );
+        }
+    }
+
     // ------------------------------------------------------------------
     // Peripheral region pipeline tests
     // ------------------------------------------------------------------
