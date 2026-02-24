@@ -1269,6 +1269,7 @@ where
     ///
     /// Returns 0 on success (matching `handle_yield` semantics).
     pub fn trigger_deschedule(&mut self) -> u32 {
+        self.transition_outgoing_ready();
         self.yield_requested = true;
         handle_yield()
     }
@@ -2870,6 +2871,9 @@ mod tests {
     #[test]
     fn yield_sets_yield_requested_flag() {
         let mut k = kernel(0, 0, 0);
+        k.active_partition = Some(0);
+        // Fix invariant: only P0 should be Running.
+        try_transition(k.partitions_mut(), 1, PartitionState::Ready);
         assert!(!k.yield_requested());
         let mut ef = frame(SYS_YIELD, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
@@ -2881,12 +2885,17 @@ mod tests {
     #[test]
     fn yield_requested_cleared_after_manual_reset() {
         let mut k = kernel(0, 0, 0);
+        k.active_partition = Some(0);
+        // Fix invariant: only P0 should be Running.
+        try_transition(k.partitions_mut(), 1, PartitionState::Ready);
         let mut ef = frame(SYS_YIELD, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert!(k.yield_requested());
         k.set_yield_requested(false);
         assert!(!k.yield_requested());
+        // Restore P0 to Running (yield transitioned it to Ready).
+        try_transition(k.partitions_mut(), 0, PartitionState::Running);
         // Non-yield syscall does not set the flag
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
@@ -2897,10 +2906,63 @@ mod tests {
     #[test]
     fn trigger_deschedule_sets_yield_requested() {
         let mut k = kernel(0, 0, 0);
+        k.active_partition = Some(0);
+        // Fix invariant: only P0 should be Running.
+        try_transition(k.partitions_mut(), 1, PartitionState::Ready);
         assert!(!k.yield_requested());
         let ret = k.trigger_deschedule();
         assert_eq!(ret, 0);
         assert!(k.yield_requested());
+    }
+
+    #[test]
+    fn trigger_deschedule_transitions_running_to_ready() {
+        let mut k = kernel_with_schedule();
+
+        // Put P0 into Running and mark it as active.
+        k.set_next_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        k.active_partition = Some(0);
+
+        let ret = k.trigger_deschedule();
+
+        assert_eq!(ret, 0);
+        assert!(k.yield_requested());
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
+    }
+
+    #[test]
+    fn trigger_deschedule_noop_for_waiting_partition() {
+        let mut k = kernel_with_schedule();
+
+        // Put P0 into Running, then transition to Waiting.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+
+        let ret = k.trigger_deschedule();
+
+        assert_eq!(ret, 0);
+        assert!(k.yield_requested());
+        // Partition remains Waiting — transition_outgoing_ready is a no-op.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
     }
 
     #[test]
@@ -6506,6 +6568,9 @@ mod tests {
     #[test]
     fn dispatch_yield_sets_flag_when_partition_running() {
         let mut k = kernel(0, 0, 0);
+        k.active_partition = Some(0);
+        // Fix invariant: only P0 should be Running.
+        try_transition(k.partitions_mut(), 1, PartitionState::Ready);
         // kernel() creates partitions via tbl(), which transitions them to Running.
         assert_eq!(
             k.partitions()
