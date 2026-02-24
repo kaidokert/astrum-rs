@@ -130,7 +130,16 @@ impl KernelTestHarness {
             let base = kernel
                 .core_stack_base(i)
                 .ok_or(HarnessError::PartitionNotFound)?;
-            kernel.fix_mpu_data_region(i, base);
+            let sp = base.wrapping_add(STACK_SIZE_BYTES);
+            kernel.set_sp(i, sp);
+            assert!(
+                kernel.fix_stack_region(i, base, STACK_SIZE_BYTES),
+                "fix_stack_region failed for partition {i}"
+            );
+            assert!(
+                kernel.fix_mpu_data_region(i, base),
+                "fix_mpu_data_region failed for partition {i}"
+            );
         }
         Ok(Self { kernel })
     }
@@ -1140,40 +1149,67 @@ mod tests {
 
     #[test]
     fn pcb_mpu_region_base_matches_core_stack_base() {
-        let h = KernelTestHarness::with_partitions(4).expect("harness setup");
-        for i in 0..h.kernel().partitions().len() {
-            let pcb = h.kernel().partitions().get(i).expect("partition exists");
-            let core_base = h
-                .kernel()
-                .core_stack_base(i)
-                .expect("core_stack_base must be Some");
-            assert_eq!(
-                pcb.mpu_region().base(),
-                core_base,
-                "partition {i}: mpu_region().base() must equal core_stack_base()"
-            );
-            assert_eq!(
-                pcb.mpu_region().size(),
-                STACK_SIZE_BYTES,
-                "partition {i}: mpu_region().size() must equal STACK_SIZE_BYTES"
-            );
+        for &n in &[1, 2, 4] {
+            let h = KernelTestHarness::with_partitions(n).expect("harness setup");
+            for i in 0..n {
+                let pcb = h.kernel().partitions().get(i).expect("partition exists");
+                let core_base = h
+                    .kernel()
+                    .core_stack_base(i)
+                    .expect("core_stack_base must be Some");
+                assert_eq!(
+                    pcb.mpu_region().base(),
+                    core_base,
+                    "n={n} partition {i}: mpu_region().base() must equal core_stack_base()"
+                );
+                assert_eq!(
+                    pcb.mpu_region().size(),
+                    STACK_SIZE_BYTES,
+                    "n={n} partition {i}: mpu_region().size() must equal STACK_SIZE_BYTES"
+                );
+            }
         }
     }
 
+    // ------------------------------------------------------------------
+    // fix_stack_region out-of-bounds edge case
+    // ------------------------------------------------------------------
+
     #[test]
-    fn mpu_data_region_base_matches_core_stack_base_two_partitions() {
-        let h = KernelTestHarness::with_partitions(2).expect("harness setup");
-        for i in 0..2 {
-            let pcb = h.kernel().partitions().get(i).expect("partition exists");
-            let core_base = h
-                .kernel()
-                .core_stack_base(i)
-                .expect("core_stack_base must be Some");
-            assert_eq!(
-                pcb.mpu_region().base(),
-                core_base,
-                "partition {i}: mpu_region().base() must equal core_stack_base()"
-            );
+    fn fix_stack_region_returns_false_for_out_of_bounds() {
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        assert!(
+            !h.kernel_mut().fix_stack_region(2, 0x2000_0000, 1024),
+            "index == partition_count must return false"
+        );
+        assert!(
+            !h.kernel_mut().fix_stack_region(100, 0x2000_0000, 1024),
+            "large out-of-bounds index must return false"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // PCB stack_base/stack_size match core_stack_base/STACK_SIZE_BYTES
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn pcb_stack_fields_match_core_after_construction() {
+        for &n in &[1, 2, 4] {
+            let h = KernelTestHarness::with_partitions(n).expect("harness setup");
+            for i in 0..n {
+                let pcb = h.kernel().partitions().get(i).expect("partition exists");
+                let core_base = h.kernel().core_stack_base(i).expect("core_stack_base");
+                assert_eq!(
+                    pcb.stack_base(),
+                    core_base,
+                    "n={n} P{i} stack_base mismatch"
+                );
+                assert_eq!(
+                    pcb.stack_size(),
+                    STACK_SIZE_BYTES,
+                    "n={n} P{i} stack_size mismatch"
+                );
+            }
         }
     }
 
