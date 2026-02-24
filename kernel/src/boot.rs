@@ -49,6 +49,8 @@ pub enum BootError {
     /// Sentinel partitions produce deny-all MPU regions; running them with
     /// hardware MPU enforcement would immediately fault on first instruction.
     SentinelMpuWithEnforce { partition_index: usize },
+    /// Sentinel MPU promotion failed for a partition.
+    SentinelPromotionFailed { partition_index: usize },
 }
 
 impl core::fmt::Display for BootError {
@@ -106,6 +108,12 @@ impl core::fmt::Display for BootError {
                     f,
                     "sentinel partition {partition_index} has mpu_region size==0, \
                      incompatible with MPU_ENFORCE=true (would deny-all fault)"
+                )
+            }
+            Self::SentinelPromotionFailed { partition_index } => {
+                write!(
+                    f,
+                    "sentinel MPU promotion failed for partition {partition_index}"
                 )
             }
         }
@@ -691,6 +699,34 @@ mod tests {
         assert_eq!(
             result,
             Err(BootError::SentinelMpuWithEnforce { partition_index: 1 })
+        );
+    }
+
+    #[test]
+    fn sentinel_promotion_failed_display() {
+        let err = BootError::SentinelPromotionFailed { partition_index: 3 };
+        assert_eq!(
+            std::format!("{err}"),
+            "sentinel MPU promotion failed for partition 3"
+        );
+    }
+
+    #[test]
+    fn sentinel_promotion_failed_carries_correct_index() {
+        let err = BootError::SentinelPromotionFailed { partition_index: 7 };
+        assert_eq!(
+            err,
+            BootError::SentinelPromotionFailed { partition_index: 7 }
+        );
+        // Verify different index produces inequality.
+        assert_ne!(
+            err,
+            BootError::SentinelPromotionFailed { partition_index: 0 }
+        );
+        // Verify it is distinct from other variants with the same index.
+        assert_ne!(
+            err,
+            BootError::SentinelMpuWithEnforce { partition_index: 7 }
         );
     }
 }
