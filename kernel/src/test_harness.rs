@@ -2164,6 +2164,57 @@ mod tests {
     // Mixed MPU region config: sentinel + user-configured (bug04)
     // ------------------------------------------------------------------
 
+    // ------------------------------------------------------------------
+    // PCB mpu_region base is not stale pre-move config address
+    // (regression for CRITICAL-pcb-mpu-region-override)
+    // ------------------------------------------------------------------
+
+    /// Regression: after Kernel::new + Box move + post-move fixup, every
+    /// partition's mpu_region.base must point to the real core_stack_base
+    /// (the post-move heap address), NOT the PartitionConfig address that
+    /// was computed before the move (RAM_BASE + offset).  This is the
+    /// same root cause as bug01 (stale MPU base after kernel relocation).
+    #[test]
+    fn pcb_mpu_region_not_stale_pre_move_address() {
+        for &n in &[2, 3, 4] {
+            let h = KernelTestHarness::with_partitions(n).expect("harness setup");
+
+            for i in 0..n {
+                let config_base = RAM_BASE + (i as u32) * PARTITION_OFFSET;
+                let core_base = h
+                    .kernel()
+                    .core_stack_base(i)
+                    .expect("core_stack_base must be Some");
+                let pcb = h.kernel().partitions().get(i).expect("partition exists");
+                let actual_base = pcb.mpu_region().base();
+
+                // The post-move core_stack_base must differ from the
+                // config-time address (they live in different allocations).
+                assert_ne!(
+                    core_base, config_base,
+                    "n={n} partition {i}: core_stack_base must differ from \
+                     config-time RAM_BASE+offset (kernel was moved)"
+                );
+
+                // The PCB must hold the post-move address, not the stale one.
+                assert_eq!(
+                    actual_base, core_base,
+                    "n={n} partition {i}: mpu_region.base() must equal \
+                     core_stack_base (post-move address)"
+                );
+                assert_ne!(
+                    actual_base, config_base,
+                    "n={n} partition {i}: mpu_region.base() must NOT equal \
+                     stale config-time address {config_base:#010x}"
+                );
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Mixed MPU region config: sentinel + user-configured (bug04)
+    // ------------------------------------------------------------------
+
     /// Verifies Kernel::new sentinel handling and that the post-move fixup
     /// (inline sentinel guard, same pattern as boot.rs) preserves
     /// user-configured bases while updating sentinel bases.
