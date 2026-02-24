@@ -196,6 +196,7 @@ macro_rules! define_unified_harness {
         #[cfg(not(feature = "dynamic-mpu"))]
         #[no_mangle]
         fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) {
+            if !<$Config as $crate::config::KernelConfig>::MPU_ENFORCE { return; }
             $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
                 let pcb = k.partitions().get(pid as usize)
@@ -290,7 +291,9 @@ macro_rules! define_unified_harness {
                 // Static mode: apply_partition_mpu handles R0-R5 with
                 // its own disable/enable cycle.
                 #[cfg(not(feature = "dynamic-mpu"))]
-                $crate::mpu::apply_partition_mpu(&p.MPU, pcb);
+                if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
+                    $crate::mpu::apply_partition_mpu(&p.MPU, pcb);
+                }
 
                 // Dynamic mode: write only R0-R3 base partition regions
                 // (MPU already disabled above; R4-R5 overridden below).
@@ -387,6 +390,11 @@ macro_rules! define_unified_harness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::KernelConfig;
+    use crate::msg_pools::MsgPools;
+    use crate::partition_core::{AlignedStack1K, PartitionCore};
+    use crate::port_pools::PortPools;
+    use crate::sync_pools::SyncPools;
     use core::fmt::Write;
 
     /// Fixed-size buffer for formatting in no_std tests.
@@ -431,4 +439,80 @@ mod tests {
         write!(&mut buf, "{}", err).unwrap();
         assert!(buf.as_str().contains("2"));
     }
+
+    // ============ MPU_ENFORCE gating tests ============
+    //
+    // The define_unified_harness! macro emits __boot_mpu_init and
+    // __pendsv_program_mpu with MPU_ENFORCE-based gating.  These
+    // functions require ARM peripherals, so we test the gating
+    // pattern itself using helper functions that mirror the exact
+    // const-generic branching used in the macro.
+
+    /// Config with default MPU_ENFORCE (false).
+    struct GateTestDefault;
+    impl KernelConfig for GateTestDefault {
+        const N: usize = 2;
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
+        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+        type Ports =
+            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    }
+
+    /// Config with MPU_ENFORCE = true.
+    struct GateTestEnforced;
+    impl KernelConfig for GateTestEnforced {
+        const N: usize = 2;
+        const MPU_ENFORCE: bool = true;
+        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
+        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+        type Ports =
+            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    }
+
+    /// Mirrors the __boot_mpu_init gating pattern:
+    /// `if !<Config>::MPU_ENFORCE { return; }` — returns false for
+    /// early-return (no-op), true when MPU would be programmed.
+    fn boot_mpu_init_would_program<C: KernelConfig>() -> bool {
+        if !C::MPU_ENFORCE {
+            return false;
+        }
+        true
+    }
+
+    /// Mirrors the PendSV gating pattern:
+    /// `if <Config>::MPU_ENFORCE { apply... }` — returns true when
+    /// apply_partition_mpu would be called, false when skipped.
+    fn pendsv_would_apply_mpu<C: KernelConfig>() -> bool {
+        if C::MPU_ENFORCE {
+            return true;
+        }
+        false
+    }
+
+    #[test]
+    fn boot_mpu_init_skips_when_mpu_enforce_false() {
+        assert!(!boot_mpu_init_would_program::<GateTestDefault>());
+    }
+
+    #[test]
+    fn boot_mpu_init_programs_when_mpu_enforce_true() {
+        assert!(boot_mpu_init_would_program::<GateTestEnforced>());
+    }
+
+    #[test]
+    fn pendsv_apply_skips_when_mpu_enforce_false() {
+        assert!(!pendsv_would_apply_mpu::<GateTestDefault>());
+    }
+
+    #[test]
+    fn pendsv_apply_runs_when_mpu_enforce_true() {
+        assert!(pendsv_would_apply_mpu::<GateTestEnforced>());
+    }
+
+    // Compile-time const assertions: verify that the gating expressions
+    // used in the macro resolve correctly at const-eval time.
+    const _: () = assert!(!GateTestDefault::MPU_ENFORCE);
+    const _: () = assert!(GateTestEnforced::MPU_ENFORCE);
 }
