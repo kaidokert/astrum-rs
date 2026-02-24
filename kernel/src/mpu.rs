@@ -293,6 +293,13 @@ fn peripheral_region_pair(region: &MpuRegion, slot: u32) -> Option<(u32, u32)> {
 /// Returns up to 2 pairs from the PCB's peripheral regions.  Unused
 /// slots are disabled (RASR enable bit = 0).  Returns `None` if a
 /// configured peripheral region has invalid MPU parameters.
+///
+/// # Mode usage
+///
+/// Used at **runtime** only in static mode (`#[cfg(not(feature =
+/// "dynamic-mpu"))]`).  In dynamic mode the PendSV handler calls
+/// [`DynamicStrategy::cached_peripheral_regions`] instead, which
+/// restores pre-computed (RBAR, RASR) pairs from the boot-time cache.
 pub fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 2]> {
     let periph = pcb.peripheral_regions();
     let r4 = match periph.first() {
@@ -314,6 +321,15 @@ pub fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32)
 /// When `peripheral_mpu_regions` returns `None` (e.g. non-power-of-2
 /// peripheral size), the disabled fallback ensures R4-R5 are explicitly
 /// cleared rather than retaining stale grants from a previous partition.
+///
+/// # Mode usage
+///
+/// Used at **runtime** only in static mode (`#[cfg(not(feature =
+/// "dynamic-mpu"))]`).  In dynamic mode the PendSV handler uses
+/// [`DynamicStrategy::cached_peripheral_regions`] as the runtime
+/// counterpart (see `harness.rs` PendSV handler).  The equivalence
+/// between the two paths is verified by
+/// `cache_vs_pcb_peripheral_rbar_rasr_equivalence`.
 pub fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) -> [(u32, u32); 2] {
     peripheral_mpu_regions(pcb).unwrap_or([DISABLED_R4, DISABLED_R5])
 }
@@ -1259,15 +1275,14 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // peripheral_mpu_regions: dynamic-mpu context-switch integration
+    // peripheral_mpu_regions: static-mode R4-R5 encoding
     // ------------------------------------------------------------------
 
     /// Verify that peripheral_mpu_regions produces the correct R4 RBAR/RASR
     /// for a PCB with one peripheral region, and that R5 is disabled.
-    /// This is the exact sequence written by __pendsv_program_mpu after
-    /// strategy regions to override R4-R5 with per-partition peripherals.
+    /// (Static-mode path; dynamic mode uses cached_peripheral_regions.)
     #[test]
-    fn peripheral_mpu_regions_dynamic_one_peripheral() {
+    fn peripheral_mpu_regions_one_peripheral_detailed() {
         let periph_base: u32 = 0x4000_0000;
         let periph_size: u32 = 4096;
         let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)

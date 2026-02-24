@@ -1628,10 +1628,10 @@ mod tests {
             "R6 holds partition RAM after switch-back"
         );
 
-        // TODO: wire_boot_peripherals must be re-called after each context
-        // switch to populate peripheral slots.  If the strategy cached
-        // per-partition peripheral descriptors and restored them during
-        // configure_partition, this manual re-wiring would be unnecessary.
+        // NOTE: wire_boot_peripherals is called once at boot; the PendSV
+        // handler restores per-partition peripheral regions via
+        // cached_peripheral_regions (see harness.rs).  This re-call
+        // below simulates the boot-time wiring for the new PCB.
         let pcb2 =
             make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
         assert_eq!(ds.wire_boot_peripherals(&[pcb2]), 1);
@@ -1726,10 +1726,11 @@ mod tests {
         // --- (2) peripheral_mpu_regions_or_disabled returns per-partition
         //         R4/R5 values for context-switch reprogramming ---
         //
-        // TODO: reviewer concern (API smell) — peripheral_mpu_regions_or_disabled
-        // is a standalone pure function that derives R4/R5 from the PCB's own
-        // peripheral list rather than from the DynamicStrategy boot-time slot
-        // assignments.  Consider taking &DynamicStrategy for slot-aware mapping.
+        // NOTE: peripheral_mpu_regions_or_disabled is a standalone pure
+        // function (static-mode path).  In dynamic mode the PendSV handler
+        // uses DynamicStrategy::cached_peripheral_regions instead.  The
+        // equivalence between the two paths is asserted by the
+        // cache_vs_pcb_peripheral_rbar_rasr_equivalence test.
         let regions_p0 = peripheral_mpu_regions_or_disabled(&pcb0);
         let regions_p1 = peripheral_mpu_regions_or_disabled(&pcb1);
 
