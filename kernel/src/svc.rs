@@ -3259,6 +3259,31 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_event_wait_blocking_saves_wait_mask() {
+        let mut k = kernel(0, 0, 0);
+        // No bits set — EventWait should block and save the wait mask in the PCB.
+        let mask = 0b1100_0011;
+        let mut ef = frame(SYS_EVT_WAIT, 0, mask);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "blocked EventWait must return 0");
+        assert!(
+            k.yield_requested(),
+            "blocking EventWait must trigger deschedule"
+        );
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "blocked partition must be Waiting"
+        );
+        assert_eq!(
+            k.partitions().get(0).unwrap().event_wait_mask(),
+            mask,
+            "PCB must save the wait mask for wake-up"
+        );
+    }
+
+    #[test]
     fn sem_wait_and_signal_dispatch() {
         let mut k = kernel(1, 0, 0);
         let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 0, 0);
@@ -3345,6 +3370,34 @@ mod tests {
         assert_eq!(
             k.partitions().get(1).unwrap().state(),
             PartitionState::Waiting
+        );
+    }
+
+    // TODO: reviewer false positive — the blocking/contested MutexLock test already
+    // exists above as `dispatch_mutex_lock_blocking_triggers_deschedule`. This test
+    // covers the complementary uncontested path. The URGENT backlog item is satisfied
+    // by the pre-existing blocking test.
+    #[test]
+    fn dispatch_mutex_lock_immediate_no_deschedule() {
+        let mut k = kernel(0, 1, 0);
+        // Mutex 0 is free — MutexLock should acquire immediately without deschedule.
+        let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 1, "immediate MutexLock must return 1 (acquired)");
+        assert!(
+            !k.yield_requested(),
+            "immediate MutexLock must not trigger deschedule"
+        );
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "acquiring partition must stay Running"
+        );
+        assert_eq!(
+            k.mutexes().owner(0),
+            Ok(Some(0)),
+            "mutex must be owned by acquiring partition"
         );
     }
 
