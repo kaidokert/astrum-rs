@@ -1554,6 +1554,7 @@ where
                             }
                             0
                         }
+                        // timeout=0: non-blocking try-send; return immediately.
                         Ok(SendQueuingOutcome::SenderBlocked { .. }) => 0,
                         Err(QueuingError::QueueFull) => 0,
                         Err(_) => SvcError::InvalidResource.to_u32(),
@@ -1585,6 +1586,7 @@ where
                         }
                         msg_len as u32
                     }
+                    // timeout=0: non-blocking try-receive; return immediately.
                     Ok(RecvQueuingOutcome::ReceiverBlocked { .. }) => 0,
                     Err(QueuingError::QueueEmpty) => 0,
                     Err(_) => SvcError::InvalidResource.to_u32(),
