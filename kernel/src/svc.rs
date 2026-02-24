@@ -1353,10 +1353,18 @@ where
     /// writable `QueuingPortStatus`. The caller is responsible for ensuring
     /// this; in production the MPU enforces partition isolation.
     pub unsafe fn dispatch(&mut self, frame: &mut ExceptionFrame) {
-        frame.r0 = match SyscallId::from_u32(frame.r0) {
+        // SAFETY: Snapshot all argument registers before the match writes
+        // frame.r0 with the return value.  This prevents any theoretical
+        // compiler reordering between reads of r1/r2/r3 and the r0 write,
+        // since all field accesses happen before the mutable borrow for r0.
+        let syscall_id = frame.r0;
+        let arg1 = frame.r1;
+        let arg2 = frame.r2;
+        let arg3 = frame.r3;
+        frame.r0 = match SyscallId::from_u32(syscall_id) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::EventWait) => {
-                let result = events::event_wait(self.partitions_mut(), frame.r1 as usize, frame.r2);
+                let result = events::event_wait(self.partitions_mut(), arg1 as usize, arg2);
                 if result == 0 {
                     self.trigger_deschedule();
                 }
@@ -1373,7 +1381,7 @@ where
                 match self
                     .sync
                     .semaphores_mut()
-                    .wait(pt, frame.r1 as usize, frame.r2 as usize)
+                    .wait(pt, arg1 as usize, arg2 as usize)
                 {
                     Ok(true) => 1,
                     Ok(false) => {
@@ -1395,7 +1403,7 @@ where
                 match self
                     .sync
                     .mutexes_mut()
-                    .lock(pt, frame.r1 as usize, frame.r2 as usize)
+                    .lock(pt, arg1 as usize, arg2 as usize)
                 {
                     Ok(true) => 1,
                     Ok(false) => {
@@ -1431,16 +1439,16 @@ where
                 }
             }
             #[cfg(feature = "ipc-message")]
-            Some(SyscallId::MsgSend) => validated_ptr!(self, frame.r3, C::QM, {
+            Some(SyscallId::MsgSend) => validated_ptr!(self, arg3, C::QM, {
                 // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region. (2) Slice length is
                 // C::QM, a KernelConfig constant. (3) The partition owns this
                 // memory as enforced by MPU isolation.
-                let data = unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, C::QM) };
+                let data = unsafe { core::slice::from_raw_parts(arg3 as *const u8, C::QM) };
                 match self
                     .msg
                     .messages_mut()
-                    .send(frame.r1 as usize, frame.r2 as usize, data)
+                    .send(arg1 as usize, arg2 as usize, data)
                 {
                     Ok(outcome) => match apply_send_outcome(self.partitions_mut(), outcome) {
                         Ok(Some(_blocked)) => {
@@ -1454,16 +1462,16 @@ where
                 }
             }),
             #[cfg(feature = "ipc-message")]
-            Some(SyscallId::MsgRecv) => validated_ptr!(self, frame.r3, C::QM, {
+            Some(SyscallId::MsgRecv) => validated_ptr!(self, arg3, C::QM, {
                 // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region. (2) Slice length is
                 // C::QM, a KernelConfig constant. (3) The partition owns this
                 // memory as enforced by MPU isolation.
-                let buf = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
+                let buf = unsafe { core::slice::from_raw_parts_mut(arg3 as *mut u8, C::QM) };
                 match self
                     .msg
                     .messages_mut()
-                    .recv(frame.r1 as usize, frame.r2 as usize, buf)
+                    .recv(arg1 as usize, arg2 as usize, buf)
                 {
                     Ok(outcome) => match apply_recv_outcome(self, outcome) {
                         Ok(Some(_blocked)) => 0,
@@ -1819,17 +1827,17 @@ where
                 self.ticks_since_bottom_half
             }
             #[cfg(feature = "ipc-queuing")]
-            Some(SyscallId::QueuingRecvTimed) => validated_ptr!(self, frame.r3, C::QM, {
+            Some(SyscallId::QueuingRecvTimed) => validated_ptr!(self, arg3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
-                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
+                let b = unsafe { core::slice::from_raw_parts_mut(arg3 as *mut u8, C::QM) };
                 let pid = self.current_partition;
                 let tick = self.tick.get();
                 match self.msg.queuing_mut().receive_queuing_message(
-                    frame.r1 as usize,
+                    arg1 as usize,
                     pid,
                     b,
-                    frame.r2 as u64,
+                    arg2 as u64,
                     tick,
                 ) {
                     Ok(crate::queuing::RecvQueuingOutcome::Received {
@@ -3061,6 +3069,23 @@ mod tests {
             k.partitions().get(0).unwrap().state(),
             PartitionState::Waiting
         );
+    }
+
+    #[test]
+    fn dispatch_sem_wait_targets_correct_index_via_r1() {
+        // Create 3 semaphores (indices 0, 1, 2) each with count=1, max=2.
+        let mut k = kernel(3, 0, 0);
+        // Dispatch SemWait with r1=2 to target semaphore index 2.
+        let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 2, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        // r0=1 means acquired immediately (Ok(true)).
+        assert_eq!(ef.r0, 1, "SemWait must return 1 (acquired)");
+        // Semaphore 2 should have count decremented from 1 to 0.
+        assert_eq!(k.semaphores().get(2).unwrap().count(), 0);
+        // Semaphores 0 and 1 must remain untouched at count=1.
+        assert_eq!(k.semaphores().get(0).unwrap().count(), 1);
+        assert_eq!(k.semaphores().get(1).unwrap().count(), 1);
     }
 
     #[test]
