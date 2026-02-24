@@ -639,4 +639,45 @@ mod tests {
     tiered_stack_tests!(stack_1k, AlignedStack1K, 256, 1024);
     tiered_stack_tests!(stack_2k, AlignedStack2K, 512, 2048);
     tiered_stack_tests!(stack_4k, AlignedStack4K, 1024, 4096);
+
+    /// Verify all stack tier natural-alignment invariants and kernel coverage.
+    /// Checks per tier: ALIGNMENT==SIZE_BYTES, mem::align_of==ALIGNMENT,
+    /// mem::size_of==SIZE_BYTES, KERNEL_ALIGNMENT >= ALIGNMENT.
+    #[test]
+    fn stack_tier_natural_alignment_and_kernel_coverage() {
+        use crate::state::KERNEL_ALIGNMENT;
+
+        macro_rules! check_tier {
+            ($ty:ty, $label:expr) => {{
+                let align = <$ty as StackStorage>::ALIGNMENT;
+                let size = <$ty as StackStorage>::SIZE_BYTES;
+                assert_eq!(align, size, "{}: ALIGNMENT != SIZE_BYTES", $label);
+                assert_eq!(
+                    core::mem::align_of::<$ty>(),
+                    align,
+                    "{}: mem::align_of != ALIGNMENT",
+                    $label
+                );
+                assert_eq!(
+                    core::mem::size_of::<$ty>(),
+                    size,
+                    "{}: mem::size_of != SIZE_BYTES",
+                    $label
+                );
+                assert!(
+                    KERNEL_ALIGNMENT >= align,
+                    "KERNEL_ALIGNMENT ({}) < {} ALIGNMENT ({})",
+                    KERNEL_ALIGNMENT,
+                    $label,
+                    align
+                );
+            }};
+        }
+
+        check_tier!(AlignedStack256B, "AlignedStack256B");
+        check_tier!(AlignedStack512B, "AlignedStack512B");
+        check_tier!(AlignedStack1K, "AlignedStack1K");
+        check_tier!(AlignedStack2K, "AlignedStack2K");
+        check_tier!(AlignedStack4K, "AlignedStack4K");
+    }
 }
