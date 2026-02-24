@@ -2286,6 +2286,17 @@ where
             if is_waiting {
                 return ScheduleEvent::None;
             }
+            // Transition outgoing partition from Running to Ready.
+            if let Some(old_pid) = self.active_partition {
+                let is_running = self
+                    .partitions()
+                    .get(old_pid as usize)
+                    .map(|pcb| pcb.state() == PartitionState::Running)
+                    .unwrap_or(false);
+                if is_running {
+                    try_transition(self.partitions_mut(), old_pid, PartitionState::Ready);
+                }
+            }
             self.active_partition = Some(pid);
         }
         result
@@ -6837,6 +6848,35 @@ mod tests {
         let result = k.yield_current_slot();
         assert_eq!(result.partition_id(), None);
         assert_eq!(k.active_partition(), initial_active);
+    }
+
+    /// Tests that yield_current_slot transitions the outgoing partition
+    /// from Running to Ready before switching to the next partition.
+    #[test]
+    fn yield_current_slot_transitions_outgoing_to_ready() {
+        use crate::invariants::assert_partition_state_consistency;
+        let mut k = kernel_with_schedule();
+
+        // Put P0 into Running via set_next_partition and mark it active.
+        k.set_next_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        k.active_partition = Some(0);
+
+        // Yield: should advance to P1 and transition P0 Running→Ready.
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), Some(1));
+
+        // P0 should now be Ready.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
+
+        // At most one Running partition.
+        assert_partition_state_consistency(k.partitions().as_slice());
     }
 
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
