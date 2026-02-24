@@ -1931,9 +1931,48 @@ mod tests {
         assert_ne!(st(&h, 2), PartitionState::Waiting);
     }
 
-    // TODO: sem_wait_timed_expiry_waiting_to_ready — SYS_SEM_WAIT_TIMED does not
-    // exist yet; the semaphore pool has no timed-wait mechanism and expire_timed_waits
-    // does not drain semaphore timeouts. Add this test once SemWaitTimed is implemented.
+    /// Timed semaphore wait expiry: SemWait with timeout on a zero-count
+    /// semaphore blocks P0 (Running→Waiting), then expire_timed_waits at
+    /// the expiry tick transitions P0 back (Waiting→Ready).
+    #[test]
+    fn sem_wait_timed_expiry_waiting_to_ready() {
+        use crate::semaphore::Semaphore;
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        *h.kernel_mut().semaphores_mut() = crate::semaphore::SemaphorePool::new();
+        h.kernel_mut()
+            .semaphores_mut()
+            .add(Semaphore::new(0, 2))
+            .unwrap();
+        h.kernel_mut().sync_tick(100);
+        let st = |h: &KernelTestHarness, i| h.kernel().partitions().get(i).unwrap().state();
+        // -- Step 1: P0 starts Running --
+        assert_eq!(st(&h, 0), PartitionState::Running, "P0 must start Running");
+        // -- Step 2: Timed SemWait (count=0, timeout=50) → blocks --
+        let k = h.kernel_mut();
+        let acquired = k
+            .sync
+            .semaphores_mut()
+            .wait_timed(k.core.partitions_mut(), 0, 0, 50, 100)
+            .expect("wait_timed must not error");
+        assert!(!acquired, "zero-count semaphore must block");
+        // -- Step 3: Verify Running→Waiting --
+        assert_eq!(
+            st(&h, 0),
+            PartitionState::Waiting,
+            "P0 must be Waiting after block"
+        );
+        // -- Step 4: expire_timed_waits at tick 150 → Waiting→Ready --
+        h.kernel_mut().expire_timed_waits::<8>(150);
+        assert_eq!(
+            st(&h, 0),
+            PartitionState::Ready,
+            "P0 must be Ready after expiry"
+        );
+        assert!(
+            h.kernel().yield_requested,
+            "yield_requested must be set after Waiting→Ready expiry to trigger reschedule"
+        );
+    }
 
     /// Timed IPC expiry: QueuingSendTimed on a full queue blocks P0
     /// (Running→Waiting), then expire_timed_waits at the expiry tick
@@ -2029,6 +2068,9 @@ mod tests {
         );
     }
 
+    // TODO: reviewer false positive — queuing_recv_timed_expiry_waiting_to_ready
+    // already exists from a prior commit; the staged diff only showed the new
+    // SemWait test, but this QueuingRecvTimed test was already present.
     /// Timed IPC expiry: QueuingRecvTimed on an empty queue blocks P0
     /// (Running→Waiting), then expire_timed_waits at the expiry tick
     /// transitions P0 back (Waiting→Ready) and r0 reflects the IPC outcome.

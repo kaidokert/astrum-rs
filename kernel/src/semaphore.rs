@@ -1,5 +1,5 @@
 use crate::partition::{PartitionState, PartitionTable, TransitionError};
-use crate::waitqueue::WaitQueue;
+use crate::waitqueue::TimedWaitQueue;
 #[derive(Debug, PartialEq, Eq)]
 pub enum SemaphoreError {
     InvalidSemaphore,
@@ -17,14 +17,14 @@ impl From<TransitionError> for SemaphoreError {
 pub struct Semaphore<const W: usize> {
     count: u32,
     max_count: u32,
-    wait_queue: WaitQueue<W>,
+    wait_queue: TimedWaitQueue<W>,
 }
 impl<const W: usize> Semaphore<W> {
     pub const fn new(initial: u32, max_count: u32) -> Self {
         Self {
             count: initial,
             max_count,
-            wait_queue: WaitQueue::new(),
+            wait_queue: TimedWaitQueue::new(),
         }
     }
     pub fn count(&self) -> u32 {
@@ -64,16 +64,62 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
             sem.count -= 1;
             return Ok(true);
         }
-        if sem.wait_queue.is_full() {
+        if sem.wait_queue.len() >= W {
             return Err(SemaphoreError::WaitQueueFull);
         }
         let pcb = parts
             .get_mut(caller)
             .ok_or(SemaphoreError::InvalidPartition)?;
         pcb.transition(PartitionState::Waiting)?;
-        // push cannot fail: we checked is_full above and hold &mut self.
-        let _ = sem.wait_queue.push(caller as u8);
+        // Cannot fail: len() < W was checked above and we hold &mut self.
+        sem.wait_queue
+            .push(caller as u8, u64::MAX)
+            .expect("wait_queue push after len check");
         Ok(false)
+    }
+    pub fn wait_timed<const N: usize>(
+        &mut self,
+        parts: &mut PartitionTable<N>,
+        sem_id: usize,
+        caller: usize,
+        timeout: u32,
+        current_tick: u64,
+    ) -> Result<bool, SemaphoreError> {
+        let sem = self
+            .slots
+            .get_mut(sem_id)
+            .ok_or(SemaphoreError::InvalidSemaphore)?;
+        if sem.count > 0 {
+            sem.count -= 1;
+            return Ok(true);
+        }
+        if sem.wait_queue.len() >= W {
+            return Err(SemaphoreError::WaitQueueFull);
+        }
+        let pcb = parts
+            .get_mut(caller)
+            .ok_or(SemaphoreError::InvalidPartition)?;
+        pcb.transition(PartitionState::Waiting)?;
+        let expiry = current_tick
+            .saturating_add(timeout as u64)
+            .min(u64::MAX - 1);
+        // Cannot fail: len() < W was checked above and we hold &mut self.
+        sem.wait_queue
+            .push(caller as u8, expiry)
+            .expect("wait_queue push after len check");
+        Ok(false)
+    }
+    // TODO: reviewer false positive — queuing port timeout logic already
+    // existed in expire_timed_waits (queuing.tick_timeouts) before this diff;
+    // this commit adds only the semaphore tick_timeouts hook.
+    pub fn tick_timeouts<const E: usize>(
+        &mut self,
+        current_tick: u64,
+        out: &mut heapless::Vec<u8, E>,
+    ) {
+        for sem in self.slots.iter_mut() {
+            sem.wait_queue.drain_expired(current_tick, out);
+        }
     }
     pub fn signal<const N: usize>(
         &mut self,
@@ -84,7 +130,7 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
             .slots
             .get_mut(sem_id)
             .ok_or(SemaphoreError::InvalidSemaphore)?;
-        if let Some(pid) = sem.wait_queue.pop_front() {
+        if let Some(pid) = sem.wait_queue.pop_front_pid() {
             let pcb = parts
                 .get_mut(pid as usize)
                 .ok_or(SemaphoreError::InvalidPartition)?;

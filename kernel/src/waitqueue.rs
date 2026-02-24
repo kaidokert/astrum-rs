@@ -118,9 +118,9 @@ impl<const W: usize> TimedWaitQueue<W> {
     /// pop-front/push-back is the only way to compact in-place without
     /// allocating a temporary buffer.
     ///
-    /// # Panics
-    ///
-    /// Debug-asserts if `out` cannot hold all expired entries.
+    /// If `out` is full, expired entries are re-enqueued and will be
+    /// retried on the next tick (graceful degradation instead of panic
+    /// or silent loss).
     pub fn drain_expired<const E: usize>(
         &mut self,
         current_tick: u64,
@@ -130,7 +130,11 @@ impl<const W: usize> TimedWaitQueue<W> {
         for _ in 0..len {
             if let Some((pid, expiry)) = self.inner.pop_front() {
                 if current_tick >= expiry {
-                    debug_assert!(out.push(pid).is_ok(), "drain_expired: output buffer full");
+                    if out.push(pid).is_err() {
+                        // Output buffer full; re-enqueue so this entry is
+                        // retried next tick rather than silently lost.
+                        let _ = self.inner.push_back((pid, expiry));
+                    }
                 } else {
                     let _ = self.inner.push_back((pid, expiry));
                 }
@@ -157,6 +161,11 @@ impl<const W: usize> TimedWaitQueue<W> {
     /// Returns the number of entries currently in the queue.
     pub fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    /// Returns `true` if the queue has reached its compile-time capacity.
+    pub fn is_full(&self) -> bool {
+        self.inner.is_full()
     }
 
     /// Non-destructive snapshot of the partition IDs currently in the queue,

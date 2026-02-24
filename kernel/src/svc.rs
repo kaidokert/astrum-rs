@@ -1306,10 +1306,11 @@ where
 
     /// Expire timed waits whose deadlines have passed.
     ///
-    /// Calls `queuing.tick_timeouts()` and `blackboards.tick_timeouts()` with
-    /// the given tick, collecting all expired partition IDs into a single
-    /// `heapless::Vec<u8, E>`, then transitions each from
-    /// [`Waiting`](PartitionState::Waiting) to [`Ready`](PartitionState::Ready).
+    /// Calls `semaphores.tick_timeouts()`, `queuing.tick_timeouts()`, and
+    /// `blackboards.tick_timeouts()` with the given tick, collecting all
+    /// expired partition IDs into a single `heapless::Vec<u8, E>`, then
+    /// transitions each from [`Waiting`](PartitionState::Waiting) to
+    /// [`Ready`](PartitionState::Ready).
     ///
     /// With `dynamic-mpu`, also drains the device wait queue.
     ///
@@ -1317,9 +1318,17 @@ where
     /// senders/receivers are woken when their timeout elapses.
     ///
     /// `E` must be large enough to hold the total number of expired partition
-    /// IDs across all subsystems in a single tick.
+    /// IDs across all subsystems in a single tick. Callers should set `E` to
+    /// at least `N` (max partitions) to guarantee no overflow; overflow is
+    /// safe (expired entries are re-enqueued by `drain_expired`) but delays
+    /// wakeup by one tick.
+    // TODO: Consider tying E to the KernelConfig::N const so callers cannot
+    // under-size the buffer. Currently E is caller-chosen.
     pub fn expire_timed_waits<const E: usize>(&mut self, current_tick: u64) {
         let mut expired: heapless::Vec<u8, E> = heapless::Vec::new();
+        self.sync
+            .semaphores_mut()
+            .tick_timeouts(current_tick, &mut expired);
         self.msg
             .queuing_mut()
             .tick_timeouts(current_tick, &mut expired);
@@ -1331,6 +1340,9 @@ where
             .drain_expired(current_tick, &mut expired);
         for &pid in expired.iter() {
             try_transition(self.core.partitions_mut(), pid, PartitionState::Ready);
+        }
+        if !expired.is_empty() {
+            self.yield_requested = true;
         }
     }
 
