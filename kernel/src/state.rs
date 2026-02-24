@@ -175,6 +175,14 @@ const _: () = assert!(
     "KernelStorageBuffer alignment must be >= 4096 for MPU compatibility"
 );
 
+// Compile-time assertion: MAX_KERNEL_SIZE must be a power of two.
+// ARMv7-M MPU regions must be power-of-two sized. If the kernel state is protected
+// by an MPU region, its backing storage must satisfy this constraint.
+const _: () = assert!(
+    MAX_KERNEL_SIZE.is_power_of_two(),
+    "MAX_KERNEL_SIZE must be a power of two for MPU region compatibility"
+);
+
 /// Unified kernel state containing all kernel subsystems.
 ///
 /// Merges: partitions, schedule, current/next indices, partition SPs, tick,
@@ -551,6 +559,18 @@ mod tests {
     #[test]
     fn storage_buffer_has_correct_size() {
         assert_eq!(size_of::<KernelStorageBuffer>(), MAX_KERNEL_SIZE);
+    }
+
+    #[test]
+    fn storage_buffer_size_is_power_of_two() {
+        // Mirrors the compile-time const assertion for MAX_KERNEL_SIZE.
+        // ARMv7-M MPU regions must be power-of-two sized, so the kernel
+        // storage buffer must satisfy this constraint.
+        assert!(
+            MAX_KERNEL_SIZE.is_power_of_two(),
+            "MAX_KERNEL_SIZE ({}) is not a power of two",
+            MAX_KERNEL_SIZE
+        );
     }
 
     #[test]
