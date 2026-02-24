@@ -2247,6 +2247,17 @@ where
                     // Return None to indicate no switch occurred.
                     return ScheduleEvent::None;
                 }
+                // Transition outgoing partition from Running to Ready.
+                if let Some(old_pid) = self.active_partition {
+                    let is_running = self
+                        .partitions()
+                        .get(old_pid as usize)
+                        .map(|pcb| pcb.state() == PartitionState::Running)
+                        .unwrap_or(false);
+                    if is_running {
+                        try_transition(self.partitions_mut(), old_pid, PartitionState::Ready);
+                    }
+                }
                 self.active_partition = Some(pid);
                 self.set_next_partition(pid);
                 event
@@ -6214,6 +6225,43 @@ mod tests {
         // Switch to P1 (Ready partition)
         assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
         assert_eq!(k.active_partition(), Some(1));
+    }
+
+    /// Verifies that advance_schedule_tick transitions the outgoing partition
+    /// from Running to Ready before switching to the incoming partition.
+    #[test]
+    fn advance_schedule_tick_transitions_outgoing_to_ready() {
+        use crate::invariants::assert_partition_state_consistency;
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+
+        // Put P0 into Running via set_next_partition.
+        k.set_next_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        k.active_partition = Some(0);
+
+        // Advance to the P1 slot boundary (P0 has 5 ticks).
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+        // 5th tick triggers switch to P1.
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+
+        // P0 should now be Ready, P1 should be Running.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Running
+        );
+
+        // At most one Running partition.
+        assert_partition_state_consistency(k.partitions().as_slice());
     }
 
     /// Regression: SYS_YIELD dispatch sets yield_requested only when the
