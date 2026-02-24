@@ -255,6 +255,9 @@ impl DynamicStrategy {
         let reserved = with_cs(|cs| *self.peripheral_reserved.borrow(cs).borrow());
 
         for part in partitions.iter() {
+            let mut part_descs: [Option<WindowDescriptor>; 2] = [None; 2];
+            let mut desc_idx = 0usize;
+
             for region in part.peripheral_regions().iter() {
                 let base = region.base();
                 let size = region.size();
@@ -262,42 +265,65 @@ impl DynamicStrategy {
                     continue;
                 }
                 let key = (base, size);
-                if seen.contains(&key) {
-                    continue;
-                }
-                let rasr = crate::mpu::build_rasr(
-                    size.trailing_zeros() - 1,
-                    crate::mpu::AP_FULL_ACCESS,
-                    true,
-                    (true, false, true),
-                );
-                // Populate reserved peripheral slots directly; add_window
-                // skips them so they must be written here.
-                if wired < reserved {
-                    if crate::mpu::validate_mpu_region(base, size).is_err() {
-                        continue;
-                    }
-                    with_cs(|cs| {
-                        self.slots.borrow(cs).borrow_mut()[wired] = Some(WindowDescriptor {
-                            base,
-                            size,
-                            permissions: rasr,
-                            owner: part.id(),
-                        });
-                    });
-                    let _ = seen.push(key);
-                    wired += 1;
-                } else {
-                    match self.add_window(base, size, rasr, part.id()) {
-                        Ok(_) => {
-                            let _ = seen.push(key);
-                            wired += 1;
+                let already_wired = seen.contains(&key);
+                // Only wire if not already wired by a preceding partition.
+                if !already_wired {
+                    let rasr = crate::mpu::build_rasr(
+                        size.trailing_zeros() - 1,
+                        crate::mpu::AP_FULL_ACCESS,
+                        true,
+                        (true, false, true),
+                    );
+                    // Populate reserved peripheral slots directly; add_window
+                    // skips them so they must be written here.
+                    if wired < reserved {
+                        if crate::mpu::validate_mpu_region(base, size).is_err() {
+                            continue;
                         }
-                        Err(MpuError::SlotExhausted) => return wired,
-                        Err(_) => continue,
+                        with_cs(|cs| {
+                            self.slots.borrow(cs).borrow_mut()[wired] = Some(WindowDescriptor {
+                                base,
+                                size,
+                                permissions: rasr,
+                                owner: part.id(),
+                            });
+                        });
+                        let _ = seen.push(key);
+                        wired += 1;
+                    } else {
+                        match self.add_window(base, size, rasr, part.id()) {
+                            Ok(_) => {
+                                let _ = seen.push(key);
+                                wired += 1;
+                            }
+                            Err(MpuError::SlotExhausted) => {
+                                self.cache_peripherals(part.id(), part_descs);
+                                return wired;
+                            }
+                            Err(_) => continue,
+                        }
                     }
+                }
+                // Cache for this partition regardless of prior wiring;
+                // shared peripherals must appear in every partition's
+                // cache for correct context-switch restoration.
+                if desc_idx < 2 {
+                    let rasr = crate::mpu::build_rasr(
+                        size.trailing_zeros() - 1,
+                        crate::mpu::AP_FULL_ACCESS,
+                        true,
+                        (true, false, true),
+                    );
+                    part_descs[desc_idx] = Some(WindowDescriptor {
+                        base,
+                        size,
+                        permissions: rasr,
+                        owner: part.id(),
+                    });
+                    desc_idx += 1;
                 }
             }
+            self.cache_peripherals(part.id(), part_descs);
         }
         wired
     }
@@ -1750,5 +1776,136 @@ mod tests {
         ];
         ds.cache_peripherals(1, second);
         assert_eq!(ds.cached_peripherals(1), second);
+    }
+
+    // ------------------------------------------------------------------
+    // wire_boot_peripherals populates peripheral_cache
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn wire_boot_peripherals_populates_cache() {
+        let ds = DynamicStrategy::new();
+        // Two partitions with distinct IDs and one peripheral each.
+        let pcb0 = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+        let pcb1 = PartitionControlBlock::new(
+            1,
+            0x0,
+            0x2000_8000,
+            0x2000_9000,
+            MpuRegion::new(0x2000_8000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4001_0000, 256)]);
+
+        assert_eq!(ds.wire_boot_peripherals(&[pcb0, pcb1]), 2);
+
+        // TODO: reviewer false positive – build_rasr / AP_FULL_ACCESS are
+        // imported at line 572 via `use crate::mpu::{build_rasr, …, AP_FULL_ACCESS, …}`.
+        let rasr_4k = build_rasr(
+            4096u32.trailing_zeros() - 1,
+            AP_FULL_ACCESS,
+            true,
+            (true, false, true),
+        );
+        let rasr_256 = build_rasr(
+            256u32.trailing_zeros() - 1,
+            AP_FULL_ACCESS,
+            true,
+            (true, false, true),
+        );
+
+        let cached0 = ds.cached_peripherals(0);
+        assert_eq!(
+            cached0[0],
+            Some(WindowDescriptor {
+                base: 0x4000_0000,
+                size: 4096,
+                permissions: rasr_4k,
+                owner: 0
+            })
+        );
+        assert_eq!(cached0[1], None);
+
+        let cached1 = ds.cached_peripherals(1);
+        assert_eq!(
+            cached1[0],
+            Some(WindowDescriptor {
+                base: 0x4001_0000,
+                size: 256,
+                permissions: rasr_256,
+                owner: 1
+            })
+        );
+        assert_eq!(cached1[1], None);
+    }
+
+    #[test]
+    fn wire_boot_peripherals_no_peripherals_cached_as_none() {
+        let ds = DynamicStrategy::new();
+        let pcb = make_pcb(0x0, 0x2000_0000, 4096); // no peripheral regions
+        ds.wire_boot_peripherals(&[pcb]);
+        assert_eq!(ds.cached_peripherals(0), [None, None]);
+    }
+
+    #[test]
+    fn wire_boot_peripherals_shared_peripheral_cached_for_both() {
+        let ds = DynamicStrategy::new();
+        // Both partitions share the same peripheral at 0x4000_0000.
+        let pcb0 = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+        let pcb1 = PartitionControlBlock::new(
+            1,
+            0x0,
+            0x2000_8000,
+            0x2000_9000,
+            MpuRegion::new(0x2000_8000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+
+        // Only 1 wired (deduped), but both partitions must have it cached.
+        assert_eq!(ds.wire_boot_peripherals(&[pcb0, pcb1]), 1);
+
+        let rasr = build_rasr(
+            4096u32.trailing_zeros() - 1,
+            AP_FULL_ACCESS,
+            true,
+            (true, false, true),
+        );
+
+        let cached0 = ds.cached_peripherals(0);
+        assert_eq!(
+            cached0[0],
+            Some(WindowDescriptor {
+                base: 0x4000_0000,
+                size: 4096,
+                permissions: rasr,
+                owner: 0
+            })
+        );
+        assert_eq!(cached0[1], None);
+
+        let cached1 = ds.cached_peripherals(1);
+        assert_eq!(
+            cached1[0],
+            Some(WindowDescriptor {
+                base: 0x4000_0000,
+                size: 4096,
+                permissions: rasr,
+                owner: 1
+            })
+        );
+        assert_eq!(cached1[1], None);
     }
 }
