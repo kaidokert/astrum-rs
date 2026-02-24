@@ -1045,11 +1045,17 @@ where
             let internal_stack_base = internal_stack.as_ptr() as u32;
             let internal_stack_size = (internal_stack.len() * 4) as u32;
             let sp = align_down_8(internal_stack_base.wrapping_add(internal_stack_size));
-            let mpu_region = crate::partition::MpuRegion::new(
-                internal_stack_base,
-                c.mpu_region.size(),
-                c.mpu_region.permissions(),
-            );
+            // Sentinel (size==0): derive base from internal stack.
+            // User-configured (size>0): preserve the caller's mpu_region.
+            let mpu_region = if c.mpu_region.size() == 0 {
+                crate::partition::MpuRegion::new(
+                    internal_stack_base,
+                    c.mpu_region.size(),
+                    c.mpu_region.permissions(),
+                )
+            } else {
+                c.mpu_region
+            };
             let pcb = PartitionControlBlock::new(
                 c.id,
                 c.entry_point,
@@ -5906,11 +5912,12 @@ mod tests {
             },
         ];
         let k = try_kernel_new(s, &cfgs).unwrap();
-        for i in 0..2 {
+        for (i, cfg) in cfgs.iter().enumerate() {
             let pcb = k.partitions().get(i).unwrap();
-            assert_eq!(pcb.mpu_region().base(), pcb.stack_base());
-            assert_eq!(pcb.mpu_region().size(), 1024);
-            assert_eq!(pcb.mpu_region().permissions(), 0x0306_0000);
+            // User-configured (size>0): base preserved from config.
+            assert_eq!(pcb.mpu_region().base(), cfg.mpu_region.base());
+            assert_eq!(pcb.mpu_region().size(), cfg.mpu_region.size());
+            assert_eq!(pcb.mpu_region().permissions(), cfg.mpu_region.permissions());
         }
     }
 
@@ -5963,7 +5970,7 @@ mod tests {
                 entry_point: 0x0800_0000,
                 stack_base: 0x2000_0000,
                 stack_size: 4096,
-                mpu_region: MpuRegion::new(0x2000_0000, 8192, 0),
+                mpu_region: MpuRegion::new(0x2000_0000, 16384, 0),
                 peripheral_regions: heapless::Vec::new(),
             },
             PartitionConfig {
@@ -5971,7 +5978,7 @@ mod tests {
                 entry_point: 0x0800_2000,
                 stack_base: 0x2000_2000,
                 stack_size: 4096,
-                mpu_region: MpuRegion::new(0x2000_2000, 8192, 0),
+                mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
                 peripheral_regions: heapless::Vec::new(),
             },
         ];
@@ -6143,8 +6150,8 @@ mod tests {
         let pcb = k.partitions().get(0).unwrap();
         assert_eq!(pcb.id(), cfg.id);
         assert_eq!(pcb.entry_point(), cfg.entry_point);
-        // mpu_region.base comes from internal stack, not config; verify via stack_base.
-        assert_eq!(pcb.mpu_region().base(), pcb.stack_base());
+        // User-configured (size>0): base preserved from config.
+        assert_eq!(pcb.mpu_region().base(), cfg.mpu_region.base());
         assert_eq!(pcb.mpu_region().size(), cfg.mpu_region.size());
         assert_eq!(pcb.mpu_region().permissions(), cfg.mpu_region.permissions());
     }
@@ -6190,8 +6197,8 @@ mod tests {
             let pcb = k.partitions().get(i).unwrap();
             assert_eq!(pcb.id(), cfg.id);
             assert_eq!(pcb.entry_point(), cfg.entry_point);
-            // mpu_region.base comes from internal stack, not config.
-            assert_eq!(pcb.mpu_region().base(), pcb.stack_base());
+            // User-configured (size>0): base preserved from config.
+            assert_eq!(pcb.mpu_region().base(), cfg.mpu_region.base());
             assert_eq!(pcb.mpu_region().size(), cfg.mpu_region.size());
             assert_eq!(pcb.mpu_region().permissions(), cfg.mpu_region.permissions());
         }
@@ -8037,6 +8044,45 @@ mod tests {
             "P0 should be Running after schedule switches to it"
         );
         assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
+    /// Boot guard: fix_mpu_data_region only for sentinel (size==0).
+    #[test]
+    fn fix_mpu_data_region_skipped_for_user_configured_partition() {
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 50)).unwrap();
+        s.add(ScheduleEntry::new(1, 50)).unwrap();
+        let cfgs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0000,
+                stack_base: 0x2000_0000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0, 0, 0),
+                peripheral_regions: heapless::Vec::new(),
+            },
+            PartitionConfig {
+                id: 1,
+                entry_point: 0x0800_1000,
+                stack_base: 0x2000_1000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
+                peripheral_regions: heapless::Vec::new(),
+            },
+        ];
+        let mut k = try_kernel_new(s, &cfgs).unwrap();
+        for i in 0..2 {
+            let sz = k.partitions().get(i).unwrap().mpu_region().size();
+            if sz == 0 {
+                let base = k.partitions().get(i).unwrap().stack_base();
+                assert!(k.fix_mpu_data_region(i, base));
+            }
+        }
+        let p0 = k.partitions().get(0).unwrap();
+        assert_eq!(p0.mpu_region().base(), p0.stack_base());
+        let p1 = k.partitions().get(1).unwrap();
+        assert_eq!(p1.mpu_region().base(), 0x2004_0000);
+        assert_eq!(p1.mpu_region().size(), 2048);
     }
 
     /// Test module for `define_unified_kernel!` macro.

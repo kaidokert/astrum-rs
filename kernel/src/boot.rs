@@ -253,8 +253,13 @@ where
             if !k.fix_stack_region(i, base, size) {
                 return Err(BootError::StackRegionError { partition_index: i });
             }
-            // Sync PCB MPU data region base with actual stack buffer address.
-            if !k.fix_mpu_data_region(i, base) {
+            // Only fix MPU data region for sentinel (size==0) partitions;
+            // user-configured partitions keep their original base.
+            let is_sentinel = k
+                .partitions()
+                .get(i)
+                .is_some_and(|p| p.mpu_region().size() == 0);
+            if is_sentinel && !k.fix_mpu_data_region(i, base) {
                 return Err(BootError::MpuDataRegionError { partition_index: i });
             }
         }
