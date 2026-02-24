@@ -1833,6 +1833,104 @@ mod tests {
         h.assert_no_switch_to_waiting();
     }
 
+    /// Stress test: 4 partitions with two rounds of mixed blocking (sem + events).
+    /// Round 1: P0 SemWait→block, P1 EventWait→block, P2 SemSignal→wake P0.
+    /// Round 2: P3 EventSet→wake P1, P3 SemWait→block.
+    /// Then 200 ticks verify at-most-one-Running across 8+ transitions and
+    /// major-frame wrap-around while P3 stays Waiting.
+    #[test]
+    fn multi_partition_mixed_blocking_cycled_stress() {
+        use crate::invariants::assert_partition_state_consistency;
+
+        let mut h = KernelTestHarness::with_partitions(4).expect("harness setup");
+        h.kernel_mut()
+            .semaphores_mut()
+            .add(Semaphore::new(0, 1))
+            .expect("add semaphore");
+        h.kernel_mut().start_schedule();
+
+        let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
+        let check = |h: &KernelTestHarness| {
+            assert_partition_state_consistency(h.kernel().partitions().as_slice());
+        };
+
+        // --- Round 1: P0 blocks on sem, P1 blocks on events ---
+        assert_eq!(st(&h, 0), PartitionState::Running);
+        check(&h);
+
+        // P0 SemWait (blocks, count=0).
+        let f = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(f.r0, 0, "blocking SemWait must return 0");
+        assert_eq!(st(&h, 0), PartitionState::Waiting);
+        check(&h);
+
+        h.process_pending_yield(); // → P1 Running
+        assert_eq!(st(&h, 1), PartitionState::Running);
+        check(&h);
+
+        // P1 EventWait (blocks, mask=0x1, no flags set).
+        let f = h.dispatch_as(1, SYS_EVT_WAIT, 1, 0x1, 0);
+        assert_eq!(f.r0, 0, "blocking EventWait must return 0");
+        assert_eq!(st(&h, 1), PartitionState::Waiting);
+        check(&h);
+
+        h.process_pending_yield(); // → P2 Running
+        assert_eq!(st(&h, 2), PartitionState::Running);
+        check(&h);
+
+        // P2 signals semaphore → wakes P0 (Waiting→Ready).
+        let f = h.dispatch_as(2, SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(f.r0, 0, "SemSignal must succeed");
+        assert_eq!(st(&h, 0), PartitionState::Ready);
+        check(&h);
+
+        // P2 yields → P3 Running.
+        let f = h.dispatch_as(2, SYS_YIELD, 0, 0, 0);
+        assert_eq!(f.r0, 0);
+        h.process_pending_yield();
+        assert_eq!(st(&h, 3), PartitionState::Running);
+        check(&h);
+
+        // --- Round 2: P3 wakes P1 via EventSet, then blocks on sem ---
+        // P3 sets event on P1 (mask=0x1) → wakes P1 (Waiting→Ready).
+        let f = h.dispatch_as(3, SYS_EVT_SET, 1, 0x1, 0);
+        assert_eq!(f.r0, 0, "EventSet must succeed");
+        assert_eq!(st(&h, 1), PartitionState::Ready);
+        check(&h);
+
+        // P3 SemWait (blocks, count=0 — consumed by P0 wake).
+        let f = h.dispatch_as(3, SYS_SEM_WAIT, 0, 3, 0);
+        assert_eq!(f.r0, 0, "blocking SemWait must return 0");
+        assert_eq!(st(&h, 3), PartitionState::Waiting);
+        check(&h);
+
+        // --- Tick cycling: 8+ transitions across major-frame wrap-around ---
+        // Schedule: [P0:10, P1:10, P2:10, P3:10].
+        // P3 is Waiting → skipped. 200 ticks = 5+ major frames.
+        h.process_pending_yield();
+        check(&h);
+
+        let mut transitions = 0u32;
+        for _ in 0..200 {
+            let event = h.kernel_mut().advance_schedule_tick();
+            check(&h);
+            if let ScheduleEvent::PartitionSwitch(pid) = event {
+                transitions += 1;
+                assert_ne!(pid, 3, "scheduler must never switch to Waiting P3");
+            }
+        }
+        assert!(
+            transitions >= 8,
+            "expected 8+ schedule transitions, got {transitions}"
+        );
+
+        // P0, P1, P2 schedulable; P3 still Waiting (never woken).
+        assert_eq!(st(&h, 3), PartitionState::Waiting);
+        assert_ne!(st(&h, 0), PartitionState::Waiting);
+        assert_ne!(st(&h, 1), PartitionState::Waiting);
+        assert_ne!(st(&h, 2), PartitionState::Waiting);
+    }
+
     // TODO: sem_wait_timed_expiry_waiting_to_ready — SYS_SEM_WAIT_TIMED does not
     // exist yet; the semaphore pool has no timed-wait mechanism and expire_timed_waits
     // does not drain semaphore timeouts. Add this test once SemWaitTimed is implemented.
