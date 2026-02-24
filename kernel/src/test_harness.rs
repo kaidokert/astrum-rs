@@ -1594,4 +1594,79 @@ mod tests {
             "P1 must remain Ready when no yield was requested"
         );
     }
+
+    /// Full blocking IPC round-trip: P0 blocks on SemWait, schedule advances
+    /// to P1, P1 signals the semaphore waking P0, schedule returns to P0.
+    #[test]
+    fn blocking_ipc_deschedule_round_trip() {
+        let mut h = KernelTestHarness::with_semaphores(&[0]).expect("harness setup");
+        h.kernel_mut().start_schedule();
+
+        let st = |h: &KernelTestHarness, i| h.kernel().partitions().get(i).unwrap().state();
+
+        // -- Initial state: P0 Running, P1 Ready --
+        assert_eq!(st(&h, 0), PartitionState::Running, "P0 must start Running");
+        assert_eq!(st(&h, 1), PartitionState::Ready, "P1 must start Ready");
+
+        // -- Step 1: P0 dispatches SemWait (count=0) → P0 blocks --
+        let wait_frame = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(wait_frame.r0, 0, "blocking SemWait must return 0");
+        assert_eq!(
+            st(&h, 0),
+            PartitionState::Waiting,
+            "P0 must be Waiting after blocking SemWait"
+        );
+        h.assert_blocking_triggered_deschedule(0);
+        h.assert_return_distinguishes_blocking(&wait_frame, true);
+
+        // -- Step 2: Process pending yield → schedule advances to P1 --
+        h.process_pending_yield();
+        assert!(
+            !h.kernel().yield_requested,
+            "yield_requested must be cleared"
+        );
+        assert_eq!(
+            st(&h, 0),
+            PartitionState::Waiting,
+            "P0 must remain Waiting after yield"
+        );
+        assert_eq!(
+            st(&h, 1),
+            PartitionState::Running,
+            "P1 must be Running after yield"
+        );
+
+        // -- Step 3: P1 dispatches SemSignal → wakes P0 (Waiting→Ready) --
+        let sig_frame = h.dispatch_as(1, SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(sig_frame.r0, 0, "SemSignal must succeed");
+        assert_eq!(
+            st(&h, 0),
+            PartitionState::Ready,
+            "P0 must be Ready after signal wakes it"
+        );
+        assert_eq!(
+            st(&h, 1),
+            PartitionState::Running,
+            "P1 must remain Running after signal"
+        );
+
+        // -- Step 4: Advance schedule back to P0 via SYS_YIELD from P1 --
+        let yield_frame = h.dispatch_as(1, SYS_YIELD, 0, 0, 0);
+        assert_eq!(yield_frame.r0, 0, "SYS_YIELD must return 0");
+        h.process_pending_yield();
+        assert_eq!(
+            st(&h, 0),
+            PartitionState::Running,
+            "P0 must be Running after schedule returns"
+        );
+        assert_eq!(
+            st(&h, 1),
+            PartitionState::Ready,
+            "P1 must be Ready after yielding"
+        );
+
+        // Semaphore count must be 0: one signal consumed by the wakeup.
+        let sem = h.kernel().semaphores().get(0).expect("semaphore 0 exists");
+        assert_eq!(sem.count(), 0, "semaphore count must be 0 after round-trip");
+    }
 }
