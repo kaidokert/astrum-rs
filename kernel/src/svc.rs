@@ -7358,6 +7358,117 @@ mod tests {
         k.transition_outgoing_ready();
     }
 
+    #[test]
+    fn transition_outgoing_ready_noop_when_active_partition_waiting() {
+        let mut k = kernel_with_schedule();
+
+        // Put P0 into Running, then block it (Running → Waiting).
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+
+        // transition_outgoing_ready should be a no-op: P0 is Waiting, not Running.
+        k.transition_outgoing_ready();
+
+        // P0 must remain Waiting — not spuriously moved to Ready.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+    }
+
+    #[test]
+    fn transition_outgoing_ready_at_major_frame_boundary() {
+        let mut k = kernel_with_schedule();
+
+        // Schedule: P0(5 ticks) | P1(3 ticks). Major frame = 8 ticks.
+        // Make P0 Running in slot 0.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Advance 5 ticks to exhaust P0's slot → switch to P1.
+        for _ in 0..4 {
+            let ev = k.advance_schedule_tick();
+            assert_eq!(ev.partition_id(), None);
+        }
+        let ev = k.advance_schedule_tick();
+        assert_eq!(ev.partition_id(), Some(1));
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Running
+        );
+
+        // Advance 3 ticks to exhaust P1's slot → wrap to slot 0 (P0).
+        for _ in 0..2 {
+            let ev = k.advance_schedule_tick();
+            assert_eq!(ev.partition_id(), None);
+        }
+        // 3rd tick triggers major frame boundary wrap-around: P1 → P0.
+        let ev = k.advance_schedule_tick();
+        assert_eq!(ev.partition_id(), Some(0));
+
+        // P1 (outgoing) transitioned Running → Ready at major frame boundary.
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
+        // P0 (incoming) is now Running.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(k.active_partition(), Some(0));
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
+    #[test]
+    fn transition_after_yield_at_end_of_major_frame() {
+        let mut k = kernel_with_schedule();
+
+        // Schedule: P0(5 ticks) | P1(3 ticks). Major frame = 8 ticks.
+        // Make P0 Running in slot 0, then advance to P1's slot.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        for _ in 0..5 {
+            k.advance_schedule_tick();
+        }
+        // P1 is now Running in the last slot before wrap-around.
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(k.active_partition(), Some(1));
+
+        // Yield in the last slot — force_advance wraps to slot 0 (P0).
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), Some(0));
+
+        // P1 (outgoing) transitioned Running → Ready via wrap-around yield.
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready
+        );
+        // P0 is now the active partition.
+        assert_eq!(k.active_partition(), Some(0));
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
