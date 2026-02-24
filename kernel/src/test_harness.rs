@@ -398,6 +398,7 @@ impl KernelTestHarness {
 mod tests {
     use super::*;
     use crate::scheduler::ScheduleEvent;
+    use crate::svc::validate_user_ptr;
     use crate::syscall::{
         SYS_EVT_SET, SYS_EVT_WAIT, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK,
         SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
@@ -1167,6 +1168,64 @@ mod tests {
             p1_regions.len(),
             2,
             "P1 accessible_static_regions must include only data + stack"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Peripheral region pointer validation boundary tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn validate_ptr_peripheral_base_accepted() {
+        let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
+        assert!(
+            validate_user_ptr(h.kernel().partitions(), 0, 0x4000_0000, 1),
+            "pointer at peripheral base must be accepted"
+        );
+    }
+
+    #[test]
+    fn validate_ptr_peripheral_last_byte_accepted() {
+        let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
+        assert!(
+            validate_user_ptr(h.kernel().partitions(), 0, 0x4000_00FF, 1),
+            "pointer at base+size-1 with len=1 must be accepted"
+        );
+    }
+
+    #[test]
+    fn validate_ptr_peripheral_just_past_end_rejected() {
+        let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
+        assert!(
+            !validate_user_ptr(h.kernel().partitions(), 0, 0x4000_0100, 1),
+            "pointer at base+size must be rejected"
+        );
+    }
+
+    #[test]
+    fn validate_ptr_peripheral_just_before_base_rejected() {
+        let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
+        assert!(
+            !validate_user_ptr(h.kernel().partitions(), 0, 0x3FFF_FFFF, 1),
+            "pointer at base-1 must be rejected"
+        );
+    }
+
+    #[test]
+    fn validate_ptr_peripheral_spanning_end_rejected() {
+        let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
+        assert!(
+            !validate_user_ptr(h.kernel().partitions(), 0, 0x4000_00FF, 2),
+            "pointer spanning past peripheral region end must be rejected"
+        );
+    }
+
+    #[test]
+    fn validate_ptr_peripheral_wrong_partition_rejected() {
+        let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
+        assert!(
+            !validate_user_ptr(h.kernel().partitions(), 1, 0x4000_0000, 1),
+            "P1 (no peripheral) must not access P0 peripheral address"
         );
     }
 }
