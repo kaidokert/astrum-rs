@@ -2837,6 +2837,16 @@ mod tests {
         k
     }
 
+    /// Safe wrapper for `Kernel::dispatch` in test code.
+    ///
+    /// Consolidates the repeated `unsafe { k.dispatch(ef) }` pattern behind
+    /// a safe interface. The safety justification is documented once here
+    /// rather than at each call site.
+    fn dispatch_checked(k: &mut Kernel<TestConfig>, ef: &mut ExceptionFrame) {
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(ef) }
+    }
+
     // -------------------------------------------------------------------------
     // Runtime alignment assertion tests
     // -------------------------------------------------------------------------
@@ -5358,6 +5368,119 @@ mod tests {
             k.yield_requested(),
             "yield_requested should be true after blocking send"
         );
+    }
+
+    // ---- blocking-path completeness meta-test ----
+
+    /// Regression gate: every blocking syscall MUST transition to Waiting
+    /// and set yield_requested (proving trigger_deschedule was called).
+    /// If a new blocking path is added and this test is not updated, the
+    /// coverage gap should be caught during code review.
+    #[test]
+    fn all_blocking_paths_set_waiting_and_yield_requested() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::{
+            SYS_BB_READ, SYS_EVT_WAIT, SYS_MTX_LOCK, SYS_QUEUING_RECV_TIMED,
+            SYS_QUEUING_SEND_TIMED, SYS_SEM_WAIT,
+        };
+
+        // Shared assertion: after a blocking dispatch the caller partition
+        // must be Waiting and yield_requested must be true.
+        macro_rules! assert_blocked {
+            ($k:expr, $pid:expr, $label:expr) => {
+                assert_eq!(
+                    $k.partitions().get($pid).unwrap().state(),
+                    PartitionState::Waiting,
+                    "{}: partition must be Waiting",
+                    $label
+                );
+                assert!(
+                    $k.yield_requested(),
+                    "{}: yield_requested must be true",
+                    $label
+                );
+            };
+        }
+
+        // --- EventWait: no bits set → blocks immediately ---
+        {
+            let mut k = kernel(0, 0, 0);
+            let mut ef = frame(SYS_EVT_WAIT, 0, 0b1010);
+            dispatch_checked(&mut k, &mut ef);
+            assert_eq!(ef.r0, 0);
+            assert_blocked!(k, 0, "EventWait");
+        }
+
+        // --- SemWait: count starts at 1; second wait blocks ---
+        {
+            let mut k = kernel(1, 0, 0);
+            let mut ef = frame(SYS_SEM_WAIT, 0, 0);
+            dispatch_checked(&mut k, &mut ef);
+            assert_eq!(ef.r0, 1, "SemWait: first wait should acquire");
+            let mut ef = frame(SYS_SEM_WAIT, 0, 0);
+            dispatch_checked(&mut k, &mut ef);
+            assert_eq!(ef.r0, 0);
+            assert_blocked!(k, 0, "SemWait");
+        }
+
+        // --- MutexLock: partition 0 acquires; partition 1 blocks ---
+        {
+            let mut k = kernel(0, 1, 0);
+            let mut ef = frame(SYS_MTX_LOCK, 0, 0);
+            dispatch_checked(&mut k, &mut ef);
+            assert_eq!(ef.r0, 1, "MutexLock: first lock should acquire");
+            k.set_current_partition(1);
+            let mut ef = frame(SYS_MTX_LOCK, 0, 1);
+            dispatch_checked(&mut k, &mut ef);
+            assert_eq!(ef.r0, 0);
+            assert_blocked!(k, 1, "MutexLock");
+        }
+
+        // --- QueuingRecvTimed: empty destination port → blocks ---
+        // NOTE: low32_buf(0) reuse is intentional — each sub-test runs in its
+        // own block with a fresh Kernel, so the buffer identity does not matter;
+        // only the address (which must fall within the partition's MPU region).
+        {
+            let mut k = kernel(0, 0, 0);
+            let _dst = k
+                .queuing_mut()
+                .create_port(PortDirection::Destination)
+                .unwrap();
+            let ptr = low32_buf(0);
+            let mut ef = frame4(SYS_QUEUING_RECV_TIMED, _dst as u32, 50, ptr as u32);
+            dispatch_checked(&mut k, &mut ef);
+            assert_eq!(ef.r0, 0);
+            assert_blocked!(k, 0, "QueuingRecvTimed");
+        }
+
+        // --- QueuingSendTimed: full destination queue → blocks ---
+        {
+            let mut k = kernel(0, 0, 0);
+            let (s, d) = connected_send_pair(&mut k);
+            for _ in 0..4 {
+                k.queuing_mut()
+                    .get_mut(d)
+                    .unwrap()
+                    .inject_message(1, &[0x42]);
+            }
+            let ptr = low32_buf(0);
+            let r2 = pack_r2(50, 1);
+            let mut ef = frame4(SYS_QUEUING_SEND_TIMED, s as u32, r2, ptr as u32);
+            dispatch_checked(&mut k, &mut ef);
+            assert_eq!(ef.r0, 0);
+            assert_blocked!(k, 0, "QueuingSendTimed");
+        }
+
+        // --- BbRead: empty blackboard with timeout → blocks ---
+        {
+            let mut k = kernel(0, 0, 0);
+            let id = k.blackboards_mut().create().unwrap();
+            let ptr = low32_buf(0);
+            let mut ef = frame4(SYS_BB_READ, id as u32, 50, ptr as u32);
+            dispatch_checked(&mut k, &mut ef);
+            assert_eq!(ef.r0, 0);
+            assert_blocked!(k, 0, "BbRead");
+        }
     }
 
     // ---- hw_uart integration tests ----
