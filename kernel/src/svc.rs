@@ -3154,9 +3154,30 @@ mod tests {
             #[cfg(feature = "dynamic-mpu")]
             registry,
         );
-        assert!(
-            result.is_ok(),
-            "Kernel::new() should accept mpu_region size==0 sentinel"
+        let kernel = result.expect("Kernel::new() should accept mpu_region size==0 sentinel");
+        let pcb = kernel.partitions().get(0).expect("partition 0 must exist");
+
+        // Both mpu_region.base and pcb.stack_base are set from the same
+        // internal_stack_base value during Kernel::new (svc.rs:1045/1052/1062).
+        // Comparing them proves the sentinel base was derived from the
+        // internal stack, not from the config's stack_base or left at 0.
+        assert_eq!(
+            pcb.mpu_region().base(),
+            pcb.stack_base(),
+            "sentinel mpu_region base must equal internal stack base"
+        );
+        // Sentinel base must differ from the config-provided address (0),
+        // proving it was actually overwritten with the real stack address.
+        assert_ne!(
+            pcb.mpu_region().base(),
+            0,
+            "sentinel mpu_region base must not remain at config value 0"
+        );
+        // The sentinel size==0 must be preserved, not overwritten.
+        assert_eq!(
+            pcb.mpu_region().size(),
+            0,
+            "sentinel mpu_region size must remain 0"
         );
     }
 
