@@ -916,6 +916,42 @@ mod tests {
         assert_eq!(pcb.mpu_region().permissions(), 0x0306_0000);
     }
 
+    #[test]
+    fn fix_mpu_data_region_preserves_peripheral_regions() {
+        // PCB with a sentinel mpu_region (base=0, size=0) and two
+        // peripheral regions.  fix_mpu_data_region must update only
+        // the data region base without disturbing peripheral_regions.
+        let mut pcb = PartitionControlBlock::new(
+            1,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0400,
+            MpuRegion::new(0, 0, 0), // sentinel
+        )
+        .with_peripheral_regions(&[
+            MpuRegion::new(0x4000_0000, 0x1000, 0x03),
+            MpuRegion::new(0x4000_1000, 0x1000, 0x03),
+        ]);
+
+        // Pre-conditions: sentinel base and two peripheral regions.
+        assert_eq!(pcb.mpu_region().base(), 0);
+        assert_eq!(pcb.peripheral_regions().len(), 2);
+
+        pcb.fix_mpu_data_region(0x2007_0000);
+
+        // mpu_region base updated.
+        assert_eq!(pcb.mpu_region().base(), 0x2007_0000);
+
+        // peripheral_regions unchanged.
+        assert_eq!(pcb.peripheral_regions().len(), 2);
+        assert_eq!(pcb.peripheral_regions()[0].base(), 0x4000_0000);
+        assert_eq!(pcb.peripheral_regions()[0].size(), 0x1000);
+        assert_eq!(pcb.peripheral_regions()[0].permissions(), 0x03);
+        assert_eq!(pcb.peripheral_regions()[1].base(), 0x4000_1000);
+        assert_eq!(pcb.peripheral_regions()[1].size(), 0x1000);
+        assert_eq!(pcb.peripheral_regions()[1].permissions(), 0x03);
+    }
+
     // ------------------------------------------------------------------
     // promote_sentinel_mpu
     // ------------------------------------------------------------------
