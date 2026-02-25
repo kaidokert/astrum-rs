@@ -8837,6 +8837,87 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    #[test]
+    fn bug05_queuing_send_timed_blocks_then_yield_no_partner() {
+        use crate::invariants::assert_partition_state_consistency;
+        use crate::syscall::SYS_QUEUING_SEND_TIMED;
+        let mut k = kernel_with_schedule();
+
+        // Step 0: Create a connected Source→Destination queuing port pair.
+        let (src, dst) = connected_send_pair(&mut k);
+
+        // Fill the destination queue to capacity (QD=4) so send blocks.
+        for _ in 0..4 {
+            k.queuing_mut()
+                .get_mut(dst)
+                .unwrap()
+                .inject_message(1, &[0x42]);
+        }
+
+        // Step 1: Transition P1 to Waiting so yield finds no partner.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting,
+            "precondition: P1 must be Waiting"
+        );
+
+        // Step 2: Set up P0 as the active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.set_current_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "precondition: P0 must be Running"
+        );
+
+        // Step 3: Dispatch SYS_QUEUING_SEND_TIMED on full queue → SenderBlocked.
+        // Use P0's MPU region base as the data pointer.
+        let mpu_base = k.partitions().get(0).unwrap().mpu_region().base();
+        let ptr = mpu_base as *mut u8;
+        let r2 = pack_r2(50, 1); // timeout_hi16=50, data_len_lo16=1
+        let mut ef = frame4(SYS_QUEUING_SEND_TIMED, src as u32, r2, ptr as u32);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "blocking queuing send must return 0");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must be Waiting after blocking queuing send"
+        );
+        assert!(
+            k.yield_requested(),
+            "blocking queuing send must set yield_requested"
+        );
+
+        // Step 4: Simulate harness yield handling: clear flag, yield.
+        k.set_yield_requested(false);
+        let result = k.yield_current_slot();
+        assert_eq!(
+            result.partition_id(),
+            None,
+            "yield must return None when no runnable partner exists"
+        );
+
+        // Step 5: P0 must still be Waiting — not reverted to Ready.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+        );
+        assert_eq!(
+            k.active_partition(),
+            Some(0),
+            "active_partition must still be P0"
+        );
+
+        // At-most-one-Running invariant must hold.
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
