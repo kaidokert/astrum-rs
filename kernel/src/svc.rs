@@ -7730,6 +7730,134 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    /// Bug 05 regression (criterion #5): a blocking syscall (SYS_EVT_WAIT
+    /// with no events set) transitions P0 to Waiting, then
+    /// yield_current_slot() finds no runnable partner and returns None.
+    /// P0 must remain Waiting — not revert to Ready.
+    #[test]
+    fn bug05_blocking_syscall_stays_waiting_after_yield_no_partner() {
+        use crate::invariants::assert_partition_state_consistency;
+        let mut k = kernel_with_schedule();
+
+        // Transition P1 to Waiting (Ready → Running → Waiting)
+        // so yield_current_slot() finds no runnable partner.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting,
+            "precondition: P1 must be Waiting"
+        );
+
+        // Set up P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "precondition: P0 must be Running"
+        );
+
+        // Dispatch blocking SYS_EVT_WAIT (no events set → blocks, returns 0).
+        let mut ef = frame(SYS_EVT_WAIT, 0, 0b1010);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "blocking EventWait must return 0");
+        assert!(
+            k.yield_requested(),
+            "blocking EventWait must set yield_requested"
+        );
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must be Waiting after blocking EventWait"
+        );
+
+        // Simulate harness yield handling: clear flag, call yield_current_slot().
+        k.set_yield_requested(false);
+        let result = k.yield_current_slot();
+        assert_eq!(
+            result.partition_id(),
+            None,
+            "yield must return None when no runnable partner exists"
+        );
+
+        // P0 must still be Waiting — not reverted to Ready.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+        );
+        assert_eq!(
+            k.active_partition(),
+            Some(0),
+            "active_partition must still be P0"
+        );
+
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
+    /// Bug 05 regression (criteria #3/#6): dispatch SYS_YIELD, simulate
+    /// harness yield handling, then dispatch SYS_GET_TIME. The second
+    /// dispatch calls assert_dispatch_invariants at entry — if Bug 05
+    /// were present, P0 would be Ready (not Running) and the invariant
+    /// check would panic with "active 0 is Ready".
+    #[test]
+    fn bug05_dispatch_yield_then_second_svc_no_invariant_panic() {
+        use crate::invariants::assert_partition_state_consistency;
+        let mut k = kernel_with_schedule();
+
+        // Transition P1 to Waiting (Ready → Running → Waiting).
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // Set up P0 as active Running partition with matching current_partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.set_current_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "precondition: P0 must be Running"
+        );
+
+        // Step 1: Dispatch SYS_YIELD — goes through assert_dispatch_invariants.
+        let mut ef = frame(SYS_YIELD, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "SYS_YIELD must return 0");
+        assert!(k.yield_requested(), "SYS_YIELD must set yield_requested");
+
+        // Step 2: Simulate harness yield handling.
+        k.set_yield_requested(false);
+        let result = k.yield_current_slot();
+        assert_eq!(
+            result.partition_id(),
+            None,
+            "yield must return None when no runnable partner exists"
+        );
+
+        // P0 must still be Running after yield found no partner.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "P0 must stay Running after yield with no partner"
+        );
+
+        // Step 3: Dispatch SYS_GET_TIME — assert_dispatch_invariants runs
+        // at entry. If Bug 05 were present, P0 would be Ready and the
+        // invariant would panic.
+        let mut ef2 = frame(crate::syscall::SYS_GET_TIME, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef2) };
+        // GET_TIME returns the current tick (0 for a fresh kernel).
+        assert_eq!(ef2.r0, 0, "SYS_GET_TIME must return current tick low word");
+
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
