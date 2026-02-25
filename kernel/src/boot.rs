@@ -207,6 +207,26 @@ pub fn check_sentinel_mpu_enforce(
     Ok(())
 }
 
+/// Apply MPU data region fixup for sentinel partitions only.
+///
+/// If the partition's `mpu_region` has size==0 (sentinel), updates its base
+/// to `stack_base`. User-configured partitions (size>0) are left unchanged.
+///
+/// Returns `true` if the partition was a sentinel and was updated,
+/// `false` if it was user-configured and skipped.
+#[inline]
+pub fn fix_mpu_data_region_if_sentinel(
+    pcb: &mut crate::partition::PartitionControlBlock,
+    stack_base: u32,
+) -> bool {
+    if pcb.mpu_region().size() == 0 {
+        pcb.fix_mpu_data_region(stack_base);
+        true
+    } else {
+        false
+    }
+}
+
 /// AAPCS requires 8-byte stack pointer alignment at public interfaces.
 pub const AAPCS_STACK_ALIGNMENT: u32 = 8;
 
@@ -293,12 +313,11 @@ where
             }
             // Only fix MPU data region for sentinel (size==0) partitions;
             // user-configured partitions keep their original base.
-            let is_sentinel = k
-                .partitions()
-                .get(i)
-                .is_some_and(|p| p.mpu_region().size() == 0);
-            if is_sentinel && !k.fix_mpu_data_region(i, base) {
-                return Err(BootError::MpuDataRegionError { partition_index: i });
+            match k.partitions_mut().get_mut(i) {
+                Some(pcb) => {
+                    fix_mpu_data_region_if_sentinel(pcb, base);
+                }
+                None => return Err(BootError::MpuDataRegionError { partition_index: i }),
             }
         }
         // Reject sentinel partitions when MPU enforcement is active.
@@ -699,6 +718,53 @@ mod tests {
         assert_eq!(
             result,
             Err(BootError::SentinelMpuWithEnforce { partition_index: 1 })
+        );
+    }
+
+    #[test]
+    fn boot_fixup_sentinel_updated_user_configured_skipped() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+
+        // Partition 0: sentinel (mpu_region size==0)
+        let mut sentinel = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0400,
+            MpuRegion::new(0, 0, 0),
+        );
+        // Partition 1: user-configured (mpu_region size>0)
+        let mut configured = PartitionControlBlock::new(
+            1,
+            0x0800_1000,
+            0x2000_1000,
+            0x2000_1400,
+            MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
+        );
+
+        let stack_base_0: u32 = 0x2008_0000;
+        let stack_base_1: u32 = 0x2009_0000;
+
+        // Apply fixup to sentinel partition — should update base
+        let updated = fix_mpu_data_region_if_sentinel(&mut sentinel, stack_base_0);
+        assert!(updated, "sentinel partition should be updated");
+        assert_eq!(sentinel.mpu_region().base(), stack_base_0);
+        assert_eq!(sentinel.mpu_region().size(), 0, "size stays 0");
+        assert_eq!(sentinel.mpu_region().permissions(), 0, "permissions stay 0");
+
+        // Apply fixup to user-configured partition — should be skipped
+        let skipped = fix_mpu_data_region_if_sentinel(&mut configured, stack_base_1);
+        assert!(!skipped, "user-configured partition should be skipped");
+        assert_eq!(
+            configured.mpu_region().base(),
+            0x2004_0000,
+            "base unchanged"
+        );
+        assert_eq!(configured.mpu_region().size(), 2048, "size unchanged");
+        assert_eq!(
+            configured.mpu_region().permissions(),
+            0x0306_0000,
+            "permissions unchanged"
         );
     }
 
