@@ -8086,6 +8086,142 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    /// Bug 05 regression (wakeup-reblock cycle): exercises the full
+    /// block→switch→wake→run→reblock→yield lifecycle.
+    ///
+    /// Scenario: P0 Running, P1 Ready, schedule [P0:5, P1:3].
+    /// P0 blocks on SYS_SEM_WAIT. yield switches to P1. P1 signals
+    /// the semaphore (wakes P0 to Ready). Tick-driven advance exhausts
+    /// P1's slot, switching back to P0. P0 blocks on SYS_EVT_WAIT.
+    /// yield finds P1 Ready (budget exhausted but force_advance grants
+    /// a fresh slot) and switches to P1. Verifies the at-most-one-Running
+    /// invariant throughout.
+    #[test]
+    fn bug05_wakeup_reblock_cycle_full_lifecycle() {
+        use crate::invariants::assert_partition_state_consistency;
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+
+        // Semaphore with count 0 so SYS_SEM_WAIT will block.
+        k.semaphores_mut().add(Semaphore::new(0, 1)).unwrap();
+
+        // P0 as active Running partition, P1 stays Ready.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.set_current_partition(0);
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 1: P0 SYS_SEM_WAIT — blocks (Waiting).
+        let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "blocking SemWait must return 0");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must be Waiting after blocking SemWait"
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 2: yield_current_slot → P1 Ready, switches to P1.
+        k.set_yield_requested(false);
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), Some(1), "must switch to P1");
+        assert_eq!(k.active_partition(), Some(1));
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must stay Waiting (transition_outgoing_ready is no-op)"
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 3: Promote P1 to Running (harness context-switch).
+        k.set_next_partition(1);
+        k.set_current_partition(1);
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 4: P1 SYS_SEM_SIGNAL — wakes P0 (Waiting → Ready).
+        let mut ef_sig = frame(crate::syscall::SYS_SEM_SIGNAL, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef_sig) };
+        assert_eq!(ef_sig.r0, 0, "SemSignal must return 0");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready,
+            "P0 must be Ready after sem signal wake"
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 5: Advance 3 ticks to exhaust P1's slot → switch to P0.
+        for i in 0..2 {
+            let ev = k.advance_schedule_tick();
+            assert_eq!(ev, ScheduleEvent::None, "tick {}: interior", i + 1);
+        }
+        let ev = k.advance_schedule_tick();
+        assert_eq!(
+            ev,
+            ScheduleEvent::PartitionSwitch(0),
+            "3rd tick must trigger switch to P0"
+        );
+        assert_eq!(k.active_partition(), Some(0));
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready,
+            "P1 transitioned to Ready by transition_outgoing_ready"
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 6: Harness context-switch — advance_schedule_tick already
+        // promoted P0 to Running via set_next_partition(0); update current.
+        k.set_current_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Ready,
+            "P1 must remain Ready (budget exhausted, not Waiting)"
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 7: P0 SYS_EVT_WAIT — no events set, blocks again (Waiting).
+        let mut ef2 = frame(crate::syscall::SYS_EVT_WAIT, 0, 0b1010);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef2) };
+        assert_eq!(ef2.r0, 0, "blocking EventWait must return 0");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must be Waiting after blocking EventWait"
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 8: yield_current_slot — P1 is Ready, force_advance gives
+        // P1 a fresh slot and yield switches to it.
+        // TODO: yield_current_slot does not currently check per-frame budget;
+        // force_advance always grants a fresh slot.  If per-frame budget
+        // tracking is added, this assertion should change to expect None.
+        k.set_yield_requested(false);
+        let r2 = k.yield_current_slot();
+        assert_eq!(
+            r2.partition_id(),
+            Some(1),
+            "P1 is Ready — yield must switch to it"
+        );
+        assert_eq!(k.active_partition(), Some(1));
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must stay Waiting — transition_outgoing_ready is no-op"
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
