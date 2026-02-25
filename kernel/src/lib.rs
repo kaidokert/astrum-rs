@@ -82,6 +82,8 @@ pub mod virtual_uart;
 pub mod waitqueue;
 
 #[cfg(test)]
+pub mod ipc_integrity_tests;
+#[cfg(test)]
 pub mod test_harness;
 #[cfg(test)]
 pub mod test_mmap;
