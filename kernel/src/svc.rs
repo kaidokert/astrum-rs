@@ -7961,6 +7961,131 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    /// Bug 05 regression (idempotency): two consecutive trigger_deschedule()
+    /// calls without an intervening yield_current_slot() must not introduce
+    /// hidden side-effects.
+    #[test]
+    fn bug05_trigger_deschedule_idempotent_double_call() {
+        use crate::invariants::assert_partition_state_consistency;
+        let mut k = kernel_with_schedule();
+
+        // P1 → Waiting so yield finds no runnable partner.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // First trigger_deschedule.
+        let ret1 = k.trigger_deschedule();
+        assert_eq!(ret1, 0, "first trigger_deschedule must return 0");
+        assert!(k.yield_requested(), "yield_requested after first call");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Second trigger_deschedule — must be idempotent.
+        let ret2 = k.trigger_deschedule();
+        assert_eq!(ret2, 0, "second trigger_deschedule must return 0");
+        assert!(k.yield_requested(), "yield_requested after second call");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(k.active_partition(), Some(0));
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
+    /// Bug 05 regression (consecutive block): block→yield→wake→block→yield
+    /// cycle must preserve invariants. P0 blocks via SYS_EVT_WAIT, yield
+    /// finds no partner, woken via event_set, promoted to Running, blocks
+    /// again via SYS_SEM_WAIT, yield again finds no partner.
+    #[test]
+    fn bug05_consecutive_block_no_partner_preserves_invariant() {
+        use crate::invariants::assert_partition_state_consistency;
+        let mut k = kernel_with_schedule();
+
+        // Semaphore with count 0 so SYS_SEM_WAIT will block.
+        k.semaphores_mut().add(Semaphore::new(0, 1)).unwrap();
+
+        // P1 → Waiting so yield finds no runnable partner.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.set_current_partition(0);
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 1: SYS_EVT_WAIT — P0 blocks (no events set).
+        let mut ef = frame(SYS_EVT_WAIT, 0, 0b1010);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "blocking EventWait must return 0");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 2: Simulate harness yield (no partner).
+        k.set_yield_requested(false);
+        let r1 = k.yield_current_slot();
+        assert_eq!(r1.partition_id(), None, "no runnable partner");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 3: Wake P0 via event_set (simulates ISR/other partition).
+        let ret = crate::events::event_set(k.partitions_mut(), 0, 0b1010);
+        assert_eq!(ret, 0, "event_set must return 0");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 4: Promote P0 back to Running.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 5: SYS_SEM_WAIT — sem count 0, P0 blocks again.
+        let mut ef2 = frame(crate::syscall::SYS_SEM_WAIT, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef2) };
+        assert_eq!(ef2.r0, 0, "blocking SemWait must return 0");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Step 6: Simulate harness yield (no partner).
+        k.set_yield_requested(false);
+        let r2 = k.yield_current_slot();
+        assert_eq!(r2.partition_id(), None, "no runnable partner");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(k.active_partition(), Some(0));
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
