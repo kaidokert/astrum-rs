@@ -868,6 +868,54 @@ mod tests {
         assert_eq!(pcb.mpu_region().permissions(), 0);
     }
 
+    #[test]
+    fn fix_mpu_data_region_zero_base() {
+        // Sentinel PCB with all-zero mpu_region: base=0, size=0, permissions=0.
+        // Calling fix_mpu_data_region(0) should keep base at 0 and preserve
+        // zero size/permissions — no special-casing for the zero→zero case.
+        let mut pcb = PartitionControlBlock::new(
+            1,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0400,
+            MpuRegion::new(0, 0, 0),
+        );
+
+        assert_eq!(pcb.mpu_region().base(), 0);
+        assert_eq!(pcb.mpu_region().size(), 0);
+        assert_eq!(pcb.mpu_region().permissions(), 0);
+
+        pcb.fix_mpu_data_region(0);
+
+        assert_eq!(pcb.mpu_region().base(), 0);
+        assert_eq!(pcb.mpu_region().size(), 0);
+        assert_eq!(pcb.mpu_region().permissions(), 0);
+    }
+
+    #[test]
+    fn fix_mpu_data_region_high_sram_base() {
+        // PCB with a typical SRAM data region; fix base to a high address
+        // (0xE000_0000, system control space boundary) and verify only
+        // the base changes while size and permissions are preserved.
+        let mut pcb = PartitionControlBlock::new(
+            1,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0400,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+        );
+
+        assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
+        assert_eq!(pcb.mpu_region().size(), 1024);
+        assert_eq!(pcb.mpu_region().permissions(), 0x0306_0000);
+
+        pcb.fix_mpu_data_region(0xE000_0000);
+
+        assert_eq!(pcb.mpu_region().base(), 0xE000_0000);
+        assert_eq!(pcb.mpu_region().size(), 1024);
+        assert_eq!(pcb.mpu_region().permissions(), 0x0306_0000);
+    }
+
     // ------------------------------------------------------------------
     // promote_sentinel_mpu
     // ------------------------------------------------------------------
