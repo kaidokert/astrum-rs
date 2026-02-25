@@ -8326,6 +8326,91 @@ mod tests {
         );
     }
 
+    /// Bug 05 regression: SYS_MTX_LOCK blocks P0 (mutex held by P1),
+    /// trigger_deschedule() fires, then yield_current_slot() finds no
+    /// runnable partner (P1 is also Waiting).  P0 must stay Waiting —
+    /// not revert to Ready.  Covers the SYS_MTX_LOCK→trigger_deschedule
+    /// path not exercised by the other Bug 05 tests.
+    #[test]
+    fn bug05_mutex_lock_blocks_then_yield_no_partner() {
+        use crate::invariants::assert_partition_state_consistency;
+        use crate::syscall::SYS_MTX_LOCK;
+        let mut k = kernel_with_schedule();
+
+        // Step 1: P1 acquires mutex 0 while active_partition is still None
+        // (dispatch invariants skip when active_partition is None in tests).
+        k.set_current_partition(1);
+        let mut ef = frame(SYS_MTX_LOCK, 0, 1);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 1, "uncontested MutexLock must return 1 (acquired)");
+        assert_eq!(
+            k.mutexes().owner(0),
+            Ok(Some(1)),
+            "mutex 0 must be owned by P1"
+        );
+
+        // Step 2: Transition P1 to Waiting (Ready → Running → Waiting)
+        // so yield_current_slot() finds no runnable partner.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting,
+            "precondition: P1 must be Waiting"
+        );
+
+        // Step 3: Set up P0 as the active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.set_current_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "precondition: P0 must be Running"
+        );
+
+        // Step 4: P0 dispatches SYS_MTX_LOCK on mutex 0 (held by P1) → blocks.
+        let mut ef = frame(SYS_MTX_LOCK, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "blocking MutexLock must return 0");
+        assert!(
+            k.yield_requested(),
+            "blocking MutexLock must set yield_requested"
+        );
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must be Waiting after blocking MutexLock"
+        );
+
+        // Step 5: Simulate harness yield handling: clear flag, yield.
+        k.set_yield_requested(false);
+        let result = k.yield_current_slot();
+        assert_eq!(
+            result.partition_id(),
+            None,
+            "yield must return None when no runnable partner exists"
+        );
+
+        // Step 6: P0 must still be Waiting — not reverted to Ready.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+        );
+        assert_eq!(
+            k.active_partition(),
+            Some(0),
+            "active_partition must still be P0"
+        );
+
+        // At-most-one-Running invariant must hold.
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
