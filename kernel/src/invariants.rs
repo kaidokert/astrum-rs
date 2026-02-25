@@ -290,6 +290,47 @@ pub fn assert_storage_alignment(address: usize, required_alignment: usize) {
 #[inline(always)]
 pub fn assert_storage_alignment(_address: usize, _required_alignment: usize) {}
 
+/// Bug 05 invariant: if any partition transitioned Running → Waiting during
+/// the current syscall dispatch, `yield_requested` must be `true`.
+///
+/// # Panics
+///
+/// Panics if the invariant is violated (debug/test builds only).
+#[cfg(any(debug_assertions, test))]
+pub fn assert_waiting_implies_yield_requested(
+    partitions: &[PartitionControlBlock],
+    entry_states: &[PartitionState],
+    yield_requested: bool,
+) {
+    assert!(
+        partitions.len() == entry_states.len(),
+        "invariant violation: partitions.len() ({}) != entry_states.len() ({})",
+        partitions.len(),
+        entry_states.len()
+    );
+    for (i, (pcb, &entry)) in partitions.iter().zip(entry_states.iter()).enumerate() {
+        if entry == PartitionState::Running
+            && pcb.state() == PartitionState::Waiting
+            && !yield_requested
+        {
+            panic!(
+                "invariant violation: partition {} transitioned Running → Waiting \
+                 but yield_requested is false — blocking must trigger deschedule",
+                i
+            );
+        }
+    }
+}
+
+#[cfg(not(any(debug_assertions, test)))]
+#[inline(always)]
+pub fn assert_waiting_implies_yield_requested(
+    _partitions: &[PartitionControlBlock],
+    _entry_states: &[PartitionState],
+    _yield_requested: bool,
+) {
+}
+
 /// Assert all kernel invariants hold.
 ///
 /// In debug builds and tests, this function performs runtime validation of
@@ -936,5 +977,54 @@ mod tests {
     fn storage_alignment_half_aligned_panics() {
         // Aligned to 2048 but not to 4096.
         assert_storage_alignment(0x2000_0800, 4096);
+    }
+
+    // -- assert_waiting_implies_yield_requested --
+
+    #[test]
+    fn waiting_yield_valid_cases() {
+        assert_waiting_implies_yield_requested(&[], &[], false); // empty
+        assert_waiting_implies_yield_requested(&[make_pcb(0)], &[PartitionState::Ready], false);
+        let mut p = make_pcb(0);
+        p.transition(PartitionState::Running).unwrap();
+        assert_waiting_implies_yield_requested(&[p], &[PartitionState::Running], false);
+        // Running → Waiting with yield_requested=true.
+        let mut p = make_pcb(0);
+        p.transition(PartitionState::Running).unwrap();
+        p.transition(PartitionState::Waiting).unwrap();
+        assert_waiting_implies_yield_requested(&[p], &[PartitionState::Running], true);
+        // Already Waiting at entry — not a new transition.
+        let mut pw = make_pcb(0);
+        pw.transition(PartitionState::Running).unwrap();
+        pw.transition(PartitionState::Waiting).unwrap();
+        assert_waiting_implies_yield_requested(&[pw], &[PartitionState::Waiting], false);
+        // Multi-partition: P1 Running → Waiting with yield set.
+        let mut p1 = make_pcb(1);
+        p1.transition(PartitionState::Running).unwrap();
+        p1.transition(PartitionState::Waiting).unwrap();
+        assert_waiting_implies_yield_requested(
+            &[make_pcb(0), p1],
+            &[PartitionState::Ready, PartitionState::Running],
+            true,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "partition 0 transitioned Running")]
+    fn waiting_yield_missing_yield_panics() {
+        let mut p = make_pcb(0);
+        p.transition(PartitionState::Running).unwrap();
+        p.transition(PartitionState::Waiting).unwrap();
+        assert_waiting_implies_yield_requested(&[p], &[PartitionState::Running], false);
+    }
+
+    #[test]
+    #[should_panic(expected = "partitions.len() (2) != entry_states.len() (1)")]
+    fn waiting_yield_length_mismatch_panics() {
+        assert_waiting_implies_yield_requested(
+            &[make_pcb(0), make_pcb(1)],
+            &[PartitionState::Ready],
+            false,
+        );
     }
 }

@@ -1393,6 +1393,15 @@ where
         let arg2 = frame.r2;
         let arg3 = frame.r3;
         self.assert_dispatch_invariants();
+        #[cfg(any(debug_assertions, test))]
+        let entry_states = {
+            let parts = self.core.partitions().as_slice();
+            let mut buf = [crate::partition::PartitionState::Ready; C::N];
+            for (dst, src) in buf[..parts.len()].iter_mut().zip(parts.iter()) {
+                *dst = src.state();
+            }
+            (buf, parts.len())
+        };
         frame.r0 = match SyscallId::from_u32(syscall_id) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::EventWait) => {
@@ -2018,6 +2027,15 @@ where
             Some(_) => SvcError::InvalidSyscall.to_u32(),
             None => SvcError::InvalidSyscall.to_u32(),
         };
+        #[cfg(any(debug_assertions, test))]
+        {
+            let (states, len) = entry_states;
+            crate::invariants::assert_waiting_implies_yield_requested(
+                self.core.partitions().as_slice(),
+                &states[..len],
+                self.yield_requested,
+            );
+        }
         self.assert_dispatch_invariants();
     }
 
