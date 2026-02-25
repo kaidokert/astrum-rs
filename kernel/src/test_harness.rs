@@ -2707,6 +2707,124 @@ mod tests {
         h.assert_stack_bases_valid();
     }
 
+    // ------------------------------------------------------------------
+    // Selective sentinel fixup on mixed-config kernel (boot.rs pattern)
+    // ------------------------------------------------------------------
+
+    /// Exercises the boot.rs selective sentinel fixup pattern directly:
+    /// creates a 2-partition kernel via Kernel::new() where P0 has a
+    /// sentinel mpu_region (size==0) and P1 has a user-configured region,
+    /// boxes the kernel, then runs the size==0 guard loop mirroring
+    /// boot.rs:296-302. Asserts that only the sentinel partition's base
+    /// is updated while user-configured regions are untouched.
+    #[test]
+    fn selective_sentinel_fixup_mixed_config() {
+        use crate::partition::SENTINEL_DATA_PERMISSIONS;
+
+        let original_config_base: u32 = 0x2004_0000;
+        let original_config_size: u32 = 1024;
+
+        // Build schedule for 2 partitions.
+        let mut schedule = ScheduleTable::new();
+        schedule
+            .add(ScheduleEntry::new(0, 10))
+            .expect("schedule P0");
+        schedule
+            .add(ScheduleEntry::new(1, 10))
+            .expect("schedule P1");
+        #[cfg(feature = "dynamic-mpu")]
+        schedule.add_system_window(10).expect("system window");
+
+        // P0: sentinel mpu_region (size==0).
+        // P1: user-configured mpu_region.
+        let mut configs: Vec<PartitionConfig, { HarnessConfig::N }> = Vec::new();
+        configs
+            .push(PartitionConfig {
+                id: 0,
+                entry_point: FLASH_BASE,
+                stack_base: RAM_BASE,
+                stack_size: STACK_SIZE_BYTES,
+                mpu_region: MpuRegion::new(0, 0, 0),
+                peripheral_regions: Vec::new(),
+            })
+            .expect("push P0 config");
+        configs
+            .push(PartitionConfig {
+                id: 1,
+                entry_point: FLASH_BASE + PARTITION_OFFSET,
+                stack_base: RAM_BASE + PARTITION_OFFSET,
+                stack_size: STACK_SIZE_BYTES,
+                mpu_region: MpuRegion::new(
+                    original_config_base,
+                    original_config_size,
+                    SENTINEL_DATA_PERMISSIONS,
+                ),
+                peripheral_regions: Vec::new(),
+            })
+            .expect("push P1 config");
+
+        // Create kernel and box it to simulate boot placement.
+        let mut kernel = Box::new(
+            Kernel::<HarnessConfig>::new(
+                schedule,
+                &configs,
+                #[cfg(feature = "dynamic-mpu")]
+                crate::virtual_device::DeviceRegistry::new(),
+            )
+            .expect("Kernel::new"),
+        );
+
+        // Grab core_stack_base for P0 (the fixup target).
+        let core_stack_base = kernel
+            .core_stack_base(0)
+            .expect("core_stack_base(0) must exist");
+
+        // Run selective fixup loop mirroring boot.rs:296-302.
+        for i in 0..2usize {
+            let is_sentinel = kernel
+                .partitions()
+                .get(i)
+                .is_some_and(|p| p.mpu_region().size() == 0);
+            if is_sentinel {
+                assert!(
+                    kernel.fix_mpu_data_region(i, core_stack_base),
+                    "fix_mpu_data_region must succeed for sentinel P{i}"
+                );
+            }
+        }
+
+        // Assert P0 (sentinel): base updated to core_stack_base.
+        let p0 = kernel.partitions().get(0).expect("P0");
+        assert_eq!(
+            p0.mpu_region().base(),
+            core_stack_base,
+            "P0 sentinel: base must be updated to core_stack_base"
+        );
+        assert_eq!(
+            p0.mpu_region().size(),
+            0,
+            "P0 sentinel: size must be preserved (still 0)"
+        );
+
+        // Assert P1 (user-configured): completely untouched by selective fixup.
+        let p1 = kernel.partitions().get(1).expect("P1");
+        assert_eq!(
+            p1.mpu_region().base(),
+            original_config_base,
+            "P1 user-configured: base must be untouched by selective fixup"
+        );
+        assert_eq!(
+            p1.mpu_region().size(),
+            original_config_size,
+            "P1 user-configured: size must be preserved"
+        );
+        assert_eq!(
+            p1.mpu_region().permissions(),
+            SENTINEL_DATA_PERMISSIONS,
+            "P1 user-configured: permissions must be preserved"
+        );
+    }
+
     /// Stress test: 4 partitions with a mid-stream wake during active schedule
     /// cycling.  P0 blocks on SemWait, P1 blocks on EventWait, P2 signals the
     /// semaphore (waking P0) and yields to P3.  After one major frame of ticks
