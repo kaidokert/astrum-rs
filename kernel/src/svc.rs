@@ -8592,6 +8592,85 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    /// Bug 05 regression: SYS_MSG_RECV on an empty message queue blocks the
+    /// receiver via apply_recv_outcome → trigger_deschedule(), then
+    /// yield_current_slot() finds no runnable partner (P1 is Waiting).
+    /// P0 must stay Waiting — not revert to Ready.  Covers the
+    /// SYS_MSG_RECV→ReceiverBlocked→trigger_deschedule path.
+    #[cfg(feature = "ipc-message")]
+    #[test]
+    fn bug05_msg_recv_blocks_then_yield_no_partner() {
+        use crate::invariants::assert_partition_state_consistency;
+        use crate::message::MessageQueue;
+        use crate::syscall::SYS_MSG_RECV;
+        let mut k = kernel_with_schedule();
+
+        // Step 0: Create one message queue (kernel_with_schedule has none).
+        // Leave it empty so SYS_MSG_RECV will block the receiver.
+        k.messages_mut().add(MessageQueue::new()).unwrap();
+
+        // Step 1: Transition P1 to Waiting so yield finds no partner.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting,
+            "precondition: P1 must be Waiting"
+        );
+
+        // Step 2: Set up P0 as the active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.set_current_partition(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "precondition: P0 must be Running"
+        );
+
+        // Step 3: Dispatch SYS_MSG_RECV on empty queue → receiver blocks.
+        let ptr = low32_buf(0);
+        // r0=SYS_MSG_RECV, r1=queue 0, r2=receiver P0, r3=buffer pointer
+        let mut ef = frame4(SYS_MSG_RECV, 0, 0, ptr as u32);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "blocking MsgRecv must return 0");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "P0 must be Waiting after blocking MsgRecv"
+        );
+        assert!(
+            k.yield_requested(),
+            "blocking MsgRecv must set yield_requested"
+        );
+
+        // Step 4: Simulate harness yield handling: clear flag, yield.
+        k.set_yield_requested(false);
+        let result = k.yield_current_slot();
+        assert_eq!(
+            result.partition_id(),
+            None,
+            "yield must return None when no runnable partner exists"
+        );
+
+        // Step 5: P0 must still be Waiting — not reverted to Ready.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+        );
+        assert_eq!(
+            k.active_partition(),
+            Some(0),
+            "active_partition must still be P0"
+        );
+
+        // At-most-one-Running invariant must hold.
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
