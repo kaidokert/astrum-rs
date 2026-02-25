@@ -842,6 +842,32 @@ mod tests {
         assert_eq!(pcb.mpu_region().base(), pcb.stack_base());
     }
 
+    #[test]
+    fn fix_mpu_data_region_sentinel_with_nonzero_base_overwritten() {
+        // Sentinel PCB: size==0 marks it as sentinel regardless of base.
+        // An accidental non-zero base (0xDEAD_BEEF) must still be overwritten.
+        let mut pcb = PartitionControlBlock::new(
+            1,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0400,
+            MpuRegion::new(0xDEAD_BEEF, 0, 0),
+        );
+
+        // Pre-condition: sentinel with non-zero base.
+        assert_eq!(pcb.mpu_region().base(), 0xDEAD_BEEF);
+        assert_eq!(pcb.mpu_region().size(), 0);
+        assert_eq!(pcb.mpu_region().permissions(), 0);
+
+        pcb.fix_mpu_data_region(0x2007_0000);
+
+        // Base overwritten to the new value.
+        assert_eq!(pcb.mpu_region().base(), 0x2007_0000);
+        // Size and permissions remain zero (still sentinel-sized).
+        assert_eq!(pcb.mpu_region().size(), 0);
+        assert_eq!(pcb.mpu_region().permissions(), 0);
+    }
+
     // ------------------------------------------------------------------
     // promote_sentinel_mpu
     // ------------------------------------------------------------------
