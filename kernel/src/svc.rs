@@ -5429,8 +5429,8 @@ mod tests {
     fn all_blocking_paths_set_waiting_and_yield_requested() {
         use crate::sampling::PortDirection;
         use crate::syscall::{
-            SYS_BB_READ, SYS_EVT_WAIT, SYS_MTX_LOCK, SYS_QUEUING_RECV_TIMED,
-            SYS_QUEUING_SEND_TIMED, SYS_SEM_WAIT,
+            SYS_BB_READ, SYS_EVT_WAIT, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK,
+            SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND_TIMED, SYS_SEM_WAIT,
         };
 
         // Shared assertion: after a blocking dispatch the caller partition
@@ -5529,6 +5529,33 @@ mod tests {
             dispatch_checked(&mut k, &mut ef);
             assert_eq!(ef.r0, 0);
             assert_blocked!(k, 0, "BbRead");
+        }
+
+        // --- MsgSend: full queue → blocks sender ---
+        {
+            let mut k = kernel(0, 0, 1);
+            // Fill the depth-4 queue to capacity via direct API
+            for i in 0..4u8 {
+                let outcome = k.messages_mut().send(0, 0, &[i; 4]).unwrap();
+                assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
+            }
+            let ptr = low32_buf(0);
+            // r1=queue 0, r2=sender partition 0, r3=data pointer
+            let mut ef = frame4(SYS_MSG_SEND, 0, 0, ptr as u32);
+            dispatch_checked(&mut k, &mut ef);
+            assert_eq!(ef.r0, 0);
+            assert_blocked!(k, 0, "MsgSend");
+        }
+
+        // --- MsgRecv: empty queue → blocks receiver ---
+        {
+            let mut k = kernel(0, 0, 1);
+            let ptr = low32_buf(0);
+            // r1=queue 0, r2=receiver partition 0, r3=buffer pointer
+            let mut ef = frame4(SYS_MSG_RECV, 0, 0, ptr as u32);
+            dispatch_checked(&mut k, &mut ef);
+            assert_eq!(ef.r0, 0);
+            assert_blocked!(k, 0, "MsgRecv");
         }
     }
 
