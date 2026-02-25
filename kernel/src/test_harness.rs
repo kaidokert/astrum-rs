@@ -2825,4 +2825,108 @@ mod tests {
         }
         h.assert_no_switch_to_waiting();
     }
+
+    /// Stress test: 4-partition mixed-blocking (semaphore + events) with all
+    /// partitions eventually schedulable across 8+ major-frame wrap-arounds.
+    ///
+    /// Sequence: P0 SemWait→block, advance to P1, P1 EventWait→block, advance
+    /// to P2, P2 SemSignal→wake P0, advance to P3, P3 EventSet→wake P1.
+    /// All 4 are now schedulable. 340 ticks (8+ major frames of 40 ticks)
+    /// verify at-most-one-Running at every tick boundary.
+    #[test]
+    fn multi_partition_mixed_blocking_invariant_wrap_stress() {
+        use crate::invariants::assert_partition_state_consistency;
+
+        let mut h = KernelTestHarness::with_partitions(4).expect("harness setup");
+        h.kernel_mut()
+            .semaphores_mut()
+            .add(Semaphore::new(0, 1))
+            .expect("add semaphore");
+        h.kernel_mut().start_schedule();
+
+        let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
+        let check = |h: &KernelTestHarness| {
+            assert_partition_state_consistency(h.kernel().partitions().as_slice());
+        };
+
+        // Initial: P0 Running, P1-P3 Ready.
+        assert_eq!(st(&h, 0), PartitionState::Running);
+        check(&h);
+
+        // P0 blocks on SemWait (count=0 → blocks).
+        let f = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(f.r0, 0, "blocking SemWait must return 0");
+        assert_eq!(st(&h, 0), PartitionState::Waiting);
+        h.assert_blocking_triggered_deschedule(0);
+        check(&h);
+
+        // Schedule advances to P1.
+        h.process_pending_yield();
+        assert_eq!(st(&h, 1), PartitionState::Running);
+        check(&h);
+
+        // P1 blocks on EventWait (mask=0x1, no flags set → blocks).
+        let f = h.dispatch_as(1, SYS_EVT_WAIT, 1, 0x1, 0);
+        assert_eq!(f.r0, 0, "blocking EventWait must return 0");
+        assert_eq!(st(&h, 1), PartitionState::Waiting);
+        h.assert_blocking_triggered_deschedule(1);
+        check(&h);
+
+        // Schedule advances to P2.
+        h.process_pending_yield();
+        assert_eq!(st(&h, 2), PartitionState::Running);
+        check(&h);
+
+        // P2 signals the semaphore → wakes P0 (Waiting→Ready).
+        let f = h.dispatch_as(2, SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(f.r0, 0, "SemSignal must succeed");
+        assert_eq!(st(&h, 0), PartitionState::Ready);
+        check(&h);
+
+        // Schedule advances to P3.
+        let f = h.dispatch_as(2, SYS_YIELD, 0, 0, 0);
+        assert_eq!(f.r0, 0);
+        h.process_pending_yield();
+        assert_eq!(st(&h, 3), PartitionState::Running);
+        check(&h);
+
+        // P3 wakes P1 via EventSet (mask=0x1) → P1 Waiting→Ready.
+        let f = h.dispatch_as(3, SYS_EVT_SET, 1, 0x1, 0);
+        assert_eq!(f.r0, 0, "EventSet must succeed");
+        assert_eq!(st(&h, 1), PartitionState::Ready);
+        check(&h);
+
+        // State: P0=Ready, P1=Ready, P2=Ready, P3=Running — all schedulable.
+        // 340 ticks = 8.5 major frames (40 ticks each). Every tick checks
+        // the at-most-one-Running invariant.
+        let mut transitions = 0u32;
+        let mut seen = [false; 4];
+        for _ in 0..340 {
+            let event = h.kernel_mut().advance_schedule_tick();
+            check(&h);
+            if let ScheduleEvent::PartitionSwitch(pid) = event {
+                transitions += 1;
+                seen[pid as usize] = true;
+            }
+        }
+        assert!(
+            transitions >= 8,
+            "expected 8+ schedule transitions, got {transitions}"
+        );
+
+        // All 4 partitions must have been scheduled during wrap-around.
+        for (i, &was_seen) in seen.iter().enumerate() {
+            assert!(was_seen, "P{i} must be scheduled during wrap-around");
+        }
+
+        // No partition should be Waiting at the end.
+        for i in 0..4 {
+            assert_ne!(
+                st(&h, i),
+                PartitionState::Waiting,
+                "P{i} must not be Waiting at end"
+            );
+        }
+        h.assert_no_switch_to_waiting();
+    }
 }
