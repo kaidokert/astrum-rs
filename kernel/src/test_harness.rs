@@ -2706,4 +2706,123 @@ mod tests {
         assert_eq!(p1.state(), PartitionState::Ready);
         h.assert_stack_bases_valid();
     }
+
+    /// Stress test: 4 partitions with a mid-stream wake during active schedule
+    /// cycling.  P0 blocks on SemWait, P1 blocks on EventWait, P2 signals the
+    /// semaphore (waking P0) and yields to P3.  After one major frame of ticks
+    /// with P1 still Waiting, P1 is woken via EventSet mid-stream, then 300
+    /// more ticks verify all 4 partitions rotate through Running across 8+
+    /// major-frame wrap-arounds.  assert_partition_state_consistency is called
+    /// after every state-changing operation.
+    #[test]
+    fn multi_partition_mixed_blocking_interleaved_tick_stress() {
+        use crate::invariants::assert_partition_state_consistency;
+
+        let mut h = KernelTestHarness::with_partitions(4).expect("harness setup");
+        h.kernel_mut()
+            .semaphores_mut()
+            .add(Semaphore::new(0, 1))
+            .expect("add semaphore");
+        h.kernel_mut().start_schedule();
+
+        let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
+        let check = |h: &KernelTestHarness| {
+            assert_partition_state_consistency(h.kernel().partitions().as_slice());
+        };
+
+        // Initial: P0 Running, P1-P3 Ready.
+        assert_eq!(st(&h, 0), PartitionState::Running);
+        check(&h);
+
+        // Phase 1: P0 blocks on SemWait (count=0).
+        let f = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(f.r0, 0, "blocking SemWait must return 0");
+        assert_eq!(st(&h, 0), PartitionState::Waiting);
+        h.assert_blocking_triggered_deschedule(0);
+        check(&h);
+
+        h.process_pending_yield(); // → P1 Running
+        assert_eq!(st(&h, 1), PartitionState::Running);
+        check(&h);
+
+        // Phase 2: P1 blocks on EventWait (mask=0x1, no flags set).
+        let f = h.dispatch_as(1, SYS_EVT_WAIT, 1, 0x1, 0);
+        assert_eq!(f.r0, 0, "blocking EventWait must return 0");
+        assert_eq!(st(&h, 1), PartitionState::Waiting);
+        h.assert_blocking_triggered_deschedule(1);
+        check(&h);
+
+        h.process_pending_yield(); // → P2 Running
+        assert_eq!(st(&h, 2), PartitionState::Running);
+        check(&h);
+
+        // Phase 3: P2 signals semaphore → wakes P0 (Waiting→Ready), yields → P3.
+        let f = h.dispatch_as(2, SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(f.r0, 0, "SemSignal must succeed");
+        assert_eq!(st(&h, 0), PartitionState::Ready);
+        check(&h);
+
+        let f = h.dispatch_as(2, SYS_YIELD, 0, 0, 0);
+        assert_eq!(f.r0, 0);
+        h.process_pending_yield(); // → P3 Running
+        assert_eq!(st(&h, 3), PartitionState::Running);
+        check(&h);
+
+        // State: P0=Ready, P1=Waiting, P2=Ready, P3=Running.
+        // Phase 4: 40 ticks (1 major frame) with P1 still Waiting.
+        let mut transitions = 0u32;
+        for _ in 0..40 {
+            let event = h.kernel_mut().advance_schedule_tick();
+            check(&h);
+            if let ScheduleEvent::PartitionSwitch(pid) = event {
+                transitions += 1;
+                assert_ne!(pid, 1, "must not switch to Waiting P1 in phase 4");
+            }
+        }
+        assert_eq!(
+            st(&h, 1),
+            PartitionState::Waiting,
+            "P1 must still be Waiting"
+        );
+
+        // Phase 5: Wake P1 mid-stream via EventSet (mask=0x1).
+        // Use the active (Running) partition as caller; after 40 ticks of
+        // advance_schedule_tick, active_partition tracks the Running one
+        // while current_partition is stale.
+        let caller = h.kernel().active_partition().expect("active partition") as usize;
+        let f = h.dispatch_as(caller, SYS_EVT_SET, 1, 0x1, 0);
+        assert_eq!(f.r0, 0, "EventSet on P1 must succeed");
+        assert_eq!(st(&h, 1), PartitionState::Ready);
+        check(&h);
+
+        // Phase 6: 300 ticks (7+ major frames) — all 4 now schedulable.
+        let mut seen = [false; 4];
+        for _ in 0..300 {
+            let event = h.kernel_mut().advance_schedule_tick();
+            check(&h);
+            if let ScheduleEvent::PartitionSwitch(pid) = event {
+                transitions += 1;
+                seen[pid as usize] = true;
+            }
+        }
+        assert!(
+            transitions >= 8,
+            "expected 8+ total schedule transitions, got {transitions}"
+        );
+
+        // All 4 partitions must have been scheduled after P1 was woken.
+        for (i, &was_seen) in seen.iter().enumerate() {
+            assert!(was_seen, "P{i} must be scheduled after mid-stream wake");
+        }
+
+        // No partition should be Waiting at the end.
+        for i in 0..4 {
+            assert_ne!(
+                st(&h, i),
+                PartitionState::Waiting,
+                "P{i} must not be Waiting at end of interleaved stress test"
+            );
+        }
+        h.assert_no_switch_to_waiting();
+    }
 }
