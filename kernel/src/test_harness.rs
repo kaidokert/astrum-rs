@@ -2096,6 +2096,138 @@ mod tests {
         assert_ne!(st(&h, 2), PartitionState::Waiting);
     }
 
+    /// Stress test: 4 partitions exercising re-blocking across mixed
+    /// primitives. P0 blocks on SemWait, gets woken, then re-blocks on
+    /// EventWait — verifying Running→Waiting→Ready→Running→Waiting→Ready
+    /// lifecycle. assert_partition_state_consistency called after every
+    /// state-changing operation. 340 ticks drive 8+ major-frame
+    /// wrap-arounds with P2 Waiting.
+    #[test]
+    fn mixed_blocking_reblock_wrap_around_stress() {
+        use crate::invariants::assert_partition_state_consistency;
+
+        let mut h = KernelTestHarness::with_partitions(4).expect("harness setup");
+        h.kernel_mut()
+            .semaphores_mut()
+            .add(Semaphore::new(0, 1))
+            .expect("add semaphore");
+        h.kernel_mut().start_schedule();
+
+        let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
+        let check = |h: &KernelTestHarness| {
+            assert_partition_state_consistency(h.kernel().partitions().as_slice());
+        };
+
+        assert_eq!(st(&h, 0), PartitionState::Running);
+        check(&h);
+
+        // Phase 1: P0 blocks on SemWait (count=0).
+        let f = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(f.r0, 0, "P0: blocking SemWait must return 0");
+        assert_eq!(st(&h, 0), PartitionState::Waiting);
+        h.assert_blocking_triggered_deschedule(0);
+        check(&h);
+
+        h.process_pending_yield();
+        assert_eq!(st(&h, 1), PartitionState::Running);
+        check(&h);
+
+        // Phase 2: P1 blocks on EventWait (mask=0x1).
+        let f = h.dispatch_as(1, SYS_EVT_WAIT, 1, 0x1, 0);
+        assert_eq!(f.r0, 0, "P1: blocking EventWait must return 0");
+        assert_eq!(st(&h, 1), PartitionState::Waiting);
+        h.assert_blocking_triggered_deschedule(1);
+        check(&h);
+
+        h.process_pending_yield();
+        assert_eq!(st(&h, 2), PartitionState::Running);
+        check(&h);
+
+        // Phase 3: P2 signals sem → wakes P0, sets event → wakes P1, yields.
+        let f = h.dispatch_as(2, SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(f.r0, 0, "SemSignal must succeed");
+        assert_eq!(st(&h, 0), PartitionState::Ready);
+        check(&h);
+
+        let f = h.dispatch_as(2, SYS_EVT_SET, 1, 0x1, 0);
+        assert_eq!(f.r0, 0, "EventSet on P1 must succeed");
+        assert_eq!(st(&h, 1), PartitionState::Ready);
+        check(&h);
+
+        let f = h.dispatch_as(2, SYS_YIELD, 0, 0, 0);
+        assert_eq!(f.r0, 0);
+        h.process_pending_yield();
+        assert_eq!(st(&h, 3), PartitionState::Running);
+        check(&h);
+
+        // Phase 4: P3 yields → wraps to P0 Running.
+        let f = h.dispatch_as(3, SYS_YIELD, 0, 0, 0);
+        assert_eq!(f.r0, 0);
+        h.process_pending_yield();
+        assert_eq!(st(&h, 0), PartitionState::Running);
+        check(&h);
+
+        // Phase 5: P0 re-blocks on EventWait (mask=0x2).
+        // Exercises Running→Waiting→Ready→Running→Waiting lifecycle on P0.
+        let f = h.dispatch(SYS_EVT_WAIT, 0, 0x2, 0);
+        assert_eq!(f.r0, 0, "P0: re-blocking EventWait must return 0");
+        assert_eq!(st(&h, 0), PartitionState::Waiting);
+        h.assert_blocking_triggered_deschedule(0);
+        check(&h);
+
+        // Yield → P1 (woken in phase 3) Running.
+        h.process_pending_yield();
+        assert_eq!(st(&h, 1), PartitionState::Running);
+        check(&h);
+
+        // Phase 6: P1 wakes P0 via EventSet, then yields to P2.
+        let f = h.dispatch_as(1, SYS_EVT_SET, 0, 0x2, 0);
+        assert_eq!(f.r0, 0, "EventSet on P0 must succeed");
+        assert_eq!(st(&h, 0), PartitionState::Ready);
+        check(&h);
+
+        let f = h.dispatch_as(1, SYS_YIELD, 0, 0, 0);
+        assert_eq!(f.r0, 0);
+        h.process_pending_yield();
+        assert_eq!(st(&h, 2), PartitionState::Running);
+        check(&h);
+
+        // Phase 7: P2 blocks on SemWait (count=0, consumed by P0 wake).
+        let f = h.dispatch_as(2, SYS_SEM_WAIT, 0, 2, 0);
+        assert_eq!(f.r0, 0, "P2: blocking SemWait must return 0");
+        assert_eq!(st(&h, 2), PartitionState::Waiting);
+        h.assert_blocking_triggered_deschedule(2);
+        check(&h);
+
+        h.process_pending_yield();
+        assert_eq!(st(&h, 3), PartitionState::Running);
+        check(&h);
+
+        // Phase 8: 340 ticks — P2 Waiting, P0/P1/P3 schedulable.
+        // 4 partitions × 10 ticks = 40 ticks/major frame.
+        // 340 ticks = 8+ major frames with wrap-around.
+        let mut transitions = 0u32;
+        for _ in 0..340 {
+            let event = h.kernel_mut().advance_schedule_tick();
+            check(&h);
+            if let ScheduleEvent::PartitionSwitch(pid) = event {
+                transitions += 1;
+                assert_ne!(pid, 2, "scheduler must never switch to Waiting P2");
+            }
+        }
+        assert!(
+            transitions >= 8,
+            "expected 8+ schedule transitions, got {transitions}"
+        );
+
+        // Final: P2 Waiting, others schedulable.
+        assert_eq!(st(&h, 2), PartitionState::Waiting);
+        assert_ne!(st(&h, 0), PartitionState::Waiting);
+        assert_ne!(st(&h, 1), PartitionState::Waiting);
+        assert_ne!(st(&h, 3), PartitionState::Waiting);
+        h.assert_no_switch_to_waiting();
+    }
+
     /// Timed semaphore wait expiry: SemWait with timeout on a zero-count
     /// semaphore blocks P0 (Running→Waiting), then expire_timed_waits at
     /// the expiry tick transitions P0 back (Waiting→Ready).
