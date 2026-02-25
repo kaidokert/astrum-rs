@@ -3161,10 +3161,8 @@ mod tests {
         );
     }
 
-    /// Kernel::new() succeeds when a partition uses mpu_region size==0
-    /// as a sentinel for "no user-configured data region".
-    #[test]
-    fn kernel_new_accepts_zero_size_mpu_region_sentinel() {
+    /// Build a single-partition Kernel whose only variable is `mpu_region`.
+    fn kernel_with_mpu_region(region: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
         use crate::partition::PartitionConfig;
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
@@ -3175,23 +3173,27 @@ mod tests {
             entry_point: 0x0800_0000,
             stack_base: 0x2000_0000,
             stack_size: 1024,
-            mpu_region: MpuRegion::new(0, 0, 0),
+            mpu_region: region,
             peripheral_regions: heapless::Vec::new(),
         }];
         #[cfg(feature = "dynamic-mpu")]
         let registry = crate::virtual_device::DeviceRegistry::new();
-        let result = Kernel::<TestConfig>::new(
+        Kernel::<TestConfig>::new(
             schedule,
             &configs,
             #[cfg(feature = "dynamic-mpu")]
             registry,
-        );
-        let kernel = result.expect("Kernel::new() should accept mpu_region size==0 sentinel");
+        )
+    }
+
+    /// Kernel::new() succeeds when a partition uses mpu_region size==0
+    /// as a sentinel for "no user-configured data region".
+    #[test]
+    fn kernel_new_accepts_zero_size_mpu_region_sentinel() {
+        let kernel = kernel_with_mpu_region(MpuRegion::new(0, 0, 0))
+            .expect("Kernel::new() should accept mpu_region size==0 sentinel");
         let pcb = kernel.partitions().get(0).expect("partition 0 must exist");
 
-        // Kernel::new() passes mpu_region through unchanged; the config
-        // value (base=0) must be preserved.  boot.rs fix_mpu_data_region()
-        // handles post-move fixup for sentinels.
         assert_eq!(
             pcb.mpu_region().base(),
             0,
@@ -3208,28 +3210,7 @@ mod tests {
     /// (e.g. size=17, not a power of two).
     #[test]
     fn kernel_new_rejects_invalid_nonzero_mpu_region() {
-        use crate::partition::PartitionConfig;
-        let mut schedule = ScheduleTable::<4>::new();
-        schedule.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
-        schedule.add_system_window(1).unwrap();
-        let configs = [PartitionConfig {
-            id: 0,
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0, 17, 0),
-            peripheral_regions: heapless::Vec::new(),
-        }];
-        #[cfg(feature = "dynamic-mpu")]
-        let registry = crate::virtual_device::DeviceRegistry::new();
-        let result = Kernel::<TestConfig>::new(
-            schedule,
-            &configs,
-            #[cfg(feature = "dynamic-mpu")]
-            registry,
-        );
-        let err = result
+        let err = kernel_with_mpu_region(MpuRegion::new(0, 17, 0))
             .err()
             .expect("Kernel::new() should reject non-zero invalid mpu_region");
         assert!(
@@ -3241,6 +3222,27 @@ mod tests {
                 }
             ),
             "Expected MpuRegionInvalid with SizeTooSmall, got: {:?}",
+            err,
+        );
+    }
+
+    /// Kernel::new() rejects a partition whose mpu_region has a valid
+    /// power-of-two size but a base address that is not aligned to that size.
+    #[test]
+    fn kernel_new_rejects_misaligned_user_mpu_region() {
+        // base=64 is not aligned to size=256 (64 & 255 != 0).
+        let err = kernel_with_mpu_region(MpuRegion::new(64, 256, 0))
+            .err()
+            .expect("Kernel::new() should reject misaligned mpu_region base");
+        assert!(
+            matches!(
+                err,
+                ConfigError::MpuRegionInvalid {
+                    partition_id: 0,
+                    detail: MpuError::BaseNotAligned,
+                }
+            ),
+            "Expected MpuRegionInvalid with BaseNotAligned, got: {:?}",
             err,
         );
     }
