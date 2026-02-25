@@ -275,7 +275,7 @@ impl DynamicStrategy {
     }
 
     /// Populate dynamic slots with deduplicated peripheral regions from
-    /// the given partitions (device memory: S/C/B=0, XN, AP_FULL_ACCESS).
+    /// the given partitions (device memory: S=1,C=0,B=1 (Shareable Device memory), XN, AP_FULL_ACCESS).
     /// Reserved peripheral slots (R4/R5) are written directly; remaining
     /// regions use [`add_window`].  Returns the number wired.
     pub fn wire_boot_peripherals(
@@ -302,6 +302,9 @@ impl DynamicStrategy {
                 let already_wired = seen.contains(&key);
                 // Only wire if not already wired by a preceding partition.
                 if !already_wired {
+                    // MpuRegion.permissions is intentionally ignored: all peripheral
+                    // MMIO uses fixed Shareable Device attributes (TEX=0 S=1 C=0 B=1,
+                    // AP=full-access, XN=true).
                     let rasr = crate::mpu::build_rasr(
                         size.trailing_zeros() - 1,
                         crate::mpu::AP_FULL_ACCESS,
