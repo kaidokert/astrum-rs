@@ -7885,6 +7885,82 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    /// Bug 05 regression (tick-driven path): advance_schedule_tick() must
+    /// skip a PartitionSwitch when the target partition is Waiting.
+    ///
+    /// Scenario: P0 (5 ticks) is Running, P1 (3 ticks) is Waiting.
+    /// Advance 5 ticks to exhaust slot 0. The schedule table yields
+    /// PartitionSwitch(1), but advance_schedule_tick must detect P1 is
+    /// Waiting and return ScheduleEvent::None instead, leaving P0
+    /// Running and active_partition unchanged.
+    #[test]
+    fn bug05_advance_schedule_tick_skips_waiting_target() {
+        use crate::invariants::assert_partition_state_consistency;
+        use crate::partition::PartitionState;
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+
+        // Both partitions start Ready (kernel_with_schedule default).
+        // Transition P1 to Waiting (Ready → Running → Waiting) first,
+        // while P0 is still Ready, so at-most-one-Running is never violated.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting,
+            "precondition: P1 must be Waiting"
+        );
+
+        // set_next_partition() transitions P0 Ready → Running internally
+        // (see Kernel::set_next_partition which calls try_transition).
+        k.set_next_partition(0);
+        // TODO: active_partition is a public field; direct assignment is the
+        // established test pattern (no setter API exists).
+        k.active_partition = Some(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "precondition: P0 must be Running"
+        );
+
+        // Advance 4 ticks — all within slot 0 (P0 has 5 ticks).
+        for i in 0..4 {
+            let event = k.advance_schedule_tick();
+            assert_eq!(
+                event,
+                ScheduleEvent::None,
+                "tick {}: must be None (still within P0 slot)",
+                i + 1
+            );
+        }
+
+        // 5th tick exhausts slot 0 → schedule table would return
+        // PartitionSwitch(1), but P1 is Waiting so advance_schedule_tick
+        // must return None and skip the switch.
+        let event = k.advance_schedule_tick();
+        assert_eq!(
+            event,
+            ScheduleEvent::None,
+            "Bug 05: advance_schedule_tick must return None when target P1 is Waiting"
+        );
+
+        // P0 must still be Running — not demoted to Ready.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "Bug 05: P0 must stay Running when tick-driven switch skips Waiting target"
+        );
+        assert_eq!(
+            k.active_partition(),
+            Some(0),
+            "active_partition must still be P0"
+        );
+
+        // At-most-one-Running invariant must hold.
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
