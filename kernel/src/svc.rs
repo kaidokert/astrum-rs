@@ -1275,9 +1275,15 @@ where
     /// harness can force-advance the schedule, then calls `handle_yield()`
     /// to pend the PendSV exception.
     ///
+    /// The outgoing Running → Ready transition is intentionally **not**
+    /// performed here.  It is deferred to `yield_current_slot()`, which
+    /// only fires the transition after confirming a valid runnable partner
+    /// exists.  Doing it eagerly here would leave the partition in Ready
+    /// even when no context switch actually occurs, violating the invariant
+    /// that exactly one partition is Running at all times.
+    ///
     /// Returns 0 on success (matching `handle_yield` semantics).
     pub fn trigger_deschedule(&mut self) -> u32 {
-        self.transition_outgoing_ready();
         self.yield_requested = true;
         handle_yield()
     }
@@ -2954,7 +2960,7 @@ mod tests {
     }
 
     #[test]
-    fn trigger_deschedule_transitions_running_to_ready() {
+    fn trigger_deschedule_preserves_running_state() {
         let mut k = kernel_with_schedule();
 
         // Put P0 into Running and mark it as active.
@@ -2969,9 +2975,11 @@ mod tests {
 
         assert_eq!(ret, 0);
         assert!(k.yield_requested());
+        // The partition must still be Running — the transition to Ready
+        // is deferred to yield_current_slot(), not done eagerly here.
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Ready
+            PartitionState::Running
         );
     }
 
