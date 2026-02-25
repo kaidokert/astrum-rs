@@ -2286,4 +2286,52 @@ mod tests {
             "cache R4 must restore peripheral on switch-back to partition 0"
         );
     }
+
+    // ------------------------------------------------------------------
+    // wire_boot_peripherals: MpuRegion.permissions is dead code
+    // ------------------------------------------------------------------
+
+    /// Prove `wire_boot_peripherals` produces identical cached RASR for
+    /// partitions with different `MpuRegion.permissions` on the same
+    /// peripheral base/size (Approach A intentional override).
+    #[test]
+    fn wire_boot_peripherals_permissions_independence() {
+        let ds = DynamicStrategy::new();
+        let (base, size) = (0x4000_0000u32, 4096u32);
+        let pcb0 = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[MpuRegion::new(base, size, 0)]);
+        let pcb1 = PartitionControlBlock::new(
+            1,
+            0x0,
+            0x2000_8000,
+            0x2000_9000,
+            MpuRegion::new(0x2000_8000, 4096, 0),
+        )
+        .with_peripheral_regions(&[MpuRegion::new(base, size, 0xDEAD_BEEF)]);
+
+        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        assert_eq!(ds.wire_boot_peripherals(&[pcb0, pcb1]), 1);
+
+        let desc0 = ds.cached_peripherals(0)[0].expect("p0 must have cached peripheral");
+        let desc1 = ds.cached_peripherals(1)[0].expect("p1 must have cached peripheral");
+        assert_eq!(
+            desc0.permissions, desc1.permissions,
+            "RASR must match despite different perms"
+        );
+
+        // Verify fixed Shareable Device attributes.
+        let rasr = desc0.permissions;
+        assert_eq!(rasr & 1, 1, "region must be enabled");
+        assert_eq!((rasr >> 24) & 0x7, AP_FULL_ACCESS, "AP must be full-access");
+        assert_eq!((rasr >> 28) & 1, 1, "XN must be set");
+        assert_eq!((rasr >> 19) & 0x7, 0, "TEX must be 0");
+        assert_eq!((rasr >> 16) & 0x7, 0b101, "S/C/B must be 101");
+    }
 }

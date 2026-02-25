@@ -1479,52 +1479,31 @@ mod tests {
     // peripheral_region_pair: permissions field is intentionally ignored
     // ------------------------------------------------------------------
 
-    /// Prove that `MpuRegion.permissions` is not consulted for peripheral
-    /// regions: two regions differing only in `permissions` produce
-    /// identical RASR values via `peripheral_region_pair`, and the RASR
-    /// encodes the expected Shareable Device attributes.
+    /// Prove `peripheral_region_pair` ignores `MpuRegion.permissions`:
+    /// three values (0, 0xFF, 0xDEAD_BEEF) produce identical (RBAR, RASR)
+    /// and the RASR encodes AP=0b011, XN=1, TEX=0, S=1, C=0, B=1.
     #[test]
     fn peripheral_permissions_field_ignored() {
-        let base: u32 = 0x4000_0000;
-        let size: u32 = 4096;
-        let slot: u32 = 4;
+        let (base, size, slot) = (0x4000_0000u32, 4096u32, 4u32);
+        let pair =
+            |p| peripheral_region_pair(&MpuRegion::new(base, size, p), slot).expect("valid region");
+        let r0 = pair(0);
+        let r1 = pair(0xFF);
+        let r2 = pair(0xDEAD_BEEF);
 
-        let region_a = MpuRegion::new(base, size, 0x00);
-        let region_b = MpuRegion::new(base, size, 0xDEAD_BEEF);
+        assert_eq!(r0, r1, "perms 0 vs 0xFF must match");
+        assert_eq!(r1, r2, "perms 0xFF vs 0xDEAD_BEEF must match");
 
-        let (rbar_a, rasr_a) =
-            peripheral_region_pair(&region_a, slot).expect("valid region must succeed");
-        let (rbar_b, rasr_b) =
-            peripheral_region_pair(&region_b, slot).expect("valid region must succeed");
-
-        // Identical output regardless of permissions
+        // Verify fixed Shareable Device attributes in RASR.
+        let rasr = r0.1;
+        assert_eq!(rasr & 1, 1, "region must be enabled");
+        assert_eq!((rasr >> 19) & 0x7, 0, "TEX must be 0");
+        assert_eq!((rasr >> 16) & 0x7, 0b101, "S/C/B must be 101");
         assert_eq!(
-            rbar_a, rbar_b,
-            "RBAR must be identical despite different permissions"
-        );
-        assert_eq!(
-            rasr_a, rasr_b,
-            "RASR must be identical despite different permissions"
-        );
-
-        // Verify Shareable Device attributes in RASR:
-        // Enable bit
-        assert_eq!(rasr_a & 1, 1, "region must be enabled");
-        // TEX=0 (bits [21:19])
-        assert_eq!((rasr_a >> 19) & 0x7, 0, "TEX must be 0");
-        // S=1, C=0, B=1 (bits [18:16])
-        assert_eq!(
-            (rasr_a >> 16) & 0x7,
-            0b101,
-            "S/C/B must be 101 (Shareable Device)"
-        );
-        // AP = full-access (0b011)
-        assert_eq!(
-            (rasr_a >> RASR_AP_SHIFT) & RASR_AP_MASK,
+            (rasr >> RASR_AP_SHIFT) & RASR_AP_MASK,
             AP_FULL_ACCESS,
-            "AP must be full-access (0b011)"
+            "AP must be 0b011"
         );
-        // XN = 1
-        assert_eq!((rasr_a >> 28) & 1, 1, "XN must be set");
+        assert_eq!((rasr >> 28) & 1, 1, "XN must be set");
     }
 }
