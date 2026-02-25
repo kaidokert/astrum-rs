@@ -8222,6 +8222,110 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    /// Bug 05 regression (major-frame wrap): advancing through full major
+    /// frames must not violate the at-most-one-Running invariant when the
+    /// schedule wraps back to an already-Running partition while another
+    /// partition is Waiting.
+    #[test]
+    fn bug05_major_frame_wrap_waiting_partition_invariant() {
+        use crate::invariants::assert_partition_state_consistency;
+        use crate::partition::PartitionState;
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+
+        // P1: Ready → Running → Waiting (before P0 becomes Running).
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // P0: Ready → Running (explicit transition for the active partition).
+        let pcb0 = k.partitions_mut().get_mut(0).unwrap();
+        pcb0.transition(PartitionState::Running).unwrap();
+
+        // Set scheduler fields to track P0 as the active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.set_current_partition(0);
+        assert_partition_state_consistency(k.partitions().as_slice());
+
+        // Schedule: P0(5) | P1(3) [+ SystemWindow(1) with dynamic-mpu].
+        //
+        // Without dynamic-mpu (major frame = 8 ticks):
+        //   Tick  5: P1 slot boundary → P1 Waiting → None
+        //   Tick  8: P0 slot boundary → PartitionSwitch(0) (wrap #1)
+        //   Tick 13: P1 slot boundary → P1 Waiting → None
+        //   Tick 16: P0 slot boundary → PartitionSwitch(0) (wrap #2)
+        //
+        // With dynamic-mpu (major frame = 9 ticks):
+        //   Tick  5: P1 slot boundary → P1 Waiting → None
+        //   Tick  8: SystemWindow boundary → SystemWindow
+        //   Tick  9: P0 slot boundary → PartitionSwitch(0) (wrap #1)
+        //   Tick 14: P1 slot boundary → P1 Waiting → None
+        //   Tick 17: SystemWindow boundary → SystemWindow
+        //   Tick 18: P0 slot boundary → PartitionSwitch(0) (wrap #2)
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let major_frame: u32 = 8;
+        #[cfg(feature = "dynamic-mpu")]
+        let major_frame: u32 = 9;
+
+        let mut wrap_count = 0u32;
+        for tick in 1..=major_frame * 2 {
+            let ev = k.advance_schedule_tick();
+
+            // 1-based position within the current major frame.
+            let offset = ((tick - 1) % major_frame) + 1;
+
+            // Determine the exact expected event for this tick.
+            #[cfg(not(feature = "dynamic-mpu"))]
+            let expected = match offset {
+                5 => ScheduleEvent::None,               // P1 boundary, Waiting → suppressed
+                8 => ScheduleEvent::PartitionSwitch(0), // major-frame wrap
+                _ => ScheduleEvent::None,
+            };
+            #[cfg(feature = "dynamic-mpu")]
+            let expected = match offset {
+                5 => ScheduleEvent::None, // P1 boundary, Waiting → suppressed
+                8 => ScheduleEvent::SystemWindow,
+                9 => ScheduleEvent::PartitionSwitch(0), // major-frame wrap
+                _ => ScheduleEvent::None,
+            };
+
+            assert_eq!(
+                ev, expected,
+                "tick {tick} (offset {offset}): unexpected event"
+            );
+
+            if ev == ScheduleEvent::PartitionSwitch(0) {
+                wrap_count += 1;
+            }
+
+            // P0 must stay Running throughout.
+            assert_eq!(
+                k.partitions().get(0).unwrap().state(),
+                PartitionState::Running,
+                "tick {tick}: P0 must remain Running"
+            );
+            // P1 must stay Waiting throughout (no wakeup source).
+            assert_eq!(
+                k.partitions().get(1).unwrap().state(),
+                PartitionState::Waiting,
+                "tick {tick}: P1 must remain Waiting"
+            );
+            assert_eq!(
+                k.active_partition(),
+                Some(0),
+                "tick {tick}: active_partition must remain P0"
+            );
+            assert_partition_state_consistency(k.partitions().as_slice());
+        }
+
+        // Exactly 2 major-frame wraps must have occurred at the expected ticks.
+        assert_eq!(
+            wrap_count, 2,
+            "expected exactly 2 major-frame wraps, got {wrap_count}"
+        );
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
