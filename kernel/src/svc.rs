@@ -4602,6 +4602,100 @@ mod tests {
         assert!(validate_user_ptr(&t, 0, 0x2000_1000, 16)); // data
     }
 
+    // ---- Dedicated pointer validation unit tests (subtask 273) ----
+    //
+    // TODO: subtask 273 requests tests for `validate_buffer_range` and other
+    // pointer validation helpers. `validate_buffer_range` does not exist in
+    // the codebase; alignment rejection is covered by `validate_mpu_region`
+    // (mpu.rs) and `PartitionConfig::validate` (partition.rs), which already
+    // have dedicated tests. If a `validate_buffer_range` helper is added in
+    // the future, corresponding tests should be added here.
+
+    #[test]
+    fn validate_ptr_null_pointer_rejected() {
+        let t = ptr_table(0x2000_0000, 4096);
+        // Null pointer (0x0) is in kernel code region — always rejected.
+        assert!(!validate_user_ptr(&t, 0, 0x0, 1));
+        assert!(!validate_user_ptr(&t, 0, 0x0, 4));
+        // Null with zero length: ptr=0 is outside accessible regions.
+        assert!(!validate_user_ptr(&t, 0, 0x0, 0));
+    }
+
+    #[test]
+    fn validate_ptr_at_u32_max_boundary() {
+        let t = ptr_table(0x2000_0000, 4096);
+        // ptr = 0xFFFF_FFFF, len = 1 → overflow (wraps past u32::MAX).
+        assert!(!validate_user_ptr(&t, 0, 0xFFFF_FFFF, 1));
+        // ptr = 0xFFFF_FFFF, len = 0 → no overflow, but outside all regions.
+        assert!(!validate_user_ptr(&t, 0, 0xFFFF_FFFF, 0));
+        // ptr = 0xFFFF_FFFE, len = 2 → end = 0x1_0000_0000 overflows u32.
+        assert!(!validate_user_ptr(&t, 0, 0xFFFF_FFFE, 2));
+        // No overflow but far outside partition region.
+        assert!(!validate_user_ptr(&t, 0, 0xFFFF_FF00, 0xFF));
+    }
+
+    #[test]
+    fn validate_ptr_misaligned_within_valid_region() {
+        let t = ptr_table(0x2000_0000, 4096);
+        // validate_user_ptr does NOT enforce alignment — it only checks
+        // region membership. Misaligned pointers inside a valid region
+        // are accepted by this function. Alignment rejection is enforced
+        // at the MPU configuration layer (validate_mpu_region / PartitionConfig::validate).
+        assert!(validate_user_ptr(&t, 0, 0x2000_0001, 1)); // odd byte
+        assert!(validate_user_ptr(&t, 0, 0x2000_0003, 2)); // halfword-misaligned
+        assert!(validate_user_ptr(&t, 0, 0x2000_0005, 4)); // word-misaligned
+    }
+
+    /// Misaligned pointer rejection: `validate_mpu_region` rejects bases
+    /// that are not aligned to their size, which is the kernel's mechanism
+    /// for preventing misaligned memory regions (subtask 273 requirement).
+    #[test]
+    fn validate_mpu_region_rejects_misaligned_base_subtask273() {
+        use crate::mpu::{validate_mpu_region, MpuError};
+        // Base 0x100 with size 4096 (0x1000) — base not aligned to size.
+        assert_eq!(
+            validate_mpu_region(0x0000_0100, 4096),
+            Err(MpuError::BaseNotAligned)
+        );
+        // Base 0x2000_0001 with size 32 — odd base, not 32-byte aligned.
+        assert_eq!(
+            validate_mpu_region(0x2000_0001, 32),
+            Err(MpuError::BaseNotAligned)
+        );
+        // Properly aligned base is accepted.
+        assert_eq!(validate_mpu_region(0x2000_0000, 4096), Ok(()));
+    }
+
+    #[test]
+    fn validate_ptr_exact_full_region() {
+        let t = ptr_table(0x2000_0000, 4096);
+        // Pointer covers the ENTIRE region [base, base + size).
+        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 4096));
+        // One byte more than the full region — rejected.
+        assert!(!validate_user_ptr(&t, 0, 0x2000_0000, 4097));
+    }
+
+    #[test]
+    fn validate_ptr_single_byte_at_region_edges() {
+        let t = ptr_table(0x2000_0000, 4096);
+        // First byte of region: valid.
+        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 1));
+        // Last valid byte of region (base + size - 1).
+        assert!(validate_user_ptr(&t, 0, 0x2000_0FFF, 1));
+        // First byte past region end: invalid.
+        assert!(!validate_user_ptr(&t, 0, 0x2000_1000, 1));
+    }
+
+    #[test]
+    fn validate_ptr_kernel_code_boundary() {
+        // Region starts at 0 covering 128KB of flash.
+        let t = ptr_table(0x0000_0000, 0x0002_0000);
+        // Pointer at exactly KERNEL_CODE_END is valid (outside kernel code).
+        assert!(validate_user_ptr(&t, 0, KERNEL_CODE_END, 16));
+        // One byte below KERNEL_CODE_END is in kernel code — rejected.
+        assert!(!validate_user_ptr(&t, 0, KERNEL_CODE_END - 1, 1));
+    }
+
     // ---- validate_user_ptr_dynamic tests (dynamic-mpu feature) ----
 
     /// Comprehensive test for validate_user_ptr_dynamic covering dynamic windows,
