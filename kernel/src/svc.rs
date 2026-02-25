@@ -7652,6 +7652,84 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    /// Bug 05 regression: trigger_deschedule() then yield_current_slot()
+    /// when no runnable partner exists must leave the caller Running.
+    ///
+    /// Scenario: P0 is Running, P1 is Waiting. trigger_deschedule() sets
+    /// yield_requested but defers the Running→Ready transition.
+    /// yield_current_slot() sees the next slot targets a Waiting partition,
+    /// so it returns None and must NOT demote P0 to Ready.
+    #[test]
+    fn bug05_trigger_deschedule_then_yield_no_partner_preserves_running() {
+        use crate::invariants::assert_partition_state_consistency;
+        let mut k = kernel_with_schedule();
+
+        // Transition P1 to Waiting first (Ready → Running → Waiting)
+        // so that promoting P0 to Running never violates at-most-one-Running.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting,
+            "precondition: P1 must be Waiting"
+        );
+
+        // Now set up P0 as the active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "precondition: P0 must be Running"
+        );
+
+        // Step 1: trigger_deschedule() — sets yield_requested, keeps P0 Running.
+        let ret = k.trigger_deschedule();
+        assert_eq!(ret, 0, "trigger_deschedule must return 0");
+        assert!(
+            k.yield_requested(),
+            "yield_requested must be set after trigger_deschedule"
+        );
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "P0 must remain Running after trigger_deschedule"
+        );
+
+        // Step 2: yield_current_slot() — no runnable partner, returns None.
+        let result = k.yield_current_slot();
+        assert_eq!(
+            result.partition_id(),
+            None,
+            "yield must return None when no runnable partner exists"
+        );
+
+        // yield_requested must still be set: yield_current_slot() does NOT
+        // clear the flag — only the dispatch hook does.
+        assert!(
+            k.yield_requested(),
+            "yield_requested must remain set after yield_current_slot (cleared only by dispatch hook)"
+        );
+
+        // P0 must still be Running — this is the Bug 05 invariant.
+        // TODO: we verify P0 is Running before and after yield_current_slot();
+        // mid-call state cannot be observed in a unit test without instrumentation.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "Bug 05: P0 must stay Running when yield finds no runnable partner"
+        );
+        assert_eq!(
+            k.active_partition(),
+            Some(0),
+            "active_partition must still be P0"
+        );
+
+        // At-most-one-Running invariant must hold.
+        assert_partition_state_consistency(k.partitions().as_slice());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
