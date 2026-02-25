@@ -1045,17 +1045,7 @@ where
             let internal_stack_base = internal_stack.as_ptr() as u32;
             let internal_stack_size = (internal_stack.len() * 4) as u32;
             let sp = align_down_8(internal_stack_base.wrapping_add(internal_stack_size));
-            // Sentinel (size==0): derive base from internal stack.
-            // User-configured (size>0): preserve the caller's mpu_region.
-            let mpu_region = if c.mpu_region.size() == 0 {
-                crate::partition::MpuRegion::new(
-                    internal_stack_base,
-                    c.mpu_region.size(),
-                    c.mpu_region.permissions(),
-                )
-            } else {
-                c.mpu_region
-            };
+            let mpu_region = c.mpu_region;
             let pcb = PartitionControlBlock::new(
                 c.id,
                 c.entry_point,
@@ -3199,23 +3189,14 @@ mod tests {
         let kernel = result.expect("Kernel::new() should accept mpu_region size==0 sentinel");
         let pcb = kernel.partitions().get(0).expect("partition 0 must exist");
 
-        // Both mpu_region.base and pcb.stack_base are set from the same
-        // internal_stack_base value during Kernel::new (svc.rs:1045/1052/1062).
-        // Comparing them proves the sentinel base was derived from the
-        // internal stack, not from the config's stack_base or left at 0.
+        // Kernel::new() passes mpu_region through unchanged; the config
+        // value (base=0) must be preserved.  boot.rs fix_mpu_data_region()
+        // handles post-move fixup for sentinels.
         assert_eq!(
             pcb.mpu_region().base(),
-            pcb.stack_base(),
-            "sentinel mpu_region base must equal internal stack base"
-        );
-        // Sentinel base must differ from the config-provided address (0),
-        // proving it was actually overwritten with the real stack address.
-        assert_ne!(
-            pcb.mpu_region().base(),
             0,
-            "sentinel mpu_region base must not remain at config value 0"
+            "sentinel mpu_region base must equal config-provided value (0)"
         );
-        // The sentinel size==0 must be preserved, not overwritten.
         assert_eq!(
             pcb.mpu_region().size(),
             0,
