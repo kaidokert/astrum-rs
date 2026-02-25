@@ -36,8 +36,9 @@ grants that partition direct hardware access through the MPU:
 1. **Static configuration.** The partition's `PartitionConfig` declares
    peripheral register blocks via the `peripheral_regions` field.
 2. **MPU grant.** The kernel programs an MPU region covering the
-   peripheral's MMIO range with unprivileged RW access, using
-   `DynamicStrategy::add_window` to allocate a dynamic slot (R5-R7).
+   peripheral's MMIO range with Shareable Device attributes, using
+   reserved MPU slots populated by `wire_boot_peripherals` at boot
+   (see Section 1.3 for slot layout).
 3. **Direct register access.** The partition runs vendor PAC/HAL code
    against the granted range — plain memory-mapped loads and stores,
    no syscall, no context switch, no kernel involvement.
@@ -69,11 +70,12 @@ The `heapless::Vec` capacity of 2 covers the common case without allocation.
 
 ### 1.3 MPU Window Allocation
 
-`DynamicStrategy` manages MPU regions R4-R7 at runtime. Slot 0 (R4)
-holds the partition's private RAM; slots 1-3 (R5-R7) are available
-for peripheral windows and IPC grants. From `kernel/src/mpu_strategy.rs`,
-`DynamicStrategy::add_window` validates alignment and power-of-two
-constraints, then scans slots 1-3 inside a critical section:
+`DynamicStrategy` manages MPU regions R4-R7 at runtime.  The field
+`peripheral_reserved` (0 or 2) controls how many leading slots are
+reserved for peripheral MMIO regions.  The partition-RAM region always
+occupies the slot immediately after the reserved block (index
+`peripheral_reserved`), and `add_window` scans from `peripheral_reserved + 1`
+onwards.  From `kernel/src/mpu_strategy.rs`:
 
 ```rust
 fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8)
@@ -82,7 +84,9 @@ fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8)
     crate::mpu::validate_mpu_region(base, size)?;
     with_cs(|cs| {
         let mut slots = self.slots.borrow(cs).borrow_mut();
-        for (idx, slot) in slots.iter_mut().enumerate().skip(1) {
+        let reserved = *self.peripheral_reserved.borrow(cs).borrow();
+        let first_window = reserved + 1;
+        for (idx, slot) in slots.iter_mut().enumerate().skip(first_window) {
             if slot.is_none() {
                 *slot = Some(WindowDescriptor { base, size, permissions, owner });
                 return Ok(DYNAMIC_REGION_BASE + idx as u8);
@@ -92,6 +96,46 @@ fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8)
     })
 }
 ```
+
+**Slot layout by configuration:**
+
+| Slot | Region | `peripheral_reserved=0`  | `peripheral_reserved=2`  |
+|------|--------|--------------------------|--------------------------|
+| 0    | R4     | Partition RAM            | Peripheral 0 (MMIO)     |
+| 1    | R5     | Dynamic window           | Peripheral 1 (MMIO)     |
+| 2    | R6     | Dynamic window           | Partition RAM            |
+| 3    | R7     | Dynamic window           | Dynamic window           |
+
+#### 1.3.1 Peripheral Region Attributes
+
+`MpuRegion.permissions` is intentionally ignored for peripheral
+regions.  All peripheral MMIO is programmed with fixed **Shareable
+Device** memory attributes regardless of the value declared in the
+partition config:
+
+- **TEX=0, S=1, C=0, B=1** — Shareable Device memory type
+  (strongly-ordered with respect to other observers; prevents
+  speculative reads and write-combining).
+- **AP=full-access** (`0b011`) — unprivileged + privileged RW.
+- **XN=true** — execute-never (no instruction fetch from MMIO space).
+
+This is enforced in `wire_boot_peripherals`, which builds the RASR
+value via `build_rasr(size_field, AP_FULL_ACCESS, true, (true, false, true))`
+rather than forwarding the caller-supplied permissions.  The rationale:
+peripheral register blocks must always use Device memory ordering to
+guarantee correct side-effect sequencing; allowing Normal-memory
+attributes would risk write-buffering or reordering that silently
+corrupts peripheral state.
+
+#### 1.3.2 Boot-Time Peripheral Wiring
+
+`wire_boot_peripherals` iterates all partitions' `peripheral_regions`,
+deduplicates by `(base, size)`, and populates the reserved slots.
+Shared peripherals (same base and size declared by multiple partitions)
+are wired into the MPU slot array **once**; each partition's descriptor
+is independently cached in `peripheral_cache` so that PendSV can
+restore the correct peripheral mapping on every context switch without
+re-scanning the PCB list.
 
 ### 1.4 Decision Rationale
 
