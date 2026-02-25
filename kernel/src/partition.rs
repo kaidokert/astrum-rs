@@ -952,6 +952,47 @@ mod tests {
         assert_eq!(pcb.peripheral_regions()[1].permissions(), 0x03);
     }
 
+    #[test]
+    fn fix_mpu_data_region_user_configured_preserves_all_fields() {
+        // A user-configured PCB (size > 0) that is never passed through
+        // fix_mpu_data_region — matching the boot.rs guard that skips
+        // non-sentinel partitions — retains its original MPU region.
+        let pcb = PartitionControlBlock::new(
+            3,
+            0x0800_0000,
+            0x2000_4000,
+            0x2000_4800, // 2 KiB stack
+            MpuRegion::new(0x2000_4000, 8192, 0x0306_0000),
+        );
+
+        // Never call fix_mpu_data_region — verify all fields unchanged.
+        assert_eq!(pcb.mpu_region().base(), 0x2000_4000);
+        assert_eq!(pcb.mpu_region().size(), 8192);
+        assert_eq!(pcb.mpu_region().permissions(), 0x0306_0000);
+    }
+
+    #[test]
+    fn fix_mpu_data_region_on_non_sentinel_only_changes_base() {
+        // If fix_mpu_data_region IS called on a non-sentinel PCB (size > 0),
+        // only the base address changes; size and permissions are preserved.
+        let original_size = 8192u32;
+        let original_perms = 0x0306_0000u32;
+        let mut pcb = PartitionControlBlock::new(
+            3,
+            0x0800_0000,
+            0x2000_4000,
+            0x2000_4800,
+            MpuRegion::new(0x2000_4000, original_size, original_perms),
+        );
+
+        let new_base = 0x2001_0000;
+        pcb.fix_mpu_data_region(new_base);
+
+        assert_eq!(pcb.mpu_region().base(), new_base);
+        assert_eq!(pcb.mpu_region().size(), original_size);
+        assert_eq!(pcb.mpu_region().permissions(), original_perms);
+    }
+
     // ------------------------------------------------------------------
     // promote_sentinel_mpu
     // ------------------------------------------------------------------
