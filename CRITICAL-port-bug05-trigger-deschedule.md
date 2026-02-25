@@ -1,5 +1,7 @@
 # CRITICAL: Port Bug 05 — trigger_deschedule Leaves Partition Ready When No Partner
 
+**Status: RESOLVED**
+
 **Severity:** CRITICAL — violates the at-most-one-Running invariant, leaving a
 partition in Ready state with no Running partition in the system.
 
@@ -95,16 +97,16 @@ All blocking syscall paths that call `trigger_deschedule()`:
 | `bug05_major_frame_wrap_waiting_partition_invariant` | Tick path | Major-frame wrap with Waiting partition |
 | `bug05_mutex_lock_blocks_then_yield_no_partner` | SYS_MTX_LOCK | Mutex blocks P0, yield finds no partner |
 
-### Remaining coverage gaps
+### Resolved coverage
 
-| # | Syscall Path | Backlog Item |
-|---|-------------|--------------|
-| 1 | `SYS_MSG_SEND` | Add Bug 05 test for SYS_MSG_SEND blocking path |
-| 2 | `SYS_MSG_RECV` | Add Bug 05 test for SYS_MSG_RECV blocking path |
-| 3 | `SYS_BB_READ` | Add Bug 05 test for SYS_BB_READ blocking path |
-| 4 | `SYS_DEV_READ_TIMED` | Add Bug 05 test for SYS_DEV_READ_TIMED blocking path |
-| 5 | `SYS_QUEUING_SEND_TIMED` | Add Bug 05 test for SYS_QUEUING_SEND_TIMED blocking path |
-| 6 | `SYS_QUEUING_RECV_TIMED` | Add Bug 05 test for SYS_QUEUING_RECV_TIMED blocking path |
+| # | Syscall Path | Test Function |
+|---|-------------|---------------|
+| 1 | `SYS_MSG_SEND` | `bug05_msg_send_blocks_then_yield_no_partner` |
+| 2 | `SYS_MSG_RECV` | `bug05_msg_recv_blocks_then_yield_no_partner` |
+| 3 | `SYS_BB_READ` | `bug05_bb_read_blocks_then_yield_no_partner` |
+| 4 | `SYS_DEV_READ_TIMED` | `bug05_dev_read_timed_blocks_then_yield_no_partner` |
+| 5 | `SYS_QUEUING_SEND_TIMED` | `bug05_queuing_send_timed_blocks_then_yield_no_partner` |
+| 6 | `SYS_QUEUING_RECV_TIMED` | `bug05_queuing_recv_timed_blocks_then_yield_no_partner` |
 
 ---
 
