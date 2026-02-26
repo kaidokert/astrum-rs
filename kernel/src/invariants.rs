@@ -180,31 +180,57 @@ pub fn assert_schedule_indices_in_bounds(entries: &[ScheduleEntry], partition_co
 #[inline(always)]
 pub fn assert_schedule_indices_in_bounds(_entries: &[ScheduleEntry], _partition_count: usize) {}
 
-/// Assert that no two partitions have overlapping MPU regions.
+/// Assert that no two partitions have overlapping MPU regions, except that
+/// Data-vs-Data overlaps are permitted for shared-memory IPC.
 ///
-/// For every pair of distinct partitions, checks that none of their
-/// accessible static regions (data, stack, peripherals) overlap in memory.
+/// For every pair of distinct partitions, checks each partition's exclusive
+/// regions (stack, peripherals) against the other partition's full set of
+/// accessible regions (data, stack, peripherals). This catches every overlap
+/// combination except Data-vs-Data.
 ///
 /// # Panics
 ///
-/// Panics if any two regions from different partitions overlap.
+/// Panics if any region overlap is found (other than Data-vs-Data).
 #[cfg(any(debug_assertions, test))]
 pub fn assert_no_overlapping_mpu_regions(partitions: &[PartitionControlBlock]) {
-    for i in 0..partitions.len() {
-        let regions_i = partitions[i].accessible_static_regions();
-        for j in (i + 1)..partitions.len() {
-            let regions_j = partitions[j].accessible_static_regions();
-            for &(base_a, size_a) in regions_i.iter() {
-                for &(base_b, size_b) in regions_j.iter() {
+    for (i, pcb_i) in partitions.iter().enumerate() {
+        let exclusive_i = pcb_i.exclusive_static_regions();
+        let accessible_i = pcb_i.accessible_static_regions();
+        for pcb_j in partitions.iter().skip(i + 1) {
+            let exclusive_j = pcb_j.exclusive_static_regions();
+            let accessible_j = pcb_j.accessible_static_regions();
+            // Check exclusive_i against accessible_j: catches stack/peripheral
+            // of partition i overlapping any region of partition j.
+            for &(base_a, size_a) in exclusive_i.iter() {
+                for &(base_b, size_b) in accessible_j.iter() {
                     if base_a < base_b.wrapping_add(size_b) && base_b < base_a.wrapping_add(size_a)
                     {
                         panic!(
                             "invariant violation: partition {} region [0x{:08x}, 0x{:08x}) \
                              overlaps partition {} region [0x{:08x}, 0x{:08x})",
-                            partitions[i].id(),
+                            pcb_i.id(),
                             base_a,
                             base_a.wrapping_add(size_a),
-                            partitions[j].id(),
+                            pcb_j.id(),
+                            base_b,
+                            base_b.wrapping_add(size_b),
+                        );
+                    }
+                }
+            }
+            // Check accessible_i against exclusive_j: catches any region of
+            // partition i overlapping stack/peripheral of partition j.
+            for &(base_a, size_a) in accessible_i.iter() {
+                for &(base_b, size_b) in exclusive_j.iter() {
+                    if base_a < base_b.wrapping_add(size_b) && base_b < base_a.wrapping_add(size_a)
+                    {
+                        panic!(
+                            "invariant violation: partition {} region [0x{:08x}, 0x{:08x}) \
+                             overlaps partition {} region [0x{:08x}, 0x{:08x})",
+                            pcb_i.id(),
+                            base_a,
+                            base_a.wrapping_add(size_a),
+                            pcb_j.id(),
                             base_b,
                             base_b.wrapping_add(size_b),
                         );
@@ -795,9 +821,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "overlaps partition 1")]
-    fn overlap_data_data() {
-        // Both partitions have data regions at the same address.
+    fn shared_data_regions_not_checked() {
+        // Overlapping data regions are accepted: partitions may share data
+        // regions for shared-memory IPC, so only exclusive regions (stack,
+        // peripherals) are checked for overlap.
         let p0 = make_region_pcb(0, 0x2000_0000, 4096, 0x2001_0000, 1024);
         let p1 = make_region_pcb(1, 0x2000_0800, 4096, 0x2002_0000, 1024);
         assert_no_overlapping_mpu_regions(&[p0, p1]);
@@ -807,6 +834,7 @@ mod tests {
     #[should_panic(expected = "overlaps partition 1")]
     fn overlap_data_stack() {
         // Partition 0's data region overlaps partition 1's stack.
+        // Only Data-vs-Data overlaps are permitted; Data-vs-Stack is rejected.
         let p0 = make_region_pcb(0, 0x2000_0000, 0x2000, 0x2001_0000, 1024);
         let p1 = make_region_pcb(1, 0x2002_0000, 4096, 0x2000_0800, 1024);
         assert_no_overlapping_mpu_regions(&[p0, p1]);
@@ -927,10 +955,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "overlaps partition 1")]
-    fn kernel_invariants_catches_overlapping_mpu_regions() {
-        // Two partitions whose data regions overlap — detected via
-        // the overlap check wired into assert_kernel_invariants.
+    fn kernel_invariants_allows_shared_data_regions() {
+        // Overlapping data regions are accepted by the kernel invariant
+        // check — only exclusive regions (stack, peripherals) are checked.
         let partitions = [
             make_region_pcb(0, 0x2000_0000, 0x2000, 0x2001_0000, 1024),
             make_region_pcb(1, 0x2000_0800, 0x2000, 0x2002_0000, 1024),

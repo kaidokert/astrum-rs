@@ -6332,19 +6332,15 @@ mod tests {
         }
     }
 
-    // TODO: reviewer false positive — configs is &[PartitionConfig] (a slice),
-    // not [PartitionConfig; N]. Passing fewer configs than N is valid and
-    // consistent with existing tests (e.g. kernel_new_rejects_partition_id_mismatch).
     #[test]
-    #[should_panic(expected = "overlaps")]
-    fn kernel_new_panics_on_overlapping_mpu_regions() {
+    fn kernel_new_allows_overlapping_data_regions() {
+        // Only the data (MPU) regions overlap here. The stack addresses from
+        // PartitionConfig are ignored — Kernel::new uses internal stacks at
+        // unrelated addresses. Since Data-vs-Data is the only overlap and is
+        // permitted for shared-memory IPC, this should succeed.
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
-        // Internal stacks are 4096 bytes apart (AlignedStack4K).
-        // Size 8192 > gap, so partition 0's data region overlaps partition 1.
-        // TODO: addresses are placeholders — Kernel::new overrides mpu_region.base
-        // with the internal stack address. All svc.rs tests use this convention.
         let cfgs = [
             PartitionConfig {
                 id: 0,
