@@ -2345,6 +2345,20 @@ where
                 .map(|pcb| pcb.state() == PartitionState::Waiting)
                 .unwrap_or(false);
             if is_waiting {
+                // Bug 05: restore active partition to Running if it is Waiting.
+                // Note: `is_waiting` checks `pid` (next scheduled), not `ap`
+                // (active partition) — they can differ in multi-partition
+                // schedules, so this guard is intentionally not redundant.
+                if let Some(ap) = self.active_partition {
+                    if self
+                        .partitions()
+                        .get(ap as usize)
+                        .is_some_and(|p| p.state() == PartitionState::Waiting)
+                        && try_transition(self.partitions_mut(), ap, PartitionState::Ready)
+                    {
+                        self.set_next_partition(ap);
+                    }
+                }
                 return ScheduleEvent::None;
             }
             self.transition_outgoing_ready();
@@ -7905,11 +7919,11 @@ mod tests {
             "yield must return None when no runnable partner exists"
         );
 
-        // P0 must still be Waiting — not reverted to Ready.
+        // Bug 05: P0 must be restored to Running — no runnable partner.
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting,
-            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+            PartitionState::Running,
+            "Bug 05: P0 must be restored to Running when yield finds no runnable partner"
         );
         assert_eq!(
             k.active_partition(),
@@ -8136,16 +8150,16 @@ mod tests {
         assert_eq!(r1.partition_id(), None, "no runnable partner");
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting
+            PartitionState::Running // Bug 05: restored from Waiting
         );
         assert_partition_state_consistency(k.partitions().as_slice());
 
-        // Step 3: Wake P0 via event_set (simulates ISR/other partition).
+        // Step 3: event_set — P0 is already Running, no state change.
         let ret = crate::events::event_set(k.partitions_mut(), 0, 0b1010);
         assert_eq!(ret, 0, "event_set must return 0");
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Ready
+            PartitionState::Running
         );
         assert_partition_state_consistency(k.partitions().as_slice());
 
@@ -8175,7 +8189,7 @@ mod tests {
         assert_eq!(r2.partition_id(), None, "no runnable partner");
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting
+            PartitionState::Running // Bug 05: restored from Waiting
         );
         assert_eq!(k.active_partition(), Some(0));
         assert_partition_state_consistency(k.partitions().as_slice());
@@ -8423,8 +8437,8 @@ mod tests {
 
     /// Bug 05 regression: SYS_EVT_WAIT with no matching event bits blocks
     /// P0 via trigger_deschedule(), then yield_current_slot() finds no
-    /// runnable partner (P1 is Waiting).  P0 must stay Waiting — not
-    /// revert to Ready.  Covers the SYS_EVT_WAIT→trigger_deschedule path.
+    /// runnable partner (P1 is Waiting).  P0 must be restored to Running.
+    /// Covers the SYS_EVT_WAIT→trigger_deschedule path.
     #[test]
     fn bug05_evt_wait_blocks_then_yield_no_partner() {
         use crate::invariants::assert_partition_state_consistency;
@@ -8477,11 +8491,11 @@ mod tests {
             "yield must return None when no runnable partner exists"
         );
 
-        // Step 5: P0 must still be Waiting — not reverted to Ready.
+        // Step 5: Bug 05: P0 must be restored to Running (no runnable partner).
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting,
-            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+            PartitionState::Running,
+            "Bug 05: P0 must be restored to Running when yield finds no runnable partner"
         );
         assert_eq!(
             k.active_partition(),
@@ -8495,9 +8509,9 @@ mod tests {
 
     /// Bug 05 regression: SYS_MTX_LOCK blocks P0 (mutex held by P1),
     /// trigger_deschedule() fires, then yield_current_slot() finds no
-    /// runnable partner (P1 is also Waiting).  P0 must stay Waiting —
-    /// not revert to Ready.  Covers the SYS_MTX_LOCK→trigger_deschedule
-    /// path not exercised by the other Bug 05 tests.
+    /// runnable partner (P1 is also Waiting).  P0 must be restored to
+    /// Running.  Covers the SYS_MTX_LOCK→trigger_deschedule path not
+    /// exercised by the other Bug 05 tests.
     #[test]
     fn bug05_mutex_lock_blocks_then_yield_no_partner() {
         use crate::invariants::assert_partition_state_consistency;
@@ -8562,11 +8576,11 @@ mod tests {
             "yield must return None when no runnable partner exists"
         );
 
-        // Step 6: P0 must still be Waiting — not reverted to Ready.
+        // Step 6: Bug 05: P0 must be restored to Running (no runnable partner).
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting,
-            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+            PartitionState::Running,
+            "Bug 05: P0 must be restored to Running when yield finds no runnable partner"
         );
         assert_eq!(
             k.active_partition(),
@@ -8580,8 +8594,8 @@ mod tests {
 
     /// Bug 05 regression: SYS_SEM_WAIT on a semaphore with count=0 blocks
     /// the caller via trigger_deschedule(), then yield_current_slot() finds
-    /// no runnable partner (P1 is Waiting).  P0 must stay Waiting — not
-    /// revert to Ready.  Covers the SYS_SEM_WAIT→trigger_deschedule path.
+    /// no runnable partner (P1 is Waiting).  P0 must be restored to Running.
+    /// Covers the SYS_SEM_WAIT→trigger_deschedule path.
     #[test]
     fn bug05_sem_wait_blocks_then_yield_no_partner() {
         use crate::invariants::assert_partition_state_consistency;
@@ -8637,11 +8651,11 @@ mod tests {
             "yield must return None when no runnable partner exists"
         );
 
-        // Step 6: P0 must still be Waiting — not reverted to Ready.
+        // Step 6: Bug 05: P0 must be restored to Running (no runnable partner).
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting,
-            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+            PartitionState::Running,
+            "Bug 05: P0 must be restored to Running when yield finds no runnable partner"
         );
         assert_eq!(
             k.active_partition(),
@@ -8655,8 +8669,8 @@ mod tests {
 
     /// Bug 05 regression: SYS_MSG_SEND on a full message queue blocks the
     /// sender via trigger_deschedule(), then yield_current_slot() finds no
-    /// runnable partner (P1 is Waiting).  P0 must stay Waiting — not revert
-    /// to Ready.  Covers the SYS_MSG_SEND→trigger_deschedule path.
+    /// runnable partner (P1 is Waiting).  P0 must be restored to Running.
+    /// Covers the SYS_MSG_SEND→trigger_deschedule path.
     #[cfg(feature = "ipc-message")]
     #[test]
     fn bug05_msg_send_blocks_then_yield_no_partner() {
@@ -8725,11 +8739,11 @@ mod tests {
             "yield must return None when no runnable partner exists"
         );
 
-        // Step 6: P0 must still be Waiting — not reverted to Ready.
+        // Step 6: Bug 05: P0 must be restored to Running (no runnable partner).
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting,
-            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+            PartitionState::Running,
+            "Bug 05: P0 must be restored to Running when yield finds no runnable partner"
         );
         assert_eq!(
             k.active_partition(),
@@ -8744,7 +8758,7 @@ mod tests {
     /// Bug 05 regression: SYS_MSG_RECV on an empty message queue blocks the
     /// receiver via apply_recv_outcome → trigger_deschedule(), then
     /// yield_current_slot() finds no runnable partner (P1 is Waiting).
-    /// P0 must stay Waiting — not revert to Ready.  Covers the
+    /// P0 must be restored to Running.  Covers the
     /// SYS_MSG_RECV→ReceiverBlocked→trigger_deschedule path.
     #[cfg(feature = "ipc-message")]
     #[test]
@@ -8804,11 +8818,11 @@ mod tests {
             "yield must return None when no runnable partner exists"
         );
 
-        // Step 5: P0 must still be Waiting — not reverted to Ready.
+        // Step 5: Bug 05: P0 must be restored to Running (no runnable partner).
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting,
-            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+            PartitionState::Running,
+            "Bug 05: P0 must be restored to Running when yield finds no runnable partner"
         );
         assert_eq!(
             k.active_partition(),
@@ -8823,7 +8837,7 @@ mod tests {
     /// Bug 05 regression: SYS_BB_READ on an empty blackboard blocks the
     /// reader via ReaderBlocked → trigger_deschedule(), then
     /// yield_current_slot() finds no runnable partner (P1 is Waiting).
-    /// P0 must stay Waiting — not revert to Ready.  Covers the
+    /// P0 must be restored to Running.  Covers the
     /// SYS_BB_READ→ReaderBlocked→trigger_deschedule path.
     #[cfg(feature = "ipc-blackboard")]
     #[test]
@@ -8882,11 +8896,11 @@ mod tests {
             "yield must return None when no runnable partner exists"
         );
 
-        // Step 5: P0 must still be Waiting — not reverted to Ready.
+        // Step 5: Bug 05: P0 must be restored to Running (no runnable partner).
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting,
-            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+            PartitionState::Running,
+            "Bug 05: P0 must be restored to Running when yield finds no runnable partner"
         );
         assert_eq!(
             k.active_partition(),
@@ -8901,7 +8915,7 @@ mod tests {
     /// Bug 05 regression: SYS_QUEUING_RECV_TIMED on an empty destination
     /// queue with timeout > 0 blocks the caller (ReceiverBlocked).  After
     /// yield_current_slot() finds no runnable partner and returns None,
-    /// P0 must stay Waiting — not revert to Ready.
+    /// P0 must be restored to Running.
     #[cfg(feature = "ipc-queuing")]
     #[test]
     fn bug05_queuing_recv_timed_blocks_then_yield_no_partner() {
@@ -8970,11 +8984,11 @@ mod tests {
             "yield must return None when no runnable partner exists"
         );
 
-        // Step 5: P0 must still be Waiting — not reverted to Ready.
+        // Step 5: Bug 05: P0 must be restored to Running (no runnable partner).
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting,
-            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+            PartitionState::Running,
+            "Bug 05: P0 must be restored to Running when yield finds no runnable partner"
         );
         assert_eq!(
             k.active_partition(),
@@ -9051,11 +9065,11 @@ mod tests {
             "yield must return None when no runnable partner exists"
         );
 
-        // Step 5: P0 must still be Waiting — not reverted to Ready.
+        // Step 5: Bug 05: P0 must be restored to Running (no runnable partner).
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting,
-            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+            PartitionState::Running,
+            "Bug 05: P0 must be restored to Running when yield finds no runnable partner"
         );
         assert_eq!(
             k.active_partition(),
@@ -9126,11 +9140,11 @@ mod tests {
             "yield must return None when no runnable partner exists"
         );
 
-        // Step 5: P0 must still be Waiting — not reverted to Ready.
+        // Step 5: Bug 05: P0 must be restored to Running (no runnable partner).
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
-            PartitionState::Waiting,
-            "Bug 05: P0 must stay Waiting after yield finds no runnable partner"
+            PartitionState::Running,
+            "Bug 05: P0 must be restored to Running when yield finds no runnable partner"
         );
         assert_eq!(
             k.active_partition(),
