@@ -2363,8 +2363,17 @@ where
                     .map(|pcb| pcb.state() == PartitionState::Waiting)
                     .unwrap_or(false);
                 if is_waiting {
-                    // Don't update active_partition or next_partition.
-                    // Return None to indicate no switch occurred.
+                    // Bug 06: restore active partition to Running if it is Waiting.
+                    if let Some(ap) = self.active_partition {
+                        if self
+                            .partitions()
+                            .get(ap as usize)
+                            .is_some_and(|p| p.state() == PartitionState::Waiting)
+                            && try_transition(self.partitions_mut(), ap, PartitionState::Ready)
+                        {
+                            self.set_next_partition(ap);
+                        }
+                    }
                     return ScheduleEvent::None;
                 }
                 self.transition_outgoing_ready();
@@ -7169,6 +7178,63 @@ mod tests {
             // (4) Running partition matches active_partition.
             assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
         }
+    }
+
+    /// Bug 06 regression for advance_schedule_tick: P0 active+Waiting,
+    /// P1 Waiting. Tick reaches schedule boundary nominating P1 (Waiting),
+    /// guard restores P0 to Running via set_next_partition.
+    #[test]
+    fn bug06_advance_tick_restores_active_when_waiting() {
+        use crate::invariants::{
+            assert_next_partition_not_waiting, assert_partition_state_consistency,
+            assert_running_matches_active,
+        };
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+
+        // Bootstrap P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Advance to 1 tick before P1's slot boundary (P0 has 5 ticks).
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+
+        // P0: Running → Waiting (simulates blocking syscall).
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+
+        // P1: Ready → Running → Waiting.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // 5th tick triggers schedule boundary nominating P1 (Waiting).
+        // Bug 06 guard should restore P0 to Running.
+        let ev = k.advance_schedule_tick();
+        assert_eq!(ev, ScheduleEvent::None);
+
+        // P0 must be restored to Running.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(k.active_partition(), Some(0));
+
+        // P1 still Waiting.
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting
+        );
+
+        // Invariant checks.
+        assert_partition_state_consistency(k.partitions().as_slice());
+        assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
+        assert_next_partition_not_waiting(k.partitions().as_slice(), k.next_partition());
     }
 
     /// Regression: SYS_YIELD dispatch sets yield_requested only when the
