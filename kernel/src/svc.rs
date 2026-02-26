@@ -1458,11 +1458,7 @@ where
             }
             Some(SyscallId::SemWait) => {
                 let pt = self.core.partitions_mut();
-                match self
-                    .sync
-                    .semaphores_mut()
-                    .wait(pt, arg1 as usize, arg2 as usize)
-                {
+                match self.sync.semaphores_mut().wait(pt, arg1 as usize, caller) {
                     Ok(true) => 1,
                     Ok(false) => {
                         self.trigger_deschedule();
@@ -1480,11 +1476,7 @@ where
             }
             Some(SyscallId::MutexLock) => {
                 let pt = self.core.partitions_mut();
-                match self
-                    .sync
-                    .mutexes_mut()
-                    .lock(pt, arg1 as usize, arg2 as usize)
-                {
+                match self.sync.mutexes_mut().lock(pt, arg1 as usize, caller) {
                     Ok(true) => 1,
                     Ok(false) => {
                         self.trigger_deschedule();
@@ -1505,7 +1497,7 @@ where
                 match self
                     .sync
                     .mutexes_mut()
-                    .unlock(pt, frame.r1 as usize, frame.r2 as usize)
+                    .unlock(pt, frame.r1 as usize, caller)
                 {
                     Ok(()) => 0,
                     Err(e) => match e {
@@ -3550,6 +3542,76 @@ mod tests {
             k.partitions().get(0).unwrap().event_flags(),
             0,
             "partition 0 must be unaffected"
+        );
+    }
+
+    /// Confused-deputy regression: SemWait must use kernel-derived `caller`,
+    /// not user-supplied r2. If r2=1 but current_partition=0, sem blocks partition 0.
+    #[test]
+    fn sem_wait_uses_caller_not_r2() {
+        // 1 semaphore with count=0 so wait will block.
+        let mut k = kernel(1, 0, 0);
+        // Drain the semaphore: count starts at 1, first wait acquires.
+        let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 1, "first SemWait must acquire (count was 1)");
+
+        // Now count=0. Attacker sets r2=1 to impersonate partition 1.
+        let mut ef = frame(crate::syscall::SYS_SEM_WAIT, 0, 1);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "SemWait must block (count=0)");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "partition 0 must be Waiting (not partition 1)"
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Running,
+            "partition 1 must be unaffected"
+        );
+    }
+
+    /// Confused-deputy regression: MutexLock must use kernel-derived `caller`,
+    /// not user-supplied r2. If r2=1 but current_partition=0, mutex is owned by partition 0.
+    #[test]
+    fn mutex_lock_uses_caller_not_r2() {
+        let mut k = kernel(0, 1, 0);
+        // Attacker sets r2=1 to impersonate partition 1.
+        let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 1);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 1, "MutexLock must acquire immediately");
+        assert_eq!(
+            k.mutexes().owner(0),
+            Ok(Some(0)),
+            "mutex must be owned by partition 0 (not partition 1)"
+        );
+    }
+
+    /// Confused-deputy regression: MutexUnlock must use kernel-derived `caller`,
+    /// not user-supplied r2. If r2=1 but current_partition=0, unlock acts as partition 0.
+    #[test]
+    fn mutex_unlock_uses_caller_not_r2() {
+        let mut k = kernel(0, 1, 0);
+        // Partition 0 acquires the mutex.
+        let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 1, "MutexLock must acquire");
+        assert_eq!(k.mutexes().owner(0), Ok(Some(0)));
+
+        // Attacker sets r2=1 to impersonate partition 1 during unlock.
+        let mut ef = frame(crate::syscall::SYS_MTX_UNLOCK, 0, 1);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "MutexUnlock must succeed for partition 0");
+        assert_eq!(
+            k.mutexes().owner(0),
+            Ok(None),
+            "mutex must be unlocked by partition 0 (not rejected as not-owner)"
         );
     }
 
