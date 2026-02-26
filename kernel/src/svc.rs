@@ -4648,6 +4648,23 @@ mod tests {
     }
 
     #[test]
+    fn validate_ptr_own_stack_in_kernel_data_accepted() {
+        // Override kernel_data_end so Guard 3 covers [0x2000_0000, 0x2000_2000).
+        KERNEL_DATA_END_OVERRIDE.with(|c| c.set(Some(0x2000_2000)));
+        // Stack at 0x2000_0000..0x2000_0800 — inside kernel data region.
+        // Data at 0x2000_2000..0x2000_3000 — above kernel data.
+        let t = ptr_table_separate_regions(0x2000_0000, 0x800, 0x2000_2000, 0x1000);
+        // Guard 2 (grant) must accept own-stack pointers before Guard 3 (SRAM
+        // rejection) fires.  This exercises the ordering fix from commit a8043b9.
+        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 4)); // start of stack
+        assert!(validate_user_ptr(&t, 0, 0x2000_0400, 16)); // middle of stack
+        assert!(validate_user_ptr(&t, 0, 0x2000_07F0, 16)); // near end of stack
+
+        // Clean up override.
+        KERNEL_DATA_END_OVERRIDE.with(|c| c.set(None));
+    }
+
+    #[test]
     fn validate_ptr_null_and_low_kernel_code_rejected() {
         let t = ptr_table(0x2000_0000, 4096);
         // Null pointer (address 0) — rejected.
