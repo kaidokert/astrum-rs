@@ -2169,7 +2169,7 @@ mod tests {
 
         // Phase 5: P0 re-blocks on EventWait (mask=0x2).
         // Exercises Running→Waiting→Ready→Running→Waiting lifecycle on P0.
-        let f = h.dispatch(SYS_EVT_WAIT, 0, 0x2, 0);
+        let f = h.dispatch_as(0, SYS_EVT_WAIT, 0, 0x2, 0);
         assert_eq!(f.r0, 0, "P0: re-blocking EventWait must return 0");
         assert_eq!(st(&h, 0), PartitionState::Waiting);
         h.assert_blocking_triggered_deschedule(0);

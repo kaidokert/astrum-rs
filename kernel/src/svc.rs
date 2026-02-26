@@ -1391,6 +1391,7 @@ where
         let arg1 = frame.r1;
         let arg2 = frame.r2;
         let arg3 = frame.r3;
+        let caller = self.current_partition as usize;
         self.assert_dispatch_invariants();
         #[cfg(any(debug_assertions, test))]
         let entry_states = {
@@ -1404,7 +1405,7 @@ where
         frame.r0 = match SyscallId::from_u32(syscall_id) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::EventWait) => {
-                let result = events::event_wait(self.partitions_mut(), arg1 as usize, arg2);
+                let result = events::event_wait(self.partitions_mut(), caller, arg2);
                 if result == 0 {
                     self.trigger_deschedule();
                 }
@@ -1414,7 +1415,7 @@ where
                 events::event_set(self.partitions_mut(), frame.r1 as usize, frame.r2)
             }
             Some(SyscallId::EventClear) => {
-                events::event_clear(self.partitions_mut(), frame.r1 as usize, frame.r2)
+                events::event_clear(self.partitions_mut(), caller, frame.r2)
             }
             Some(SyscallId::SemWait) => {
                 let pt = self.core.partitions_mut();
@@ -3416,6 +3417,76 @@ mod tests {
             k.partitions().get(0).unwrap().event_wait_mask(),
             mask,
             "PCB must save the wait mask for wake-up"
+        );
+    }
+
+    /// Confused-deputy regression: EventWait must use current_partition, not r1.
+    /// If r1=1 but current_partition=0, the wait must operate on partition 0.
+    #[test]
+    fn event_wait_uses_current_partition_not_r1() {
+        let mut k = kernel(0, 0, 0);
+        // r1=1 (attacker tries to operate on partition 1), mask in r2
+        let mut ef = frame(SYS_EVT_WAIT, 1, 0b0011);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        // current_partition=0 has no bits set, so it blocks
+        assert_eq!(ef.r0, 0, "EventWait must block on partition 0");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting,
+            "partition 0 must be Waiting (not partition 1)"
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Running,
+            "partition 1 must be unaffected"
+        );
+    }
+
+    /// Confused-deputy regression: EventClear must use current_partition, not r1.
+    /// If r1=1 but current_partition=0, the clear must operate on partition 0.
+    #[test]
+    fn event_clear_uses_current_partition_not_r1() {
+        let mut k = kernel(0, 0, 0);
+        // Pre-set bits on both partitions
+        events::event_set(k.partitions_mut(), 0, 0b1111);
+        events::event_set(k.partitions_mut(), 1, 0b1111);
+        // r1=1 (attacker tries to clear partition 1's flags), mask in r2
+        let mut ef = frame(SYS_EVT_CLEAR, 1, 0b0101);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "EventClear must succeed");
+        assert_eq!(
+            k.partitions().get(0).unwrap().event_flags(),
+            0b1010,
+            "partition 0 flags must be cleared (not partition 1)"
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().event_flags(),
+            0b1111,
+            "partition 1 flags must be unaffected"
+        );
+    }
+
+    /// EventSet must still route to the target in r1 (by design — you signal
+    /// another partition). Verify r1=1 targets partition 1.
+    #[test]
+    fn event_set_still_targets_r1() {
+        let mut k = kernel(0, 0, 0);
+        // current_partition=0, r1=1 → should set flags on partition 1
+        let mut ef = frame(SYS_EVT_SET, 1, 0b0110);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "EventSet must succeed");
+        assert_eq!(
+            k.partitions().get(1).unwrap().event_flags(),
+            0b0110,
+            "partition 1 must have the flags set via r1"
+        );
+        assert_eq!(
+            k.partitions().get(0).unwrap().event_flags(),
+            0,
+            "partition 0 must be unaffected"
         );
     }
 
@@ -7938,6 +8009,7 @@ mod tests {
         );
 
         // Set up P0 as active Running partition.
+        k.set_current_partition(0);
         k.set_next_partition(0);
         k.active_partition = Some(0);
         assert_eq!(
