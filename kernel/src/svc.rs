@@ -9602,6 +9602,113 @@ mod tests {
         assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
     }
 
+    /// Bug 06 regression (tick path, 3 partitions): P0 active+Waiting,
+    /// P1 Waiting, P2 Waiting. Tick boundary nominates P1 (Waiting),
+    /// guard restores P0 to Running. P1 and P2 stay Waiting.
+    #[test]
+    fn bug06_tick_three_partitions_all_waiting_restores_active() {
+        use crate::invariants::{
+            assert_next_partition_not_waiting, assert_partition_state_consistency,
+            assert_running_matches_active,
+        };
+        use crate::scheduler::ScheduleEvent;
+        use crate::test_harness::KernelTestHarness;
+
+        let mut h = KernelTestHarness::with_partitions(3).expect("harness setup");
+        let k = h.kernel_mut();
+        k.start_schedule();
+        k.set_next_partition(0);
+
+        // P0: Running → Waiting.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        // P1: Ready → Running → Waiting.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        // P2: Ready → Running → Waiting.
+        let pcb2 = k.partitions_mut().get_mut(2).unwrap();
+        pcb2.transition(PartitionState::Running).unwrap();
+        pcb2.transition(PartitionState::Waiting).unwrap();
+
+        // Advance 9 ticks (P0's slot = 10 ticks; boundary at tick 10).
+        for _ in 0..9 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+        // 10th tick: boundary nominates P1 (Waiting), guard restores P0.
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(k.active_partition(), Some(0));
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(
+            k.partitions().get(2).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+        assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
+        assert_next_partition_not_waiting(k.partitions().as_slice(), k.next_partition());
+    }
+
+    /// Bug 06 regression (yield path, 3 partitions): P0 active+Waiting,
+    /// P1 Waiting, P2 Ready. Yield from P0 → nominates P1 (Waiting),
+    /// guard restores P0 to Running. P2 stays Ready (untouched).
+    #[test]
+    fn bug06_yield_three_partitions_nominee_waiting_restores_active() {
+        use crate::invariants::{
+            assert_next_partition_not_waiting, assert_partition_state_consistency,
+            assert_running_matches_active,
+        };
+        use crate::test_harness::KernelTestHarness;
+
+        let mut h = KernelTestHarness::with_partitions(3).expect("harness setup");
+        let k = h.kernel_mut();
+        k.start_schedule();
+        k.set_next_partition(0);
+
+        // P0: Running → Waiting.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        // P1: Ready → Running → Waiting.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        // P2: stays Ready (untouched).
+
+        // Yield → force_advance nominates P1 (Waiting), guard restores P0.
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), None, "must not switch to Waiting P1");
+
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(k.active_partition(), Some(0));
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(
+            k.partitions().get(2).unwrap().state(),
+            PartitionState::Ready
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+        assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
+        assert_next_partition_not_waiting(k.partitions().as_slice(), k.next_partition());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
