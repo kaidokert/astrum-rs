@@ -41,7 +41,7 @@ const XPSR_THUMB: u32 = 1 << 24; // Thumb bit — required on all Cortex-M
 /// On Cortex-M, when the processor enters an exception, the LR is loaded with
 /// a special EXC_RETURN value. Writing 0xFFFFFFFD to LR and executing BX LR
 /// causes an exception return to Thread mode, restoring context from the PSP.
-const EXC_RETURN_THREAD_PSP: u32 = 0xFFFF_FFFD;
+pub const EXC_RETURN_THREAD_PSP: u32 = 0xFFFF_FFFD;
 
 /// Write an initial context-switch frame at the top of `stack` so PendSV can
 /// "return" into `entry_point`. Returns the stack-pointer index, or `None`

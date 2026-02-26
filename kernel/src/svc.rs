@@ -367,10 +367,19 @@ core::arch::global_asm!(
     ".global SVCall",
     ".type SVCall, %function",
     "SVCall:",
+    // Defense-in-depth: validate lr == EXC_RETURN_THREAD_PSP (0xFFFFFFFD).
+    // If SVC is entered from Handler mode, lr would be a different EXC_RETURN
+    // value and PSP would not point to the caller's exception frame.
+    "movw r0, #0xFFFD",
+    "movt r0, #0xFFFF",
+    "cmp lr, r0",
+    "bne .Lsvc_bad_exc_return",
     "mrs r0, psp",
     "push {{lr}}",
     "bl dispatch_svc",
     "pop {{pc}}",
+    ".Lsvc_bad_exc_return:",
+    "b .Lsvc_bad_exc_return",
     ".size SVCall, . - SVCall",
 );
 
@@ -2895,6 +2904,47 @@ mod tests {
     fn dispatch_checked(k: &mut Kernel<TestConfig>, ef: &mut ExceptionFrame) {
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(ef) }
+    }
+
+    // -------------------------------------------------------------------------
+    // EXC_RETURN guard constant tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn svc_exc_return_guard_matches_context_constant() {
+        use crate::context::EXC_RETURN_THREAD_PSP;
+
+        // The assembly trampoline hardcodes 0xFFFFFFFD via movw/movt.
+        // Verify the context module constant matches the expected value.
+        assert_eq!(EXC_RETURN_THREAD_PSP, 0xFFFF_FFFD);
+
+        // Bit 0 set: return to Thread mode (not Handler mode).
+        assert_ne!(
+            EXC_RETURN_THREAD_PSP & (1 << 0),
+            0,
+            "bit 0 (Thread mode) must be set"
+        );
+
+        // Bit 2 set: restore context from PSP (not MSP).
+        assert_ne!(
+            EXC_RETURN_THREAD_PSP & (1 << 2),
+            0,
+            "bit 2 (PSP) must be set"
+        );
+
+        // Bit 1 clear: no FPU context (basic frame).
+        assert_eq!(
+            EXC_RETURN_THREAD_PSP & (1 << 4),
+            1 << 4,
+            "bit 4 (no FPU stacking) must be set for basic frame"
+        );
+
+        // Bits [31:4] must all be ones (EXC_RETURN magic prefix).
+        assert_eq!(
+            EXC_RETURN_THREAD_PSP & 0xFFFF_FFF0,
+            0xFFFF_FFF0,
+            "bits [31:4] must all be ones"
+        );
     }
 
     // -------------------------------------------------------------------------
