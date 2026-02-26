@@ -13,6 +13,7 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
+use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
@@ -80,49 +81,42 @@ impl KernelConfig for TestConfig {
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
-// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
+static SVC_RESULT: AtomicU32 = AtomicU32::new(0);
+static SVC_DONE: AtomicU32 = AtomicU32::new(0);
 
-// ---------------------------------------------------------------------------
-// Partition entry points
-// ---------------------------------------------------------------------------
+kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+    if SVC_DONE.load(Ordering::Acquire) == 1 {
+        let result = SVC_RESULT.load(Ordering::Acquire);
+        if result == EXPECTED_ERROR {
+            hprintln!("{}: PASS (error {:#010x})", TEST_NAME, result);
+            debug::exit(debug::EXIT_SUCCESS);
+        } else {
+            hprintln!(
+                "{}: FAIL - expected {:#010x}, got {:#010x}",
+                TEST_NAME,
+                EXPECTED_ERROR,
+                result
+            );
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
+    if tick > 100 {
+        hprintln!("{}: FAIL - timeout", TEST_NAME);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+});
 
 /// Partition 0 entry: invoke SYS_SAMPLING_WRITE with pointer into P1's region.
 extern "C" fn p0_main_body(r0: u32) -> ! {
-    // Retrieve packed argument: upper 16 bits = port_id, lower 16 bits = P1 offset index.
-    // Actually, we pack: port_id in bits [31:16], p1_base high bits in [15:0].
-    // For simplicity, we pass the full p1_base as a second word via a static.
     let packed = r0;
     let port_id = packed >> 16;
-    let p1_base = (packed & 0xFFFF) << 16; // Reconstruct upper half (lower half is 0 for aligned stacks)
-
-    // Target address: middle of partition 1's MPU region.
+    let p1_base = (packed & 0xFFFF) << 16;
     let target_in_p1 = p1_base + STACK_SIZE / 2;
-
-    // Issue SYS_SAMPLING_WRITE with:
-    //   r1 = port_id (valid sampling port)
-    //   r2 = 4 (data length)
-    //   r3 = target_in_p1 (invalid: points to partition 1's region)
     let result = kernel::svc!(SYS_SAMPLING_WRITE, port_id, 4u32, target_in_p1);
-
-    // The kernel should have rejected this with InvalidPointer.
-    // If we reach here, no MemManage fault occurred (pointer was validated
-    // before dereference).
-    if result == EXPECTED_ERROR {
-        hprintln!("{}: PASS (error code {:#010x})", TEST_NAME, result);
-        debug::exit(debug::EXIT_SUCCESS);
-    } else {
-        hprintln!(
-            "{}: FAIL - expected {:#010x}, got {:#010x}",
-            TEST_NAME,
-            EXPECTED_ERROR,
-            result
-        );
-        debug::exit(debug::EXIT_FAILURE);
-    }
-
+    SVC_RESULT.store(result, Ordering::Release);
+    SVC_DONE.store(1, Ordering::Release);
     loop {
-        cortex_m::asm::wfi();
+        cortex_m::asm::nop();
     }
 }
 kernel::partition_trampoline!(p0_main => p0_main_body);

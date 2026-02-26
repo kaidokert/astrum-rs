@@ -14,6 +14,7 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
+use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
@@ -59,17 +60,17 @@ const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 
 struct TestConfig;
 impl KernelConfig for TestConfig {
-    const N: usize = 2; // Need 2 partitions defined for EVT_SET test
+    const N: usize = 1;
     const SCHED: usize = 4;
     const STACK_WORDS: usize = 256;
     const S: usize = 1;
     const SW: usize = 1;
     const MS: usize = 1;
     const MW: usize = 1;
-    const QS: usize = 4;
-    const QD: usize = 4;
-    const QM: usize = 16;
-    const QW: usize = 4;
+    const QS: usize = 1;
+    const QD: usize = 1;
+    const QM: usize = 1;
+    const QW: usize = 1;
     const SP: usize = 1;
     const SM: usize = 1;
     const BS: usize = 1;
@@ -88,62 +89,45 @@ impl KernelConfig for TestConfig {
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
-// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
+// 0 = pending, 1 = pass, 2 = fail (EVT_SET), 3 = fail (QUEUING_SEND)
+static RESULT: AtomicU32 = AtomicU32::new(0);
 
-// ---------------------------------------------------------------------------
-// Partition entry point
-// ---------------------------------------------------------------------------
+kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+    let r = RESULT.load(Ordering::Acquire);
+    if r == 1 {
+        hprintln!("{}: PASS", TEST_NAME);
+        debug::exit(debug::EXIT_SUCCESS);
+    } else if r >= 2 {
+        hprintln!("{}: FAIL (code {})", TEST_NAME, r);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+    if tick > 100 {
+        hprintln!("{}: FAIL - timeout", TEST_NAME);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+});
 
 /// Partition 0 entry: test invalid resource ID syscalls.
 extern "C" fn test_partition_main() -> ! {
-    // Test 1: SYS_EVT_SET with invalid partition ID
-    // r0 = syscall ID, r1 = target partition ID (invalid), r2 = event mask, r3 = unused
-    hprintln!(
-        "  testing EVT_SET with partition_id={}",
-        INVALID_PARTITION_ID
-    );
-
-    let result = kernel::svc!(SYS_EVT_SET, INVALID_PARTITION_ID, 1u32, 0u32);
-
-    if result != EXPECTED_INVALID_PARTITION {
-        hprintln!(
-            "{}: FAIL - EVT_SET: expected {:#010x}, got {:#010x}",
-            TEST_NAME,
-            EXPECTED_INVALID_PARTITION,
-            result
-        );
-        debug::exit(debug::EXIT_FAILURE);
+    let r1 = kernel::svc!(SYS_EVT_SET, INVALID_PARTITION_ID, 1u32, 0u32);
+    if r1 != EXPECTED_INVALID_PARTITION {
+        RESULT.store(2, Ordering::Release);
+        loop {
+            cortex_m::asm::nop();
+        }
     }
-    hprintln!("  EVT_SET returned InvalidPartition: {:#010x}", result);
-
-    // Test 2: SYS_QUEUING_SEND with invalid port ID
-    // r0 = syscall ID, r1 = port ID (invalid), r2 = data length, r3 = data pointer
-    // Use stack address as data pointer (within MPU region).
-    hprintln!("  testing QUEUING_SEND with port_id={}", INVALID_PORT_ID);
-
-    // Use a stack variable as the data pointer (valid within partition's MPU region)
     let data: u32 = 0;
     let data_ptr = &data as *const u32 as u32;
-
-    let result2 = kernel::svc!(SYS_QUEUING_SEND, INVALID_PORT_ID, 4u32, data_ptr);
-
-    if result2 != EXPECTED_INVALID_RESOURCE {
-        hprintln!(
-            "{}: FAIL - QUEUING_SEND: expected {:#010x}, got {:#010x}",
-            TEST_NAME,
-            EXPECTED_INVALID_RESOURCE,
-            result2
-        );
-        debug::exit(debug::EXIT_FAILURE);
+    let r2 = kernel::svc!(SYS_QUEUING_SEND, INVALID_PORT_ID, 4u32, data_ptr);
+    if r2 != EXPECTED_INVALID_RESOURCE {
+        RESULT.store(3, Ordering::Release);
+        loop {
+            cortex_m::asm::nop();
+        }
     }
-    hprintln!("  QUEUING_SEND returned InvalidResource: {:#010x}", result2);
-
-    hprintln!("{}: PASS", TEST_NAME);
-    debug::exit(debug::EXIT_SUCCESS);
-
+    RESULT.store(1, Ordering::Release);
     loop {
-        cortex_m::asm::wfi();
+        cortex_m::asm::nop();
     }
 }
 

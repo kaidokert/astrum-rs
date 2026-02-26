@@ -6,8 +6,8 @@
 //! - **Bit 0 (nPRIV) = 1** — partition executes in unprivileged mode.
 //! - **Bit 1 (SPSEL) = 1** — partition uses the Process Stack Pointer.
 //!
-//! On QEMU the semihosting BKPT trap works regardless of privilege
-//! level, so the partition can report results and exit directly.
+//! The partition stores its CONTROL reading in an atomic; the SysTick
+//! hook (privileged Handler mode) reads it and reports via semihosting.
 //!
 //! This validates the end-to-end privilege drop from the PendSV handler
 //! through partition execution.
@@ -17,6 +17,7 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
+use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
@@ -46,44 +47,44 @@ impl KernelConfig for TestConfig {
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
-// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
+/// Partition stores CONTROL reading here; 0 = not yet read.
+static CONTROL_VAL: AtomicU32 = AtomicU32::new(0);
+/// Set to 1 once the partition has stored its reading.
+static DONE: AtomicU32 = AtomicU32::new(0);
 
-/// Partition entry: reads CONTROL, asserts nPRIV and SPSEL, then exits.
+kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+    if DONE.load(Ordering::Acquire) == 1 {
+        let control = CONTROL_VAL.load(Ordering::Acquire);
+        let npriv = control & 1;
+        let spsel = (control >> 1) & 1;
+        hprintln!("priv_drop_test: CONTROL = {:#06x}", control);
+        if npriv == 1 && spsel == 1 {
+            hprintln!("priv_drop_test: PASS");
+            debug::exit(debug::EXIT_SUCCESS);
+        } else {
+            hprintln!("priv_drop_test: FAIL");
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
+    if tick > 100 {
+        hprintln!("priv_drop_test: FAIL - timeout");
+        debug::exit(debug::EXIT_FAILURE);
+    }
+});
+
+/// Partition entry: reads CONTROL and stores it in an atomic.
 extern "C" fn partition_main() -> ! {
     let control: u32;
-
     #[cfg(target_arch = "arm")]
-    // SAFETY: MRS reads the CONTROL register with no side effects.
-    // The partition is running in Thread mode so CONTROL reflects the
-    // current privilege level and stack pointer selection.
     unsafe {
         core::arch::asm!("mrs {0}, CONTROL", out(reg) control);
     }
-
     #[cfg(not(target_arch = "arm"))]
     {
         control = 0;
     }
-
-    let npriv = control & 1;
-    let spsel = (control >> 1) & 1;
-
-    hprintln!("priv_drop_test: CONTROL = {:#06x}", control);
-    hprintln!("  nPRIV (bit 0) = {} (expect 1)", npriv);
-    hprintln!("  SPSEL (bit 1) = {} (expect 1)", spsel);
-
-    if npriv == 1 && spsel == 1 {
-        hprintln!("priv_drop_test: PASS");
-        debug::exit(debug::EXIT_SUCCESS);
-    } else {
-        hprintln!("priv_drop_test: FAIL");
-        debug::exit(debug::EXIT_FAILURE);
-    }
-
-    // TODO: reviewer false positive — debug::exit() returns `()`, not `!`.
-    // The debugger may allow the program to continue, so this loop is
-    // required to satisfy the `-> !` return type.
+    CONTROL_VAL.store(control, Ordering::Release);
+    DONE.store(1, Ordering::Release);
     loop {
         cortex_m::asm::nop();
     }

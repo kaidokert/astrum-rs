@@ -13,6 +13,7 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
+use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
@@ -81,42 +82,40 @@ impl KernelConfig for TestConfig {
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
-// Use the unified harness: single KERNEL global, no separate KS/KERN.
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
+// 0 = pending, result value when done (set SVC_DONE to 1)
+static SVC_RESULT: AtomicU32 = AtomicU32::new(0);
+static SVC_DONE: AtomicU32 = AtomicU32::new(0);
 
-// ---------------------------------------------------------------------------
-// Partition entry point
-// ---------------------------------------------------------------------------
+kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+    if SVC_DONE.load(Ordering::Acquire) == 1 {
+        let result = SVC_RESULT.load(Ordering::Acquire);
+        if result == EXPECTED_ERROR {
+            hprintln!("{}: PASS (error {:#010x})", TEST_NAME, result);
+            debug::exit(debug::EXIT_SUCCESS);
+        } else {
+            hprintln!(
+                "{}: FAIL - expected {:#010x}, got {:#010x}",
+                TEST_NAME,
+                EXPECTED_ERROR,
+                result
+            );
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
+    if tick > 100 {
+        hprintln!("{}: FAIL - timeout", TEST_NAME);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+});
 
 /// Partition entry: invoke SYS_SAMPLING_WRITE with kernel address as data ptr.
 extern "C" fn test_partition_main_body(r0: u32) -> ! {
-    // Unpack the port ID passed via r0.
     let port_id = r0;
-
-    // Issue SYS_SAMPLING_WRITE with:
-    //   r1 = port_id (valid sampling port)
-    //   r2 = 4 (data length)
-    //   r3 = KERNEL_ADDR (invalid: points to kernel memory)
     let result = kernel::svc!(SYS_SAMPLING_WRITE, port_id, 4u32, KERNEL_ADDR);
-
-    // The kernel should have rejected this with InvalidPointer.
-    // If we reach here, no MemManage fault occurred (pointer was validated
-    // before dereference).
-    if result == EXPECTED_ERROR {
-        hprintln!("{}: PASS (error code {:#010x})", TEST_NAME, result);
-        debug::exit(debug::EXIT_SUCCESS);
-    } else {
-        hprintln!(
-            "{}: FAIL - expected {:#010x}, got {:#010x}",
-            TEST_NAME,
-            EXPECTED_ERROR,
-            result
-        );
-        debug::exit(debug::EXIT_FAILURE);
-    }
-
+    SVC_RESULT.store(result, Ordering::Release);
+    SVC_DONE.store(1, Ordering::Release);
     loop {
-        cortex_m::asm::wfi();
+        cortex_m::asm::nop();
     }
 }
 kernel::partition_trampoline!(test_partition_main => test_partition_main_body);

@@ -17,6 +17,7 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
+use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
@@ -68,90 +69,63 @@ impl KernelConfig for TestConfig {
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
-// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
+// 0 = pending, 1 = pass, 2 = fail (partition not unpriv), 3 = fail (escalated)
+static RESULT: AtomicU32 = AtomicU32::new(0);
 
-/// Partition entry: attempts to escalate privilege by clearing nPRIV.
-///
-/// Reads CONTROL, verifies nPRIV=1, writes CONTROL with nPRIV=0,
-/// reads again and verifies nPRIV is still 1 (write was ignored).
+kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+    let r = RESULT.load(Ordering::Acquire);
+    if r == 1 {
+        hprintln!("{}: nPRIV unchanged (write ignored) — PASS", TEST_NAME);
+        debug::exit(debug::EXIT_SUCCESS);
+    } else if r == 2 {
+        hprintln!("{}: FAIL - not unprivileged at start", TEST_NAME);
+        debug::exit(debug::EXIT_FAILURE);
+    } else if r == 3 {
+        hprintln!("{}: FAIL - privilege escalation", TEST_NAME);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+    if tick > 100 {
+        hprintln!("{}: FAIL - timeout", TEST_NAME);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+});
+
+/// Partition entry: attempts privilege escalation, stores result in atomic.
 extern "C" fn partition_main() -> ! {
-    // Step 1: Read initial CONTROL register
     let control_before: u32;
     #[cfg(target_arch = "arm")]
-    // SAFETY: MRS reads the CONTROL register with no side effects.
     unsafe {
         core::arch::asm!("mrs {0}, CONTROL", out(reg) control_before);
     }
     #[cfg(not(target_arch = "arm"))]
     {
-        control_before = 3; // Simulate nPRIV=1, SPSEL=1 for host tests
+        control_before = 3;
     }
-
-    let npriv_before = control_before & 1;
-    hprintln!("{}: CONTROL before = {:#06x}", TEST_NAME, control_before);
-    hprintln!("  nPRIV = {} (expect 1)", npriv_before);
-
-    // Verify we start unprivileged
-    if npriv_before != 1 {
-        hprintln!("{}: FAIL - partition not unprivileged at start", TEST_NAME);
-        debug::exit(debug::EXIT_FAILURE);
+    if control_before & 1 != 1 {
+        RESULT.store(2, Ordering::Release);
         loop {
             cortex_m::asm::nop();
         }
     }
-
-    // Step 2: Attempt to clear nPRIV (escalate to privileged)
-    // Keep SPSEL=1 (bit 1), clear nPRIV (bit 0)
-    let control_write = control_before & !1u32; // Clear nPRIV bit
-    hprintln!(
-        "{}: attempting MSR CONTROL, {:#06x} (nPRIV=0)",
-        TEST_NAME,
-        control_write
-    );
-
     #[cfg(target_arch = "arm")]
-    // SAFETY: MSR CONTROL writes to the CONTROL register. In unprivileged
-    // Thread mode, writes to nPRIV are ignored (sticky bit). ISB ensures
-    // the pipeline sees any potential state change.
+    let control_write = control_before & !1u32;
+    #[cfg(target_arch = "arm")]
     unsafe {
-        core::arch::asm!(
-            "msr CONTROL, {0}",
-            "isb",
-            in(reg) control_write,
-        );
+        core::arch::asm!("msr CONTROL, {0}", "isb", in(reg) control_write);
     }
-
-    // Step 3: Read CONTROL again after the write attempt
     let control_after: u32;
     #[cfg(target_arch = "arm")]
-    // SAFETY: MRS reads the CONTROL register with no side effects.
     unsafe {
         core::arch::asm!("mrs {0}, CONTROL", out(reg) control_after);
     }
     #[cfg(not(target_arch = "arm"))]
     {
-        control_after = 3; // Simulate unchanged for host tests
+        control_after = 3;
     }
-
-    let npriv_after = control_after & 1;
-    hprintln!("{}: CONTROL after = {:#06x}", TEST_NAME, control_after);
-    hprintln!("  nPRIV = {} (expect 1)", npriv_after);
-
-    // Step 4: Verify nPRIV is still 1 (write was ignored)
-    if npriv_after == 1 {
-        hprintln!("{}: nPRIV unchanged (write was ignored)", TEST_NAME);
-        hprintln!("{}: PASS", TEST_NAME);
-        debug::exit(debug::EXIT_SUCCESS);
-    } else {
-        hprintln!(
-            "{}: FAIL - nPRIV changed to {} (privilege escalation!)",
-            TEST_NAME,
-            npriv_after
-        );
-        debug::exit(debug::EXIT_FAILURE);
-    }
-
+    RESULT.store(
+        if control_after & 1 == 1 { 1 } else { 3 },
+        Ordering::Release,
+    );
     loop {
         cortex_m::asm::nop();
     }

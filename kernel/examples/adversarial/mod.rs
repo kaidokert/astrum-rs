@@ -319,6 +319,54 @@ where
     }
 }
 
+/// Run a kernel-address access test: configure a single partition, drop to
+/// unprivileged mode, then call the provided closure to perform an access
+/// that should fault.
+///
+/// # Safety
+/// - `stack` must point to a valid `AlignedStack` instance.
+/// - `access_fn` should perform a memory access to `target_addr` that triggers a fault.
+#[cfg(feature = "qemu")]
+pub unsafe fn run_kernel_access_test<F>(
+    test_name: &str,
+    target_addr: u32,
+    p: &mut cortex_m::Peripherals,
+    stack: *const AlignedStack,
+    access_fn: F,
+) -> !
+where
+    F: FnOnce(),
+{
+    hprintln!("{}: start", test_name);
+
+    // Enable MemManage fault handler.
+    p.SCB.enable(Exception::MemoryManagement);
+
+    // Get stack addresses.
+    let stack_base = (*stack).base();
+    let stack_top = (*stack).top();
+
+    hprintln!("  stack: {:#010x} - {:#010x}", stack_base, stack_top);
+    hprintln!("  target kernel addr: {:#010x}", target_addr);
+
+    // Configure MPU before dropping privileges.
+    configure_single_partition_mpu(&p.MPU, stack_base);
+
+    hprintln!("  MPU configured, dropping to unprivileged...");
+
+    // Drop to unprivileged mode.
+    drop_to_unprivileged(stack_top);
+
+    // Now unprivileged on PSP.
+    // Perform the access that should fault.
+    access_fn();
+
+    // Should never reach here — if we do, no fault occurred.
+    loop {
+        asm::nop();
+    }
+}
+
 /// MPU configuration for two-partition adversarial test setup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdversarialMpuConfig {

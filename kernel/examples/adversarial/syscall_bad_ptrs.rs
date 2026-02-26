@@ -8,6 +8,7 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
+use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
@@ -75,48 +76,44 @@ impl KernelConfig for TestConfig {
     type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
 }
 
-// Use the unified harness macro: single KERNEL global, no separate KS/KERN.
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
+// 0 = pending, 1 = pass, 2 = fail (null ptr), 3 = fail (wrap ptr)
+static RESULT: AtomicU32 = AtomicU32::new(0);
 
-// ---------------------------------------------------------------------------
-// Partition entry point
-// ---------------------------------------------------------------------------
+kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+    let r = RESULT.load(Ordering::Acquire);
+    if r == 1 {
+        hprintln!("{}: PASS", TEST_NAME);
+        debug::exit(debug::EXIT_SUCCESS);
+    } else if r >= 2 {
+        hprintln!("{}: FAIL (code {})", TEST_NAME, r);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+    if tick > 100 {
+        hprintln!("{}: FAIL - timeout", TEST_NAME);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+});
 
 /// Partition 0 entry: test null pointer and wrapping pointer syscalls.
 extern "C" fn test_partition_main_body(r0: u32) -> ! {
     let port_id = r0;
-
-    // Test 1: Null pointer
-    let result = kernel::svc!(SYS_SAMPLING_WRITE, port_id, 4u32, NULL_PTR);
-    if result != EXPECTED_ERROR {
-        hprintln!(
-            "{}: FAIL - null ptr: expected {:#010x}, got {:#010x}",
-            TEST_NAME,
-            EXPECTED_ERROR,
-            result
-        );
-        debug::exit(debug::EXIT_FAILURE);
+    let r1 = kernel::svc!(SYS_SAMPLING_WRITE, port_id, 4u32, NULL_PTR);
+    if r1 != EXPECTED_ERROR {
+        RESULT.store(2, Ordering::Release);
+        loop {
+            cortex_m::asm::nop();
+        }
     }
-    hprintln!("{}: null pointer check passed", TEST_NAME);
-
-    // Test 2: Wrapping pointer (0xFFFF_FFF0 + 32 overflows)
-    let result = kernel::svc!(SYS_SAMPLING_WRITE, port_id, WRAP_LEN, WRAP_PTR);
-    if result != EXPECTED_ERROR {
-        hprintln!(
-            "{}: FAIL - wrap ptr: expected {:#010x}, got {:#010x}",
-            TEST_NAME,
-            EXPECTED_ERROR,
-            result
-        );
-        debug::exit(debug::EXIT_FAILURE);
+    let r2 = kernel::svc!(SYS_SAMPLING_WRITE, port_id, WRAP_LEN, WRAP_PTR);
+    if r2 != EXPECTED_ERROR {
+        RESULT.store(3, Ordering::Release);
+        loop {
+            cortex_m::asm::nop();
+        }
     }
-    hprintln!("{}: wrapping pointer check passed", TEST_NAME);
-
-    hprintln!("{}: PASS", TEST_NAME);
-    debug::exit(debug::EXIT_SUCCESS);
-
+    RESULT.store(1, Ordering::Release);
     loop {
-        cortex_m::asm::wfi();
+        cortex_m::asm::nop();
     }
 }
 kernel::partition_trampoline!(test_partition_main => test_partition_main_body);

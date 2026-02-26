@@ -184,6 +184,11 @@ path = "examples/adversarial/disable_interrupts.rs"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "write_kernel_mem"
+path = "examples/adversarial/write_kernel_mem.rs"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "write_control"
 path = "examples/adversarial/write_control.rs"
 required-features = ["qemu", "log-semihosting"]

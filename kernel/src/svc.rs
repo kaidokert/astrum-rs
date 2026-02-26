@@ -6111,7 +6111,7 @@ mod tests {
     /// helper must ensure total partition ticks ≤ `SYSTEM_WINDOW_MAX_GAP_TICKS` (100)
     /// to pass the system window frequency validation.
     fn try_kernel_new(
-        mut schedule: ScheduleTable<4>,
+        schedule: ScheduleTable<4>,
         configs: &[PartitionConfig],
     ) -> Result<Kernel<TestConfig>, ConfigError> {
         #[cfg(not(feature = "dynamic-mpu"))]
@@ -6121,6 +6121,7 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         {
             // Add system window required for dynamic-mpu builds.
+            let mut schedule = schedule;
             let _ = schedule.add_system_window(1);
             Kernel::<TestConfig>::new(
                 schedule,
@@ -7165,8 +7166,8 @@ mod tests {
         //   tick 8-9: interior of P3 slot (None)
         //   tick 10:  boundary -> P0 slot (PartitionSwitch(0)) [wraps]
         let mut events = [ScheduleEvent::None; 10];
-        for i in 0..10 {
-            events[i] = k.advance_schedule_tick();
+        for event in &mut events {
+            *event = k.advance_schedule_tick();
             // active_partition must never point to a Waiting partition.
             if let Some(ap) = k.active_partition() {
                 assert!(ap != 1 && ap != 2, "active_partition was set to P{ap}");
