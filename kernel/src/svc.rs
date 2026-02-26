@@ -9156,6 +9156,139 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
     }
 
+    /// Bug 06 regression: P0 Running, P1 Waiting. yield_current_slot()
+    /// nominates P1 (Waiting), is_waiting guard fires but active P0 is
+    /// Running (not Waiting) — guard is a no-op. Verifies Bug 05
+    /// behavior is preserved by the Bug 06 guard.
+    #[test]
+    fn bug06_yield_guard_noop_when_active_running() {
+        use crate::invariants::{
+            assert_partition_state_consistency, assert_running_matches_active,
+        };
+        let mut k = kernel_with_schedule();
+
+        // P1: Ready → Running → Waiting
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // force_advance → P1 (Waiting), guard checks P0 (Running) → no-op.
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), None);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(k.active_partition(), Some(0));
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+        assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
+    }
+
+    /// Bug 06 regression: P0 blocks (SYS_EVT_WAIT), P1 is Ready.
+    /// yield nominates P1 (Ready, not Waiting) → normal switch path.
+    /// Bug 06 guard never fires. P0 stays Waiting, P1 becomes Running.
+    #[test]
+    fn bug06_blocking_with_ready_partner_normal_switch() {
+        use crate::invariants::{
+            assert_partition_state_consistency, assert_running_matches_active,
+        };
+        use crate::syscall::SYS_EVT_WAIT;
+        let mut k = kernel_with_schedule();
+
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        k.set_current_partition(0);
+
+        // Dispatch blocking SYS_EVT_WAIT (no events → blocks).
+        let mut ef = frame(SYS_EVT_WAIT, 0, 0b1010);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "blocking EventWait must return 0");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+
+        // Harness yield: P1 is Ready → normal switch.
+        k.set_yield_requested(false);
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), Some(1));
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(k.active_partition(), Some(1));
+
+        // Harness completes switch.
+        k.set_next_partition(1);
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_partition_state_consistency(k.partitions().as_slice());
+        assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
+    }
+
+    /// Bug 06 regression: single-partition kernel. P0 blocks, yield
+    /// wraps back to P0 (Waiting), guard restores P0 to Running.
+    /// Covers the hal_gpio_blink single-partition pattern.
+    #[test]
+    fn bug06_single_partition_blocking_no_panic() {
+        use crate::invariants::{
+            assert_partition_state_consistency, assert_running_matches_active,
+        };
+
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 5)).unwrap();
+        schedule.start();
+        let cfgs = [PartitionConfig {
+            id: 0,
+            entry_point: 0x0800_0000,
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+            peripheral_regions: heapless::Vec::new(),
+        }];
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let mut k = Kernel::<TestConfig>::new(schedule, &cfgs).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        let mut k = Kernel::<TestConfig>::new(
+            schedule,
+            &cfgs,
+            crate::virtual_device::DeviceRegistry::new(),
+        )
+        .unwrap();
+
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Simulate blocking: Running → Waiting.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+
+        // force_advance wraps to P0 (Waiting), guard restores to Running.
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), None);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(k.active_partition(), Some(0));
+        assert_partition_state_consistency(k.partitions().as_slice());
+        assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
+    }
+
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
     fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
