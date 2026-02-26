@@ -260,6 +260,9 @@ macro_rules! define_unified_harness {
                 let tick_val = k.tick().get();
                 $crate::_unified_handle_yield!(k, tick_val, &HARNESS_STRATEGY);
             }
+            // Flush partition debug buffers at yield boundaries.
+            // Zero-cost when partition-debug is disabled or budget is 0.
+            k.drain_debug_auto();
         });
 
         #[used]

@@ -10060,6 +10060,41 @@ mod tests {
         assert!(BUF.is_empty());
     }
 
+    /// Mirrors the harness yield closure: yield_current_slot then
+    /// drain_debug_auto clears pending debug output.
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn yield_then_drain_debug_auto_clears_pending() {
+        use crate::debug::{DebugRingBuffer, KIND_TEXT, LOG_INFO};
+
+        static BUF: DebugRingBuffer<64> = DebugRingBuffer::new();
+        let mut k = kernel_with_schedule();
+
+        // Attach debug buffer to partition 0 and write a record.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_debug_buffer(&BUF);
+        BUF.write_record(LOG_INFO, KIND_TEXT, b"yield-drain");
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .signal_debug_pending();
+
+        assert!(k.partitions().get(0).unwrap().debug_pending());
+        assert!(!BUF.is_empty());
+
+        // Execute the same sequence as the harness yield closure:
+        // yield_current_slot followed by drain_debug_auto.
+        let result = k.yield_current_slot();
+        assert!(result.partition_id().is_some());
+        k.drain_debug_auto();
+
+        // Debug buffer must be fully drained.
+        assert!(!k.partitions().get(0).unwrap().debug_pending());
+        assert!(BUF.is_empty());
+    }
+
     #[cfg(feature = "partition-debug")]
     #[test]
     fn debug_write_rejects_invalid_pointer() {
