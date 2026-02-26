@@ -696,22 +696,31 @@ mod tests {
     }
 
     #[test]
-    fn mpu_ctrl_constant() {
-        assert_eq!(MPU_CTRL_ENABLE_PRIVDEFENA, 0b101);
+    fn mpu_ctrl_privdefena_bit_fields() {
+        // Exact value: ENABLE | PRIVDEFENA.
+        assert_eq!(MPU_CTRL_ENABLE_PRIVDEFENA, 0x5);
 
-        // ENABLE bit (bit 0): turns the MPU on.
+        // Bit 0 set: MPU enabled.
         assert_ne!(
             MPU_CTRL_ENABLE_PRIVDEFENA & (1 << 0),
             0,
-            "ENABLE (bit 0) must be set"
+            "bit 0 (MPU enable) must be set"
         );
 
-        // PRIVDEFENA bit (bit 2): privileged code uses default memory map
+        // Bit 2 set: privileged code uses default memory map
         // when no MPU region matches, avoiding dedicated kernel regions.
         assert_ne!(
             MPU_CTRL_ENABLE_PRIVDEFENA & (1 << 2),
             0,
-            "PRIVDEFENA (bit 2) must be set"
+            "bit 2 (PRIVDEFENA) must be set"
+        );
+
+        // Bit 1 clear: HFNMIENA must NOT be set — MPU must stay
+        // disabled during HardFault/NMI so the kernel can always execute.
+        assert_eq!(
+            MPU_CTRL_ENABLE_PRIVDEFENA & (1 << 1),
+            0,
+            "bit 1 (HFNMIENA) must be clear"
         );
     }
 

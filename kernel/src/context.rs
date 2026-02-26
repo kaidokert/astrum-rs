@@ -135,4 +135,31 @@ mod tests {
         let mut empty: [u32; 0] = [];
         assert!(init_stack_frame(&mut empty, 0x100, None).is_none());
     }
+
+    #[test]
+    fn exc_return_thread_psp_bit_fields() {
+        // Exact value: return to Thread mode using PSP.
+        assert_eq!(EXC_RETURN_THREAD_PSP, 0xFFFF_FFFD);
+
+        // Bit 0 set: return to Thread mode (not Handler mode).
+        assert_ne!(
+            EXC_RETURN_THREAD_PSP & (1 << 0),
+            0,
+            "bit 0 (Thread mode) must be set"
+        );
+
+        // Bit 2 set: restore context from PSP (not MSP).
+        assert_ne!(
+            EXC_RETURN_THREAD_PSP & (1 << 2),
+            0,
+            "bit 2 (PSP) must be set"
+        );
+
+        // Bits [31:4] must all be ones (EXC_RETURN magic prefix).
+        assert_eq!(
+            EXC_RETURN_THREAD_PSP & 0xFFFF_FFF0,
+            0xFFFF_FFF0,
+            "bits [31:4] must all be ones"
+        );
+    }
 }
