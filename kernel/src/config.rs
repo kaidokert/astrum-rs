@@ -255,6 +255,11 @@ pub trait KernelConfig {
     #[cfg(feature = "partition-debug")]
     const DEBUG_BUFFER_SIZE: usize = 256;
 
+    /// Maximum bytes `drain_debug_auto` will drain per call.
+    /// Set to 0 to disable automatic draining entirely.
+    /// Not cfg-gated so that `drain_debug_auto` compiles unconditionally.
+    const DEBUG_AUTO_DRAIN_BUDGET: usize = 256;
+
     /// SVCall exception priority (0x00 = highest on Cortex-M).
     const SVCALL_PRIORITY: u8 = 0x00;
     /// PendSV exception priority (must be the lowest of the three).

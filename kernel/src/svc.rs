@@ -2584,6 +2584,21 @@ where
         }
         total
     }
+
+    /// Drain pending debug output using the budget from `KernelConfig`.
+    ///
+    /// When `partition-debug` is enabled and `DEBUG_AUTO_DRAIN_BUDGET > 0`,
+    /// creates a stack-local `DrainContext` and forwards to
+    /// `drain_debug_pending`. Otherwise compiles to nothing (zero-cost).
+    pub fn drain_debug_auto(&mut self) {
+        #[cfg(feature = "partition-debug")]
+        {
+            if C::DEBUG_AUTO_DRAIN_BUDGET > 0 {
+                let mut ctx = crate::partition_debug::DrainContext::new();
+                self.drain_debug_pending(&mut ctx, C::DEBUG_AUTO_DRAIN_BUDGET);
+            }
+        }
+    }
 }
 
 /// Try to transition partition `pid` to `state`. Returns `true` on success.
@@ -9922,6 +9937,99 @@ mod tests {
         assert!(!BUF0.is_empty());
         // Partition 1's buffer should be empty
         assert!(BUF1.is_empty());
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn drain_debug_auto_drains_pending_output() {
+        use crate::debug::{DebugRingBuffer, KIND_TEXT, LOG_INFO};
+
+        static BUF: DebugRingBuffer<64> = DebugRingBuffer::new();
+        let mut k = kernel(0, 0, 0);
+
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_debug_buffer(&BUF);
+        BUF.write_record(LOG_INFO, KIND_TEXT, b"hello");
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .signal_debug_pending();
+
+        assert!(k.partitions().get(0).unwrap().debug_pending());
+        assert!(!BUF.is_empty());
+
+        k.drain_debug_auto();
+
+        assert!(!k.partitions().get(0).unwrap().debug_pending());
+        assert!(BUF.is_empty());
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn drain_debug_auto_budget_zero_is_noop() {
+        use crate::debug::{DebugRingBuffer, KIND_TEXT, LOG_INFO};
+
+        struct NoDrainConfig;
+        impl KernelConfig for NoDrainConfig {
+            const N: usize = 4;
+            const SCHED: usize = 4;
+            const STACK_WORDS: usize = 1024;
+            const S: usize = 4;
+            const SW: usize = 4;
+            const MS: usize = 4;
+            const MW: usize = 4;
+            const QS: usize = 4;
+            const QD: usize = 4;
+            const QM: usize = 4;
+            const QW: usize = 4;
+            const SP: usize = 4;
+            const SM: usize = 64;
+            const BS: usize = 4;
+            const BM: usize = 64;
+            const BW: usize = 4;
+            const DEBUG_AUTO_DRAIN_BUDGET: usize = 0;
+            #[cfg(feature = "dynamic-mpu")]
+            const BP: usize = 4;
+            #[cfg(feature = "dynamic-mpu")]
+            const BZ: usize = 32;
+
+            type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack4K>;
+            type Sync =
+                crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+            type Msg =
+                crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+            type Ports = crate::port_pools::PortPools<
+                { Self::SP },
+                { Self::SM },
+                { Self::BS },
+                { Self::BM },
+                { Self::BW },
+            >;
+        }
+
+        static BUF: DebugRingBuffer<64> = DebugRingBuffer::new();
+        let mut k: Kernel<NoDrainConfig> = Kernel::default();
+        k.partitions_mut().add(pcb(0)).unwrap();
+
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_debug_buffer(&BUF);
+        BUF.write_record(LOG_INFO, KIND_TEXT, b"stay");
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .signal_debug_pending();
+
+        assert!(k.partitions().get(0).unwrap().debug_pending());
+
+        k.drain_debug_auto();
+
+        // Budget is 0 so buffer must remain untouched.
+        assert!(k.partitions().get(0).unwrap().debug_pending());
+        assert!(!BUF.is_empty());
     }
 
     #[cfg(feature = "partition-debug")]
