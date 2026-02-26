@@ -26,6 +26,41 @@ pub const KERNEL_CODE_END: u32 = 0x0001_0000;
 /// Set to 0x2000_0000 to disable this check (code region check remains active).
 pub const KERNEL_DATA_END: u32 = 0x2000_0000;
 
+/// Return the runtime end-address of the kernel data region.
+///
+/// On ARM targets the linker defines `__kernel_state_end` marking where kernel
+/// state ends in SRAM. On host/test builds the compile-time constant
+/// `KERNEL_DATA_END` (0x2000_0000) is returned, keeping the check disabled.
+#[cfg(target_arch = "arm")]
+#[inline]
+fn kernel_data_end() -> u32 {
+    extern "C" {
+        static __kernel_state_end: u8;
+    }
+    // SAFETY: We only take the address of the linker symbol, never dereference it.
+    // The unsafe block is required on ARM targets where the extern static is real.
+    #[allow(unused_unsafe)]
+    unsafe {
+        core::ptr::addr_of!(__kernel_state_end) as u32
+    }
+}
+
+/// Host/test fallback: returns the compile-time constant (disabled).
+#[cfg(not(target_arch = "arm"))]
+#[inline]
+fn kernel_data_end() -> u32 {
+    KERNEL_DATA_END
+}
+
+/// Check if the range `[ptr, end)` overlaps kernel data `[0x2000_0000, kernel_end)`.
+///
+/// Parameterized so unit tests can inject an arbitrary `kernel_end` value.
+/// When `kernel_end == 0x2000_0000` the region is empty and no addresses are rejected.
+#[inline]
+fn overlaps_kernel_data(ptr: u32, end: u32, kernel_end: u32) -> bool {
+    ptr < kernel_end && end > 0x2000_0000
+}
+
 /// Check if the range `[ptr, end)` overlaps kernel memory regions.
 #[inline]
 fn overlaps_kernel_memory(ptr: u32, end: u32) -> bool {
@@ -33,9 +68,8 @@ fn overlaps_kernel_memory(ptr: u32, end: u32) -> bool {
     if ptr < KERNEL_CODE_END && end > 0 {
         return true;
     }
-    // Kernel data: [0x2000_0000, KERNEL_DATA_END)
-    // When KERNEL_DATA_END == 0x2000_0000, this check is effectively disabled.
-    if ptr < KERNEL_DATA_END && end > 0x2000_0000 {
+    // Kernel data: [0x2000_0000, kernel_data_end())
+    if overlaps_kernel_data(ptr, end, kernel_data_end()) {
         return true;
     }
     false
@@ -4535,6 +4569,38 @@ mod tests {
         // These assertions verify the check structure exists; adjust constants
         // to enable actual rejection when kernel data size is known.
         assert!(validate_user_ptr(&t, 0, 0x2000_0000, 16));
+    }
+
+    // ---- overlaps_kernel_data parameterized tests ----
+
+    #[test]
+    fn overlaps_kernel_data_rejects_within_kernel_region() {
+        let kernel_end: u32 = 0x2000_2000;
+        // Pointer at SRAM start, fully inside [0x2000_0000, 0x2000_2000).
+        assert!(overlaps_kernel_data(0x2000_0000, 0x2000_0010, kernel_end));
+        // Pointer in the middle of the kernel region.
+        assert!(overlaps_kernel_data(0x2000_1000, 0x2000_1010, kernel_end));
+        // Pointer at last byte of kernel region.
+        assert!(overlaps_kernel_data(0x2000_1FFF, 0x2000_2000, kernel_end));
+        // Pointer spanning the kernel_end boundary.
+        assert!(overlaps_kernel_data(0x2000_1FF0, 0x2000_2010, kernel_end));
+    }
+
+    #[test]
+    fn overlaps_kernel_data_accepts_above_kernel_end() {
+        let kernel_end: u32 = 0x2000_2000;
+        // Pointer starts exactly at kernel_end — no overlap.
+        assert!(!overlaps_kernel_data(0x2000_2000, 0x2000_2010, kernel_end));
+        // Pointer well above kernel_end.
+        assert!(!overlaps_kernel_data(0x2000_8000, 0x2000_9000, kernel_end));
+    }
+
+    #[test]
+    fn overlaps_kernel_data_disabled_when_kernel_end_equals_sram_start() {
+        // Disabled: kernel_end equals SRAM start, so the region is empty.
+        let kernel_end: u32 = 0x2000_0000;
+        assert!(!overlaps_kernel_data(0x2000_0000, 0x2000_1000, kernel_end));
+        assert!(!overlaps_kernel_data(0x2000_0000, 0x2001_0000, kernel_end));
     }
 
     #[test]
