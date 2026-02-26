@@ -10,7 +10,7 @@ use crate::invariants::assert_partition_state_consistency;
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
 
-// ---- Kernel Memory Region Constants (defense in depth) ----
+// ---- Kernel Memory Region Constants ----
 
 /// End address of kernel code region in flash (exclusive).
 ///
@@ -61,37 +61,11 @@ fn overlaps_kernel_data(ptr: u32, end: u32, kernel_end: u32) -> bool {
     ptr < kernel_end && end > 0x2000_0000
 }
 
-/// Check if the range `[ptr, end)` overlaps kernel memory regions.
-#[inline]
-fn overlaps_kernel_memory(ptr: u32, end: u32) -> bool {
-    // Kernel code: [0, KERNEL_CODE_END)
-    if ptr < KERNEL_CODE_END && end > 0 {
-        return true;
-    }
-    // Kernel data: [0x2000_0000, kernel_data_end())
-    if overlaps_kernel_data(ptr, end, kernel_data_end()) {
-        return true;
-    }
-    false
-}
-
-/// Check that a user-space pointer `[ptr, ptr+len)` lies entirely within the
-/// MPU data region OR the stack region of partition `pid`.
+/// Validate that `[ptr, ptr+len)` fits within a static region of partition `pid`.
 ///
-/// Returns `true` when **all** of the following hold:
-/// 1. `pid` refers to an existing partition in `partitions`.
-/// 2. `ptr + len` does not overflow `u32`.
-/// 3. The pointer range does NOT overlap kernel memory (defense in depth).
-/// 4. The pointer range `[ptr, ptr+len)` lies entirely within EITHER:
-///    - The MPU data region (`mpu_region.base()`, `mpu_region.size()`), OR
-///    - The stack region (`stack_base`, `stack_size`).
-///
-/// A pointer that spans across both regions (partially in data, partially in
-/// stack) is **invalid** — the entire range must fit within a single region.
-///
-/// A zero-length range (`len == 0`) is considered valid as long as `ptr`
-/// itself falls within `[base, base + size]` of either region, but the caller
-/// should avoid dereferencing such a pointer.
+/// Guards: (1) flash rejects `[0, KERNEL_CODE_END)`, (2) grant accepts if range
+/// fits a partition region, (3) SRAM rejects `[0x2000_0000, kernel_data_end())`.
+/// Grant (2) runs before SRAM guard (3) so granted regions are accepted first.
 pub fn validate_user_ptr<const N: usize>(
     partitions: &PartitionTable<N>,
     pid: u8,
@@ -109,13 +83,12 @@ pub fn validate_user_ptr<const N: usize>(
         None => return false,
     };
 
-    // Defense in depth: reject pointers in kernel memory regions.
-    if overlaps_kernel_memory(ptr, end) {
+    // Guard 1 — Flash: unconditionally reject pointers in kernel code region.
+    if ptr < KERNEL_CODE_END && end > 0 {
         return false;
     }
 
-    // Check each accessible static region (data and stack).
-    // Region validity (base + size not overflowing) is enforced at creation time.
+    // Guard 2 — Accessible-regions grant (runs before SRAM guard).
     for (base, size) in pcb.accessible_static_regions() {
         let region_end = base + size;
         if ptr >= base && end <= region_end {
@@ -123,28 +96,19 @@ pub fn validate_user_ptr<const N: usize>(
         }
     }
 
+    // Guard 3 — SRAM kernel-data: reject overlap with kernel data in SRAM.
+    if overlaps_kernel_data(ptr, end, kernel_data_end()) {
+        return false;
+    }
+
     false
 }
 
-/// Check that a user-space pointer `[ptr, ptr+len)` lies entirely within one
-/// of the dynamic MPU windows assigned to partition `pid`, OR within the
-/// static regions (data + stack).
+/// Dynamic-MPU variant of [`validate_user_ptr`].
 ///
-/// This is the dynamic-MPU variant of [`validate_user_ptr`] that additionally
-/// queries `strategy.accessible_regions(pid)` and validates against each
-/// dynamically-assigned MPU window.
-///
-/// Returns `true` when **all** of the following hold:
-/// 1. `pid` refers to an existing partition in `partitions`.
-/// 2. `ptr + len` does not overflow `u32`.
-/// 3. The pointer range does NOT overlap kernel memory (defense in depth).
-/// 4. The pointer range `[ptr, ptr+len)` lies entirely within EITHER:
-///    - One of the dynamic MPU windows returned by `strategy.accessible_regions(pid)`, OR
-///    - The static MPU data region (`mpu_region.base()`, `mpu_region.size()`), OR
-///    - The static stack region (`stack_base`, `stack_size`).
-///
-/// A pointer that spans across multiple regions is **invalid** — the entire
-/// range must fit within a single region.
+/// Same three-guard ordering as `validate_user_ptr` (flash → grant → SRAM),
+/// but the grant step also checks dynamic MPU windows from
+/// `strategy.accessible_regions(pid)` before falling back to static regions.
 #[cfg(feature = "dynamic-mpu")]
 pub fn validate_user_ptr_dynamic<const N: usize>(
     partitions: &PartitionTable<N>,
@@ -164,8 +128,8 @@ pub fn validate_user_ptr_dynamic<const N: usize>(
         None => return false,
     };
 
-    // Defense in depth: reject pointers in kernel memory regions.
-    if overlaps_kernel_memory(ptr, end) {
+    // Guard 1 — Flash: unconditionally reject pointers in kernel code region.
+    if ptr < KERNEL_CODE_END && end > 0 {
         return false;
     }
 
@@ -176,7 +140,7 @@ pub fn validate_user_ptr_dynamic<const N: usize>(
         ptr >= base && end <= region_end
     };
 
-    // First, check dynamic MPU windows assigned to this partition.
+    // Guard 2a — Dynamic MPU windows assigned to this partition.
     let windows = strategy.accessible_regions(pid);
     for (base, size) in windows {
         if in_region(base, size) {
@@ -184,11 +148,16 @@ pub fn validate_user_ptr_dynamic<const N: usize>(
         }
     }
 
-    // Fall back to static regions (data, stack, and peripheral regions).
+    // Guard 2b — Static regions (data, stack, and peripheral regions).
     for (base, size) in pcb.accessible_static_regions() {
         if in_region(base, size) {
             return true;
         }
+    }
+
+    // Guard 3 — SRAM kernel-data: reject overlap with kernel data in SRAM.
+    if overlaps_kernel_data(ptr, end, kernel_data_end()) {
+        return false;
     }
 
     false
