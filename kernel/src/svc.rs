@@ -791,8 +791,8 @@ pub unsafe extern "C" fn dispatch_svc(frame: &mut ExceptionFrame) {
     frame.r0 = match SyscallId::from_u32(frame.r0) {
         Some(SyscallId::Yield) => handle_yield(),
         Some(SyscallId::EventWait | SyscallId::EventSet | SyscallId::EventClear) => {
-            // Event syscalls require kernel state; in the real handler this
-            // would go through dispatch_syscall with the global partition table.
+            // TODO: wire dispatch_svc to call dispatch_syscall with the global
+            // partition table and a kernel-trusted caller index.
             1
         }
         Some(_) => 1,
@@ -802,19 +802,24 @@ pub unsafe extern "C" fn dispatch_svc(frame: &mut ExceptionFrame) {
 
 /// Core syscall dispatch that routes event syscalls to the events module.
 ///
+/// `caller` is the kernel-trusted partition index of the calling partition,
+/// used by syscalls that operate on the caller's own partition (e.g.
+/// EventWait, EventClear).
+///
 /// Frame register convention:
 /// - `r0`: syscall ID (overwritten with return value)
-/// - `r1`: first argument (partition index for caller/target)
+/// - `r1`: first argument (interpretation varies per syscall)
 /// - `r2`: second argument (event mask)
 pub fn dispatch_syscall<const N: usize>(
     frame: &mut ExceptionFrame,
     partitions: &mut PartitionTable<N>,
+    caller: usize,
 ) {
     frame.r0 = match SyscallId::from_u32(frame.r0) {
         Some(SyscallId::Yield) => handle_yield(),
-        Some(SyscallId::EventWait) => events::event_wait(partitions, frame.r1 as usize, frame.r2),
+        Some(SyscallId::EventWait) => events::event_wait(partitions, caller, frame.r2),
         Some(SyscallId::EventSet) => events::event_set(partitions, frame.r1 as usize, frame.r2),
-        Some(SyscallId::EventClear) => events::event_clear(partitions, frame.r1 as usize, frame.r2),
+        Some(SyscallId::EventClear) => events::event_clear(partitions, caller, frame.r2),
         Some(_) => 1,
         None => SvcError::InvalidSyscall.to_u32(),
     };
@@ -2981,7 +2986,7 @@ mod tests {
     fn yield_returns_zero_and_preserves_regs() {
         let mut ef = frame(SYS_YIELD, 0xAA, 0xBB);
         let mut t = tbl();
-        dispatch_syscall(&mut ef, &mut t);
+        dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!((ef.r0, ef.r1, ef.r2, ef.r3), (0, 0xAA, 0xBB, 0xCC));
     }
 
@@ -3316,7 +3321,7 @@ mod tests {
     fn invalid_syscall_returns_error_code() {
         let mut ef = frame(0xFFFF, 0, 0);
         let mut t = tbl();
-        dispatch_syscall(&mut ef, &mut t);
+        dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!(ef.r0, SvcError::InvalidSyscall.to_u32());
     }
 
@@ -3324,8 +3329,8 @@ mod tests {
     fn event_wait_dispatches_to_events_module() {
         let mut t = tbl();
         events::event_set(&mut t, 0, 0b1010);
-        let mut ef = frame(SYS_EVT_WAIT, 0, 0b1110);
-        dispatch_syscall(&mut ef, &mut t);
+        let mut ef = frame(SYS_EVT_WAIT, 0xDEADBEEF, 0b1110);
+        dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!(ef.r0, 0b1010);
         assert_eq!(t.get(0).unwrap().event_flags(), 0);
     }
@@ -3334,7 +3339,7 @@ mod tests {
     fn event_set_dispatches_to_events_module() {
         let mut t = tbl();
         let mut ef = frame(SYS_EVT_SET, 1, 0b0101);
-        dispatch_syscall(&mut ef, &mut t);
+        dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!(ef.r0, 0);
         assert_eq!(t.get(1).unwrap().event_flags(), 0b0101);
     }
@@ -3343,8 +3348,8 @@ mod tests {
     fn event_clear_dispatches_to_events_module() {
         let mut t = tbl();
         events::event_set(&mut t, 0, 0b1111);
-        let mut ef = frame(SYS_EVT_CLEAR, 0, 0b0101);
-        dispatch_syscall(&mut ef, &mut t);
+        let mut ef = frame(SYS_EVT_CLEAR, 0xDEADBEEF, 0b0101);
+        dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!(ef.r0, 0);
         assert_eq!(t.get(0).unwrap().event_flags(), 0b1010);
     }
@@ -3353,14 +3358,14 @@ mod tests {
     fn event_invalid_partition_returns_error_code() {
         let inv = SvcError::InvalidPartition.to_u32();
         let mut t = tbl();
-        let mut ef = frame(SYS_EVT_WAIT, 99, 0b0001);
-        dispatch_syscall(&mut ef, &mut t);
+        let mut ef = frame(SYS_EVT_WAIT, 0xDEADBEEF, 0b0001);
+        dispatch_syscall(&mut ef, &mut t, 99);
         assert_eq!(ef.r0, inv);
         let mut ef = frame(SYS_EVT_SET, 99, 0b0001);
-        dispatch_syscall(&mut ef, &mut t);
+        dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!(ef.r0, inv);
-        let mut ef = frame(SYS_EVT_CLEAR, 99, 0b0001);
-        dispatch_syscall(&mut ef, &mut t);
+        let mut ef = frame(SYS_EVT_CLEAR, 0xDEADBEEF, 0b0001);
+        dispatch_syscall(&mut ef, &mut t, 99);
         assert_eq!(ef.r0, inv);
     }
 
