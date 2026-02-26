@@ -45,10 +45,23 @@ fn kernel_data_end() -> u32 {
     }
 }
 
-/// Host/test fallback: returns the compile-time constant (disabled).
+// Per-test override for kernel_data_end(), allowing tests to inject a
+// non-trivial kernel data boundary and verify Guard 3 through validate_user_ptr.
+#[cfg(test)]
+std::thread_local! {
+    static KERNEL_DATA_END_OVERRIDE: std::cell::Cell<Option<u32>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Host/test fallback: returns the compile-time constant (disabled),
+/// unless a test override is active.
 #[cfg(not(target_arch = "arm"))]
 #[inline]
 fn kernel_data_end() -> u32 {
+    #[cfg(test)]
+    if let Some(v) = KERNEL_DATA_END_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
     KERNEL_DATA_END
 }
 
@@ -4617,13 +4630,41 @@ mod tests {
     }
 
     #[test]
-    fn validate_ptr_in_kernel_data_fails() {
-        // Even if MPU region covers kernel data area, it is rejected.
+    fn validate_ptr_kernel_data_rejected() {
+        // Override kernel_data_end so Guard 3 is active with a non-trivial
+        // kernel data region [0x2000_0000, 0x2000_2000).
+        KERNEL_DATA_END_OVERRIDE.with(|c| c.set(Some(0x2000_2000)));
+        // MPU region covers SRAM from 0x2000_2000 onward (above kernel data).
+        let t = ptr_table(0x2000_2000, 0x0000_E000);
+        // Pointer inside kernel data region — rejected by Guard 3.
+        assert!(!validate_user_ptr(&t, 0, 0x2000_0000, 16));
+        assert!(!validate_user_ptr(&t, 0, 0x2000_1000, 64));
+        // Spanning boundary: starts in kernel data, ends outside.
+        assert!(!validate_user_ptr(&t, 0, 0x2000_1FF0, 32));
+        // Pointer at kernel_data_end — accepted (outside kernel data, in grant).
+        assert!(validate_user_ptr(&t, 0, 0x2000_2000, 16));
+        // Clean up override.
+        KERNEL_DATA_END_OVERRIDE.with(|c| c.set(None));
+    }
+
+    #[test]
+    fn validate_ptr_null_and_low_kernel_code_rejected() {
+        let t = ptr_table(0x2000_0000, 4096);
+        // Null pointer (address 0) — rejected.
+        assert!(!validate_user_ptr(&t, 0, 0, 1));
+        // Null with zero length: not in any grant region — rejected.
+        assert!(!validate_user_ptr(&t, 0, 0, 0));
+        // Non-zero address in kernel code region — verifies range check, not
+        // just a null check.
+        assert!(!validate_user_ptr(&t, 0, 0x8000, 16));
+    }
+
+    #[test]
+    fn validate_ptr_length_wraps_address_space() {
         let t = ptr_table(0x2000_0000, 0x0001_0000);
-        // With KERNEL_DATA_END == 0x2000_0000, no addresses are rejected.
-        // These assertions verify the check structure exists; adjust constants
-        // to enable actual rejection when kernel data size is known.
-        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 16));
+        // ptr + len wraps u32 — rejected by checked_add overflow.
+        assert!(!validate_user_ptr(&t, 0, 0x2000_0100, usize::MAX));
+        assert!(!validate_user_ptr(&t, 0, 1, u32::MAX as usize));
     }
 
     // ---- overlaps_kernel_data parameterized tests ----
