@@ -5160,6 +5160,37 @@ mod tests {
         assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_1000, 16)); // data
     }
 
+    /// Test that validate_user_ptr_dynamic accepts own-stack pointers even when
+    /// the stack region overlaps the kernel data area [0x2000_0000, kernel_data_end).
+    ///
+    /// Mirrors `validate_ptr_own_stack_in_kernel_data_accepted` but exercises
+    /// the dynamic-MPU code path: Guard 2b (static grant) must fire before
+    /// Guard 3 (SRAM kernel-data rejection).
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn validate_ptr_dynamic_own_stack_in_kernel_data_accepted() {
+        use crate::mpu_strategy::DynamicStrategy;
+        // Override kernel_data_end so Guard 3 covers [0x2000_0000, 0x2000_2000).
+        KERNEL_DATA_END_OVERRIDE.with(|c| c.set(Some(0x2000_2000)));
+        // Stack at 0x2000_0000..0x2000_0800 — inside kernel data region.
+        // Data at 0x2000_2000..0x2000_3000 — above kernel data.
+        let t = ptr_table_separate_regions(0x2000_0000, 0x800, 0x2000_2000, 0x1000);
+        let s = DynamicStrategy::new();
+        // No dynamic windows — only static regions.
+
+        // Guard 2b (grant) must accept own-stack pointers before Guard 3
+        // (SRAM rejection) fires.
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0000, 4)); // start
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0400, 16)); // middle
+        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_07F0, 16)); // near end
+
+        // Pointer inside kernel data but outside all granted regions → rejected.
+        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0900, 4));
+
+        // Clean up override.
+        KERNEL_DATA_END_OVERRIDE.with(|c| c.set(None));
+    }
+
     // ---- all_accessible_regions tests (dynamic-mpu feature) ----
 
     /// Comprehensive test for all_accessible_regions covering static/dynamic
