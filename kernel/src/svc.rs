@@ -2403,7 +2403,7 @@ where
                 .map(|pcb| pcb.state() == PartitionState::Waiting)
                 .unwrap_or(false);
             if is_waiting {
-                // Bug 05: restore active partition to Running if it is Waiting.
+                // Bug 06: restore active partition to Running if it is Waiting.
                 // Note: `is_waiting` checks `pid` (next scheduled), not `ap`
                 // (active partition) — they can differ in multi-partition
                 // schedules, so this guard is intentionally not redundant.
@@ -9545,6 +9545,59 @@ mod tests {
             PartitionState::Running
         );
         assert_eq!(k.active_partition(), Some(0));
+        assert_partition_state_consistency(k.partitions().as_slice());
+        assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
+    }
+
+    /// Bug 06 regression: both P0 (active) and P1 are Waiting.
+    /// yield_current_slot() nominates P1 (Waiting), is_waiting guard fires,
+    /// then the inner Bug 06 guard detects P0 is also Waiting, restores P0
+    /// to Running via set_next_partition. Returns ScheduleEvent::None.
+    #[test]
+    fn bug06_yield_both_waiting_restores_active() {
+        use crate::invariants::{
+            assert_partition_state_consistency, assert_running_matches_active,
+        };
+        let mut k = kernel_with_schedule();
+
+        // Bootstrap P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // P0: Running → Waiting.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+
+        // P1: Ready → Running → Waiting.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // force_advance → P1 (Waiting), Bug 06 guard restores P0 to Running.
+        let result = k.yield_current_slot();
+        assert_eq!(
+            result.partition_id(),
+            None,
+            "yield must return None when nominated partition is Waiting"
+        );
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "Bug 06: P0 must be restored to Running when both partitions are Waiting"
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().state(),
+            PartitionState::Waiting,
+            "P1 must remain Waiting"
+        );
+        assert_eq!(
+            k.active_partition(),
+            Some(0),
+            "active_partition must remain P0"
+        );
         assert_partition_state_consistency(k.partitions().as_slice());
         assert_running_matches_active(k.partitions().as_slice(), k.active_partition());
     }
