@@ -859,6 +859,45 @@ mod tests {
     }
 
     #[test]
+    fn three_partitions_shared_data_allowed() {
+        // P0 data overlaps P1 data, P1 data overlaps P2 data — all permitted.
+        // Stacks are fully disjoint from each other and from all data regions.
+        let p0 = make_region_pcb(0, 0x2000_0000, 0x2000, 0x2001_0000, 0x400);
+        let p1 = make_region_pcb(1, 0x2000_1000, 0x2000, 0x2002_0000, 0x400);
+        let p2 = make_region_pcb(2, 0x2000_2000, 0x2000, 0x2003_0000, 0x400);
+        assert_no_overlapping_mpu_regions(&[p0, p1, p2]);
+    }
+
+    #[test]
+    #[should_panic(expected = "overlaps partition")]
+    fn three_partitions_data_stack_overlap_rejected() {
+        // P0 data [0x2000_0000, 0x2000_2000) overlaps P1 stack [0x2000_0800, 0x2000_0C00).
+        let p0 = make_region_pcb(0, 0x2000_0000, 0x2000, 0x2001_0000, 0x400);
+        let p1 = make_region_pcb(1, 0x2002_0000, 0x1000, 0x2000_0800, 0x400);
+        let p2 = make_region_pcb(2, 0x2003_0000, 0x1000, 0x2004_0000, 0x400);
+        assert_no_overlapping_mpu_regions(&[p0, p1, p2]);
+    }
+
+    #[test]
+    #[should_panic(expected = "overlaps partition 1")]
+    fn overlap_stack_stack() {
+        // P0 stack [0x2000_2000, 0x2000_2400) overlaps P1 stack [0x2000_2200, 0x2000_2600).
+        let p0 = make_region_pcb(0, 0x2000_0000, 0x1000, 0x2000_2000, 0x400);
+        let p1 = make_region_pcb(1, 0x2000_4000, 0x1000, 0x2000_2200, 0x400);
+        assert_no_overlapping_mpu_regions(&[p0, p1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "overlaps partition 1")]
+    fn overlap_data_peripheral() {
+        // P0 data [0x4000_0000, 0x4000_2000) overlaps P1 peripheral [0x4000_0800, 0x4000_1800).
+        let p0 = make_region_pcb(0, 0x4000_0000, 0x2000, 0x2000_0000, 0x400);
+        let p1 = make_region_pcb(1, 0x2000_2000, 0x1000, 0x2000_4000, 0x400)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0800, 0x1000, 0)]);
+        assert_no_overlapping_mpu_regions(&[p0, p1]);
+    }
+
+    #[test]
     fn semaphore_count_bounded_valid_counts() {
         // count < max for all semaphores.
         assert_semaphore_count_bounded(&[(0, 5), (3, 10), (0, 1)]);
