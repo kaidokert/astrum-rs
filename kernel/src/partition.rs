@@ -199,6 +199,27 @@ impl PartitionControlBlock {
         regions
     }
 
+    /// Returns only stack and peripheral regions (excluding the data/mpu_region).
+    ///
+    /// Used by the overlap invariant check: data regions may legitimately be
+    /// shared across partitions, while stacks and peripherals must be exclusive.
+    // TODO: capacity 4 assumes 1 stack + at most 3 peripherals; consider a
+    // compile-time or runtime check if peripheral_regions can ever exceed 3.
+    pub fn exclusive_static_regions(&self) -> Vec<(u32, u32), 4> {
+        let mut regions = Vec::new();
+        if self.stack_size > 0 {
+            let ok = regions.push((self.stack_base, self.stack_size)).is_ok();
+            debug_assert!(ok);
+        }
+        for pr in self.peripheral_regions.iter() {
+            if pr.size() > 0 {
+                let ok = regions.push((pr.base(), pr.size())).is_ok();
+                debug_assert!(ok);
+            }
+        }
+        regions
+    }
+
     pub fn mpu_region(&self) -> &MpuRegion {
         &self.mpu_region
     }
@@ -1227,6 +1248,95 @@ mod tests {
         assert_eq!((regions.capacity(), regions.len()), (4, 4));
         assert_eq!(regions[2], (0x4000_0000, 4096));
         assert_eq!(regions[3], (0x4000_1000, 256));
+    }
+
+    // ------------------------------------------------------------------
+    // exclusive_static_regions
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn exclusive_static_regions_returns_stack_and_peripheral_not_data() {
+        let r = |b, s| MpuRegion::new(b, s, 0x03);
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_2000,                                    // stack_base
+            0x2000_2400,                                    // stack_pointer => stack_size = 1024
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000), // data region
+        )
+        .with_peripheral_regions(&[r(0x4000_0000, 4096)]);
+        let regions = pcb.exclusive_static_regions();
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0], (0x2000_2000, 1024)); // stack
+        assert_eq!(regions[1], (0x4000_0000, 4096)); // peripheral
+    }
+
+    #[test]
+    fn exclusive_static_regions_zero_stack_returns_peripherals_only() {
+        let r = |b, s| MpuRegion::new(b, s, 0x03);
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0000, // stack_size = 0
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        )
+        .with_peripheral_regions(&[r(0x4000_0000, 256)]);
+        let regions = pcb.exclusive_static_regions();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0], (0x4000_0000, 256));
+    }
+
+    #[test]
+    fn exclusive_static_regions_no_peripherals_returns_stack_only() {
+        let pcb = make_pcb(); // has stack, no peripherals
+        let regions = pcb.exclusive_static_regions();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0], (0x2000_0000, 1024));
+    }
+
+    #[test]
+    fn exclusive_static_regions_filters_zero_size_peripherals() {
+        let r = |b, s| MpuRegion::new(b, s, 0x03);
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_2000,
+            0x2000_2400, // stack_size = 1024
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        )
+        .with_peripheral_regions(&[r(0x4000_0000, 0), r(0x4000_1000, 256)]);
+        let regions = pcb.exclusive_static_regions();
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0], (0x2000_2000, 1024)); // stack
+        assert_eq!(regions[1], (0x4000_1000, 256)); // non-zero peripheral only
+    }
+
+    #[test]
+    fn exclusive_static_regions_zero_stack_zero_peripherals_returns_empty() {
+        let r = |b, s| MpuRegion::new(b, s, 0x03);
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0000, // stack_size = 0
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        )
+        .with_peripheral_regions(&[r(0x4000_0000, 0)]);
+        let regions = pcb.exclusive_static_regions();
+        assert!(regions.is_empty());
+    }
+
+    #[test]
+    fn exclusive_static_regions_reflects_fix_stack_region() {
+        let mut pcb = make_pcb();
+        let before = pcb.exclusive_static_regions();
+        assert_eq!(before[0], (0x2000_0000, 1024));
+
+        pcb.fix_stack_region(0x2001_0000, 2048).unwrap();
+        let after = pcb.exclusive_static_regions();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0], (0x2001_0000, 2048));
     }
 
     #[test]
