@@ -10097,6 +10097,91 @@ mod tests {
 
     #[cfg(feature = "partition-debug")]
     #[test]
+    fn drain_debug_auto_multi_partition_clears_all() {
+        use crate::debug::{DebugRingBuffer, KIND_TEXT, LOG_INFO};
+
+        static BUF0: DebugRingBuffer<64> = DebugRingBuffer::new();
+        static BUF1: DebugRingBuffer<64> = DebugRingBuffer::new();
+
+        let mut k = kernel(0, 0, 0);
+
+        // Attach debug buffers to both partitions.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_debug_buffer(&BUF0);
+        k.partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .set_debug_buffer(&BUF1);
+
+        // Write distinct records so we can verify per-partition drain.
+        BUF0.write_record(LOG_INFO, KIND_TEXT, b"p0");
+        BUF1.write_record(LOG_INFO, KIND_TEXT, b"p1");
+
+        // Signal pending on both partitions.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .signal_debug_pending();
+        k.partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .signal_debug_pending();
+
+        // Pre-conditions: both pending, both non-empty.
+        assert!(k.partitions().get(0).unwrap().debug_pending());
+        assert!(k.partitions().get(1).unwrap().debug_pending());
+        assert!(!BUF0.is_empty());
+        assert!(!BUF1.is_empty());
+
+        // Exercise the auto-drain entry point (not drain_debug_pending directly).
+        k.drain_debug_auto();
+
+        // Both debug_pending flags must be cleared.
+        assert!(!k.partitions().get(0).unwrap().debug_pending());
+        assert!(!k.partitions().get(1).unwrap().debug_pending());
+
+        // Both buffers must be fully drained.
+        assert!(BUF0.is_empty());
+        assert!(BUF1.is_empty());
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn drain_debug_auto_idempotent_second_call_noop() {
+        use crate::debug::{DebugRingBuffer, KIND_TEXT, LOG_INFO};
+
+        static BUF: DebugRingBuffer<64> = DebugRingBuffer::new();
+
+        let mut k = kernel(0, 0, 0);
+
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_debug_buffer(&BUF);
+        BUF.write_record(LOG_INFO, KIND_TEXT, b"once");
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .signal_debug_pending();
+
+        assert!(k.partitions().get(0).unwrap().debug_pending());
+        assert!(!BUF.is_empty());
+
+        // First call drains the buffer and clears pending.
+        k.drain_debug_auto();
+        assert!(!k.partitions().get(0).unwrap().debug_pending());
+        assert!(BUF.is_empty());
+
+        // Second call is a no-op: pending is already false so nothing runs.
+        k.drain_debug_auto();
+        assert!(!k.partitions().get(0).unwrap().debug_pending());
+        assert!(BUF.is_empty());
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
     fn debug_write_rejects_invalid_pointer() {
         use crate::syscall::SYS_DEBUG_WRITE;
         let mut k = kernel(0, 0, 0);
