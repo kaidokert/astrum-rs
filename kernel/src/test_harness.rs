@@ -1,8 +1,8 @@
 use crate::config::KernelConfig;
 use crate::context::ExceptionFrame;
+use crate::kernel_config_types;
 use crate::message::MessageQueue;
 use crate::partition::{ConfigError, MpuRegion, PartitionConfig, PartitionState, TransitionError};
-use crate::partition_core::{AlignedStack1K, PartitionCore};
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
 use crate::semaphore::Semaphore;
 use crate::svc::{Kernel, YieldResult};
@@ -13,7 +13,6 @@ pub struct HarnessConfig;
 impl KernelConfig for HarnessConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
-    const STACK_WORDS: usize = 256;
     const S: usize = 4;
     const SW: usize = 4;
     const MS: usize = 4;
@@ -29,18 +28,7 @@ impl KernelConfig for HarnessConfig {
     const BW: usize = 4;
     #[cfg(feature = "dynamic-mpu")]
     const BP: usize = 4;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-    type Sync = crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-    type Msg = crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-    type Ports = crate::port_pools::PortPools<
-        { Self::SP },
-        { Self::SM },
-        { Self::BS },
-        { Self::BM },
-        { Self::BW },
-    >;
+    kernel_config_types!();
 }
 
 /// Base address for partition flash (code) regions in the test memory map.

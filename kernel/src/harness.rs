@@ -408,10 +408,7 @@ macro_rules! define_unified_harness {
 mod tests {
     use super::*;
     use crate::config::KernelConfig;
-    use crate::msg_pools::MsgPools;
-    use crate::partition_core::{AlignedStack1K, PartitionCore};
-    use crate::port_pools::PortPools;
-    use crate::sync_pools::SyncPools;
+    use crate::kernel_config_types;
     use core::fmt::Write;
 
     /// Fixed-size buffer for formatting in no_std tests.
@@ -469,11 +466,7 @@ mod tests {
     struct GateTestDefault;
     impl KernelConfig for GateTestDefault {
         const N: usize = 2;
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-        type Ports =
-            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+        kernel_config_types!();
     }
 
     /// Config with MPU_ENFORCE = true.
@@ -481,11 +474,7 @@ mod tests {
     impl KernelConfig for GateTestEnforced {
         const N: usize = 2;
         const MPU_ENFORCE: bool = true;
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-        type Ports =
-            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+        kernel_config_types!();
     }
 
     /// Mirrors the __boot_mpu_init gating pattern:
