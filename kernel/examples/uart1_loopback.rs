@@ -22,17 +22,12 @@ use cortex_m::interrupt::Mutex;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    config::KernelConfig,
     hw_uart::HwUartBackend,
     mpu_strategy::DynamicStrategy,
-    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
-    partition_core::{AlignedStack1K, PartitionCore},
-    port_pools::PortPools,
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc,
     svc::{Kernel, SvcError, YieldResult},
-    sync_pools::SyncPools,
     syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE, SYS_YIELD},
     uart_hal::UartRegs,
     virtual_device::VirtualDevice,
@@ -52,33 +47,12 @@ const MESSAGES: [&[u8]; NUM_MESSAGES] = [MSG_SHORT, MSG_MEDIUM, MSG_LONG];
 /// TX ring buffer capacity in HwUartBackend (must match hw_uart.rs CAPACITY).
 const TX_CAPACITY: usize = 64;
 
-struct DemoConfig;
-impl KernelConfig for DemoConfig {
+kernel::kernel_config!(DemoConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
-    const STACK_WORDS: usize = 256;
-    const S: usize = 1;
-    const SW: usize = 1;
-    const MS: usize = 1;
-    const MW: usize = 1;
-    const QS: usize = 1;
-    const QD: usize = 1;
-    const QM: usize = 1;
-    const QW: usize = 1;
-    const SP: usize = 1;
     const SM: usize = 1;
-    const BS: usize = 1;
     const BM: usize = 1;
-    const BW: usize = 1;
-    const BP: usize = 1;
-    const BZ: usize = 32;
-    const DR: usize = 4;
-
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
-}
+});
 
 #[repr(C, align(1024))]
 struct AlignedStack([u32; STACK_WORDS]);
