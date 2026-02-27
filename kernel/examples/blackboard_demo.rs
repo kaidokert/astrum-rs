@@ -21,7 +21,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    config::KernelConfig,
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     semaphore::Semaphore,
@@ -40,20 +39,19 @@ use panic_semihosting as _;
 const NUM_PARTITIONS: usize = 3;
 const STACK_WORDS: usize = 256;
 
-/// Kernel configuration for the blackboard demo.
-///
-/// Sized for 3 partitions, 1 semaphore, 1 blackboard (4-byte messages,
-/// 3-deep wait queue), and minimal allocations for unused resource pools.
-struct DemoConfig;
-impl KernelConfig for DemoConfig {
-    const N: usize = 3;
-    const SCHED: usize = 8;
-    const SW: usize = 3;
-    const SM: usize = 1; // TODO: reviewer false positive — SM default is 64, not 1; keeping non-default
-    const BM: usize = 4;
-    const BW: usize = 3;
-
-    kernel::kernel_config_types!();
+kernel::kernel_config! {
+    /// Kernel configuration for the blackboard demo.
+    ///
+    /// Sized for 3 partitions, 1 semaphore, 1 blackboard (4-byte messages,
+    /// 3-deep wait queue), and minimal allocations for unused resource pools.
+    DemoConfig {
+        const N: usize = 3;
+        const SCHED: usize = 8;
+        const SW: usize = 3;
+        const SM: usize = 1;
+        const BM: usize = 4;
+        const BW: usize = 3;
+    }
 }
 
 // ---------------------------------------------------------------------------

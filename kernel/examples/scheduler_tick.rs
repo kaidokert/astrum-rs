@@ -7,24 +7,20 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::config::KernelConfig;
 use kernel::partition::{MpuRegion, PartitionConfig, PartitionState};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::tick::configure_systick;
 use panic_semihosting as _;
 
-struct TestConfig;
-impl KernelConfig for TestConfig {
+kernel::kernel_config! { TestConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
     const S: usize = 4;
     const SW: usize = 4;
     const SM: usize = 1;
     const BM: usize = 1;
-
-    kernel::kernel_config_types!();
-}
+}}
 
 kernel::define_unified_kernel!(TestConfig);
 

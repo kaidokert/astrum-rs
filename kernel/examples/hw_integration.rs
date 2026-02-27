@@ -12,7 +12,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::exception;
 use kernel::{
     boot,
-    config::KernelConfig,
     kexit, klog,
     partition::{MpuRegion, PartitionConfig},
     sampling::PortDirection,
@@ -28,8 +27,7 @@ use panic_rtt_target as _;
 use panic_semihosting as _;
 // TODO: replace ERR bitmask with a typed Result abstraction once syscall API supports it
 const ERR: u32 = 0x8000_0000;
-struct Cfg;
-impl KernelConfig for Cfg {
+kernel::kernel_config! { Cfg {
     const N: usize = 2;
     const QS: usize = 2;
     const QD: usize = 4;
@@ -37,9 +35,7 @@ impl KernelConfig for Cfg {
     const QW: usize = 2;
     const SM: usize = 1;
     const BM: usize = 1;
-
-    kernel::kernel_config_types!();
-}
+}}
 static P0_SENT: AtomicU32 = AtomicU32::new(0);
 static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);
 static PARTS_RAN: AtomicU32 = AtomicU32::new(0);

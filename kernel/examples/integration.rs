@@ -7,7 +7,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::config::KernelConfig;
 use kernel::message::SendOutcome;
 use kernel::mpu;
 use kernel::partition::{MpuRegion, PartitionConfig, PartitionState};
@@ -16,8 +15,7 @@ use kernel::svc::Kernel;
 use kernel::{boot, events};
 use panic_semihosting as _;
 
-struct IntegrationConfig;
-impl KernelConfig for IntegrationConfig {
+kernel::kernel_config! { IntegrationConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
     const QS: usize = 4;
@@ -26,9 +24,7 @@ impl KernelConfig for IntegrationConfig {
     const QW: usize = 4;
     const SM: usize = 1;
     const BM: usize = 1;
-
-    kernel::kernel_config_types!();
-}
+}}
 
 static P_RAN: AtomicU32 = AtomicU32::new(u32::MAX);
 static SW: AtomicU32 = AtomicU32::new(0);

@@ -708,9 +708,13 @@ macro_rules! _kernel_config_inherent_consts {
 ///
 /// The macro body accepts any items valid inside an `impl` block, including
 /// `#[cfg(...)]` attributes on individual constants.
+///
+/// Doc-attributes (`///`) placed before the struct name are forwarded to
+/// the generated struct definition.
 #[macro_export]
 macro_rules! kernel_config {
-    ($name:ident { $($body:tt)* }) => {
+    ($(#[$meta:meta])* $name:ident { $($body:tt)* }) => {
+        $(#[$meta])*
         struct $name;
         impl $crate::config::KernelConfig for $name {
             $($body)*
@@ -718,7 +722,8 @@ macro_rules! kernel_config {
         }
         $crate::_kernel_config_inherent_consts!($name);
     };
-    ($name:ident [$stack:ty] { $($body:tt)* }) => {
+    ($(#[$meta:meta])* $name:ident [$stack:ty] { $($body:tt)* }) => {
+        $(#[$meta])*
         struct $name;
         impl $crate::config::KernelConfig for $name {
             $($body)*
