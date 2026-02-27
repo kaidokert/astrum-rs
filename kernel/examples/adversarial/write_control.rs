@@ -34,7 +34,7 @@ const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
 kernel::kernel_config! { TestConfig {
-    const N: usize = 1;
+    partitions = 1;
 }}
 
 // 0 = pending, 1 = pass, 2 = fail (partition not unpriv), 3 = fail (escalated)

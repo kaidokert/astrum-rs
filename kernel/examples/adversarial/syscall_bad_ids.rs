@@ -54,7 +54,7 @@ const STACK_WORDS: usize = 256;
 const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 
 kernel::kernel_config! { TestConfig {
-    const N: usize = 1;
+    partitions = 1;
 }}
 
 // 0 = pending, 1 = pass, 2 = fail (EVT_SET), 3 = fail (QUEUING_SEND)

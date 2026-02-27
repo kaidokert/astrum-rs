@@ -46,9 +46,9 @@ const STACK_WORDS: usize = 256;
 const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 
 kernel::kernel_config! { TestConfig {
-    const N: usize = 2;
-    const SP: usize = 4;
-    const SM: usize = 4;
+    partitions = 2;
+    sampling_ports = 4;
+    sampling_msg_size = 4;
 }}
 
 static SVC_RESULT: AtomicU32 = AtomicU32::new(0);

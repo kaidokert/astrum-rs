@@ -41,16 +41,13 @@ const STACK_WORDS: usize = 256;
 const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 
 kernel::kernel_config!(TestConfig {
-    const N: usize = 2;
-    const SP: usize = 4;
-    const SM: usize = 4;
-    const BM: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
+    partitions = 2;
+    sampling_ports = 4;
+    sampling_msg_size = 4;
+    blackboard_msg_size = 1;
+    buffer_pool_regions = 1;
+    buffer_zone_size = 32;
+    dynamic_regions = 4;
 });
 
 // 0 = pending, 1 = pass, 2 = fail (null ptr), 3 = fail (wrap ptr)

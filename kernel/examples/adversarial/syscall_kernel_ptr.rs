@@ -47,16 +47,13 @@ const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
 kernel::kernel_config!(TestConfig {
-    const N: usize = 2;
-    const SP: usize = 4; // Need at least one sampling port
-    const SM: usize = 4;
-    const BM: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
+    partitions = 2;
+    sampling_ports = 4;
+    sampling_msg_size = 4;
+    blackboard_msg_size = 1;
+    buffer_pool_regions = 1;
+    buffer_zone_size = 32;
+    dynamic_regions = 4;
 });
 
 // 0 = pending, result value when done (set SVC_DONE to 1)
