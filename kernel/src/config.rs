@@ -186,6 +186,35 @@ pub trait PortsOps {
     fn blackboards_mut(&mut self) -> &mut Self::BlackboardPool;
 }
 
+/// Sub-trait providing readable constant names for partition-related
+/// configuration parameters.
+///
+/// This trait offers self-documenting names that map 1-to-1 to the
+/// single-letter constants on [`KernelConfig`]:
+///
+/// | `PartitionConfig` | `KernelConfig` | Meaning |
+/// |---|---|---|
+/// | `COUNT` | `N` | Number of partitions |
+/// | `SCHEDULE_CAPACITY` | `SCHED` | Schedule table entries |
+/// | `STACK_WORDS` | `STACK_WORDS` | Stack size per partition (in 32-bit words) |
+pub trait PartitionConfig {
+    /// Number of partitions (maps to [`KernelConfig::N`]).
+    const COUNT: usize;
+    /// Schedule table capacity (maps to [`KernelConfig::SCHED`]).
+    const SCHEDULE_CAPACITY: usize;
+    /// Stack size per partition in 32-bit words (maps to [`KernelConfig::STACK_WORDS`]).
+    const STACK_WORDS: usize;
+}
+
+/// Preset: 2 partitions, 4 schedule entries, 256-word (1 KiB) stacks.
+pub struct Partitions2;
+
+impl PartitionConfig for Partitions2 {
+    const COUNT: usize = 2;
+    const SCHEDULE_CAPACITY: usize = 4;
+    const STACK_WORDS: usize = 256;
+}
+
 /// Trait that bundles every const-generic parameter the [`Kernel`] needs.
 ///
 /// Implement this trait on a zero-sized struct to configure a kernel
@@ -725,4 +754,26 @@ mod tests {
     const _: () = assert!(!DefaultPriority::MPU_ENFORCE);
     const _: () = assert_priority_order::<MpuEnabledConfig>();
     const _: () = assert_systick_reload::<MpuEnabledConfig>();
+
+    // ============ PartitionConfig tests ============
+
+    #[test]
+    fn partitions2_count_is_2() {
+        assert_eq!(Partitions2::COUNT, 2);
+    }
+
+    #[test]
+    fn partitions2_schedule_capacity_is_4() {
+        assert_eq!(Partitions2::SCHEDULE_CAPACITY, 4);
+    }
+
+    #[test]
+    fn partitions2_stack_words_is_256() {
+        assert_eq!(Partitions2::STACK_WORDS, 256);
+    }
+
+    // Compile-time assertions for Partitions2 preset values.
+    const _: () = assert!(Partitions2::COUNT == 2);
+    const _: () = assert!(Partitions2::SCHEDULE_CAPACITY == 4);
+    const _: () = assert!(Partitions2::STACK_WORDS == 256);
 }
