@@ -841,6 +841,30 @@ pub fn dispatch_syscall<const N: usize>(
     };
 }
 
+// ---- Struct-Move Invariant ----
+//
+// `Kernel` is constructed on the stack in `Kernel::new()` and then moved into
+// `UNIFIED_KERNEL_STORAGE` via `ptr.write(kernel)` (see `state.rs`).  Any
+// address captured from internal fields during `new()` — stack buffer
+// pointers, MPU region bases — becomes **stale** after the move because the
+// struct now lives at a different address.
+//
+// Fields that store self-referential addresses must therefore be **patched
+// after placement**, not during construction.  The correct pattern is:
+//
+//   1. Construct with stale / sentinel values (e.g. base = 0, size = 0).
+//   2. After placement in `boot()`, call the appropriate `fix_*()` method
+//      which recomputes the address from the live storage location.
+//   3. Verify the patched address falls within the `UNIFIED_KERNEL_STORAGE`
+//      range.
+//
+// Currently affected fields and their fixup methods:
+//   - `PartitionControlBlock.mpu_region.base`  → `fix_mpu_data_region()`
+//   - `PartitionControlBlock.stack_base`        → `fix_stack_region()`
+//
+// See `boot.rs` for the post-placement fixup sequence that calls these
+// methods after the kernel has been moved into its final storage.
+
 /// Encapsulates all kernel service pools alongside the partition table,
 /// with pool sizes derived from a single [`KernelConfig`] implementer.
 ///
@@ -1072,6 +1096,8 @@ where
             let internal_stack = core
                 .stack_mut(i)
                 .ok_or(ConfigError::StackInitFailed { partition_id: c.id })?;
+            // WARNING: this address is stale after the struct is moved into
+            // UNIFIED_KERNEL_STORAGE; boot.rs patches it via fix_stack_region().
             let internal_stack_base = internal_stack.as_ptr() as u32;
             let internal_stack_size = (internal_stack.len() * 4) as u32;
             let sp = align_down_8(internal_stack_base.wrapping_add(internal_stack_size));
