@@ -637,6 +637,36 @@ macro_rules! kernel_config_types {
     };
 }
 
+/// Generates a config struct, `impl KernelConfig`, and the associated type
+/// aliases from just the non-default overrides.
+///
+/// # Forms
+///
+/// - `kernel_config!(Name { const N: usize = 2; ... })` — uses
+///   [`AlignedStack1K`](crate::partition_core::AlignedStack1K).
+/// - `kernel_config!(Name [StackType] { const N: usize = 2; ... })` — uses
+///   the provided stack type.
+///
+/// The macro body accepts any items valid inside an `impl` block, including
+/// `#[cfg(...)]` attributes on individual constants.
+#[macro_export]
+macro_rules! kernel_config {
+    ($name:ident { $($body:tt)* }) => {
+        struct $name;
+        impl $crate::config::KernelConfig for $name {
+            $($body)*
+            $crate::kernel_config_types!();
+        }
+    };
+    ($name:ident [$stack:ty] { $($body:tt)* }) => {
+        struct $name;
+        impl $crate::config::KernelConfig for $name {
+            $($body)*
+            $crate::kernel_config_types!($stack);
+        }
+    };
+}
+
 /// Compile-time assertion that `SYSTICK_CYCLES` fits in the 24-bit SysTick
 /// RELOAD register.
 ///
@@ -1065,5 +1095,64 @@ mod tests {
         assert_eq!(PortsRich::BLACKBOARDS, 4);
         assert_eq!(PortsRich::BLACKBOARD_MAX_MSG_SIZE, 64);
         assert_eq!(PortsRich::BLACKBOARD_WAITQ, 4);
+    }
+
+    // ============ kernel_config! macro tests ============
+
+    kernel_config!(MacroDefaultsOnly { const N: usize = 2; });
+
+    #[test]
+    fn kernel_config_macro_defaults_only() {
+        assert_eq!(MacroDefaultsOnly::N, 2);
+        assert_eq!(MacroDefaultsOnly::SCHED, 4);
+        assert_eq!(MacroDefaultsOnly::STACK_WORDS, 256);
+        assert_eq!(MacroDefaultsOnly::S, 1);
+        assert_eq!(MacroDefaultsOnly::SW, 1);
+        assert_eq!(MacroDefaultsOnly::MS, 1);
+        assert_eq!(MacroDefaultsOnly::MW, 1);
+        assert_eq!(MacroDefaultsOnly::QS, 1);
+        assert_eq!(MacroDefaultsOnly::QD, 1);
+        assert_eq!(MacroDefaultsOnly::QM, 1);
+        assert_eq!(MacroDefaultsOnly::QW, 1);
+        assert_eq!(MacroDefaultsOnly::CORE_CLOCK_HZ, 12_000_000);
+        assert_eq!(MacroDefaultsOnly::TICK_PERIOD_US, 1000);
+    }
+
+    kernel_config!(MacroWithOverrides {
+        const N: usize = 4;
+        const SCHED: usize = 8;
+        const S: usize = 4;
+        const SW: usize = 2;
+        const CORE_CLOCK_HZ: u32 = 64_000_000;
+    });
+
+    #[test]
+    fn kernel_config_macro_with_overrides() {
+        assert_eq!(MacroWithOverrides::N, 4);
+        assert_eq!(MacroWithOverrides::SCHED, 8);
+        assert_eq!(MacroWithOverrides::S, 4);
+        assert_eq!(MacroWithOverrides::SW, 2);
+        assert_eq!(MacroWithOverrides::CORE_CLOCK_HZ, 64_000_000);
+        // Non-overridden constants retain defaults.
+        assert_eq!(MacroWithOverrides::STACK_WORDS, 256);
+        assert_eq!(MacroWithOverrides::MS, 1);
+        assert_eq!(MacroWithOverrides::MW, 1);
+        assert_eq!(MacroWithOverrides::TICK_PERIOD_US, 1000);
+    }
+
+    kernel_config!(MacroCustomStack [crate::partition_core::AlignedStack4K] {
+        const N: usize = 2;
+        const STACK_WORDS: usize = 1024;
+    });
+
+    #[test]
+    fn kernel_config_macro_custom_stack() {
+        assert_eq!(MacroCustomStack::N, 2);
+        assert_eq!(MacroCustomStack::STACK_WORDS, 1024);
+        // Defaults still apply for non-overridden constants.
+        assert_eq!(MacroCustomStack::SCHED, 4);
+        assert_eq!(MacroCustomStack::S, 1);
+        // Verify the type compiles by constructing the Core type.
+        let _core = <MacroCustomStack as KernelConfig>::Core::default();
     }
 }
