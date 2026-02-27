@@ -757,6 +757,26 @@ macro_rules! _kernel_config_field {
     (debug_auto_drain = $v:expr) => {
         const DEBUG_AUTO_DRAIN_BUDGET: usize = $v;
     };
+    (buffer_pool_regions = $v:expr) => {
+        #[cfg(feature = "dynamic-mpu")]
+        const BP: usize = $v;
+    };
+    (buffer_zone_size = $v:expr) => {
+        #[cfg(feature = "dynamic-mpu")]
+        const BZ: usize = $v;
+    };
+    (dynamic_regions = $v:expr) => {
+        #[cfg(feature = "dynamic-mpu")]
+        const DR: usize = $v;
+    };
+    (system_window_max_gap_ticks = $v:expr) => {
+        #[cfg(feature = "dynamic-mpu")]
+        const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 = $v;
+    };
+    (debug_buffer_size = $v:expr) => {
+        #[cfg(feature = "partition-debug")]
+        const DEBUG_BUFFER_SIZE: usize = $v;
+    };
 }
 
 #[macro_export]
@@ -1486,5 +1506,66 @@ mod tests {
         assert_eq!(MixedSyntaxConfig::STACK_WORDS, 256);
         assert_eq!(MixedSyntaxConfig::MS, 1);
         assert_eq!(MixedSyntaxConfig::TICK_PERIOD_US, 1000);
+    }
+
+    // ============ Feature-gated field alias tests ============
+
+    struct FeatureGatedFieldConfig;
+    impl KernelConfig for FeatureGatedFieldConfig {
+        _kernel_config_field!(partitions = 2);
+        _kernel_config_field!(buffer_pool_regions = 8);
+        _kernel_config_field!(buffer_zone_size = 64);
+        _kernel_config_field!(dynamic_regions = 6);
+        _kernel_config_field!(system_window_max_gap_ticks = 50);
+        _kernel_config_field!(debug_buffer_size = 512);
+        kernel_config_types!();
+    }
+
+    #[test]
+    fn feature_gated_field_aliases_expand_correctly() {
+        assert_eq!(FeatureGatedFieldConfig::N, 2);
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            assert_eq!(FeatureGatedFieldConfig::BP, 8);
+            assert_eq!(FeatureGatedFieldConfig::BZ, 64);
+            assert_eq!(FeatureGatedFieldConfig::DR, 6);
+            assert_eq!(FeatureGatedFieldConfig::SYSTEM_WINDOW_MAX_GAP_TICKS, 50);
+        }
+        #[cfg(feature = "partition-debug")]
+        {
+            assert_eq!(FeatureGatedFieldConfig::DEBUG_BUFFER_SIZE, 512);
+        }
+    }
+
+    kernel_config!(FeatureGatedE2EConfig {
+        partitions = 2;
+        semaphores = 4;
+        buffer_pool_regions = 8;
+        buffer_zone_size = 64;
+        dynamic_regions = 6;
+        system_window_max_gap_ticks = 50;
+        debug_buffer_size = 512;
+        core_clock_hz = 48_000_000;
+    });
+
+    #[test]
+    fn feature_gated_kernel_config_e2e() {
+        assert_eq!(FeatureGatedE2EConfig::N, 2);
+        assert_eq!(FeatureGatedE2EConfig::S, 4);
+        assert_eq!(FeatureGatedE2EConfig::CORE_CLOCK_HZ, 48_000_000);
+        // Non-overridden fields retain defaults.
+        assert_eq!(FeatureGatedE2EConfig::SCHED, 4);
+        assert_eq!(FeatureGatedE2EConfig::STACK_WORDS, 256);
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            assert_eq!(FeatureGatedE2EConfig::BP, 8);
+            assert_eq!(FeatureGatedE2EConfig::BZ, 64);
+            assert_eq!(FeatureGatedE2EConfig::DR, 6);
+            assert_eq!(FeatureGatedE2EConfig::SYSTEM_WINDOW_MAX_GAP_TICKS, 50);
+        }
+        #[cfg(feature = "partition-debug")]
+        {
+            assert_eq!(FeatureGatedE2EConfig::DEBUG_BUFFER_SIZE, 512);
+        }
     }
 }
