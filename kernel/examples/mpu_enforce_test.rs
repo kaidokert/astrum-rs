@@ -27,11 +27,11 @@ const SW: usize = 256; // AlignedStack1K = 256 words = 1024 bytes
 const REGION_SZ: u32 = 1024;
 
 kernel::kernel_config! { TestConfig {
-    const N: usize = 2;
-    const MPU_ENFORCE: bool = true;
-    const STACK_WORDS: usize = SW;
-    const SM: usize = 1;
-    const BM: usize = 1;
+    partitions = 2;
+    mpu_enforce = true;
+    stack_words = SW;
+    sampling_max_msg = 1;
+    blackboard_max_msg = 1;
 }}
 
 // Partition entries: yield in a loop. No memory access beyond the

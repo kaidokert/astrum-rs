@@ -61,10 +61,10 @@ static mut CURRENT_PARTITION: u32 = u32::MAX;
 static mut NEXT_PARTITION: u32 = 0;
 
 kernel::kernel_config!(TestConfig {
-    const N: usize = 2;
-    const SM: usize = 1;
-    const BM: usize = 1;
-    const BP: usize = 2;
+    partitions = 2;
+    sampling_max_msg = 1;
+    blackboard_max_msg = 1;
+    buffer_pool_regions = 2;
 });
 
 // Use define_unified_kernel! to create the KERNEL static and dispatch hook.

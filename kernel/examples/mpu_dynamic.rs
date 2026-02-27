@@ -55,10 +55,10 @@ static mut CURRENT_PARTITION: u32 = u32::MAX;
 static mut NEXT_PARTITION: u32 = 0;
 
 kernel::kernel_config! { TestConfig {
-    const N: usize = 2;
-    const SM: usize = 1;
-    const BM: usize = 1;
-    const DR: usize = 4;
+    partitions = 2;
+    sampling_max_msg = 1;
+    blackboard_max_msg = 1;
+    dynamic_regions = 4;
 }}
 
 // Use define_unified_kernel! with empty yield handler (this test doesn't use SVC yield).
