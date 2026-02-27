@@ -215,6 +215,15 @@ impl PartitionConfig for Partitions2 {
     const STACK_WORDS: usize = 256;
 }
 
+/// Preset: 4 partitions, 8 schedule entries, 256-word (1 KiB) stacks.
+pub struct Partitions4;
+
+impl PartitionConfig for Partitions4 {
+    const COUNT: usize = 4;
+    const SCHEDULE_CAPACITY: usize = 8;
+    const STACK_WORDS: usize = 256;
+}
+
 /// Sub-trait providing readable constant names for synchronization-related
 /// configuration parameters.
 ///
@@ -292,6 +301,16 @@ impl MsgConfig for MsgMinimal {
     const QUEUE_WAITQ: usize = 1;
 }
 
+/// Preset: rich messaging (4 queues, depth 4, 64-byte messages, wait-queue depth 4).
+pub struct MsgRich;
+
+impl MsgConfig for MsgRich {
+    const QUEUES: usize = 4;
+    const QUEUE_DEPTH: usize = 4;
+    const MAX_MSG_SIZE: usize = 64;
+    const QUEUE_WAITQ: usize = 4;
+}
+
 /// Sub-trait providing readable constant names for port-related
 /// configuration parameters.
 ///
@@ -328,6 +347,28 @@ impl PortsConfig for PortsMinimal {
     const BLACKBOARDS: usize = 1;
     const BLACKBOARD_MAX_MSG_SIZE: usize = 64;
     const BLACKBOARD_WAITQ: usize = 1;
+}
+
+/// Preset: tiny ports (all fields 1, for test/minimal configs where SM=64 default is too large).
+pub struct PortsTiny;
+
+impl PortsConfig for PortsTiny {
+    const SAMPLING_PORTS: usize = 1;
+    const SAMPLING_MAX_MSG_SIZE: usize = 1;
+    const BLACKBOARDS: usize = 1;
+    const BLACKBOARD_MAX_MSG_SIZE: usize = 1;
+    const BLACKBOARD_WAITQ: usize = 1;
+}
+
+/// Preset: rich ports (4 sampling ports, 64-byte messages, 4 blackboards, 64-byte messages, wait-queue depth 4).
+pub struct PortsRich;
+
+impl PortsConfig for PortsRich {
+    const SAMPLING_PORTS: usize = 4;
+    const SAMPLING_MAX_MSG_SIZE: usize = 64;
+    const BLACKBOARDS: usize = 4;
+    const BLACKBOARD_MAX_MSG_SIZE: usize = 64;
+    const BLACKBOARD_WAITQ: usize = 4;
 }
 
 /// Trait that bundles every const-generic parameter the [`Kernel`] needs.
@@ -897,6 +938,18 @@ mod tests {
     const _: () = assert!(Partitions2::SCHEDULE_CAPACITY == 4);
     const _: () = assert!(Partitions2::STACK_WORDS == 256);
 
+    // Compile-time assertions for Partitions4 preset values.
+    const _: () = assert!(Partitions4::COUNT == 4);
+    const _: () = assert!(Partitions4::SCHEDULE_CAPACITY == 8);
+    const _: () = assert!(Partitions4::STACK_WORDS == 256);
+
+    #[test]
+    fn partitions4_field_values() {
+        assert_eq!(Partitions4::COUNT, 4);
+        assert_eq!(Partitions4::SCHEDULE_CAPACITY, 8);
+        assert_eq!(Partitions4::STACK_WORDS, 256);
+    }
+
     // ============ SyncConfig tests ============
 
     #[test]
@@ -959,6 +1012,20 @@ mod tests {
     const _: () = assert!(MsgMinimal::MAX_MSG_SIZE == 1);
     const _: () = assert!(MsgMinimal::QUEUE_WAITQ == 1);
 
+    // Compile-time assertions for MsgRich preset values.
+    const _: () = assert!(MsgRich::QUEUES == 4);
+    const _: () = assert!(MsgRich::QUEUE_DEPTH == 4);
+    const _: () = assert!(MsgRich::MAX_MSG_SIZE == 64);
+    const _: () = assert!(MsgRich::QUEUE_WAITQ == 4);
+
+    #[test]
+    fn msg_rich_field_values() {
+        assert_eq!(MsgRich::QUEUES, 4);
+        assert_eq!(MsgRich::QUEUE_DEPTH, 4);
+        assert_eq!(MsgRich::MAX_MSG_SIZE, 64);
+        assert_eq!(MsgRich::QUEUE_WAITQ, 4);
+    }
+
     // ============ PortsConfig tests ============
 
     // Compile-time assertions for PortsMinimal preset values.
@@ -967,4 +1034,36 @@ mod tests {
     const _: () = assert!(PortsMinimal::BLACKBOARDS == 1);
     const _: () = assert!(PortsMinimal::BLACKBOARD_MAX_MSG_SIZE == 64);
     const _: () = assert!(PortsMinimal::BLACKBOARD_WAITQ == 1);
+
+    // Compile-time assertions for PortsTiny preset values.
+    const _: () = assert!(PortsTiny::SAMPLING_PORTS == 1);
+    const _: () = assert!(PortsTiny::SAMPLING_MAX_MSG_SIZE == 1);
+    const _: () = assert!(PortsTiny::BLACKBOARDS == 1);
+    const _: () = assert!(PortsTiny::BLACKBOARD_MAX_MSG_SIZE == 1);
+    const _: () = assert!(PortsTiny::BLACKBOARD_WAITQ == 1);
+
+    #[test]
+    fn ports_tiny_field_values() {
+        assert_eq!(PortsTiny::SAMPLING_PORTS, 1);
+        assert_eq!(PortsTiny::SAMPLING_MAX_MSG_SIZE, 1);
+        assert_eq!(PortsTiny::BLACKBOARDS, 1);
+        assert_eq!(PortsTiny::BLACKBOARD_MAX_MSG_SIZE, 1);
+        assert_eq!(PortsTiny::BLACKBOARD_WAITQ, 1);
+    }
+
+    // Compile-time assertions for PortsRich preset values.
+    const _: () = assert!(PortsRich::SAMPLING_PORTS == 4);
+    const _: () = assert!(PortsRich::SAMPLING_MAX_MSG_SIZE == 64);
+    const _: () = assert!(PortsRich::BLACKBOARDS == 4);
+    const _: () = assert!(PortsRich::BLACKBOARD_MAX_MSG_SIZE == 64);
+    const _: () = assert!(PortsRich::BLACKBOARD_WAITQ == 4);
+
+    #[test]
+    fn ports_rich_field_values() {
+        assert_eq!(PortsRich::SAMPLING_PORTS, 4);
+        assert_eq!(PortsRich::SAMPLING_MAX_MSG_SIZE, 64);
+        assert_eq!(PortsRich::BLACKBOARDS, 4);
+        assert_eq!(PortsRich::BLACKBOARD_MAX_MSG_SIZE, 64);
+        assert_eq!(PortsRich::BLACKBOARD_WAITQ, 4);
+    }
 }
