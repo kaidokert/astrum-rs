@@ -292,6 +292,44 @@ impl MsgConfig for MsgMinimal {
     const QUEUE_WAITQ: usize = 1;
 }
 
+/// Sub-trait providing readable constant names for port-related
+/// configuration parameters.
+///
+/// This trait offers self-documenting names that map 1-to-1 to the
+/// single-letter constants on [`KernelConfig`]:
+///
+/// | `PortsConfig` | `KernelConfig` | Meaning |
+/// |---|---|---|
+/// | `SAMPLING_PORTS` | `SP` | Sampling-port pool capacity |
+/// | `SAMPLING_MAX_MSG_SIZE` | `SM` | Sampling-port maximum message size in bytes |
+/// | `BLACKBOARDS` | `BS` | Blackboard pool capacity |
+/// | `BLACKBOARD_MAX_MSG_SIZE` | `BM` | Blackboard maximum message size in bytes |
+/// | `BLACKBOARD_WAITQ` | `BW` | Blackboard wait-queue depth |
+// TODO: integrate as KernelConfig associated type (same as PartitionConfig/SyncConfig/MsgConfig)
+pub trait PortsConfig {
+    /// Sampling-port pool capacity (maps to [`KernelConfig::SP`]).
+    const SAMPLING_PORTS: usize;
+    /// Sampling-port maximum message size in bytes (maps to [`KernelConfig::SM`]).
+    const SAMPLING_MAX_MSG_SIZE: usize;
+    /// Blackboard pool capacity (maps to [`KernelConfig::BS`]).
+    const BLACKBOARDS: usize;
+    /// Blackboard maximum message size in bytes (maps to [`KernelConfig::BM`]).
+    const BLACKBOARD_MAX_MSG_SIZE: usize;
+    /// Blackboard wait-queue depth (maps to [`KernelConfig::BW`]).
+    const BLACKBOARD_WAITQ: usize;
+}
+
+/// Preset: minimal ports (1 sampling port, 64-byte messages, 1 blackboard, 64-byte messages, wait-queue depth 1).
+pub struct PortsMinimal;
+
+impl PortsConfig for PortsMinimal {
+    const SAMPLING_PORTS: usize = 1;
+    const SAMPLING_MAX_MSG_SIZE: usize = 64;
+    const BLACKBOARDS: usize = 1;
+    const BLACKBOARD_MAX_MSG_SIZE: usize = 64;
+    const BLACKBOARD_WAITQ: usize = 1;
+}
+
 /// Trait that bundles every const-generic parameter the [`Kernel`] needs.
 ///
 /// Implement this trait on a zero-sized struct to configure a kernel
@@ -915,4 +953,13 @@ mod tests {
     const _: () = assert!(MsgMinimal::QUEUE_DEPTH == 1);
     const _: () = assert!(MsgMinimal::MAX_MSG_SIZE == 1);
     const _: () = assert!(MsgMinimal::QUEUE_WAITQ == 1);
+
+    // ============ PortsConfig tests ============
+
+    // Compile-time assertions for PortsMinimal preset values.
+    const _: () = assert!(PortsMinimal::SAMPLING_PORTS == 1);
+    const _: () = assert!(PortsMinimal::SAMPLING_MAX_MSG_SIZE == 64);
+    const _: () = assert!(PortsMinimal::BLACKBOARDS == 1);
+    const _: () = assert!(PortsMinimal::BLACKBOARD_MAX_MSG_SIZE == 64);
+    const _: () = assert!(PortsMinimal::BLACKBOARD_WAITQ == 1);
 }
