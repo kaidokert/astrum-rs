@@ -365,6 +365,22 @@ pub struct PartitionConfig {
 }
 
 impl PartitionConfig {
+    /// Create a sentinel (default) partition config.
+    ///
+    /// Sets `entry_point`, `stack_base`, and `mpu_region` to zero sentinels,
+    /// with an empty `peripheral_regions` vector.  Only `id` and `stack_size`
+    /// (in bytes) are caller-supplied.
+    pub fn sentinel(id: u8, stack_size_bytes: u32) -> Self {
+        Self {
+            id,
+            entry_point: 0,
+            stack_base: 0,
+            stack_size: stack_size_bytes,
+            mpu_region: MpuRegion::new(0, 0, 0),
+            peripheral_regions: Vec::new(),
+        }
+    }
+
     /// Validate all fields of this partition configuration.
     ///
     /// Checks performed (in order):
@@ -1788,6 +1804,43 @@ mod tests {
         };
         let msg = format!("{e}");
         assert!(msg.contains("partition 2") && msg.contains("peripheral region 1"));
+    }
+
+    // ------------------------------------------------------------------
+    // PartitionConfig::sentinel
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn sentinel_field_values_are_correct() {
+        let cfg = PartitionConfig::sentinel(3, 1024);
+        assert_eq!(cfg.id, 3);
+        assert_eq!(cfg.entry_point, 0);
+        assert_eq!(cfg.stack_base, 0);
+        assert_eq!(cfg.stack_size, 1024);
+        assert_eq!(cfg.mpu_region, MpuRegion::new(0, 0, 0));
+        assert!(cfg.peripheral_regions.is_empty());
+    }
+
+    #[test]
+    fn sentinel_mpu_region_is_zero() {
+        let cfg = PartitionConfig::sentinel(0, 512);
+        assert_eq!(cfg.mpu_region.base(), 0);
+        assert_eq!(cfg.mpu_region.size(), 0);
+        assert_eq!(cfg.mpu_region.permissions(), 0);
+    }
+
+    #[test]
+    fn sentinel_different_ids_and_sizes() {
+        for id in [0u8, 1, 7, 255] {
+            for size in [32u32, 256, 4096] {
+                let cfg = PartitionConfig::sentinel(id, size);
+                assert_eq!(cfg.id, id);
+                assert_eq!(cfg.stack_size, size);
+                assert_eq!(cfg.entry_point, 0);
+                assert_eq!(cfg.stack_base, 0);
+                assert!(cfg.peripheral_regions.is_empty());
+            }
+        }
     }
 
     // ------------------------------------------------------------------
