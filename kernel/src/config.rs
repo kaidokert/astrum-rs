@@ -215,6 +215,49 @@ impl PartitionConfig for Partitions2 {
     const STACK_WORDS: usize = 256;
 }
 
+/// Sub-trait providing readable constant names for synchronization-related
+/// configuration parameters.
+///
+/// This trait offers self-documenting names that map 1-to-1 to the
+/// single-letter constants on [`KernelConfig`]:
+///
+/// | `SyncConfig` | `KernelConfig` | Meaning |
+/// |---|---|---|
+/// | `SEMAPHORES` | `S` | Semaphore pool capacity |
+/// | `SEMAPHORE_WAITQ` | `SW` | Semaphore wait-queue depth |
+/// | `MUTEXES` | `MS` | Mutex pool capacity |
+/// | `MUTEX_WAITQ` | `MW` | Mutex wait-queue depth |
+pub trait SyncConfig {
+    /// Semaphore pool capacity (maps to [`KernelConfig::S`]).
+    const SEMAPHORES: usize;
+    /// Semaphore wait-queue depth (maps to [`KernelConfig::SW`]).
+    const SEMAPHORE_WAITQ: usize;
+    /// Mutex pool capacity (maps to [`KernelConfig::MS`]).
+    const MUTEXES: usize;
+    /// Mutex wait-queue depth (maps to [`KernelConfig::MW`]).
+    const MUTEX_WAITQ: usize;
+}
+
+/// Preset: minimal synchronization (1 semaphore, 1 mutex, wait-queue depth 1).
+pub struct SyncMinimal;
+
+impl SyncConfig for SyncMinimal {
+    const SEMAPHORES: usize = 1;
+    const SEMAPHORE_WAITQ: usize = 1;
+    const MUTEXES: usize = 1;
+    const MUTEX_WAITQ: usize = 1;
+}
+
+/// Preset: rich synchronization (8 semaphores, 4 mutexes, wait-queue depth 4).
+pub struct SyncRich;
+
+impl SyncConfig for SyncRich {
+    const SEMAPHORES: usize = 8;
+    const SEMAPHORE_WAITQ: usize = 4;
+    const MUTEXES: usize = 4;
+    const MUTEX_WAITQ: usize = 4;
+}
+
 /// Trait that bundles every const-generic parameter the [`Kernel`] needs.
 ///
 /// Implement this trait on a zero-sized struct to configure a kernel
@@ -776,4 +819,58 @@ mod tests {
     const _: () = assert!(Partitions2::COUNT == 2);
     const _: () = assert!(Partitions2::SCHEDULE_CAPACITY == 4);
     const _: () = assert!(Partitions2::STACK_WORDS == 256);
+
+    // ============ SyncConfig tests ============
+
+    #[test]
+    fn sync_minimal_semaphores_is_1() {
+        assert_eq!(SyncMinimal::SEMAPHORES, 1);
+    }
+
+    #[test]
+    fn sync_minimal_semaphore_waitq_is_1() {
+        assert_eq!(SyncMinimal::SEMAPHORE_WAITQ, 1);
+    }
+
+    #[test]
+    fn sync_minimal_mutexes_is_1() {
+        assert_eq!(SyncMinimal::MUTEXES, 1);
+    }
+
+    #[test]
+    fn sync_minimal_mutex_waitq_is_1() {
+        assert_eq!(SyncMinimal::MUTEX_WAITQ, 1);
+    }
+
+    #[test]
+    fn sync_rich_semaphores_is_8() {
+        assert_eq!(SyncRich::SEMAPHORES, 8);
+    }
+
+    #[test]
+    fn sync_rich_semaphore_waitq_is_4() {
+        assert_eq!(SyncRich::SEMAPHORE_WAITQ, 4);
+    }
+
+    #[test]
+    fn sync_rich_mutexes_is_4() {
+        assert_eq!(SyncRich::MUTEXES, 4);
+    }
+
+    #[test]
+    fn sync_rich_mutex_waitq_is_4() {
+        assert_eq!(SyncRich::MUTEX_WAITQ, 4);
+    }
+
+    // Compile-time assertions for SyncMinimal preset values.
+    const _: () = assert!(SyncMinimal::SEMAPHORES == 1);
+    const _: () = assert!(SyncMinimal::SEMAPHORE_WAITQ == 1);
+    const _: () = assert!(SyncMinimal::MUTEXES == 1);
+    const _: () = assert!(SyncMinimal::MUTEX_WAITQ == 1);
+
+    // Compile-time assertions for SyncRich preset values.
+    const _: () = assert!(SyncRich::SEMAPHORES == 8);
+    const _: () = assert!(SyncRich::SEMAPHORE_WAITQ == 4);
+    const _: () = assert!(SyncRich::MUTEXES == 4);
+    const _: () = assert!(SyncRich::MUTEX_WAITQ == 4);
 }
