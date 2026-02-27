@@ -11,7 +11,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    config::KernelConfig,
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
@@ -25,14 +24,11 @@ const TARGET_SWITCHES: u32 = 6;
 static PARTITION_RUNNING: AtomicU32 = AtomicU32::new(u32::MAX);
 static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 
-struct DemoConfig;
-impl KernelConfig for DemoConfig {
+kernel::kernel_config! { DemoConfig {
     const N: usize = 2;
     const SM: usize = 1;
     const BM: usize = 1;
-
-    kernel::kernel_config_types!();
-}
+}}
 
 kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
     let who = PARTITION_RUNNING.load(Ordering::Acquire);

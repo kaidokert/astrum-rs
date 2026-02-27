@@ -21,7 +21,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    config::KernelConfig,
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
@@ -31,14 +30,11 @@ use panic_semihosting as _;
 const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
-struct TestConfig;
-impl KernelConfig for TestConfig {
+kernel::kernel_config! { TestConfig {
     const N: usize = 1;
     const SM: usize = 1;
     const BM: usize = 1;
-
-    kernel::kernel_config_types!();
-}
+}}
 
 /// Partition stores CONTROL reading here; 0 = not yet read.
 static CONTROL_VAL: AtomicU32 = AtomicU32::new(0);

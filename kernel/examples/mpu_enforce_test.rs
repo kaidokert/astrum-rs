@@ -15,7 +15,6 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     boot,
-    config::KernelConfig,
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
@@ -27,16 +26,13 @@ const NP: usize = 2;
 const SW: usize = 256; // AlignedStack1K = 256 words = 1024 bytes
 const REGION_SZ: u32 = 1024;
 
-struct TestConfig;
-impl KernelConfig for TestConfig {
+kernel::kernel_config! { TestConfig {
     const N: usize = 2;
     const MPU_ENFORCE: bool = true;
     const STACK_WORDS: usize = SW;
     const SM: usize = 1;
     const BM: usize = 1;
-
-    kernel::kernel_config_types!();
-}
+}}
 
 // Partition entries: yield in a loop. No memory access beyond the
 // stack (covered by the MPU data region) and registers (SVC ABI).

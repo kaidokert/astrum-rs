@@ -37,7 +37,6 @@ use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception, ExceptionFrame};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    config::KernelConfig,
     context::init_stack_frame,
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
@@ -48,14 +47,11 @@ use panic_semihosting as _;
 const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
-struct TestConfig;
-impl KernelConfig for TestConfig {
+kernel::kernel_config! { TestConfig {
     const N: usize = 2;
     const SM: usize = 1;
     const BM: usize = 1;
-
-    kernel::kernel_config_types!();
-}
+}}
 
 // Manual stacks (not using define_unified_harness!)
 #[repr(C, align(1024))]

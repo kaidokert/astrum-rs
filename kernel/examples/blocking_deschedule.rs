@@ -19,7 +19,6 @@ use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    config::KernelConfig,
     partition::{MpuRegion, PartitionConfig, PartitionState},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
@@ -30,8 +29,7 @@ use panic_semihosting as _;
 
 const NP: usize = 1;
 
-struct Cfg;
-impl KernelConfig for Cfg {
+kernel::kernel_config! { Cfg {
     const N: usize = 1;
     const QS: usize = 2;
     const QD: usize = 4;
@@ -39,9 +37,7 @@ impl KernelConfig for Cfg {
     const QW: usize = 4;
     const SM: usize = 1;
     const BM: usize = 1;
-
-    kernel::kernel_config_types!();
-}
+}}
 
 // Use define_unified_kernel! which generates KERNEL static, dispatch_hook, and store_kernel
 kernel::define_unified_kernel!(Cfg, |k| {
@@ -119,7 +115,7 @@ fn SysTick() {
         // Sync tick and expire timed waits
         let current_tick = k.tick().get();
         k.sync_tick(current_tick);
-        k.expire_timed_waits::<{ <Cfg as KernelConfig>::N }>(current_tick);
+        k.expire_timed_waits::<{ Cfg::N }>(current_tick);
     });
 
     // Check if partition has blocked and verify state transition
