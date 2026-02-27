@@ -39,18 +39,20 @@ use panic_semihosting as _;
 const NUM_PARTITIONS: usize = 3;
 const STACK_WORDS: usize = 256;
 
+// TODO: rename sampling_max_msg → sampling_msg_size, blackboard_max_msg → blackboard_msg_size
+// for clarity (_size suffix convention); requires macro alias update in config.rs.
 kernel::kernel_config! {
     /// Kernel configuration for the blackboard demo.
     ///
     /// Sized for 3 partitions, 1 semaphore, 1 blackboard (4-byte messages,
     /// 3-deep wait queue), and minimal allocations for unused resource pools.
     DemoConfig {
-        const N: usize = 3;
-        const SCHED: usize = 8;
-        const SW: usize = 3;
-        const SM: usize = 1;
-        const BM: usize = 4;
-        const BW: usize = 3;
+        partitions = 3;
+        schedule_capacity = 8;
+        semaphore_waitq = 3;
+        sampling_max_msg = 1;
+        blackboard_max_msg = 4;
+        blackboard_waitq = 3;
     }
 }
 

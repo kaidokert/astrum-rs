@@ -13,13 +13,15 @@ use kernel::svc::Kernel;
 use kernel::tick::configure_systick;
 use panic_semihosting as _;
 
+// TODO: rename sampling_max_msg → sampling_msg_size, blackboard_max_msg → blackboard_msg_size
+// for clarity (_size suffix convention); requires macro alias update in config.rs.
 kernel::kernel_config! { TestConfig {
-    const N: usize = 4;
-    const SCHED: usize = 8;
-    const S: usize = 4;
-    const SW: usize = 4;
-    const SM: usize = 1;
-    const BM: usize = 1;
+    partitions = 4;
+    schedule_capacity = 8;
+    semaphores = 4;
+    semaphore_waitq = 4;
+    sampling_max_msg = 1;
+    blackboard_max_msg = 1;
 }}
 
 kernel::define_unified_kernel!(TestConfig);

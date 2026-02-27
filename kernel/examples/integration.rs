@@ -15,15 +15,17 @@ use kernel::svc::Kernel;
 use kernel::{boot, events};
 use panic_semihosting as _;
 
+// TODO: rename sampling_max_msg → sampling_msg_size, blackboard_max_msg → blackboard_msg_size
+// for clarity (_size suffix convention); requires macro alias update in config.rs.
 kernel::kernel_config! { IntegrationConfig {
-    const N: usize = 4;
-    const SCHED: usize = 8;
-    const QS: usize = 4;
-    const QD: usize = 4;
-    const QM: usize = 4;
-    const QW: usize = 4;
-    const SM: usize = 1;
-    const BM: usize = 1;
+    partitions = 4;
+    schedule_capacity = 8;
+    queues = 4;
+    queue_depth = 4;
+    max_msg_size = 4;
+    queue_waitq = 4;
+    sampling_max_msg = 1;
+    blackboard_max_msg = 1;
 }}
 
 static P_RAN: AtomicU32 = AtomicU32::new(u32::MAX);
