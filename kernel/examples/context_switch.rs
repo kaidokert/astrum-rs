@@ -25,9 +25,9 @@ static PARTITION_RUNNING: AtomicU32 = AtomicU32::new(u32::MAX);
 static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 
 kernel::kernel_config! { DemoConfig {
-    const N: usize = 2;
-    const SM: usize = 1;
-    const BM: usize = 1;
+    partitions = 2;
+    sampling_max_msg = 1;
+    blackboard_max_msg = 1;
 }}
 
 kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {

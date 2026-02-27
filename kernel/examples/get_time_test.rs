@@ -35,9 +35,9 @@ const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
 kernel::kernel_config! { TestConfig {
-    const N: usize = 1;
-    const SM: usize = 1;
-    const BM: usize = 1;
+    partitions = 1;
+    sampling_max_msg = 1;
+    blackboard_max_msg = 1;
 }}
 
 /// Latest SYS_GET_TIME reading from the partition (0 = not yet read).

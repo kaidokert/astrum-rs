@@ -16,9 +16,9 @@ const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
 kernel::kernel_config!(TestConfig {
-    const N: usize = 2;
-    const SM: usize = 1;
-    const BM: usize = 1;
+    partitions = 2;
+    sampling_max_msg = 1;
+    blackboard_max_msg = 1;
 });
 
 kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
