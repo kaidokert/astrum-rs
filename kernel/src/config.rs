@@ -28,41 +28,31 @@
 //! **nRF52840 — 64 MHz core clock, default 1 ms tick:**
 //!
 //! ```ignore
-//! struct Nrf52840Config;
-//! impl KernelConfig for Nrf52840Config {
+//! kernel::kernel_config!(Nrf52840Config {
 //!     const N: usize = 4;
 //!     const CORE_CLOCK_HZ: u32 = 64_000_000;
-//!     const TICK_PERIOD_US: u32 = 1000; // 1 ms tick (same as default)
-//!     // SYSTICK_CYCLES auto-computes to 64_000 → reload 63_999
-//!     # // ... type aliases omitted for brevity
-//! }
+//! });
 //! ```
 //!
 //! **STM32F4 — 168 MHz core clock, 500 µs tick:**
 //!
 //! ```ignore
-//! struct Stm32f4Config;
-//! impl KernelConfig for Stm32f4Config {
+//! kernel::kernel_config!(Stm32f4Config {
 //!     const N: usize = 4;
 //!     const CORE_CLOCK_HZ: u32 = 168_000_000;
-//!     const TICK_PERIOD_US: u32 = 500; // 500 µs tick for finer scheduling
-//!     // SYSTICK_CYCLES auto-computes to 84_000 → reload 83_999
-//!     # // ... type aliases omitted for brevity
-//! }
+//!     const TICK_PERIOD_US: u32 = 500;
+//! });
 //! ```
 //!
 //! **SAMD51 — 120 MHz core clock, external reference clock:**
 //!
 //! ```ignore
-//! struct Samd51Config;
-//! impl KernelConfig for Samd51Config {
+//! kernel::kernel_config!(Samd51Config {
 //!     const N: usize = 4;
 //!     const CORE_CLOCK_HZ: u32 = 15_000_000; // HCLK/8 external ref
-//!     const TICK_PERIOD_US: u32 = 2000; // 2 ms tick
-//!     const USE_PROCESSOR_CLOCK: bool = false; // external reference
-//!     // SYSTICK_CYCLES auto-computes to 30_000 → reload 29_999
-//!     # // ... type aliases omitted for brevity
-//! }
+//!     const TICK_PERIOD_US: u32 = 2000;
+//!     const USE_PROCESSOR_CLOCK: bool = false;
+//! });
 //! ```
 //!
 //! ## Consequences of Incorrect `CORE_CLOCK_HZ`
