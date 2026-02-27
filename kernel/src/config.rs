@@ -567,6 +567,35 @@ pub const fn assert_priority_order<C: KernelConfig>() {
     );
 }
 
+/// Generates the four associated type aliases (`Core`, `Sync`, `Msg`,
+/// `Ports`) required by [`KernelConfig`].
+///
+/// # Forms
+///
+/// - `kernel_config_types!()` — uses
+///   [`AlignedStack1K`](crate::partition_core::AlignedStack1K).
+/// - `kernel_config_types!($stack)` — uses the provided stack type.
+#[macro_export]
+macro_rules! kernel_config_types {
+    () => {
+        $crate::kernel_config_types!($crate::partition_core::AlignedStack1K);
+    };
+    ($stack:ty) => {
+        type Core = $crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }, $stack>;
+        type Sync =
+            $crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
+        type Msg =
+            $crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
+        type Ports = $crate::port_pools::PortPools<
+            { Self::SP },
+            { Self::SM },
+            { Self::BS },
+            { Self::BM },
+            { Self::BW },
+        >;
+    };
+}
+
 /// Compile-time assertion that `SYSTICK_CYCLES` fits in the 24-bit SysTick
 /// RELOAD register.
 ///
@@ -586,10 +615,6 @@ pub const fn assert_systick_reload<C: KernelConfig>() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::msg_pools::MsgPools;
-    use crate::partition_core::{AlignedStack1K, PartitionCore};
-    use crate::port_pools::PortPools;
-    use crate::sync_pools::SyncPools;
 
     // ============ compute_systick_reload tests ============
 
@@ -681,11 +706,7 @@ mod tests {
     struct DefaultPriority;
     impl KernelConfig for DefaultPriority {
         const N: usize = 2; // N has no default - must be specified
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-        type Ports =
-            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+        kernel_config_types!();
     }
 
     /// Config that overrides priorities (uses default resource pool constants).
@@ -701,11 +722,7 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 = 200;
 
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-        type Ports =
-            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+        kernel_config_types!();
     }
 
     #[test]
@@ -775,11 +792,7 @@ mod tests {
     impl KernelConfig for OverflowSystick {
         const N: usize = 2;
         const SYSTICK_CYCLES: u32 = SYSTICK_RELOAD_MAX + 2; // 0x1000001, reload would be 0x1000000
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-        type Ports =
-            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+        kernel_config_types!();
     }
 
     #[test]
@@ -793,11 +806,7 @@ mod tests {
     impl KernelConfig for ZeroSystick {
         const N: usize = 2;
         const SYSTICK_CYCLES: u32 = 0;
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-        type Ports =
-            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+        kernel_config_types!();
     }
 
     #[test]
@@ -851,11 +860,7 @@ mod tests {
     impl KernelConfig for MpuEnabledConfig {
         const N: usize = 2;
         const MPU_ENFORCE: bool = true;
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-        type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-        type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-        type Ports =
-            PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+        kernel_config_types!();
     }
 
     #[test]
