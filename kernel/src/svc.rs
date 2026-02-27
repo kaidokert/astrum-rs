@@ -2776,7 +2776,6 @@ mod tests {
     struct TestConfig;
     impl KernelConfig for TestConfig {
         const N: usize = 4;
-        const SCHED: usize = 4;
         const STACK_WORDS: usize = 1024;
         const S: usize = 4;
         const SW: usize = 4;
@@ -2787,14 +2786,10 @@ mod tests {
         const QM: usize = 4;
         const QW: usize = 4;
         const SP: usize = 4;
-        const SM: usize = 64;
         const BS: usize = 4;
-        const BM: usize = 64;
         const BW: usize = 4;
         #[cfg(feature = "dynamic-mpu")]
         const BP: usize = 4;
-        #[cfg(feature = "dynamic-mpu")]
-        const BZ: usize = 32;
 
         kernel_config_types!(AlignedStack4K);
     }
@@ -10107,7 +10102,6 @@ mod tests {
         struct NoDrainConfig;
         impl KernelConfig for NoDrainConfig {
             const N: usize = 4;
-            const SCHED: usize = 4;
             const STACK_WORDS: usize = 1024;
             const S: usize = 4;
             const SW: usize = 4;
@@ -10118,15 +10112,11 @@ mod tests {
             const QM: usize = 4;
             const QW: usize = 4;
             const SP: usize = 4;
-            const SM: usize = 64;
             const BS: usize = 4;
-            const BM: usize = 64;
             const BW: usize = 4;
             const DEBUG_AUTO_DRAIN_BUDGET: usize = 0;
             #[cfg(feature = "dynamic-mpu")]
             const BP: usize = 4;
-            #[cfg(feature = "dynamic-mpu")]
-            const BZ: usize = 32;
 
             kernel_config_types!(AlignedStack4K);
         }
@@ -10672,7 +10662,6 @@ mod tests {
         struct UnifiedTestConfig;
         impl KernelConfig for UnifiedTestConfig {
             const N: usize = 2;
-            const SCHED: usize = 4;
             const S: usize = 2;
             const SW: usize = 2;
             const MS: usize = 2;
@@ -10688,8 +10677,6 @@ mod tests {
             const BW: usize = 2;
             #[cfg(feature = "dynamic-mpu")]
             const BP: usize = 2;
-            #[cfg(feature = "dynamic-mpu")]
-            const BZ: usize = 32;
 
             kernel_config_types!();
         }

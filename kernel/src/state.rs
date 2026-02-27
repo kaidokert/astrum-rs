@@ -543,34 +543,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel_config_types;
+    use crate::kernel_config;
 
-    struct TestConfig;
-    impl KernelConfig for TestConfig {
+    kernel_config!(TestConfig {
         const N: usize = 2;
-        const SCHED: usize = 4;
-        const STACK_WORDS: usize = 256;
-        const S: usize = 1;
-        const SW: usize = 1;
-        const MS: usize = 1;
-        const MW: usize = 1;
-        const QS: usize = 1;
-        const QD: usize = 1;
-        const QM: usize = 1;
-        const QW: usize = 1;
-        const SP: usize = 1;
         const SM: usize = 1;
-        const BS: usize = 1;
         const BM: usize = 1;
-        const BW: usize = 1;
-        #[cfg(feature = "dynamic-mpu")]
-        const BP: usize = 1;
-        #[cfg(feature = "dynamic-mpu")]
-        const BZ: usize = 32;
-        #[cfg(feature = "dynamic-mpu")]
-        const DR: usize = 4;
-        kernel_config_types!();
-    }
+    });
 
     /// Helper to create a test kernel instance.
     ///
