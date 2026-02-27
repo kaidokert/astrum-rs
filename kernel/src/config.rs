@@ -759,6 +759,25 @@ macro_rules! _kernel_config_field {
     };
 }
 
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _kernel_config_body {
+    () => {};
+    ($field:ident = $v:expr; $($rest:tt)*) => {
+        $crate::_kernel_config_field!($field = $v);
+        $crate::_kernel_config_body!($($rest)*);
+    };
+    (const $name:ident : $ty:ty = $v:expr; $($rest:tt)*) => {
+        const $name: $ty = $v;
+        $crate::_kernel_config_body!($($rest)*);
+    };
+    (#[$attr:meta] const $name:ident : $ty:ty = $v:expr; $($rest:tt)*) => {
+        #[$attr]
+        const $name: $ty = $v;
+        $crate::_kernel_config_body!($($rest)*);
+    };
+}
+
 /// Generates a config struct, `impl KernelConfig`, and the associated type
 /// aliases from just the non-default overrides.
 ///
@@ -784,7 +803,7 @@ macro_rules! kernel_config {
         $(#[$meta])*
         $vis struct $name;
         impl $crate::config::KernelConfig for $name {
-            $($body)*
+            $crate::_kernel_config_body!($($body)*);
             $crate::kernel_config_types!();
         }
         $crate::_kernel_config_inherent_consts!($vis $name);
@@ -793,7 +812,7 @@ macro_rules! kernel_config {
         $(#[$meta])*
         $vis struct $name;
         impl $crate::config::KernelConfig for $name {
-            $($body)*
+            $crate::_kernel_config_body!($($body)*);
             $crate::kernel_config_types!($stack);
         }
         $crate::_kernel_config_inherent_consts!($vis $name);
@@ -1418,5 +1437,54 @@ mod tests {
         assert_eq!(FieldMacroConfig::PENDSV_PRIORITY, 0xFF);
         assert_eq!(FieldMacroConfig::SYSTICK_PRIORITY, 0x80);
         assert_eq!(FieldMacroConfig::DEBUG_AUTO_DRAIN_BUDGET, 512);
+    }
+
+    // ============ _kernel_config_body! TT-muncher tests ============
+
+    kernel_config!(FieldSyntaxConfig {
+        partitions = 3;
+        schedule_capacity = 6;
+        stack_words = 128;
+        semaphores = 2;
+        semaphore_waitq = 2;
+        mutexes = 3;
+        mutex_waitq = 3;
+        core_clock_hz = 48_000_000;
+        tick_period_us = 500;
+    });
+
+    #[test]
+    fn field_syntax_config_values() {
+        assert_eq!(FieldSyntaxConfig::N, 3);
+        assert_eq!(FieldSyntaxConfig::SCHED, 6);
+        assert_eq!(FieldSyntaxConfig::STACK_WORDS, 128);
+        assert_eq!(FieldSyntaxConfig::S, 2);
+        assert_eq!(FieldSyntaxConfig::SW, 2);
+        assert_eq!(FieldSyntaxConfig::MS, 3);
+        assert_eq!(FieldSyntaxConfig::MW, 3);
+        assert_eq!(FieldSyntaxConfig::CORE_CLOCK_HZ, 48_000_000);
+        assert_eq!(FieldSyntaxConfig::TICK_PERIOD_US, 500);
+        // Non-overridden fields retain defaults.
+        assert_eq!(FieldSyntaxConfig::QS, 1);
+        assert_eq!(FieldSyntaxConfig::SP, 1);
+    }
+
+    kernel_config!(MixedSyntaxConfig {
+        partitions = 2;
+        const SCHED: usize = 4;
+        semaphores = 8;
+        const CORE_CLOCK_HZ: u32 = 64_000_000;
+    });
+
+    #[test]
+    fn mixed_syntax_config_values() {
+        assert_eq!(MixedSyntaxConfig::N, 2);
+        assert_eq!(MixedSyntaxConfig::SCHED, 4);
+        assert_eq!(MixedSyntaxConfig::S, 8);
+        assert_eq!(MixedSyntaxConfig::CORE_CLOCK_HZ, 64_000_000);
+        // Non-overridden fields retain defaults.
+        assert_eq!(MixedSyntaxConfig::STACK_WORDS, 256);
+        assert_eq!(MixedSyntaxConfig::MS, 1);
+        assert_eq!(MixedSyntaxConfig::TICK_PERIOD_US, 1000);
     }
 }
