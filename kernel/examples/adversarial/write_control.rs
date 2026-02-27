@@ -21,7 +21,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    config::KernelConfig,
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
@@ -34,33 +33,9 @@ const TEST_NAME: &str = "write_control";
 const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
-struct TestConfig;
-impl KernelConfig for TestConfig {
+kernel::kernel_config! { TestConfig {
     const N: usize = 1;
-    const SCHED: usize = 4;
-    const STACK_WORDS: usize = 256;
-    const S: usize = 1;
-    const SW: usize = 1;
-    const MS: usize = 1;
-    const MW: usize = 1;
-    const QS: usize = 1;
-    const QD: usize = 1;
-    const QM: usize = 1;
-    const QW: usize = 1;
-    const SP: usize = 1;
-    const SM: usize = 1;
-    const BS: usize = 1;
-    const BM: usize = 1;
-    const BW: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
-
-    kernel::kernel_config_types!();
-}
+}}
 
 // 0 = pending, 1 = pass, 2 = fail (partition not unpriv), 3 = fail (escalated)
 static RESULT: AtomicU32 = AtomicU32::new(0);
