@@ -637,8 +637,67 @@ macro_rules! kernel_config_types {
     };
 }
 
+/// Re-exports every [`KernelConfig`] associated constant as an inherent
+/// constant on `$name`, so callers can write `MyConfig::SCHED` without
+/// importing the trait.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _kernel_config_inherent_consts {
+    ($name:ident) => {
+        #[allow(dead_code)]
+        impl $name {
+            pub const N: usize = <$name as $crate::config::KernelConfig>::N;
+            pub const SCHED: usize = <$name as $crate::config::KernelConfig>::SCHED;
+            pub const STACK_WORDS: usize = <$name as $crate::config::KernelConfig>::STACK_WORDS;
+            pub const S: usize = <$name as $crate::config::KernelConfig>::S;
+            pub const SW: usize = <$name as $crate::config::KernelConfig>::SW;
+            pub const MS: usize = <$name as $crate::config::KernelConfig>::MS;
+            pub const MW: usize = <$name as $crate::config::KernelConfig>::MW;
+            pub const QS: usize = <$name as $crate::config::KernelConfig>::QS;
+            pub const QD: usize = <$name as $crate::config::KernelConfig>::QD;
+            pub const QM: usize = <$name as $crate::config::KernelConfig>::QM;
+            pub const QW: usize = <$name as $crate::config::KernelConfig>::QW;
+            pub const SP: usize = <$name as $crate::config::KernelConfig>::SP;
+            pub const SM: usize = <$name as $crate::config::KernelConfig>::SM;
+            pub const BS: usize = <$name as $crate::config::KernelConfig>::BS;
+            pub const BM: usize = <$name as $crate::config::KernelConfig>::BM;
+            pub const BW: usize = <$name as $crate::config::KernelConfig>::BW;
+            #[cfg(feature = "dynamic-mpu")]
+            pub const BP: usize = <$name as $crate::config::KernelConfig>::BP;
+            #[cfg(feature = "dynamic-mpu")]
+            pub const BZ: usize = <$name as $crate::config::KernelConfig>::BZ;
+            #[cfg(feature = "dynamic-mpu")]
+            pub const DR: usize = <$name as $crate::config::KernelConfig>::DR;
+            #[cfg(feature = "dynamic-mpu")]
+            pub const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 =
+                <$name as $crate::config::KernelConfig>::SYSTEM_WINDOW_MAX_GAP_TICKS;
+            #[cfg(feature = "partition-debug")]
+            pub const DEBUG_BUFFER_SIZE: usize =
+                <$name as $crate::config::KernelConfig>::DEBUG_BUFFER_SIZE;
+            pub const DEBUG_AUTO_DRAIN_BUDGET: usize =
+                <$name as $crate::config::KernelConfig>::DEBUG_AUTO_DRAIN_BUDGET;
+            pub const SVCALL_PRIORITY: u8 =
+                <$name as $crate::config::KernelConfig>::SVCALL_PRIORITY;
+            pub const PENDSV_PRIORITY: u8 =
+                <$name as $crate::config::KernelConfig>::PENDSV_PRIORITY;
+            pub const SYSTICK_PRIORITY: u8 =
+                <$name as $crate::config::KernelConfig>::SYSTICK_PRIORITY;
+            pub const CORE_CLOCK_HZ: u32 = <$name as $crate::config::KernelConfig>::CORE_CLOCK_HZ;
+            pub const TICK_PERIOD_US: u32 = <$name as $crate::config::KernelConfig>::TICK_PERIOD_US;
+            pub const SYSTICK_CYCLES: u32 = <$name as $crate::config::KernelConfig>::SYSTICK_CYCLES;
+            pub const USE_PROCESSOR_CLOCK: bool =
+                <$name as $crate::config::KernelConfig>::USE_PROCESSOR_CLOCK;
+            pub const MPU_ENFORCE: bool = <$name as $crate::config::KernelConfig>::MPU_ENFORCE;
+        }
+    };
+}
+
 /// Generates a config struct, `impl KernelConfig`, and the associated type
 /// aliases from just the non-default overrides.
+///
+/// The macro also generates an inherent `impl` block that re-exports every
+/// trait constant, so callers can write `MyConfig::SCHED` without importing
+/// the [`KernelConfig`] trait.
 ///
 /// # Forms
 ///
@@ -657,6 +716,7 @@ macro_rules! kernel_config {
             $($body)*
             $crate::kernel_config_types!();
         }
+        $crate::_kernel_config_inherent_consts!($name);
     };
     ($name:ident [$stack:ty] { $($body:tt)* }) => {
         struct $name;
@@ -664,6 +724,7 @@ macro_rules! kernel_config {
             $($body)*
             $crate::kernel_config_types!($stack);
         }
+        $crate::_kernel_config_inherent_consts!($name);
     };
 }
 

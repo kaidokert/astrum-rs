@@ -6,49 +6,20 @@
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 use kernel::{
-    config::KernelConfig,
-    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
-    partition_core::{AlignedStack1K, PartitionCore},
-    port_pools::PortPools,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    sync_pools::SyncPools,
 };
 use panic_semihosting as _;
 
 const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
-struct TestConfig;
-impl KernelConfig for TestConfig {
+kernel::kernel_config!(TestConfig {
     const N: usize = 2;
-    const SCHED: usize = 4;
-    const S: usize = 1;
-    const SW: usize = 1;
-    const MS: usize = 1;
-    const MW: usize = 1;
-    const QS: usize = 1;
-    const QD: usize = 1;
-    const QM: usize = 1;
-    const QW: usize = 1;
-    const SP: usize = 1;
     const SM: usize = 1;
-    const BS: usize = 1;
     const BM: usize = 1;
-    const BW: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
-
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
-}
+});
 
 kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
 

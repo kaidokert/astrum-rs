@@ -16,7 +16,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    config::KernelConfig,
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
@@ -34,32 +33,11 @@ const UARTFR_OFFSET: u32 = 0x18;
 /// UARTFR reset value on PL011 (TXFE | RXFE = bits 7 and 4).
 const UARTFR_RESET: u32 = 0x90;
 
-struct PassthroughConfig;
-impl KernelConfig for PassthroughConfig {
+kernel::kernel_config!(PassthroughConfig {
     const N: usize = 2;
-    const SCHED: usize = 4;
-    const S: usize = 1;
-    const SW: usize = 1;
-    const MS: usize = 1;
-    const MW: usize = 1;
-    const QS: usize = 1;
-    const QD: usize = 1;
-    const QM: usize = 1;
-    const QW: usize = 1;
-    const SP: usize = 1;
     const SM: usize = 1;
-    const BS: usize = 1;
     const BM: usize = 1;
-    const BW: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
-
-    kernel::kernel_config_types!();
-}
+});
 
 kernel::define_unified_harness!(PassthroughConfig, NUM_PARTITIONS, STACK_WORDS);
 
