@@ -592,10 +592,7 @@ macro_rules! define_unified_kernel {
                 const BZ: usize = $bz;
             )?
 
-            type Core = $crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }, $crate::partition_core::AlignedStack1K>;
-            type Sync = $crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-            type Msg = $crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-            type Ports = $crate::port_pools::PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+            $crate::kernel_config_types!();
         }
     };
     // Internal implementation rule using @impl_named token as private pattern.
@@ -2760,10 +2757,11 @@ mod tests {
 
     use super::*;
     use crate::config::KernelConfig;
+    use crate::kernel_config_types;
     use crate::message::MessageQueue;
     use crate::mpu::MpuError;
     use crate::partition::{MpuRegion, PartitionControlBlock};
-    use crate::partition_core::{AlignedStack4K, PartitionCore};
+    use crate::partition_core::AlignedStack4K;
     use crate::scheduler::ScheduleEntry;
     use crate::scheduler::ScheduleEvent;
     use crate::semaphore::Semaphore;
@@ -2798,18 +2796,7 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         const BZ: usize = 32;
 
-        type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack4K>;
-        type Sync =
-            crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-        type Msg =
-            crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-        type Ports = crate::port_pools::PortPools<
-            { Self::SP },
-            { Self::SM },
-            { Self::BS },
-            { Self::BM },
-            { Self::BW },
-        >;
+        kernel_config_types!(AlignedStack4K);
     }
 
     fn frame(r0: u32, r1: u32, r2: u32) -> ExceptionFrame {
@@ -10141,18 +10128,7 @@ mod tests {
             #[cfg(feature = "dynamic-mpu")]
             const BZ: usize = 32;
 
-            type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack4K>;
-            type Sync =
-                crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-            type Msg =
-                crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-            type Ports = crate::port_pools::PortPools<
-                { Self::SP },
-                { Self::SM },
-                { Self::BS },
-                { Self::BM },
-                { Self::BW },
-            >;
+            kernel_config_types!(AlignedStack4K);
         }
 
         static BUF: DebugRingBuffer<64> = DebugRingBuffer::new();
@@ -10715,22 +10691,7 @@ mod tests {
             #[cfg(feature = "dynamic-mpu")]
             const BZ: usize = 32;
 
-            type Core = crate::partition_core::PartitionCore<
-                { Self::N },
-                { Self::SCHED },
-                crate::partition_core::AlignedStack1K,
-            >;
-            type Sync =
-                crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-            type Msg =
-                crate::msg_pools::MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-            type Ports = crate::port_pools::PortPools<
-                { Self::SP },
-                { Self::SM },
-                { Self::BS },
-                { Self::BM },
-                { Self::BW },
-            >;
+            kernel_config_types!();
         }
 
         // Module to test basic macro invocation compiles.
