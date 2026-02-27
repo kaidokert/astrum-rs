@@ -50,8 +50,8 @@ const TX_CAPACITY: usize = 64;
 kernel::kernel_config!(DemoConfig {
     partitions = 4;
     schedule_capacity = 8;
-    sampling_max_msg = 1;
-    blackboard_max_msg = 1;
+    sampling_msg_size = 1;
+    blackboard_msg_size = 1;
 });
 
 #[repr(C, align(1024))]

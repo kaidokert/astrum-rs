@@ -56,8 +56,8 @@ static mut NEXT_PARTITION: u32 = 0;
 
 kernel::kernel_config! { TestConfig {
     partitions = 2;
-    sampling_max_msg = 1;
-    blackboard_max_msg = 1;
+    sampling_msg_size = 1;
+    blackboard_msg_size = 1;
     dynamic_regions = 4;
 }}
 

@@ -49,8 +49,8 @@ const MSG_REPLY: &[u8] = b"Ok";
 kernel::kernel_config!(DemoConfig {
     partitions = 4;
     schedule_capacity = 8;
-    sampling_max_msg = 1;
-    blackboard_max_msg = 1;
+    sampling_msg_size = 1;
+    blackboard_msg_size = 1;
 });
 
 // Use the unified harness: single KERNEL global, no separate KS/KERN.

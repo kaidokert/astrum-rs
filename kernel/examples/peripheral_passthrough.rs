@@ -35,8 +35,8 @@ const UARTFR_RESET: u32 = 0x90;
 
 kernel::kernel_config!(PassthroughConfig {
     partitions = 2;
-    sampling_max_msg = 1;
-    blackboard_max_msg = 1;
+    sampling_msg_size = 1;
+    blackboard_msg_size = 1;
 });
 
 kernel::define_unified_harness!(PassthroughConfig, NUM_PARTITIONS, STACK_WORDS);

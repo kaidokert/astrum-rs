@@ -66,8 +66,8 @@ static mut NEXT_PARTITION: u32 = 0;
 
 kernel::kernel_config!(TestConfig {
     partitions = 2;
-    sampling_max_msg = 1;
-    blackboard_max_msg = 1;
+    sampling_msg_size = 1;
+    blackboard_msg_size = 1;
 });
 
 // Use define_unified_kernel! with empty yield handler (this test doesn't use SVC yield).
