@@ -30,7 +30,6 @@ use cortex_m_semihosting::{debug, hprintln};
 #[cfg(target_arch = "arm")]
 use kernel::syscall::{SYS_BUF_ALLOC, SYS_BUF_RELEASE, SYS_BUF_WRITE};
 use kernel::{
-    config::KernelConfig,
     mpu,
     mpu_strategy::{DynamicStrategy, MpuStrategy},
     partition::{MpuRegion, PartitionConfig},
@@ -61,30 +60,12 @@ static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
 
-struct TestConfig;
-impl KernelConfig for TestConfig {
+kernel::kernel_config!(TestConfig {
     const N: usize = 2;
-    const SCHED: usize = 4;
-    const STACK_WORDS: usize = 256;
-    const S: usize = 1;
-    const SW: usize = 1;
-    const MS: usize = 1;
-    const MW: usize = 1;
-    const QS: usize = 1;
-    const QD: usize = 1;
-    const QM: usize = 1;
-    const QW: usize = 1;
-    const SP: usize = 1;
     const SM: usize = 1;
-    const BS: usize = 1;
     const BM: usize = 1;
-    const BW: usize = 1;
     const BP: usize = 2;
-    const BZ: usize = 32;
-    const DR: usize = 4;
-
-    kernel::kernel_config_types!();
-}
+});
 
 // Use define_unified_kernel! to create the KERNEL static and dispatch hook.
 // The yield handler is empty since this test uses a custom SysTick handler.
