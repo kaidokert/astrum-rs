@@ -682,6 +682,83 @@ macro_rules! _kernel_config_inherent_consts {
     };
 }
 
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _kernel_config_field {
+    (partitions = $v:expr) => {
+        const N: usize = $v;
+    };
+    (schedule_capacity = $v:expr) => {
+        const SCHED: usize = $v;
+    };
+    (stack_words = $v:expr) => {
+        const STACK_WORDS: usize = $v;
+    };
+    (semaphores = $v:expr) => {
+        const S: usize = $v;
+    };
+    (semaphore_waitq = $v:expr) => {
+        const SW: usize = $v;
+    };
+    (mutexes = $v:expr) => {
+        const MS: usize = $v;
+    };
+    (mutex_waitq = $v:expr) => {
+        const MW: usize = $v;
+    };
+    (queues = $v:expr) => {
+        const QS: usize = $v;
+    };
+    (queue_depth = $v:expr) => {
+        const QD: usize = $v;
+    };
+    (max_msg_size = $v:expr) => {
+        const QM: usize = $v;
+    };
+    (queue_waitq = $v:expr) => {
+        const QW: usize = $v;
+    };
+    (sampling_ports = $v:expr) => {
+        const SP: usize = $v;
+    };
+    (sampling_max_msg = $v:expr) => {
+        const SM: usize = $v;
+    };
+    (blackboards = $v:expr) => {
+        const BS: usize = $v;
+    };
+    (blackboard_max_msg = $v:expr) => {
+        const BM: usize = $v;
+    };
+    (blackboard_waitq = $v:expr) => {
+        const BW: usize = $v;
+    };
+    (core_clock_hz = $v:expr) => {
+        const CORE_CLOCK_HZ: u32 = $v;
+    };
+    (tick_period_us = $v:expr) => {
+        const TICK_PERIOD_US: u32 = $v;
+    };
+    (use_processor_clock = $v:expr) => {
+        const USE_PROCESSOR_CLOCK: bool = $v;
+    };
+    (mpu_enforce = $v:expr) => {
+        const MPU_ENFORCE: bool = $v;
+    };
+    (svcall_priority = $v:expr) => {
+        const SVCALL_PRIORITY: u8 = $v;
+    };
+    (pendsv_priority = $v:expr) => {
+        const PENDSV_PRIORITY: u8 = $v;
+    };
+    (systick_priority = $v:expr) => {
+        const SYSTICK_PRIORITY: u8 = $v;
+    };
+    (debug_auto_drain = $v:expr) => {
+        const DEBUG_AUTO_DRAIN_BUDGET: usize = $v;
+    };
+}
+
 /// Generates a config struct, `impl KernelConfig`, and the associated type
 /// aliases from just the non-default overrides.
 ///
@@ -1285,4 +1362,61 @@ mod tests {
     // this parent module, confirming that default (private) visibility works.
     // TODO: add a compile_fail doctest for PrivateConfig once trybuild or
     // compile_fail infrastructure is set up for this crate.
+    struct FieldMacroConfig;
+    impl KernelConfig for FieldMacroConfig {
+        _kernel_config_field!(partitions = 3);
+        _kernel_config_field!(schedule_capacity = 6);
+        _kernel_config_field!(stack_words = 128);
+        _kernel_config_field!(semaphores = 2);
+        _kernel_config_field!(semaphore_waitq = 2);
+        _kernel_config_field!(mutexes = 2);
+        _kernel_config_field!(mutex_waitq = 2);
+        _kernel_config_field!(queues = 2);
+        _kernel_config_field!(queue_depth = 4);
+        _kernel_config_field!(max_msg_size = 32);
+        _kernel_config_field!(queue_waitq = 2);
+        _kernel_config_field!(sampling_ports = 2);
+        _kernel_config_field!(sampling_max_msg = 32);
+        _kernel_config_field!(blackboards = 2);
+        _kernel_config_field!(blackboard_max_msg = 32);
+        _kernel_config_field!(blackboard_waitq = 2);
+        _kernel_config_field!(core_clock_hz = 48_000_000);
+        _kernel_config_field!(tick_period_us = 500);
+        _kernel_config_field!(use_processor_clock = false);
+        _kernel_config_field!(mpu_enforce = true);
+        _kernel_config_field!(svcall_priority = 0x00);
+        _kernel_config_field!(pendsv_priority = 0xFF);
+        _kernel_config_field!(systick_priority = 0x80);
+        _kernel_config_field!(debug_auto_drain = 512);
+        kernel_config_types!();
+    }
+    #[test]
+    fn kernel_config_field_macro_expands_correctly() {
+        assert_eq!(FieldMacroConfig::N, 3);
+        assert_eq!(FieldMacroConfig::SCHED, 6);
+        assert_eq!(FieldMacroConfig::STACK_WORDS, 128);
+        assert_eq!(FieldMacroConfig::S, 2);
+        assert_eq!(FieldMacroConfig::SW, 2);
+        assert_eq!(FieldMacroConfig::MS, 2);
+        assert_eq!(FieldMacroConfig::MW, 2);
+        assert_eq!(FieldMacroConfig::QS, 2);
+        assert_eq!(FieldMacroConfig::QD, 4);
+        assert_eq!(FieldMacroConfig::QM, 32);
+        assert_eq!(FieldMacroConfig::QW, 2);
+        assert_eq!(FieldMacroConfig::SP, 2);
+        assert_eq!(FieldMacroConfig::SM, 32);
+        assert_eq!(FieldMacroConfig::BS, 2);
+        assert_eq!(FieldMacroConfig::BM, 32);
+        assert_eq!(FieldMacroConfig::BW, 2);
+        assert_eq!(FieldMacroConfig::CORE_CLOCK_HZ, 48_000_000);
+        assert_eq!(FieldMacroConfig::TICK_PERIOD_US, 500);
+        let upc = FieldMacroConfig::USE_PROCESSOR_CLOCK;
+        assert!(!upc);
+        let mpu = FieldMacroConfig::MPU_ENFORCE;
+        assert!(mpu);
+        assert_eq!(FieldMacroConfig::SVCALL_PRIORITY, 0x00);
+        assert_eq!(FieldMacroConfig::PENDSV_PRIORITY, 0xFF);
+        assert_eq!(FieldMacroConfig::SYSTICK_PRIORITY, 0x80);
+        assert_eq!(FieldMacroConfig::DEBUG_AUTO_DRAIN_BUDGET, 512);
+    }
 }
