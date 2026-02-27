@@ -3047,4 +3047,118 @@ mod tests {
         }
         h.assert_no_switch_to_waiting();
     }
+
+    // ------------------------------------------------------------------
+    // IPC data-integrity round-trip tests
+    // ------------------------------------------------------------------
+
+    /// Fix MPU data regions for 2 partitions so validated_ptr accepts low32_buf.
+    fn fix_mpu_for_ipc(h: &mut KernelTestHarness) {
+        for i in 0..2 {
+            let base = 0x2000_0000 + (i as u32) * 0x1000;
+            h.kernel_mut()
+                .partitions_mut()
+                .get_mut(i)
+                .unwrap()
+                .fix_mpu_data_region(base);
+        }
+    }
+
+    #[test]
+    fn msg_queue_round_trip_data_integrity() {
+        let mut h = KernelTestHarness::with_messages().expect("harness setup");
+        fix_mpu_for_ipc(&mut h);
+        let payload: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
+
+        // P0 sends: r1=queue_id, r2=sender_pid, r3=data_ptr
+        let send_ptr = low32_buf(0);
+        // SAFETY: send_ptr is valid for 4096 bytes via low32_buf mmap.
+        unsafe { core::ptr::copy_nonoverlapping(payload.as_ptr(), send_ptr, 4) };
+        let sf = h.dispatch_as(0, SYS_MSG_SEND, 0, 0, send_ptr as u32);
+        assert_eq!(sf.r0, 0, "SYS_MSG_SEND must return 0");
+
+        // P1 receives: r1=queue_id, r2=caller_pid, r3=buf_ptr
+        let recv_ptr = low32_buf(1);
+        // SAFETY: recv_ptr is valid for 4096 bytes via low32_buf mmap.
+        unsafe { core::ptr::write_bytes(recv_ptr, 0, 4) };
+        let rf = h.dispatch_as(1, SYS_MSG_RECV, 0, 1, recv_ptr as u32);
+        assert_eq!(rf.r0, 0, "SYS_MSG_RECV must return 0");
+        assert_eq!(
+            h.kernel().partitions().get(1).unwrap().state(),
+            PartitionState::Running,
+            "P1 must remain Running after non-blocking recv"
+        );
+        // SAFETY: recv_ptr is valid for 4096 bytes; dispatch wrote 4 bytes.
+        let received = unsafe { core::slice::from_raw_parts(recv_ptr, 4) };
+        assert_eq!(received, &payload, "recv payload mismatch");
+    }
+
+    #[test]
+    fn sampling_port_round_trip_data_integrity() {
+        use crate::sampling::PortDirection;
+        use crate::syscall::{SYS_SAMPLING_READ, SYS_SAMPLING_WRITE};
+
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        fix_mpu_for_ipc(&mut h);
+
+        let src = h
+            .kernel_mut()
+            .sampling_mut()
+            .create_port(PortDirection::Source, 1000)
+            .unwrap();
+        let dst = h
+            .kernel_mut()
+            .sampling_mut()
+            .create_port(PortDirection::Destination, 1000)
+            .unwrap();
+        h.kernel_mut()
+            .sampling_mut()
+            .connect_ports(src, dst)
+            .unwrap();
+        let payload: [u8; 4] = [0xCA, 0xFE, 0xBA, 0xBE];
+
+        // P0 writes via SYS_SAMPLING_WRITE
+        let wr = low32_buf(0);
+        // SAFETY: wr is valid for 4096 bytes via low32_buf mmap.
+        unsafe { core::ptr::copy_nonoverlapping(payload.as_ptr(), wr, 4) };
+        let wf = h.dispatch_as(0, SYS_SAMPLING_WRITE, src as u32, 4, wr as u32);
+        assert_eq!(wf.r0, 0, "SYS_SAMPLING_WRITE must return 0");
+
+        // P1 reads via SYS_SAMPLING_READ
+        let rd = low32_buf(1);
+        // SAFETY: rd is valid for 4096 bytes via low32_buf mmap.
+        unsafe { core::ptr::write_bytes(rd, 0, 4) };
+        let rf = h.dispatch_as(1, SYS_SAMPLING_READ, dst as u32, 0, rd as u32);
+        assert_eq!(rf.r0, 4, "SYS_SAMPLING_READ must return 4");
+        // SAFETY: rd is valid for 4096 bytes; dispatch wrote 4 bytes.
+        let received = unsafe { core::slice::from_raw_parts(rd, 4) };
+        assert_eq!(received, &payload, "sampling read payload mismatch");
+    }
+
+    #[test]
+    fn blackboard_round_trip_data_integrity() {
+        use crate::syscall::{SYS_BB_DISPLAY, SYS_BB_READ};
+
+        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
+        fix_mpu_for_ipc(&mut h);
+        let bid = h.kernel_mut().blackboards_mut().create().unwrap();
+        let payload: [u8; 4] = [0x12, 0x34, 0x56, 0x78];
+
+        // P0 writes via SYS_BB_DISPLAY
+        let wr = low32_buf(0);
+        // SAFETY: wr is valid for 4096 bytes via low32_buf mmap.
+        unsafe { core::ptr::copy_nonoverlapping(payload.as_ptr(), wr, 4) };
+        let wf = h.dispatch_as(0, SYS_BB_DISPLAY, bid as u32, 4, wr as u32);
+        assert_eq!(wf.r0, 0, "SYS_BB_DISPLAY must return 0");
+
+        // P1 reads via SYS_BB_READ (timeout=0, non-blocking)
+        let rd = low32_buf(1);
+        // SAFETY: rd is valid for 4096 bytes via low32_buf mmap.
+        unsafe { core::ptr::write_bytes(rd, 0, 4) };
+        let rf = h.dispatch_as(1, SYS_BB_READ, bid as u32, 0, rd as u32);
+        assert_eq!(rf.r0, 4, "SYS_BB_READ must return 4");
+        // SAFETY: rd is valid for 4096 bytes; dispatch wrote 4 bytes.
+        let received = unsafe { core::slice::from_raw_parts(rd, 4) };
+        assert_eq!(received, &payload, "blackboard read payload mismatch");
+    }
 }
