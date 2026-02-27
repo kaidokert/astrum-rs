@@ -14,14 +14,10 @@ use kernel::{
     boot,
     config::KernelConfig,
     kexit, klog,
-    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
-    partition_core::{AlignedStack1K, PartitionCore},
-    port_pools::PortPools,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    sync_pools::SyncPools,
     syscall::{SYS_QUEUING_RECV, SYS_QUEUING_SEND, SYS_YIELD},
 };
 #[cfg(panic_backend = "halt")]
@@ -30,28 +26,24 @@ use panic_halt as _;
 use panic_rtt_target as _;
 #[cfg(panic_backend = "semihosting")]
 use panic_semihosting as _;
-const NP: usize = 2; const SW: usize = 256;
 // TODO: replace ERR bitmask with a typed Result abstraction once syscall API supports it
 const ERR: u32 = 0x8000_0000;
 struct Cfg;
 impl KernelConfig for Cfg {
-    const N: usize = 2; const SCHED: usize = 4; const STACK_WORDS: usize = 256;
-    const S: usize = 1; const SW: usize = 1; const MS: usize = 1; const MW: usize = 1;
-    const QS: usize = 2; const QD: usize = 4; const QM: usize = 4; const QW: usize = 2;
-    const SP: usize = 1; const SM: usize = 1;
-    const BS: usize = 1; const BM: usize = 1; const BW: usize = 1;
-    #[cfg(feature = "dynamic-mpu")] const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")] const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")] const DR: usize = 4;
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    const N: usize = 2;
+    const QS: usize = 2;
+    const QD: usize = 4;
+    const QM: usize = 4;
+    const QW: usize = 2;
+    const SM: usize = 1;
+    const BM: usize = 1;
+
+    kernel::kernel_config_types!();
 }
 static P0_SENT: AtomicU32 = AtomicU32::new(0);
 static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);
 static PARTS_RAN: AtomicU32 = AtomicU32::new(0);
-kernel::define_unified_harness!(no_boot, Cfg, NP, SW, |tick, k| {
+kernel::define_unified_harness!(no_boot, Cfg, { Cfg::N }, { Cfg::STACK_WORDS }, |tick, k| {
     let addr = k as *const _ as usize;
     if (addr & (kernel::state::KERNEL_ALIGNMENT - 1)) != 0 { kexit!(failure); }
     if tick.is_multiple_of(5) {
@@ -100,8 +92,8 @@ fn main() -> ! {
     if sched.add(ScheduleEntry::new(1, 2)).is_err() { loop { kexit!(failure); } }
     #[cfg(feature = "dynamic-mpu")]
     if sched.add_system_window(1).is_err() { loop { kexit!(failure); } }
-    let cfgs: [PartitionConfig; NP] = core::array::from_fn(|i| PartitionConfig {
-        id: i as u8, entry_point: 0, stack_base: 0, stack_size: (SW * 4) as u32,
+    let cfgs: [PartitionConfig; Cfg::N] = core::array::from_fn(|i| PartitionConfig {
+        id: i as u8, entry_point: 0, stack_base: 0, stack_size: (Cfg::STACK_WORDS * 4) as u32,
         mpu_region: MpuRegion::new(0, 0, 0), peripheral_regions: heapless::Vec::new(),
     });
     #[cfg(feature = "dynamic-mpu")]
@@ -124,7 +116,7 @@ fn main() -> ! {
     };
     if k.queuing_mut().connect_ports(src, dst).is_err() { loop { kexit!(failure); } }
     store_kernel(k);
-    let parts: [(extern "C" fn() -> !, u32); NP] =
+    let parts: [(extern "C" fn() -> !, u32); Cfg::N] =
         [(p0_main, (src as u32) << 16), (p1_main, dst as u32)];
     match boot::boot::<Cfg>(&parts, &mut p) {
         Ok(never) => match never {},

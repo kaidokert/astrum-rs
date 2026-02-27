@@ -20,50 +20,27 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig, PartitionState},
-    partition_core::{AlignedStack1K, PartitionCore},
-    port_pools::PortPools,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{try_transition, Kernel},
-    sync_pools::SyncPools,
     syscall::{SYS_GET_TIME, SYS_QUEUING_RECV_TIMED, SYS_YIELD},
 };
 use panic_semihosting as _;
 
 const NP: usize = 1;
-const SW: usize = 256;
 
 struct Cfg;
 impl KernelConfig for Cfg {
     const N: usize = 1;
-    const SCHED: usize = 4;
-    const STACK_WORDS: usize = 256;
-    const S: usize = 1;
-    const SW: usize = 1;
-    const MS: usize = 1;
-    const MW: usize = 1;
     const QS: usize = 2;
     const QD: usize = 4;
     const QM: usize = 4;
     const QW: usize = 4;
-    const SP: usize = 1;
     const SM: usize = 1;
-    const BS: usize = 1;
     const BM: usize = 1;
-    const BW: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    kernel::kernel_config_types!();
 }
 
 // Use define_unified_kernel! which generates KERNEL static, dispatch_hook, and store_kernel
@@ -82,9 +59,9 @@ static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel
 kernel::define_pendsv!();
 
 #[repr(C, align(1024))]
-struct Stack([u32; SW]);
+struct Stack([u32; Cfg::STACK_WORDS]);
 static mut STACKS: [Stack; NP] = {
-    const Z: Stack = Stack([0; SW]);
+    const Z: Stack = Stack([0; Cfg::STACK_WORDS]);
     [Z; NP]
 };
 
@@ -197,8 +174,8 @@ fn main() -> ! {
                 id: 0,
                 entry_point: 0,
                 stack_base: b,
-                stack_size: (SW * 4) as u32,
-                mpu_region: MpuRegion::new(b, (SW * 4) as u32, 0),
+                stack_size: (Cfg::STACK_WORDS * 4) as u32,
+                mpu_region: MpuRegion::new(b, (Cfg::STACK_WORDS * 4) as u32, 0),
                 peripheral_regions: heapless::Vec::new(),
             }
         }]
