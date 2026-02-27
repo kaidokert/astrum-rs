@@ -724,16 +724,10 @@ macro_rules! _kernel_config_field {
     (sampling_msg_size = $v:expr) => {
         const SM: usize = $v;
     };
-    (sampling_max_msg = $v:expr) => {
-        const SM: usize = $v;
-    };
     (blackboards = $v:expr) => {
         const BS: usize = $v;
     };
     (blackboard_msg_size = $v:expr) => {
-        const BM: usize = $v;
-    };
-    (blackboard_max_msg = $v:expr) => {
         const BM: usize = $v;
     };
     (blackboard_waitq = $v:expr) => {
@@ -1421,9 +1415,9 @@ mod tests {
         _kernel_config_field!(max_msg_size = 32);
         _kernel_config_field!(queue_waitq = 2);
         _kernel_config_field!(sampling_ports = 2);
-        _kernel_config_field!(sampling_max_msg = 32);
+        _kernel_config_field!(sampling_msg_size = 32);
         _kernel_config_field!(blackboards = 2);
-        _kernel_config_field!(blackboard_max_msg = 32);
+        _kernel_config_field!(blackboard_msg_size = 32);
         _kernel_config_field!(blackboard_waitq = 2);
         _kernel_config_field!(core_clock_hz = 48_000_000);
         _kernel_config_field!(tick_period_us = 500);
