@@ -39,28 +39,29 @@ static CONTROL_STATUS: AtomicU32 = AtomicU32::new(0);
 /// Display: cycle count (test passes when this reaches 4)
 static DISPLAY_CYCLES: AtomicU32 = AtomicU32::new(0);
 
-kernel::kernel_config!(
+kernel::kernel_config! {
     /// Kernel configuration for the sampling-port demo.
     ///
     /// Sized for 4 partitions, 8 sampling ports with 4-byte messages, and
     /// moderate pool sizes for all resource types.
     DemoConfig {
-    const N: usize = 4;
-    const SCHED: usize = 8;
-    const S: usize = 4;
-    const SW: usize = 4;
-    const MS: usize = 4;
-    const MW: usize = 4;
-    const QS: usize = 4;
-    const QD: usize = 4;
-    const QM: usize = 4;
-    const QW: usize = 4;
-    const SP: usize = 8;
-    const SM: usize = 4;
-    const BS: usize = 4;
-    const BM: usize = 4;
-    const BW: usize = 4;
-});
+        partitions = 4;
+        schedule_capacity = 8;
+        semaphores = 4;
+        semaphore_waitq = 4;
+        mutexes = 4;
+        mutex_waitq = 4;
+        queues = 4;
+        queue_depth = 4;
+        max_msg_size = 4;
+        queue_waitq = 4;
+        sampling_ports = 8;
+        sampling_msg_size = 4;
+        blackboards = 4;
+        blackboard_msg_size = 4;
+        blackboard_waitq = 4;
+    }
+}
 
 // Use the unified harness macro (no_boot variant) with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.
