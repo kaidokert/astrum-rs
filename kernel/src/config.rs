@@ -258,6 +258,40 @@ impl SyncConfig for SyncRich {
     const MUTEX_WAITQ: usize = 4;
 }
 
+/// Sub-trait providing readable constant names for message-queue-related
+/// configuration parameters.
+///
+/// This trait offers self-documenting names that map 1-to-1 to the
+/// single-letter constants on [`KernelConfig`]:
+///
+/// | `MsgConfig` | `KernelConfig` | Meaning |
+/// |---|---|---|
+/// | `QUEUES` | `QS` | Message-queue pool capacity |
+/// | `QUEUE_DEPTH` | `QD` | Messages per queue |
+/// | `MAX_MSG_SIZE` | `QM` | Maximum message size in bytes |
+/// | `QUEUE_WAITQ` | `QW` | Message-queue wait-queue depth |
+// TODO: integrate as KernelConfig associated type (same for PartitionConfig/SyncConfig)
+pub trait MsgConfig {
+    /// Message-queue pool capacity (maps to [`KernelConfig::QS`]).
+    const QUEUES: usize;
+    /// Messages per queue (maps to [`KernelConfig::QD`]).
+    const QUEUE_DEPTH: usize;
+    /// Maximum message size in bytes (maps to [`KernelConfig::QM`]).
+    const MAX_MSG_SIZE: usize;
+    /// Message-queue wait-queue depth (maps to [`KernelConfig::QW`]).
+    const QUEUE_WAITQ: usize;
+}
+
+/// Preset: minimal messaging (1 queue, depth 1, 1-byte messages, wait-queue depth 1).
+pub struct MsgMinimal;
+
+impl MsgConfig for MsgMinimal {
+    const QUEUES: usize = 1;
+    const QUEUE_DEPTH: usize = 1;
+    const MAX_MSG_SIZE: usize = 1;
+    const QUEUE_WAITQ: usize = 1;
+}
+
 /// Trait that bundles every const-generic parameter the [`Kernel`] needs.
 ///
 /// Implement this trait on a zero-sized struct to configure a kernel
@@ -873,4 +907,12 @@ mod tests {
     const _: () = assert!(SyncRich::SEMAPHORE_WAITQ == 4);
     const _: () = assert!(SyncRich::MUTEXES == 4);
     const _: () = assert!(SyncRich::MUTEX_WAITQ == 4);
+
+    // ============ MsgConfig tests ============
+
+    // Compile-time assertions for MsgMinimal preset values.
+    const _: () = assert!(MsgMinimal::QUEUES == 1);
+    const _: () = assert!(MsgMinimal::QUEUE_DEPTH == 1);
+    const _: () = assert!(MsgMinimal::MAX_MSG_SIZE == 1);
+    const _: () = assert!(MsgMinimal::QUEUE_WAITQ == 1);
 }
