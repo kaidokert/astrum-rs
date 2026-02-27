@@ -633,51 +633,51 @@ macro_rules! kernel_config_types {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _kernel_config_inherent_consts {
-    ($name:ident) => {
+    ($vis:vis $name:ident) => {
         #[allow(dead_code)]
         impl $name {
-            pub const N: usize = <$name as $crate::config::KernelConfig>::N;
-            pub const SCHED: usize = <$name as $crate::config::KernelConfig>::SCHED;
-            pub const STACK_WORDS: usize = <$name as $crate::config::KernelConfig>::STACK_WORDS;
-            pub const S: usize = <$name as $crate::config::KernelConfig>::S;
-            pub const SW: usize = <$name as $crate::config::KernelConfig>::SW;
-            pub const MS: usize = <$name as $crate::config::KernelConfig>::MS;
-            pub const MW: usize = <$name as $crate::config::KernelConfig>::MW;
-            pub const QS: usize = <$name as $crate::config::KernelConfig>::QS;
-            pub const QD: usize = <$name as $crate::config::KernelConfig>::QD;
-            pub const QM: usize = <$name as $crate::config::KernelConfig>::QM;
-            pub const QW: usize = <$name as $crate::config::KernelConfig>::QW;
-            pub const SP: usize = <$name as $crate::config::KernelConfig>::SP;
-            pub const SM: usize = <$name as $crate::config::KernelConfig>::SM;
-            pub const BS: usize = <$name as $crate::config::KernelConfig>::BS;
-            pub const BM: usize = <$name as $crate::config::KernelConfig>::BM;
-            pub const BW: usize = <$name as $crate::config::KernelConfig>::BW;
+            $vis const N: usize = <$name as $crate::config::KernelConfig>::N;
+            $vis const SCHED: usize = <$name as $crate::config::KernelConfig>::SCHED;
+            $vis const STACK_WORDS: usize = <$name as $crate::config::KernelConfig>::STACK_WORDS;
+            $vis const S: usize = <$name as $crate::config::KernelConfig>::S;
+            $vis const SW: usize = <$name as $crate::config::KernelConfig>::SW;
+            $vis const MS: usize = <$name as $crate::config::KernelConfig>::MS;
+            $vis const MW: usize = <$name as $crate::config::KernelConfig>::MW;
+            $vis const QS: usize = <$name as $crate::config::KernelConfig>::QS;
+            $vis const QD: usize = <$name as $crate::config::KernelConfig>::QD;
+            $vis const QM: usize = <$name as $crate::config::KernelConfig>::QM;
+            $vis const QW: usize = <$name as $crate::config::KernelConfig>::QW;
+            $vis const SP: usize = <$name as $crate::config::KernelConfig>::SP;
+            $vis const SM: usize = <$name as $crate::config::KernelConfig>::SM;
+            $vis const BS: usize = <$name as $crate::config::KernelConfig>::BS;
+            $vis const BM: usize = <$name as $crate::config::KernelConfig>::BM;
+            $vis const BW: usize = <$name as $crate::config::KernelConfig>::BW;
             #[cfg(feature = "dynamic-mpu")]
-            pub const BP: usize = <$name as $crate::config::KernelConfig>::BP;
+            $vis const BP: usize = <$name as $crate::config::KernelConfig>::BP;
             #[cfg(feature = "dynamic-mpu")]
-            pub const BZ: usize = <$name as $crate::config::KernelConfig>::BZ;
+            $vis const BZ: usize = <$name as $crate::config::KernelConfig>::BZ;
             #[cfg(feature = "dynamic-mpu")]
-            pub const DR: usize = <$name as $crate::config::KernelConfig>::DR;
+            $vis const DR: usize = <$name as $crate::config::KernelConfig>::DR;
             #[cfg(feature = "dynamic-mpu")]
-            pub const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 =
+            $vis const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 =
                 <$name as $crate::config::KernelConfig>::SYSTEM_WINDOW_MAX_GAP_TICKS;
             #[cfg(feature = "partition-debug")]
-            pub const DEBUG_BUFFER_SIZE: usize =
+            $vis const DEBUG_BUFFER_SIZE: usize =
                 <$name as $crate::config::KernelConfig>::DEBUG_BUFFER_SIZE;
-            pub const DEBUG_AUTO_DRAIN_BUDGET: usize =
+            $vis const DEBUG_AUTO_DRAIN_BUDGET: usize =
                 <$name as $crate::config::KernelConfig>::DEBUG_AUTO_DRAIN_BUDGET;
-            pub const SVCALL_PRIORITY: u8 =
+            $vis const SVCALL_PRIORITY: u8 =
                 <$name as $crate::config::KernelConfig>::SVCALL_PRIORITY;
-            pub const PENDSV_PRIORITY: u8 =
+            $vis const PENDSV_PRIORITY: u8 =
                 <$name as $crate::config::KernelConfig>::PENDSV_PRIORITY;
-            pub const SYSTICK_PRIORITY: u8 =
+            $vis const SYSTICK_PRIORITY: u8 =
                 <$name as $crate::config::KernelConfig>::SYSTICK_PRIORITY;
-            pub const CORE_CLOCK_HZ: u32 = <$name as $crate::config::KernelConfig>::CORE_CLOCK_HZ;
-            pub const TICK_PERIOD_US: u32 = <$name as $crate::config::KernelConfig>::TICK_PERIOD_US;
-            pub const SYSTICK_CYCLES: u32 = <$name as $crate::config::KernelConfig>::SYSTICK_CYCLES;
-            pub const USE_PROCESSOR_CLOCK: bool =
+            $vis const CORE_CLOCK_HZ: u32 = <$name as $crate::config::KernelConfig>::CORE_CLOCK_HZ;
+            $vis const TICK_PERIOD_US: u32 = <$name as $crate::config::KernelConfig>::TICK_PERIOD_US;
+            $vis const SYSTICK_CYCLES: u32 = <$name as $crate::config::KernelConfig>::SYSTICK_CYCLES;
+            $vis const USE_PROCESSOR_CLOCK: bool =
                 <$name as $crate::config::KernelConfig>::USE_PROCESSOR_CLOCK;
-            pub const MPU_ENFORCE: bool = <$name as $crate::config::KernelConfig>::MPU_ENFORCE;
+            $vis const MPU_ENFORCE: bool = <$name as $crate::config::KernelConfig>::MPU_ENFORCE;
         }
     };
 }
@@ -703,23 +703,23 @@ macro_rules! _kernel_config_inherent_consts {
 /// the generated struct definition.
 #[macro_export]
 macro_rules! kernel_config {
-    ($(#[$meta:meta])* $name:ident { $($body:tt)* }) => {
+    ($(#[$meta:meta])* $vis:vis $name:ident { $($body:tt)* }) => {
         $(#[$meta])*
-        struct $name;
+        $vis struct $name;
         impl $crate::config::KernelConfig for $name {
             $($body)*
             $crate::kernel_config_types!();
         }
-        $crate::_kernel_config_inherent_consts!($name);
+        $crate::_kernel_config_inherent_consts!($vis $name);
     };
-    ($(#[$meta:meta])* $name:ident [$stack:ty] { $($body:tt)* }) => {
+    ($(#[$meta:meta])* $vis:vis $name:ident [$stack:ty] { $($body:tt)* }) => {
         $(#[$meta])*
-        struct $name;
+        $vis struct $name;
         impl $crate::config::KernelConfig for $name {
             $($body)*
             $crate::kernel_config_types!($stack);
         }
-        $crate::_kernel_config_inherent_consts!($name);
+        $crate::_kernel_config_inherent_consts!($vis $name);
     };
 }
 
@@ -1211,4 +1211,78 @@ mod tests {
         // Verify the type compiles by constructing the Core type.
         let _core = <MacroCustomStack as KernelConfig>::Core::default();
     }
+
+    // ============ kernel_config! visibility modifier tests ============
+    //
+    // These tests use a child module to verify that visibility modifiers are
+    // actually forwarded.  A `pub` config and its constants should be
+    // accessible from a sibling/parent module, while a private (default-vis)
+    // config should not leak out of the defining module.
+
+    /// Child module that defines configs with different visibilities.
+    mod vis_test {
+        // Public config — struct and inherent consts are `pub`.
+        kernel_config!(pub PubConfig { const N: usize = 2; });
+
+        // `pub(crate)` config.
+        kernel_config!(pub(crate) PubCrateConfig { const N: usize = 3; });
+
+        // `pub` config with custom stack type.
+        kernel_config!(pub PubStackConfig [crate::partition_core::AlignedStack4K] {
+            const N: usize = 2;
+            const STACK_WORDS: usize = 1024;
+        });
+
+        // `pub(crate)` config with custom stack type.
+        kernel_config!(pub(crate) PubCrateStackConfig [crate::partition_core::AlignedStack4K] {
+            const N: usize = 4;
+            const STACK_WORDS: usize = 1024;
+        });
+
+        // Private (default) config — should only be accessible within this module.
+        kernel_config!(PrivateConfig { const N: usize = 5; });
+
+        #[test]
+        fn private_config_accessible_inside_defining_module() {
+            assert_eq!(PrivateConfig::N, 5);
+            assert_eq!(PrivateConfig::SCHED, 4);
+        }
+    }
+
+    /// Access `pub` and `pub(crate)` configs from the parent module to prove
+    /// visibility is actually forwarded through the struct *and* the inherent
+    /// constants.
+    #[test]
+    fn pub_config_accessible_from_parent() {
+        assert_eq!(vis_test::PubConfig::N, 2);
+        assert_eq!(vis_test::PubConfig::SCHED, 4);
+        assert_eq!(vis_test::PubConfig::CORE_CLOCK_HZ, 12_000_000);
+    }
+
+    #[test]
+    fn pub_crate_config_accessible_from_parent() {
+        assert_eq!(vis_test::PubCrateConfig::N, 3);
+        assert_eq!(vis_test::PubCrateConfig::SCHED, 4);
+        assert_eq!(vis_test::PubCrateConfig::CORE_CLOCK_HZ, 12_000_000);
+    }
+
+    #[test]
+    fn pub_stack_config_accessible_from_parent() {
+        assert_eq!(vis_test::PubStackConfig::N, 2);
+        assert_eq!(vis_test::PubStackConfig::STACK_WORDS, 1024);
+        assert_eq!(vis_test::PubStackConfig::SCHED, 4);
+    }
+
+    #[test]
+    fn pub_crate_stack_config_accessible_from_parent() {
+        assert_eq!(vis_test::PubCrateStackConfig::N, 4);
+        assert_eq!(vis_test::PubCrateStackConfig::STACK_WORDS, 1024);
+        assert_eq!(vis_test::PubCrateStackConfig::SCHED, 4);
+    }
+
+    // NOTE: `vis_test::PrivateConfig` is intentionally *not* referenced here.
+    // It is private to `vis_test` and would fail to compile if accessed from
+    // this parent module, confirming that default (private) visibility works.
+    // TODO: add a compile_fail doctest for PrivateConfig once trybuild or
+    // compile_fail infrastructure is set up for this crate.
 }
