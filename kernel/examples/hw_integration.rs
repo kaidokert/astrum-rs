@@ -27,16 +27,14 @@ use panic_rtt_target as _;
 use panic_semihosting as _;
 // TODO: replace ERR bitmask with a typed Result abstraction once syscall API supports it
 const ERR: u32 = 0x8000_0000;
-// TODO: rename sampling_max_msg → sampling_msg_size, blackboard_max_msg → blackboard_msg_size
-// for clarity (_size suffix convention); requires macro alias update in config.rs.
 kernel::kernel_config! { Cfg {
     partitions = 2;
     queues = 2;
     queue_depth = 4;
     max_msg_size = 4;
     queue_waitq = 2;
-    sampling_max_msg = 1;
-    blackboard_max_msg = 1;
+    sampling_msg_size = 1;
+    blackboard_msg_size = 1;
 }}
 static P0_SENT: AtomicU32 = AtomicU32::new(0);
 static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);

@@ -32,8 +32,8 @@ const STACK_WORDS: usize = 256;
 
 kernel::kernel_config! { TestConfig {
     partitions = 1;
-    sampling_max_msg = 1;
-    blackboard_max_msg = 1;
+    sampling_msg_size = 1;
+    blackboard_msg_size = 1;
 }}
 
 /// Partition stores CONTROL reading here; 0 = not yet read.

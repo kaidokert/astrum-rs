@@ -30,8 +30,8 @@ kernel::kernel_config! { TestConfig {
     partitions = 2;
     mpu_enforce = true;
     stack_words = SW;
-    sampling_max_msg = 1;
-    blackboard_max_msg = 1;
+    sampling_msg_size = 1;
+    blackboard_msg_size = 1;
 }}
 
 // Partition entries: yield in a loop. No memory access beyond the

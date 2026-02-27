@@ -29,16 +29,14 @@ use panic_semihosting as _;
 
 const NP: usize = 1;
 
-// TODO: rename sampling_max_msg → sampling_msg_size, blackboard_max_msg → blackboard_msg_size
-// for clarity (_size suffix convention); requires macro alias update in config.rs.
 kernel::kernel_config! { Cfg {
     partitions = 1;
     queues = 2;
     queue_depth = 4;
     max_msg_size = 4;
     queue_waitq = 4;
-    sampling_max_msg = 1;
-    blackboard_max_msg = 1;
+    sampling_msg_size = 1;
+    blackboard_msg_size = 1;
 }}
 
 // Use define_unified_kernel! which generates KERNEL static, dispatch_hook, and store_kernel
