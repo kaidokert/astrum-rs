@@ -721,11 +721,17 @@ macro_rules! _kernel_config_field {
     (sampling_ports = $v:expr) => {
         const SP: usize = $v;
     };
+    (sampling_msg_size = $v:expr) => {
+        const SM: usize = $v;
+    };
     (sampling_max_msg = $v:expr) => {
         const SM: usize = $v;
     };
     (blackboards = $v:expr) => {
         const BS: usize = $v;
+    };
+    (blackboard_msg_size = $v:expr) => {
+        const BM: usize = $v;
     };
     (blackboard_max_msg = $v:expr) => {
         const BM: usize = $v;
@@ -1535,6 +1541,20 @@ mod tests {
         {
             assert_eq!(FeatureGatedFieldConfig::DEBUG_BUFFER_SIZE, 512);
         }
+    }
+
+    struct FieldMsgSizeConfig;
+    impl KernelConfig for FieldMsgSizeConfig {
+        _kernel_config_field!(partitions = 2);
+        _kernel_config_field!(sampling_msg_size = 128);
+        _kernel_config_field!(blackboard_msg_size = 256);
+        kernel_config_types!();
+    }
+
+    #[test]
+    fn msg_size_field_aliases_expand_correctly() {
+        assert_eq!(FieldMsgSizeConfig::SM, 128);
+        assert_eq!(FieldMsgSizeConfig::BM, 256);
     }
 
     kernel_config!(FeatureGatedE2EConfig {
