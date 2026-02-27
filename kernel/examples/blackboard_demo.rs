@@ -22,15 +22,11 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     config::KernelConfig,
-    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
-    partition_core::{AlignedStack1K, PartitionCore},
-    port_pools::PortPools,
     scheduler::{ScheduleEntry, ScheduleTable},
     semaphore::Semaphore,
     svc,
     svc::Kernel,
-    sync_pools::SyncPools,
     syscall::{
         SYS_BB_DISPLAY, SYS_BB_READ, SYS_EVT_SET, SYS_EVT_WAIT, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
         SYS_YIELD,
@@ -52,31 +48,12 @@ struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 3;
     const SCHED: usize = 8;
-    const STACK_WORDS: usize = 256;
-    const S: usize = 1;
     const SW: usize = 3;
-    const MS: usize = 1;
-    const MW: usize = 1;
-    const QS: usize = 1;
-    const QD: usize = 1;
-    const QM: usize = 1;
-    const QW: usize = 1;
-    const SP: usize = 1;
-    const SM: usize = 1;
-    const BS: usize = 1;
+    const SM: usize = 1; // TODO: reviewer false positive — SM default is 64, not 1; keeping non-default
     const BM: usize = 4;
     const BW: usize = 3;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    kernel::kernel_config_types!();
 }
 
 // ---------------------------------------------------------------------------

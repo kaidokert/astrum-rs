@@ -18,15 +18,11 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     boot,
     config::KernelConfig,
-    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
-    partition_core::{AlignedStack1K, PartitionCore},
-    port_pools::PortPools,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc,
     svc::Kernel,
-    sync_pools::SyncPools,
     syscall::{SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_YIELD},
 };
 use panic_semihosting as _;
@@ -52,6 +48,7 @@ struct DemoConfig;
 impl KernelConfig for DemoConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
+    const STACK_WORDS: usize = 256;
     const S: usize = 4;
     const SW: usize = 4;
     const MS: usize = 4;
@@ -72,10 +69,7 @@ impl KernelConfig for DemoConfig {
     #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    kernel::kernel_config_types!();
 }
 
 // Use the unified harness macro (no_boot variant) with SysTick hook for progress verification.

@@ -8,13 +8,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::config::KernelConfig;
-use kernel::msg_pools::MsgPools;
 use kernel::partition::{MpuRegion, PartitionConfig, PartitionState};
-use kernel::partition_core::{AlignedStack1K, PartitionCore};
-use kernel::port_pools::PortPools;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
-use kernel::sync_pools::SyncPools;
 use kernel::tick::configure_systick;
 use panic_semihosting as _;
 
@@ -24,28 +20,10 @@ impl KernelConfig for TestConfig {
     const SCHED: usize = 8;
     const S: usize = 4;
     const SW: usize = 4;
-    const MS: usize = 1;
-    const MW: usize = 1;
-    const QS: usize = 1;
-    const QD: usize = 1;
-    const QM: usize = 1;
-    const QW: usize = 1;
-    const SP: usize = 1;
     const SM: usize = 1;
-    const BS: usize = 1;
     const BM: usize = 1;
-    const BW: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, AlignedStack1K>;
-    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    kernel::kernel_config_types!();
 }
 
 kernel::define_unified_kernel!(TestConfig);
