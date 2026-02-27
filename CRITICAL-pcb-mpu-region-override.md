@@ -16,14 +16,14 @@ unprotected.
 ## Root Cause
 
 `Kernel::new()` in `svc.rs` copies `c.mpu_region` from the user-supplied
-`PartitionConfig` directly into the PCB (line 1078). For sentinel partitions
+`PartitionConfig` directly into the PCB (line 1104). For sentinel partitions
 (size==0), the base address is meaningless at config time. After the Kernel
 is constructed on the stack and then moved (e.g., via `Box`), all internal
 `PartitionCore` stack buffer addresses change. The PCB's `mpu_region.base()`
 is never updated to reflect the new location, leaving a stale address that
 no longer corresponds to any valid stack memory.
 
-**Key location:** `svc.rs:1078` — `let mpu_region = c.mpu_region;` copies
+**Key location:** `svc.rs:1104` — `let mpu_region = c.mpu_region;` copies
 the config value without post-move correction.
 
 ## Fix: Sentinel-Guarded Post-Move Fixup
@@ -43,7 +43,7 @@ partitions while preserving user-configured MPU regions:
    partitions and calls `fix_mpu_data_region_if_sentinel()` with the real
    `core_stack` base for each.
 
-4. **`Kernel::new()`** (`svc.rs:1078`) — Simplified to passthrough: copies
+4. **`Kernel::new()`** (`svc.rs:1104`) — Simplified to passthrough: copies
    `c.mpu_region` as-is, deferring fixup to boot time.
 
 ## Affected Code Paths
@@ -53,8 +53,8 @@ partitions while preserving user-configured MPU regions:
 | `boot.rs` | 290-321 | Post-move fixup loop in `boot()` |
 | `boot.rs` | 218-228 | `fix_mpu_data_region_if_sentinel()` helper |
 | `partition.rs` | 260-263 | `fix_mpu_data_region()` base-patching method |
-| `svc.rs` | 1078 | `Kernel::new()` config passthrough |
-| `svc.rs` | 2207-2213 | `Kernel::fix_mpu_data_region()` public wrapper |
+| `svc.rs` | 1104 | `Kernel::new()` config passthrough |
+| `svc.rs` | 2233-2239 | `Kernel::fix_mpu_data_region()` public wrapper |
 
 ## Resolution Checklist
 
