@@ -33,13 +33,9 @@ use kernel::{
     config::KernelConfig,
     mpu,
     mpu_strategy::{DynamicStrategy, MpuStrategy},
-    msg_pools::MsgPools,
     partition::{MpuRegion, PartitionConfig},
-    partition_core::PartitionCore,
-    port_pools::PortPools,
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
-    sync_pools::SyncPools,
 };
 use panic_semihosting as _;
 
@@ -87,10 +83,7 @@ impl KernelConfig for TestConfig {
     const BZ: usize = 32;
     const DR: usize = 4;
 
-    type Core = PartitionCore<{ Self::N }, { Self::SCHED }, kernel::partition_core::AlignedStack1K>;
-    type Sync = SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
-    type Msg = MsgPools<{ Self::QS }, { Self::QD }, { Self::QM }, { Self::QW }>;
-    type Ports = PortPools<{ Self::SP }, { Self::SM }, { Self::BS }, { Self::BM }, { Self::BW }>;
+    kernel::kernel_config_types!();
 }
 
 // Use define_unified_kernel! to create the KERNEL static and dispatch hook.
