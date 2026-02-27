@@ -11,7 +11,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    partition::{MpuRegion, PartitionConfig},
+    partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
 };
@@ -71,14 +71,8 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(0, 2)).expect("sched entry 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched entry 1");
 
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| PartitionConfig {
-        id: i as u8,
-        entry_point: 0,
-        stack_base: 0,
-        stack_size: (STACK_WORDS * 4) as u32,
-        mpu_region: MpuRegion::new(0, 0, 0),
-        peripheral_regions: heapless::Vec::new(),
-    });
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
+        core::array::from_fn(|i| PartitionConfig::sentinel(i as u8, (STACK_WORDS * 4) as u32));
 
     #[cfg(feature = "dynamic-mpu")]
     let k = Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())

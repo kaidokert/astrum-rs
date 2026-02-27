@@ -6,7 +6,7 @@
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 use kernel::{
-    partition::{MpuRegion, PartitionConfig},
+    partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
 };
@@ -42,16 +42,8 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched");
 
-    // Build partition configs. Stack bases are derived from internal
-    // PartitionCore stacks by Kernel::new(), so we use dummy values here.
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| PartitionConfig {
-        id: i as u8,
-        entry_point: 0, // Not used by Kernel::new
-        stack_base: 0,  // Ignored: internal stack used
-        stack_size: (STACK_WORDS * 4) as u32,
-        mpu_region: MpuRegion::new(0, 0, 0), // Base/size overridden by Kernel::new
-        peripheral_regions: heapless::Vec::new(),
-    });
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
+        core::array::from_fn(|i| PartitionConfig::sentinel(i as u8, (STACK_WORDS * 4) as u32));
 
     #[cfg(feature = "dynamic-mpu")]
     let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())

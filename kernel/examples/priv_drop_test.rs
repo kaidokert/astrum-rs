@@ -21,7 +21,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    partition::{MpuRegion, PartitionConfig},
+    partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
 };
@@ -90,16 +90,8 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 2))
         .expect("static schedule entry must fit");
 
-    // Build partition configs. Stack bases are derived from internal
-    // PartitionCore stacks by Kernel::new(), so we use dummy values here.
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = [PartitionConfig {
-        id: 0,
-        entry_point: 0, // Not used by Kernel::new
-        stack_base: 0,  // Ignored: internal stack used
-        stack_size: (STACK_WORDS * 4) as u32,
-        mpu_region: MpuRegion::new(0, 0, 0), // Base/size overridden by Kernel::new
-        peripheral_regions: heapless::Vec::new(),
-    }];
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
+        [PartitionConfig::sentinel(0, (STACK_WORDS * 4) as u32)];
 
     // Create the unified kernel with schedule and partitions.
     #[cfg(feature = "dynamic-mpu")]
