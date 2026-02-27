@@ -17,7 +17,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    config::KernelConfig,
     partition::{MpuRegion, PartitionConfig},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
@@ -35,15 +34,14 @@ const QUEUE_MSG_SIZE: usize = 4;
 const NUM_PARTITIONS: usize = 2;
 const STACK_WORDS: usize = 256;
 
-/// Kernel configuration for the queuing-port demo.
-///
-/// Sized for 4 partitions, depth-4 queuing ports with 4-byte messages,
-/// and moderate pool sizes for all resource types.
-struct DemoConfig;
-impl KernelConfig for DemoConfig {
+kernel::kernel_config!(
+    /// Kernel configuration for the queuing-port demo.
+    ///
+    /// Sized for 4 partitions, depth-4 queuing ports with 4-byte messages,
+    /// and moderate pool sizes for all resource types.
+    DemoConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
-    const STACK_WORDS: usize = 256;
     const S: usize = 4;
     const SW: usize = 4;
     const MS: usize = 4;
@@ -57,15 +55,7 @@ impl KernelConfig for DemoConfig {
     const BS: usize = 4;
     const BM: usize = 4;
     const BW: usize = 4;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
-
-    kernel::kernel_config_types!();
-}
+});
 
 // ---------------------------------------------------------------------------
 // Command / response protocol constants

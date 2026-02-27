@@ -17,7 +17,6 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     boot,
-    config::KernelConfig,
     partition::{MpuRegion, PartitionConfig},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
@@ -40,15 +39,14 @@ static CONTROL_STATUS: AtomicU32 = AtomicU32::new(0);
 /// Display: cycle count (test passes when this reaches 4)
 static DISPLAY_CYCLES: AtomicU32 = AtomicU32::new(0);
 
-/// Kernel configuration for the sampling-port demo.
-///
-/// Sized for 4 partitions, 8 sampling ports with 4-byte messages, and
-/// moderate pool sizes for all resource types.
-struct DemoConfig;
-impl KernelConfig for DemoConfig {
+kernel::kernel_config!(
+    /// Kernel configuration for the sampling-port demo.
+    ///
+    /// Sized for 4 partitions, 8 sampling ports with 4-byte messages, and
+    /// moderate pool sizes for all resource types.
+    DemoConfig {
     const N: usize = 4;
     const SCHED: usize = 8;
-    const STACK_WORDS: usize = 256;
     const S: usize = 4;
     const SW: usize = 4;
     const MS: usize = 4;
@@ -62,15 +60,7 @@ impl KernelConfig for DemoConfig {
     const BS: usize = 4;
     const BM: usize = 4;
     const BW: usize = 4;
-    #[cfg(feature = "dynamic-mpu")]
-    const BP: usize = 1;
-    #[cfg(feature = "dynamic-mpu")]
-    const BZ: usize = 32;
-    #[cfg(feature = "dynamic-mpu")]
-    const DR: usize = 4;
-
-    kernel::kernel_config_types!();
-}
+});
 
 // Use the unified harness macro (no_boot variant) with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.
