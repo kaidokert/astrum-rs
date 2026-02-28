@@ -10,6 +10,32 @@ use crate::invariants::assert_partition_state_consistency;
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
 
+// ---------------------------------------------------------------------------
+// Kernel struct-move invariant
+// ---------------------------------------------------------------------------
+//
+// `Kernel` is constructed on the stack in `Kernel::new()` and then moved into
+// the static `UNIFIED_KERNEL_STORAGE` via `core::ptr::write()`.  Because the
+// struct changes address during this move, any pointer or address derived from
+// a field *during* `new()` becomes stale once the struct lands in its final
+// location.
+//
+// Affected fields (as of this writing):
+//   - `PartitionControlBlock.mpu_region.base`  — patched by `fix_mpu_data_region()`
+//   - `PartitionControlBlock.stack_base`        — patched by `fix_stack_region()`
+//
+// Correct pattern:
+//   1. Construct with sentinel / placeholder values (`PartitionConfig::sentinel()`).
+//   2. Place into `UNIFIED_KERNEL_STORAGE` with `ptr::write()`.
+//   3. Call `fix_mpu_data_region()` and `fix_stack_region()` **after** placement
+//      so they compute addresses from the struct's final location.
+//   4. Verify with `invariants::assert_pcb_addresses_in_storage()`.
+//
+// See `boot.rs` for the post-placement fixup sequence and `invariants.rs` for
+// the runtime assertion that all PCB-embedded addresses fall within the static
+// storage region.
+// ---------------------------------------------------------------------------
+
 // ---- Kernel Memory Region Constants ----
 
 /// End address of kernel code region in flash (exclusive).
