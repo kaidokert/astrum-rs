@@ -1056,6 +1056,25 @@ where
         )
     }
 
+    /// Create a `Kernel` without requiring a `DeviceRegistry` argument.
+    ///
+    #[cfg_attr(
+        feature = "dynamic-mpu",
+        doc = "When `dynamic-mpu` is enabled, constructs a default [`DeviceRegistry::new()`] internally."
+    )]
+    /// Otherwise identical to [`new`](Self::new).
+    pub fn create(
+        schedule: ScheduleTable<{ C::SCHED }>,
+        configs: &[PartitionConfig],
+    ) -> Result<Self, ConfigError> {
+        Self::new(
+            schedule,
+            configs,
+            #[cfg(feature = "dynamic-mpu")]
+            crate::virtual_device::DeviceRegistry::new(),
+        )
+    }
+
     /// Primary constructor for custom kernel configurations.
     ///
     /// Validates that: schedule is non-empty, all schedule entries reference
@@ -6452,6 +6471,18 @@ mod tests {
             crate::virtual_device::DeviceRegistry::new(),
         )
         .unwrap();
+        assert_eq!(k.partitions().len(), 1);
+        assert_eq!(k.active_partition(), None);
+    }
+
+    #[test]
+    fn kernel_create_succeeds_with_valid_config() {
+        let mut s: ScheduleTable<4> = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        s.add_system_window(1).unwrap();
+        let cfg = PartitionConfig::sentinel(0, 1024);
+        let k = Kernel::<TestConfig>::create(s, core::slice::from_ref(&cfg)).unwrap();
         assert_eq!(k.partitions().len(), 1);
         assert_eq!(k.active_partition(), None);
     }

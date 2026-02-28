@@ -403,6 +403,27 @@ impl PartitionConfig {
         }
     }
 
+    /// Create an array of `N` sentinel partition configs.
+    ///
+    /// Each element gets `id = index` and
+    /// `stack_size = stack_words * size_of::<u32>()` bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `N > 256` (partition ID is `u8`) or if the byte-level
+    /// stack size overflows `u32`.
+    pub fn sentinel_array<const N: usize>(stack_words: usize) -> [PartitionConfig; N] {
+        assert!(
+            N <= 256,
+            "sentinel_array: N must be <= 256 (partition ID is u8)"
+        );
+        let stack_bytes: u32 = stack_words
+            .checked_mul(core::mem::size_of::<u32>())
+            .and_then(|b| u32::try_from(b).ok())
+            .expect("sentinel_array: stack size in bytes overflows u32");
+        core::array::from_fn(|i| Self::sentinel(i as u8, stack_bytes))
+    }
+
     /// Validate all fields of this partition configuration.
     ///
     /// Checks performed (in order):
@@ -1894,6 +1915,44 @@ mod tests {
                 assert!(cfg.peripheral_regions.is_empty());
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // PartitionConfig::sentinel_array
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn sentinel_array_ids_and_stack_sizes() {
+        let arr = PartitionConfig::sentinel_array::<4>(256);
+        let word = core::mem::size_of::<u32>() as u32;
+        for (i, cfg) in arr.iter().enumerate() {
+            assert_eq!(cfg.id, i as u8);
+            assert_eq!(cfg.stack_size, 256 * word);
+            assert_eq!(cfg.entry_point, 0);
+            assert_eq!(cfg.stack_base, 0);
+            assert!(cfg.peripheral_regions.is_empty());
+        }
+    }
+
+    #[test]
+    fn sentinel_array_single_element() {
+        let arr = PartitionConfig::sentinel_array::<1>(128);
+        let word = core::mem::size_of::<u32>() as u32;
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0].id, 0);
+        assert_eq!(arr[0].stack_size, 128 * word);
+    }
+
+    #[test]
+    #[should_panic(expected = "N must be <= 256")]
+    fn sentinel_array_rejects_n_over_256() {
+        let _ = PartitionConfig::sentinel_array::<257>(64);
+    }
+
+    #[test]
+    #[should_panic(expected = "stack size in bytes overflows u32")]
+    fn sentinel_array_rejects_overflow() {
+        let _ = PartitionConfig::sentinel_array::<1>(usize::MAX);
     }
 
     // ------------------------------------------------------------------
