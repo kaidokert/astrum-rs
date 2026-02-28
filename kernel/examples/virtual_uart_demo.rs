@@ -21,17 +21,18 @@
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    partition::{MpuRegion, PartitionConfig},
+    partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc,
     svc::{Kernel, SvcError},
     syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED, SYS_DEV_WRITE, SYS_YIELD},
     virtual_device::VirtualDevice,
+    DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = 256;
+const STACK_WORDS: usize = DemoConfig::STACK_WORDS;
 
 /// UART-A device ID (used by P1).
 const UART_A: u32 = 0;
@@ -46,12 +47,7 @@ const MSG_HELLO: &[u8] = b"Hi";
 /// Response P2 sends back via UART-B TX → UART-A RX.
 const MSG_REPLY: &[u8] = b"Ok";
 
-kernel::kernel_config!(DemoConfig {
-    partitions = 4;
-    schedule_capacity = 8;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-});
+kernel::compose_kernel_config!(DemoConfig<Partitions4, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Use the unified harness: single KERNEL global, no separate KS/KERN.
 kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS);
@@ -191,16 +187,8 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 2)).unwrap();
     sched.add_system_window(1).unwrap();
 
-    // Build partition configs. Stack bases are derived from internal
-    // PartitionCore stacks by Kernel::new(), so we use dummy values here.
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| PartitionConfig {
-        id: i as u8,
-        entry_point: 0, // Not used by Kernel::new
-        stack_base: 0,  // Ignored: internal stack used
-        stack_size: (STACK_WORDS * 4) as u32,
-        mpu_region: MpuRegion::new(0, 0, 0), // Base/size overridden by Kernel::new
-        peripheral_regions: heapless::Vec::new(),
-    });
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
+        core::array::from_fn(|i| PartitionConfig::sentinel(i as u8, (STACK_WORDS * 4) as u32));
 
     // Create the unified kernel with schedule and partitions.
     let mut k =

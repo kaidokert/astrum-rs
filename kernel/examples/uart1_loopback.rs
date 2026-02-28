@@ -31,11 +31,12 @@ use kernel::{
     syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE, SYS_YIELD},
     uart_hal::UartRegs,
     virtual_device::VirtualDevice,
+    DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = 256;
+const STACK_WORDS: usize = DemoConfig::STACK_WORDS;
 const STACK_BYTES: u32 = (STACK_WORDS * 4) as u32;
 const HW_UART_DEV: u32 = 2;
 
@@ -47,12 +48,7 @@ const MESSAGES: [&[u8]; NUM_MESSAGES] = [MSG_SHORT, MSG_MEDIUM, MSG_LONG];
 /// TX ring buffer capacity in HwUartBackend (must match hw_uart.rs CAPACITY).
 const TX_CAPACITY: usize = 64;
 
-kernel::kernel_config!(DemoConfig {
-    partitions = 4;
-    schedule_capacity = 8;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-});
+kernel::compose_kernel_config!(DemoConfig<Partitions4, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 #[repr(C, align(1024))]
 struct AlignedStack([u32; STACK_WORDS]);
