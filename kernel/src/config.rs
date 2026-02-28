@@ -927,6 +927,16 @@ macro_rules! compose_kernel_config {
     };
 }
 
+// ── DefaultConfig: sensible defaults for quick prototyping ──────────────
+
+compose_kernel_config!(pub DefaultConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+
+impl Default for DefaultConfig {
+    fn default() -> Self {
+        Self
+    }
+}
+
 /// Compile-time assertion that `SYSTICK_CYCLES` fits in the 24-bit SysTick
 /// RELOAD register.
 ///
@@ -1751,5 +1761,50 @@ mod tests {
             ComposedP1::DEBUG_AUTO_DRAIN_BUDGET,
             DebugEnabled::AUTO_DRAIN_BUDGET
         );
+    }
+
+    // ============ DefaultConfig tests ============
+
+    #[test]
+    fn default_config_partition_values() {
+        assert_eq!(DefaultConfig::N, 2);
+        assert_eq!(DefaultConfig::SCHED, 4);
+        assert_eq!(DefaultConfig::STACK_WORDS, 256);
+    }
+
+    #[test]
+    fn default_config_sync_values() {
+        assert_eq!(DefaultConfig::S, 1);
+        assert_eq!(DefaultConfig::SW, 1);
+        assert_eq!(DefaultConfig::MS, 1);
+        assert_eq!(DefaultConfig::MW, 1);
+    }
+
+    #[test]
+    fn default_config_msg_values() {
+        assert_eq!(DefaultConfig::QS, 1);
+        assert_eq!(DefaultConfig::QD, 1);
+        assert_eq!(DefaultConfig::QM, 1);
+        assert_eq!(DefaultConfig::QW, 1);
+    }
+
+    #[test]
+    fn default_config_ports_values() {
+        assert_eq!(DefaultConfig::SP, 1);
+        assert_eq!(DefaultConfig::SM, 1);
+        assert_eq!(DefaultConfig::BS, 1);
+        assert_eq!(DefaultConfig::BM, 1);
+        assert_eq!(DefaultConfig::BW, 1);
+    }
+
+    #[test]
+    fn default_config_debug_values() {
+        assert_eq!(DefaultConfig::DEBUG_AUTO_DRAIN_BUDGET, 256);
+    }
+
+    #[test]
+    fn default_config_is_default() {
+        fn assert_default<T: Default>() {}
+        assert_default::<DefaultConfig>();
     }
 }
