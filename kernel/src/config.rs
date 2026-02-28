@@ -278,6 +278,16 @@ impl SyncConfig for SyncRich {
     const MUTEX_WAITQ: usize = 4;
 }
 
+/// Preset: standard synchronization (4 semaphores, 4 mutexes, wait-queue depth 4).
+pub struct SyncStandard;
+
+impl SyncConfig for SyncStandard {
+    const SEMAPHORES: usize = 4;
+    const SEMAPHORE_WAITQ: usize = 4;
+    const MUTEXES: usize = 4;
+    const MUTEX_WAITQ: usize = 4;
+}
+
 /// Sub-trait providing readable constant names for message-queue-related
 /// configuration parameters.
 ///
@@ -333,6 +343,16 @@ impl MsgConfig for MsgRich {
     const QUEUES: usize = 4;
     const QUEUE_DEPTH: usize = 4;
     const MAX_MSG_SIZE: usize = 64;
+    const QUEUE_WAITQ: usize = 4;
+}
+
+/// Preset: standard messaging (4 queues, depth 4, 4-byte messages, wait-queue depth 4).
+pub struct MsgStandard;
+
+impl MsgConfig for MsgStandard {
+    const QUEUES: usize = 4;
+    const QUEUE_DEPTH: usize = 4;
+    const MAX_MSG_SIZE: usize = 4;
     const QUEUE_WAITQ: usize = 4;
 }
 
@@ -393,6 +413,16 @@ impl PortsConfig for PortsRich {
     const SAMPLING_MAX_MSG_SIZE: usize = 64;
     const BLACKBOARDS: usize = 4;
     const BLACKBOARD_MAX_MSG_SIZE: usize = 64;
+    const BLACKBOARD_WAITQ: usize = 4;
+}
+
+/// Preset: small ports (SP=4, SM=4, BS=4, BM=4, BW=4).
+pub struct PortsSmall;
+impl PortsConfig for PortsSmall {
+    const SAMPLING_PORTS: usize = 4;
+    const SAMPLING_MAX_MSG_SIZE: usize = 4;
+    const BLACKBOARDS: usize = 4;
+    const BLACKBOARD_MAX_MSG_SIZE: usize = 4;
     const BLACKBOARD_WAITQ: usize = 4;
 }
 
@@ -1387,6 +1417,14 @@ mod tests {
     const _: () = assert!(SyncRich::MUTEXES == 4);
     const _: () = assert!(SyncRich::MUTEX_WAITQ == 4);
 
+    #[test]
+    fn sync_standard_field_values() {
+        assert_eq!(SyncStandard::SEMAPHORES, 4);
+        assert_eq!(SyncStandard::SEMAPHORE_WAITQ, 4);
+        assert_eq!(SyncStandard::MUTEXES, 4);
+        assert_eq!(SyncStandard::MUTEX_WAITQ, 4);
+    }
+
     // ============ MsgConfig tests ============
 
     // Compile-time assertions for MsgMinimal preset values.
@@ -1421,6 +1459,14 @@ mod tests {
         assert_eq!(MsgRich::QUEUE_DEPTH, 4);
         assert_eq!(MsgRich::MAX_MSG_SIZE, 64);
         assert_eq!(MsgRich::QUEUE_WAITQ, 4);
+    }
+
+    #[test]
+    fn msg_standard_field_values() {
+        assert_eq!(MsgStandard::QUEUES, 4);
+        assert_eq!(MsgStandard::QUEUE_DEPTH, 4);
+        assert_eq!(MsgStandard::MAX_MSG_SIZE, 4);
+        assert_eq!(MsgStandard::QUEUE_WAITQ, 4);
     }
 
     // ============ PortsConfig tests ============
@@ -1462,6 +1508,15 @@ mod tests {
         assert_eq!(PortsRich::BLACKBOARDS, 4);
         assert_eq!(PortsRich::BLACKBOARD_MAX_MSG_SIZE, 64);
         assert_eq!(PortsRich::BLACKBOARD_WAITQ, 4);
+    }
+
+    #[test]
+    fn ports_small_field_values() {
+        assert_eq!(PortsSmall::SAMPLING_PORTS, 4);
+        assert_eq!(PortsSmall::SAMPLING_MAX_MSG_SIZE, 4);
+        assert_eq!(PortsSmall::BLACKBOARDS, 4);
+        assert_eq!(PortsSmall::BLACKBOARD_MAX_MSG_SIZE, 4);
+        assert_eq!(PortsSmall::BLACKBOARD_WAITQ, 4);
     }
 
     // ============ DebugConfig tests ============
@@ -1874,6 +1929,8 @@ mod tests {
         assert_eq!(ComposedP3MsgSmall::QW, 2);
     }
 
+    // Compile-only: new Standard/Small presets compose successfully.
+    compose_kernel_config!(ComposedStdSmall<Partitions2, SyncStandard, MsgStandard, PortsSmall, DebugDisabled>);
     // ============ compose_kernel_config! override tests ============
 
     compose_kernel_config!(

@@ -33,8 +33,9 @@ pub mod buffer_pool;
 pub mod config;
 pub use config::{
     DebugConfig, DebugDisabled, DebugEnabled, DefaultConfig, MsgConfig, MsgMinimal, MsgRich,
-    MsgSmall, PartitionConfig, Partitions1, Partitions2, Partitions3, Partitions4, PortsConfig,
-    PortsMinimal, PortsRich, PortsTiny, SyncConfig, SyncMinimal, SyncRich,
+    MsgSmall, MsgStandard, PartitionConfig, Partitions1, Partitions2, Partitions3, Partitions4,
+    PortsConfig, PortsMinimal, PortsRich, PortsSmall, PortsTiny, SyncConfig, SyncMinimal, SyncRich,
+    SyncStandard,
 };
 pub mod context;
 #[cfg(feature = "partition-debug")]
@@ -123,6 +124,7 @@ mod reexport_tests {
     fn sync_presets_via_root() {
         _assert_sync_cfg::<SyncMinimal>();
         _assert_sync_cfg::<SyncRich>();
+        _assert_sync_cfg::<SyncStandard>();
 
         assert_eq!(SyncMinimal::SEMAPHORES, 1);
         const { assert!(SyncRich::SEMAPHORES > SyncMinimal::SEMAPHORES) };
@@ -133,6 +135,7 @@ mod reexport_tests {
         _assert_msg_cfg::<MsgMinimal>();
         _assert_msg_cfg::<MsgSmall>();
         _assert_msg_cfg::<MsgRich>();
+        _assert_msg_cfg::<MsgStandard>();
 
         assert_eq!(MsgMinimal::QUEUES, 1);
         const { assert!(MsgRich::QUEUES >= MsgSmall::QUEUES) };
@@ -143,6 +146,7 @@ mod reexport_tests {
         _assert_ports_cfg::<PortsMinimal>();
         _assert_ports_cfg::<PortsTiny>();
         _assert_ports_cfg::<PortsRich>();
+        _assert_ports_cfg::<PortsSmall>();
 
         assert_eq!(PortsMinimal::SAMPLING_PORTS, 1);
         const { assert!(PortsRich::SAMPLING_PORTS >= PortsTiny::SAMPLING_PORTS) };
