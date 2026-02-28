@@ -365,6 +365,28 @@ pub struct PartitionConfig {
 }
 
 impl PartitionConfig {
+    /// Create a fully specified partition config with no peripheral regions.
+    ///
+    /// Use this when the partition has real stack addresses and MPU regions
+    /// known at build time.  `peripheral_regions` defaults to empty; chain
+    /// field assignment if peripherals are needed.
+    pub fn new(
+        id: u8,
+        entry_point: u32,
+        stack_base: u32,
+        stack_size: u32,
+        mpu_region: MpuRegion,
+    ) -> Self {
+        Self {
+            id,
+            entry_point,
+            stack_base,
+            stack_size,
+            mpu_region,
+            peripheral_regions: Vec::new(),
+        }
+    }
+
     /// Create a sentinel (default) partition config.
     ///
     /// Sets `entry_point`, `stack_base`, and `mpu_region` to zero sentinels,
@@ -1804,6 +1826,37 @@ mod tests {
         };
         let msg = format!("{e}");
         assert!(msg.contains("partition 2") && msg.contains("peripheral region 1"));
+    }
+
+    // ------------------------------------------------------------------
+    // PartitionConfig::new
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn config_new_field_values_match() {
+        let mpu = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
+        let cfg = PartitionConfig::new(2, 0x0800_1000, 0x2000_0000, 1024, mpu);
+        assert_eq!(cfg.id, 2);
+        assert_eq!(cfg.entry_point, 0x0800_1000);
+        assert_eq!(cfg.stack_base, 0x2000_0000);
+        assert_eq!(cfg.stack_size, 1024);
+        assert_eq!(cfg.mpu_region.base(), 0x2000_0000);
+        assert_eq!(cfg.mpu_region.size(), 4096);
+        assert_eq!(cfg.mpu_region.permissions(), 0x0306_0000);
+    }
+
+    #[test]
+    fn config_new_peripheral_regions_empty() {
+        let mpu = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
+        let cfg = PartitionConfig::new(0, 0x0800_0000, 0x2000_0000, 1024, mpu);
+        assert!(cfg.peripheral_regions.is_empty());
+    }
+
+    #[test]
+    fn config_new_valid_inputs_pass_validate() {
+        let mpu = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
+        let cfg = PartitionConfig::new(0, 0x0800_0000, 0x2000_0000, 1024, mpu);
+        assert_eq!(cfg.validate(), Ok(()));
     }
 
     // ------------------------------------------------------------------
