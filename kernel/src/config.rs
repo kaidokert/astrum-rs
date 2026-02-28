@@ -832,13 +832,25 @@ macro_rules! _kernel_config_field {
     (queues = $v:expr) => {
         const QS: usize = $v;
     };
+    (QS = $v:expr) => {
+        const QS: usize = $v;
+    };
     (queue_depth = $v:expr) => {
+        const QD: usize = $v;
+    };
+    (QD = $v:expr) => {
         const QD: usize = $v;
     };
     (max_msg_size = $v:expr) => {
         const QM: usize = $v;
     };
+    (QM = $v:expr) => {
+        const QM: usize = $v;
+    };
     (queue_waitq = $v:expr) => {
+        const QW: usize = $v;
+    };
+    (QW = $v:expr) => {
         const QW: usize = $v;
     };
     (sampling_ports = $v:expr) => {
@@ -1066,6 +1078,50 @@ macro_rules! _compose_sync_default {
     };
 }
 
+/// Conditional bridge for **MsgConfig** — see [`_compose_sync_default!`].
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _compose_msg_default {
+    (@QS, $p:ty; #[$a:meta] queues = $v:expr; $($r:tt)*) => {};
+    (@QS, $p:ty; queues = $v:expr; $($r:tt)*) => {};
+    (@QS, $p:ty; QS = $v:expr; $($r:tt)*) => {};
+    (@QS, $p:ty; #[$a:meta] const QS : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@QS, $p:ty; const QS : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@QD, $p:ty; #[$a:meta] queue_depth = $v:expr; $($r:tt)*) => {};
+    (@QD, $p:ty; queue_depth = $v:expr; $($r:tt)*) => {};
+    (@QD, $p:ty; QD = $v:expr; $($r:tt)*) => {};
+    (@QD, $p:ty; #[$a:meta] const QD : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@QD, $p:ty; const QD : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@QM, $p:ty; #[$a:meta] max_msg_size = $v:expr; $($r:tt)*) => {};
+    (@QM, $p:ty; max_msg_size = $v:expr; $($r:tt)*) => {};
+    (@QM, $p:ty; QM = $v:expr; $($r:tt)*) => {};
+    (@QM, $p:ty; #[$a:meta] const QM : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@QM, $p:ty; const QM : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@QW, $p:ty; #[$a:meta] queue_waitq = $v:expr; $($r:tt)*) => {};
+    (@QW, $p:ty; queue_waitq = $v:expr; $($r:tt)*) => {};
+    (@QW, $p:ty; QW = $v:expr; $($r:tt)*) => {};
+    (@QW, $p:ty; #[$a:meta] const QW : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@QW, $p:ty; const QW : $ty:ty = $v:expr; $($r:tt)*) => {};
+    // ── shared skip arms ──
+    (@ $tag:tt, $p:ty; #[$a:meta] $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_msg_default!(@ $tag, $p; $($r)*);
+    };
+    (@ $tag:tt, $p:ty; $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_msg_default!(@ $tag, $p; $($r)*);
+    };
+    (@ $tag:tt, $p:ty; #[$a:meta] const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_msg_default!(@ $tag, $p; $($r)*);
+    };
+    (@ $tag:tt, $p:ty; const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_msg_default!(@ $tag, $p; $($r)*);
+    };
+    // ── terminal: emit preset bridge ──
+    (@QS, $p:ty;) => { const QS: usize = <$p as $crate::config::MsgConfig>::QUEUES; };
+    (@QD, $p:ty;) => { const QD: usize = <$p as $crate::config::MsgConfig>::QUEUE_DEPTH; };
+    (@QM, $p:ty;) => { const QM: usize = <$p as $crate::config::MsgConfig>::MAX_MSG_SIZE; };
+    (@QW, $p:ty;) => { const QW: usize = <$p as $crate::config::MsgConfig>::QUEUE_WAITQ; };
+}
+
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _kernel_config_body {
@@ -1200,11 +1256,11 @@ macro_rules! compose_kernel_config {
             $crate::_compose_sync_default!(@MS, $sync; $($overrides)*);
             $crate::_compose_sync_default!(@MW, $sync; $($overrides)*);
 
-            // MsgConfig
-            const QS: usize = <$msg as $crate::config::MsgConfig>::QUEUES;
-            const QD: usize = <$msg as $crate::config::MsgConfig>::QUEUE_DEPTH;
-            const QM: usize = <$msg as $crate::config::MsgConfig>::MAX_MSG_SIZE;
-            const QW: usize = <$msg as $crate::config::MsgConfig>::QUEUE_WAITQ;
+            // MsgConfig — conditionally bridged so overrides can replace them.
+            $crate::_compose_msg_default!(@QS, $msg; $($overrides)*);
+            $crate::_compose_msg_default!(@QD, $msg; $($overrides)*);
+            $crate::_compose_msg_default!(@QM, $msg; $($overrides)*);
+            $crate::_compose_msg_default!(@QW, $msg; $($overrides)*);
             // PortsConfig
             const SP: usize = <$ports as $crate::config::PortsConfig>::SAMPLING_PORTS;
             const SM: usize = <$ports as $crate::config::PortsConfig>::SAMPLING_MAX_MSG_SIZE;
@@ -2323,6 +2379,49 @@ mod tests {
         assert_eq!(SyncRawNameOverride::SW, SyncMinimal::SEMAPHORE_WAITQ);
         assert_eq!(SyncRawNameOverride::MS, SyncMinimal::MUTEXES);
         assert_eq!(SyncRawNameOverride::MW, SyncMinimal::MUTEX_WAITQ);
+    }
+
+    // ============ compose_kernel_config! msg override tests ============
+
+    compose_kernel_config!(
+        ComposedMsgOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            queues = 10;
+        }
+    );
+
+    #[test]
+    fn compose_with_msg_friendly_override() {
+        // Override takes effect
+        assert_eq!(ComposedMsgOverride::QS, 10);
+        assert_ne!(ComposedMsgOverride::QS, MsgMinimal::QUEUES);
+        // Non-overridden msg fields still come from the preset
+        assert_eq!(ComposedMsgOverride::QD, MsgMinimal::QUEUE_DEPTH);
+        assert_eq!(ComposedMsgOverride::QM, MsgMinimal::MAX_MSG_SIZE);
+        assert_eq!(ComposedMsgOverride::QW, MsgMinimal::QUEUE_WAITQ);
+    }
+
+    compose_kernel_config!(
+        MsgRawNameOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            QD = 16;
+        }
+    );
+
+    #[test]
+    fn compose_with_msg_raw_name_override() {
+        assert_eq!(MsgRawNameOverride::QD, 16);
+        assert_ne!(MsgRawNameOverride::QD, MsgMinimal::QUEUE_DEPTH);
+        // Non-overridden msg fields still come from the preset
+        assert_eq!(MsgRawNameOverride::QS, MsgMinimal::QUEUES);
+        assert_eq!(MsgRawNameOverride::QM, MsgMinimal::MAX_MSG_SIZE);
+        assert_eq!(MsgRawNameOverride::QW, MsgMinimal::QUEUE_WAITQ);
     }
 
     // ============ custom user-defined preset tests ============
