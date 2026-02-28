@@ -1000,6 +1000,34 @@ macro_rules! kernel_config {
 /// The macro generates a zero-sized struct, bridges every sub-config
 /// constant to the flat [`KernelConfig`] constant, and calls
 /// [`kernel_config_types!`] and [`_kernel_config_inherent_consts!`].
+///
+/// # Examples
+///
+/// Basic preset composition with no overrides:
+///
+/// ```ignore
+/// use kernel::{compose_kernel_config, Partitions2, SyncMinimal,
+///              MsgMinimal, PortsTiny, DebugEnabled};
+///
+/// compose_kernel_config!(
+///     pub MyConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
+/// );
+/// ```
+///
+/// Override non-sub-config fields with a trailing block:
+///
+/// ```ignore
+/// use kernel::{compose_kernel_config, Partitions4, SyncStandard,
+///              MsgStandard, PortsStandard, DebugEnabled};
+///
+/// compose_kernel_config!(
+///     pub AppConfig<Partitions4, SyncStandard, MsgStandard,
+///                   PortsStandard, DebugEnabled> {
+///         mpu_enforce = true;
+///         core_clock_hz = 64_000_000;
+///     }
+/// );
+/// ```
 #[macro_export]
 macro_rules! compose_kernel_config {
     ($vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty > { $($overrides:tt)* }) => {
