@@ -808,13 +808,25 @@ macro_rules! _kernel_config_field {
     (semaphores = $v:expr) => {
         const S: usize = $v;
     };
+    (S = $v:expr) => {
+        const S: usize = $v;
+    };
     (semaphore_waitq = $v:expr) => {
+        const SW: usize = $v;
+    };
+    (SW = $v:expr) => {
         const SW: usize = $v;
     };
     (mutexes = $v:expr) => {
         const MS: usize = $v;
     };
+    (MS = $v:expr) => {
+        const MS: usize = $v;
+    };
     (mutex_waitq = $v:expr) => {
+        const MW: usize = $v;
+    };
+    (MW = $v:expr) => {
         const MW: usize = $v;
     };
     (queues = $v:expr) => {
@@ -982,6 +994,78 @@ macro_rules! _compose_partition_stack_default {
     };
 }
 
+/// Conditionally bridges a single `SyncConfig` field from a preset unless
+/// the override token stream contains a matching override.
+///
+/// Called with a tag (`@S`, `@SW`, `@MS`, `@MW`) to select the field.
+/// Each field recognises five "hit" forms that suppress the preset bridge:
+///   1. `friendly = val;`                    (bare friendly-name)
+///   2. `#[attr] friendly = val;`            (attributed friendly-name)
+///   3. `RAW = val;`                         (raw const-name assignment)
+///   4. `const RAW: ty = val;`               (full const item)
+///   5. `#[attr] const RAW: ty = val;`       (attributed const item)
+///
+/// Non-matching items are skipped via shared TT-munching recursion arms.
+/// When the token stream is exhausted without a hit, the preset default is
+/// emitted.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _compose_sync_default {
+    // ── S hit arms ──
+    (@S, $p:ty; #[$a:meta] semaphores = $v:expr; $($r:tt)*) => {};
+    (@S, $p:ty; semaphores = $v:expr; $($r:tt)*) => {};
+    (@S, $p:ty; S = $v:expr; $($r:tt)*) => {};
+    (@S, $p:ty; #[$a:meta] const S : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@S, $p:ty; const S : $ty:ty = $v:expr; $($r:tt)*) => {};
+    // ── SW hit arms ──
+    (@SW, $p:ty; #[$a:meta] semaphore_waitq = $v:expr; $($r:tt)*) => {};
+    (@SW, $p:ty; semaphore_waitq = $v:expr; $($r:tt)*) => {};
+    (@SW, $p:ty; SW = $v:expr; $($r:tt)*) => {};
+    (@SW, $p:ty; #[$a:meta] const SW : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@SW, $p:ty; const SW : $ty:ty = $v:expr; $($r:tt)*) => {};
+    // ── MS hit arms ──
+    (@MS, $p:ty; #[$a:meta] mutexes = $v:expr; $($r:tt)*) => {};
+    (@MS, $p:ty; mutexes = $v:expr; $($r:tt)*) => {};
+    (@MS, $p:ty; MS = $v:expr; $($r:tt)*) => {};
+    (@MS, $p:ty; #[$a:meta] const MS : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@MS, $p:ty; const MS : $ty:ty = $v:expr; $($r:tt)*) => {};
+    // ── MW hit arms ──
+    (@MW, $p:ty; #[$a:meta] mutex_waitq = $v:expr; $($r:tt)*) => {};
+    (@MW, $p:ty; mutex_waitq = $v:expr; $($r:tt)*) => {};
+    (@MW, $p:ty; MW = $v:expr; $($r:tt)*) => {};
+    (@MW, $p:ty; #[$a:meta] const MW : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@MW, $p:ty; const MW : $ty:ty = $v:expr; $($r:tt)*) => {};
+    // ── Skip: non-matching attributed friendly-name (shared) ──
+    (@ $tag:tt, $p:ty; #[$a:meta] $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_sync_default!(@ $tag, $p; $($r)*);
+    };
+    // ── Skip: non-matching bare friendly-name (shared) ──
+    (@ $tag:tt, $p:ty; $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_sync_default!(@ $tag, $p; $($r)*);
+    };
+    // ── Skip: non-matching attributed const (shared) ──
+    (@ $tag:tt, $p:ty; #[$a:meta] const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_sync_default!(@ $tag, $p; $($r)*);
+    };
+    // ── Skip: non-matching bare const (shared) ──
+    (@ $tag:tt, $p:ty; const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_sync_default!(@ $tag, $p; $($r)*);
+    };
+    // ── Terminal: emit preset bridge ──
+    (@S, $p:ty;) => {
+        const S: usize = <$p as $crate::config::SyncConfig>::SEMAPHORES;
+    };
+    (@SW, $p:ty;) => {
+        const SW: usize = <$p as $crate::config::SyncConfig>::SEMAPHORE_WAITQ;
+    };
+    (@MS, $p:ty;) => {
+        const MS: usize = <$p as $crate::config::SyncConfig>::MUTEXES;
+    };
+    (@MW, $p:ty;) => {
+        const MW: usize = <$p as $crate::config::SyncConfig>::MUTEX_WAITQ;
+    };
+}
+
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _kernel_config_body {
@@ -1110,11 +1194,12 @@ macro_rules! compose_kernel_config {
             $crate::_compose_partition_n_default!($parts; $($overrides)*);
             $crate::_compose_partition_sched_default!($parts; $($overrides)*);
             $crate::_compose_partition_stack_default!($parts; $($overrides)*);
-            // SyncConfig
-            const S: usize = <$sync as $crate::config::SyncConfig>::SEMAPHORES;
-            const SW: usize = <$sync as $crate::config::SyncConfig>::SEMAPHORE_WAITQ;
-            const MS: usize = <$sync as $crate::config::SyncConfig>::MUTEXES;
-            const MW: usize = <$sync as $crate::config::SyncConfig>::MUTEX_WAITQ;
+            // SyncConfig — conditionally bridged so overrides can replace them.
+            $crate::_compose_sync_default!(@S, $sync; $($overrides)*);
+            $crate::_compose_sync_default!(@SW, $sync; $($overrides)*);
+            $crate::_compose_sync_default!(@MS, $sync; $($overrides)*);
+            $crate::_compose_sync_default!(@MW, $sync; $($overrides)*);
+
             // MsgConfig
             const QS: usize = <$msg as $crate::config::MsgConfig>::QUEUES;
             const QD: usize = <$msg as $crate::config::MsgConfig>::QUEUE_DEPTH;
@@ -2196,6 +2281,48 @@ mod tests {
         // N and SCHED still come from the preset
         assert_eq!(ComposedStackOverride::N, Partitions2::COUNT);
         assert_eq!(ComposedStackOverride::SCHED, Partitions2::SCHEDULE_CAPACITY);
+    }
+
+    compose_kernel_config!(
+        ComposedSyncOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            semaphores = 8;
+        }
+    );
+
+    #[test]
+    fn compose_with_sync_override() {
+        // Override takes effect
+        assert_eq!(ComposedSyncOverride::S, 8);
+        assert_ne!(ComposedSyncOverride::S, SyncMinimal::SEMAPHORES);
+        // Non-overridden sync fields still come from the preset
+        assert_eq!(ComposedSyncOverride::SW, SyncMinimal::SEMAPHORE_WAITQ);
+        assert_eq!(ComposedSyncOverride::MS, SyncMinimal::MUTEXES);
+        assert_eq!(ComposedSyncOverride::MW, SyncMinimal::MUTEX_WAITQ);
+    }
+
+    // raw const-name assignment form: `S = 8;`
+    compose_kernel_config!(
+        SyncRawNameOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            S = 8;
+        }
+    );
+
+    #[test]
+    fn compose_with_sync_raw_name_override() {
+        assert_eq!(SyncRawNameOverride::S, 8);
+        assert_ne!(SyncRawNameOverride::S, SyncMinimal::SEMAPHORES);
+        // Non-overridden sync fields still come from the preset
+        assert_eq!(SyncRawNameOverride::SW, SyncMinimal::SEMAPHORE_WAITQ);
+        assert_eq!(SyncRawNameOverride::MS, SyncMinimal::MUTEXES);
+        assert_eq!(SyncRawNameOverride::MW, SyncMinimal::MUTEX_WAITQ);
     }
 
     // ============ custom user-defined preset tests ============
