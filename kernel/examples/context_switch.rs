@@ -14,21 +14,18 @@ use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
-const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = 256;
+kernel::compose_kernel_config!(DemoConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+
+const NUM_PARTITIONS: usize = DemoConfig::N;
+const STACK_WORDS: usize = DemoConfig::STACK_WORDS;
 const TARGET_SWITCHES: u32 = 6;
 
 static PARTITION_RUNNING: AtomicU32 = AtomicU32::new(u32::MAX);
 static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
-
-kernel::kernel_config! { DemoConfig {
-    partitions = 2;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-}}
 
 kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
     let who = PARTITION_RUNNING.load(Ordering::Acquire);

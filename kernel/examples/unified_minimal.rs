@@ -9,17 +9,14 @@ use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
-const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = 256;
+kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-kernel::kernel_config!(TestConfig {
-    partitions = 2;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-});
+const NUM_PARTITIONS: usize = 1;
+const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 
 kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
 

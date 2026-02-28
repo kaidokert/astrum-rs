@@ -29,11 +29,14 @@ use kernel::{
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
-const NP: usize = 2;
-const STACK_WORDS: usize = 256;
+kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+
+const NP: usize = TestConfig::N;
+const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 /// Partition 0: 4 KiB data region at 0x2000_0000.
 /// Partition 1: 8 KiB data region at 0x2000_8000.
@@ -63,12 +66,6 @@ static mut PARTITION_SP: [u32; NP] = [0; NP];
 static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
-
-kernel::kernel_config!(TestConfig {
-    partitions = 2;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-});
 
 // Use define_unified_kernel! with empty yield handler (this test doesn't use SVC yield).
 kernel::define_unified_kernel!(TestConfig, |_k| {});

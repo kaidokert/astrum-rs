@@ -19,11 +19,14 @@ use kernel::{
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
+kernel::compose_kernel_config!(PassthroughConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+
 const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = 256;
+const STACK_WORDS: usize = PassthroughConfig::STACK_WORDS;
 
 /// UART0 register block on lm3s6965evb.
 const UART0_BASE: u32 = 0x4000_C000;
@@ -32,12 +35,6 @@ const UART0_SIZE: u32 = 4096;
 const UARTFR_OFFSET: u32 = 0x18;
 /// UARTFR reset value on PL011 (TXFE | RXFE = bits 7 and 4).
 const UARTFR_RESET: u32 = 0x90;
-
-kernel::kernel_config!(PassthroughConfig {
-    partitions = 2;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-});
 
 kernel::define_unified_harness!(PassthroughConfig, NUM_PARTITIONS, STACK_WORDS);
 
