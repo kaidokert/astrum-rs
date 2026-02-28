@@ -361,6 +361,35 @@ impl PortsConfig for PortsRich {
     const BLACKBOARD_WAITQ: usize = 4;
 }
 
+/// Sub-trait providing readable constant names for debug-output configuration.
+///
+/// | `DebugConfig` | Meaning |
+/// |---|---|
+/// | `BUFFER_SIZE` | Debug buffer size per partition (bytes) |
+/// | `AUTO_DRAIN_BUDGET` | Max bytes `drain_debug_auto` drains per call |
+pub trait DebugConfig {
+    /// Debug ring-buffer capacity in bytes per partition.
+    const BUFFER_SIZE: usize;
+    /// Maximum bytes drained per `drain_debug_auto` invocation.
+    const AUTO_DRAIN_BUDGET: usize;
+}
+
+/// Preset: debug enabled (256-byte buffer, 256-byte drain budget).
+pub struct DebugEnabled;
+
+impl DebugConfig for DebugEnabled {
+    const BUFFER_SIZE: usize = 256;
+    const AUTO_DRAIN_BUDGET: usize = 256;
+}
+
+/// Preset: debug disabled (zero-size buffer, zero drain budget).
+pub struct DebugDisabled;
+
+impl DebugConfig for DebugDisabled {
+    const BUFFER_SIZE: usize = 0;
+    const AUTO_DRAIN_BUDGET: usize = 0;
+}
+
 /// Trait that bundles every const-generic parameter the [`Kernel`] needs.
 ///
 /// Implement this trait on a zero-sized struct to configure a kernel
@@ -1267,6 +1296,28 @@ mod tests {
         assert_eq!(PortsRich::BLACKBOARDS, 4);
         assert_eq!(PortsRich::BLACKBOARD_MAX_MSG_SIZE, 64);
         assert_eq!(PortsRich::BLACKBOARD_WAITQ, 4);
+    }
+
+    // ============ DebugConfig tests ============
+
+    // Compile-time assertions for DebugEnabled preset values.
+    const _: () = assert!(DebugEnabled::BUFFER_SIZE == 256);
+    const _: () = assert!(DebugEnabled::AUTO_DRAIN_BUDGET == 256);
+
+    // Compile-time assertions for DebugDisabled preset values.
+    const _: () = assert!(DebugDisabled::BUFFER_SIZE == 0);
+    const _: () = assert!(DebugDisabled::AUTO_DRAIN_BUDGET == 0);
+
+    #[test]
+    fn debug_enabled_field_values() {
+        assert_eq!(DebugEnabled::BUFFER_SIZE, 256);
+        assert_eq!(DebugEnabled::AUTO_DRAIN_BUDGET, 256);
+    }
+
+    #[test]
+    fn debug_disabled_field_values() {
+        assert_eq!(DebugDisabled::BUFFER_SIZE, 0);
+        assert_eq!(DebugDisabled::AUTO_DRAIN_BUDGET, 0);
     }
 
     // ============ kernel_config! macro tests ============
