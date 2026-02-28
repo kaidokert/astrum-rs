@@ -1,4 +1,5 @@
-//! Kernel configuration traits and clock setup.
+//! Kernel configuration traits, clock setup, and preset-based composition
+//! via `compose_kernel_config!`.
 //!
 //! # Clock Configuration
 //!
@@ -933,6 +934,13 @@ macro_rules! _kernel_config_body {
 
 /// Generates a config struct, `impl KernelConfig`, and the associated type
 /// aliases from just the non-default overrides.
+///
+/// # Prefer `compose_kernel_config!` for new configs
+///
+/// Most configurations should use `compose_kernel_config!` instead, which
+/// composes a [`KernelConfig`] from reusable sub-config presets. Use this
+/// macro only when you need fine-grained control over individual fields not
+/// covered by an existing preset.
 ///
 /// The macro also generates an inherent `impl` block that re-exports every
 /// trait constant, so callers can write `MyConfig::SCHED` without importing
