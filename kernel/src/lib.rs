@@ -31,6 +31,11 @@ pub mod blackboard;
 #[cfg(feature = "dynamic-mpu")]
 pub mod buffer_pool;
 pub mod config;
+pub use config::{
+    DebugConfig, DebugDisabled, DebugEnabled, DefaultConfig, MsgConfig, MsgMinimal, MsgRich,
+    MsgSmall, PartitionConfig, Partitions1, Partitions2, Partitions3, Partitions4, PortsConfig,
+    PortsMinimal, PortsRich, PortsTiny, SyncConfig, SyncMinimal, SyncRich,
+};
 pub mod context;
 #[cfg(feature = "partition-debug")]
 pub mod debug;
@@ -87,3 +92,78 @@ pub mod ipc_integrity_tests;
 pub mod test_harness;
 #[cfg(test)]
 pub mod test_mmap;
+
+#[cfg(test)]
+mod reexport_tests {
+    //! Verify that all config presets, traits, and DefaultConfig are
+    //! accessible via the crate root (i.e. `crate::TypeName`).
+
+    use super::*;
+
+    fn _assert_partition_cfg<T: PartitionConfig>() {}
+    fn _assert_sync_cfg<T: SyncConfig>() {}
+    fn _assert_msg_cfg<T: MsgConfig>() {}
+    fn _assert_ports_cfg<T: PortsConfig>() {}
+    fn _assert_debug_cfg<T: DebugConfig>() {}
+
+    #[test]
+    fn partition_presets_via_root() {
+        _assert_partition_cfg::<Partitions1>();
+        _assert_partition_cfg::<Partitions2>();
+        _assert_partition_cfg::<Partitions3>();
+        _assert_partition_cfg::<Partitions4>();
+
+        assert_eq!(Partitions1::COUNT, 1);
+        assert_eq!(Partitions2::COUNT, 2);
+        assert_eq!(Partitions3::COUNT, 3);
+        assert_eq!(Partitions4::COUNT, 4);
+    }
+
+    #[test]
+    fn sync_presets_via_root() {
+        _assert_sync_cfg::<SyncMinimal>();
+        _assert_sync_cfg::<SyncRich>();
+
+        assert_eq!(SyncMinimal::SEMAPHORES, 1);
+        const { assert!(SyncRich::SEMAPHORES > SyncMinimal::SEMAPHORES) };
+    }
+
+    #[test]
+    fn msg_presets_via_root() {
+        _assert_msg_cfg::<MsgMinimal>();
+        _assert_msg_cfg::<MsgSmall>();
+        _assert_msg_cfg::<MsgRich>();
+
+        assert_eq!(MsgMinimal::QUEUES, 1);
+        const { assert!(MsgRich::QUEUES >= MsgSmall::QUEUES) };
+    }
+
+    #[test]
+    fn ports_presets_via_root() {
+        _assert_ports_cfg::<PortsMinimal>();
+        _assert_ports_cfg::<PortsTiny>();
+        _assert_ports_cfg::<PortsRich>();
+
+        assert_eq!(PortsMinimal::SAMPLING_PORTS, 1);
+        const { assert!(PortsRich::SAMPLING_PORTS >= PortsTiny::SAMPLING_PORTS) };
+    }
+
+    #[test]
+    fn debug_presets_via_root() {
+        _assert_debug_cfg::<DebugEnabled>();
+        _assert_debug_cfg::<DebugDisabled>();
+
+        const { assert!(DebugEnabled::AUTO_DRAIN_BUDGET > 0) };
+        assert_eq!(DebugDisabled::AUTO_DRAIN_BUDGET, 0);
+    }
+
+    #[test]
+    fn default_config_via_root() {
+        // DefaultConfig is composed — verify inherent constants
+        // that originate from each sub-config preset.
+        assert_eq!(DefaultConfig::N, 2); // Partitions2
+        assert_eq!(DefaultConfig::S, 1); // SyncMinimal
+        assert_eq!(DefaultConfig::QS, 1); // MsgMinimal
+        assert_eq!(DefaultConfig::SP, 1); // PortsTiny
+    }
+}
