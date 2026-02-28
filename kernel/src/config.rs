@@ -919,6 +919,69 @@ macro_rules! _compose_debug_default {
     };
 }
 
+/// Conditionally bridges `N` from a partition preset unless overridden
+/// by `partitions = …` or `const N : … = …` in the override block.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _compose_partition_n_default {
+    ($p:ty; partitions = $v:expr; $($r:tt)*) => {};
+    ($p:ty; const N : $ty:ty = $v:expr; $($r:tt)*) => {};
+    ($p:ty; $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_partition_n_default!($p; $($r)*);
+    };
+    ($p:ty; const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_partition_n_default!($p; $($r)*);
+    };
+    ($p:ty; #[$a:meta] const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_partition_n_default!($p; $($r)*);
+    };
+    ($p:ty;) => {
+        const N: usize = <$p as $crate::config::PartitionConfig>::COUNT;
+    };
+}
+
+/// Conditionally bridges `SCHED` from a partition preset unless overridden
+/// by `schedule_capacity = …` or `const SCHED : … = …` in the override block.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _compose_partition_sched_default {
+    ($p:ty; schedule_capacity = $v:expr; $($r:tt)*) => {};
+    ($p:ty; const SCHED : $ty:ty = $v:expr; $($r:tt)*) => {};
+    ($p:ty; $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_partition_sched_default!($p; $($r)*);
+    };
+    ($p:ty; const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_partition_sched_default!($p; $($r)*);
+    };
+    ($p:ty; #[$a:meta] const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_partition_sched_default!($p; $($r)*);
+    };
+    ($p:ty;) => {
+        const SCHED: usize = <$p as $crate::config::PartitionConfig>::SCHEDULE_CAPACITY;
+    };
+}
+
+/// Conditionally bridges `STACK_WORDS` from a partition preset unless
+/// overridden by `stack_words = …` or `const STACK_WORDS : … = …`.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _compose_partition_stack_default {
+    ($p:ty; stack_words = $v:expr; $($r:tt)*) => {};
+    ($p:ty; const STACK_WORDS : $ty:ty = $v:expr; $($r:tt)*) => {};
+    ($p:ty; $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_partition_stack_default!($p; $($r)*);
+    };
+    ($p:ty; const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_partition_stack_default!($p; $($r)*);
+    };
+    ($p:ty; #[$a:meta] const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_partition_stack_default!($p; $($r)*);
+    };
+    ($p:ty;) => {
+        const STACK_WORDS: usize = <$p as $crate::config::PartitionConfig>::STACK_WORDS;
+    };
+}
+
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _kernel_config_body {
@@ -1043,10 +1106,10 @@ macro_rules! compose_kernel_config {
         $vis struct $name;
 
         impl $crate::config::KernelConfig for $name {
-            // PartitionConfig
-            const N: usize = <$parts as $crate::config::PartitionConfig>::COUNT;
-            const SCHED: usize = <$parts as $crate::config::PartitionConfig>::SCHEDULE_CAPACITY;
-            const STACK_WORDS: usize = <$parts as $crate::config::PartitionConfig>::STACK_WORDS;
+            // PartitionConfig — conditionally bridged so overrides can replace them.
+            $crate::_compose_partition_n_default!($parts; $($overrides)*);
+            $crate::_compose_partition_sched_default!($parts; $($overrides)*);
+            $crate::_compose_partition_stack_default!($parts; $($overrides)*);
             // SyncConfig
             const S: usize = <$sync as $crate::config::SyncConfig>::SEMAPHORES;
             const SW: usize = <$sync as $crate::config::SyncConfig>::SEMAPHORE_WAITQ;
@@ -2113,6 +2176,26 @@ mod tests {
         assert_eq!(ComposedClockOverride::TICK_PERIOD_US, 500);
         // 64_000_000 * 500 / 1_000_000 = 32_000
         assert_eq!(ComposedClockOverride::SYSTICK_CYCLES, 32_000);
+    }
+
+    compose_kernel_config!(
+        ComposedStackOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            stack_words = 512;
+        }
+    );
+
+    #[test]
+    fn compose_with_stack_words_override() {
+        // Override takes effect
+        assert_eq!(ComposedStackOverride::STACK_WORDS, 512);
+        assert_ne!(ComposedStackOverride::STACK_WORDS, Partitions2::STACK_WORDS);
+        // N and SCHED still come from the preset
+        assert_eq!(ComposedStackOverride::N, Partitions2::COUNT);
+        assert_eq!(ComposedStackOverride::SCHED, Partitions2::SCHEDULE_CAPACITY);
     }
 
     // ============ custom user-defined preset tests ============
