@@ -34,29 +34,11 @@ const QUEUE_MSG_SIZE: usize = 4;
 const NUM_PARTITIONS: usize = 2;
 const STACK_WORDS: usize = 256;
 
-kernel::kernel_config! {
-    /// Kernel configuration for the queuing-port demo.
-    ///
-    /// Sized for 4 partitions, depth-4 queuing ports with 4-byte messages,
-    /// and moderate pool sizes for all resource types.
-    DemoConfig {
-        partitions = 4;
-        schedule_capacity = 8;
-        semaphores = 4;
-        semaphore_waitq = 4;
-        mutexes = 4;
-        mutex_waitq = 4;
-        queues = 4;
-        queue_depth = QUEUE_DEPTH;
-        max_msg_size = QUEUE_MSG_SIZE;
-        queue_waitq = 4;
-        sampling_ports = 4;
-        sampling_msg_size = 4;
-        blackboards = 4;
-        blackboard_msg_size = 4;
-        blackboard_waitq = 4;
-    }
-}
+// Kernel configuration for the queuing-port demo.
+//
+// Sized for 2 partitions, depth-4 queuing ports with 4-byte messages,
+// and moderate pool sizes for all resource types.
+kernel::compose_kernel_config!(DemoConfig<kernel::Partitions2, kernel::SyncStandard, kernel::MsgStandard, kernel::PortsSmall, kernel::DebugEnabled>);
 
 // ---------------------------------------------------------------------------
 // Command / response protocol constants

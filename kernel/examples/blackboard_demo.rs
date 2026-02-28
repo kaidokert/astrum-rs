@@ -39,20 +39,11 @@ use panic_semihosting as _;
 const NUM_PARTITIONS: usize = 3;
 const STACK_WORDS: usize = 256;
 
-kernel::kernel_config! {
-    /// Kernel configuration for the blackboard demo.
-    ///
-    /// Sized for 3 partitions, 1 semaphore, 1 blackboard (4-byte messages,
-    /// 3-deep wait queue), and minimal allocations for unused resource pools.
-    DemoConfig {
-        partitions = 3;
-        schedule_capacity = 8;
-        semaphore_waitq = 3;
-        sampling_msg_size = 1;
-        blackboard_msg_size = 4;
-        blackboard_waitq = 3;
-    }
-}
+// Kernel configuration for the blackboard demo.
+//
+// Sized for 3 partitions, 1 semaphore, 1 blackboard (4-byte messages,
+// 3-deep wait queue), and minimal allocations for unused resource pools.
+kernel::compose_kernel_config!(DemoConfig<kernel::Partitions3, kernel::SyncStandard, kernel::MsgStandard, kernel::PortsSmall, kernel::DebugEnabled>);
 
 // ---------------------------------------------------------------------------
 // R0 packing helpers
