@@ -222,6 +222,9 @@ ipc-message = []
 # ARINC 653 compatibility: enables all optional IPC primitives
 arinc-compat = ["ipc-sampling", "ipc-queuing", "ipc-blackboard", "ipc-message"]
 
+# Omit the built-in minimal __INTERRUPTS vector table so that a
+# custom one (e.g. from bind_interrupts!) can be linked instead.
+custom-ivt = []
 qemu = []
 dynamic-mpu = []
 partition-debug = ["rtos-traits/partition-debug"]

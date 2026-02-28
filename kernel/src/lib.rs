@@ -10,12 +10,12 @@
 // The LM3S6965 (used in QEMU) has 70 interrupts, but we only need
 // at least one entry to satisfy the linker's SIZEOF(.vector_table) > 0x40 assertion.
 // All entries point to the default handler provided by cortex-m-rt.
-#[cfg(all(not(test), target_arch = "arm"))]
+#[cfg(all(not(test), target_arch = "arm", not(feature = "custom-ivt")))]
 #[link_section = ".vector_table.interrupts"]
 #[no_mangle]
 pub static __INTERRUPTS: [unsafe extern "C" fn(); 1] = [DefaultHandler; 1];
 
-#[cfg(all(not(test), target_arch = "arm"))]
+#[cfg(all(not(test), target_arch = "arm", not(feature = "custom-ivt")))]
 extern "C" {
     fn DefaultHandler();
 }
