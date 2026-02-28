@@ -108,6 +108,10 @@ name = "unified_minimal"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "qemu_smoke"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "peripheral_passthrough"
 required-features = ["qemu", "log-semihosting"]
 

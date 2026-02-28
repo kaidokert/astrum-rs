@@ -9,6 +9,7 @@ FAIL=0
 FAILED=""
 
 EXAMPLES=(
+    qemu_smoke
     mpu_region systick mpu_wx mpu_fault
     partition_switch context_switch mpu_partition
     svc_yield integration sampling_demo queuing_demo blackboard_demo
@@ -36,12 +37,12 @@ run_examples() {
 }
 
 echo "=== Static-mode examples ==="
-run_examples "qemu" "${EXAMPLES[@]}"
+run_examples "qemu,log-semihosting" "${EXAMPLES[@]}"
 
 if [[ "${1:-}" == "--dynamic-mpu" ]]; then
     echo ""
     echo "=== Dynamic-MPU examples ==="
-    run_examples "qemu,dynamic-mpu" "${DYNAMIC_MPU_EXAMPLES[@]}"
+    run_examples "qemu,log-semihosting,dynamic-mpu" "${DYNAMIC_MPU_EXAMPLES[@]}"
 fi
 
 echo ""
