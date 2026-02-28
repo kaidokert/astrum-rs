@@ -426,6 +426,16 @@ impl PortsConfig for PortsSmall {
     const BLACKBOARD_WAITQ: usize = 4;
 }
 
+/// Preset: standard ports (SP=8, SM=4, BS=4, BM=4, BW=4).
+pub struct PortsStandard;
+impl PortsConfig for PortsStandard {
+    const SAMPLING_PORTS: usize = 8;
+    const SAMPLING_MAX_MSG_SIZE: usize = 4;
+    const BLACKBOARDS: usize = 4;
+    const BLACKBOARD_MAX_MSG_SIZE: usize = 4;
+    const BLACKBOARD_WAITQ: usize = 4;
+}
+
 /// Sub-trait providing readable constant names for debug-output configuration.
 ///
 /// | `DebugConfig` | Meaning |

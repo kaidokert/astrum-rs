@@ -34,8 +34,8 @@ pub mod config;
 pub use config::{
     DebugConfig, DebugDisabled, DebugEnabled, DefaultConfig, MsgConfig, MsgMinimal, MsgRich,
     MsgSmall, MsgStandard, PartitionConfig, Partitions1, Partitions2, Partitions3, Partitions4,
-    PortsConfig, PortsMinimal, PortsRich, PortsSmall, PortsTiny, SyncConfig, SyncMinimal, SyncRich,
-    SyncStandard,
+    PortsConfig, PortsMinimal, PortsRich, PortsSmall, PortsStandard, PortsTiny, SyncConfig,
+    SyncMinimal, SyncRich, SyncStandard,
 };
 pub mod context;
 #[cfg(feature = "partition-debug")]
@@ -147,9 +147,19 @@ mod reexport_tests {
         _assert_ports_cfg::<PortsTiny>();
         _assert_ports_cfg::<PortsRich>();
         _assert_ports_cfg::<PortsSmall>();
+        _assert_ports_cfg::<PortsStandard>();
 
         assert_eq!(PortsMinimal::SAMPLING_PORTS, 1);
         const { assert!(PortsRich::SAMPLING_PORTS >= PortsTiny::SAMPLING_PORTS) };
+    }
+
+    #[test]
+    fn ports_standard_constants() {
+        assert_eq!(PortsStandard::SAMPLING_PORTS, 8);
+        assert_eq!(PortsStandard::SAMPLING_MAX_MSG_SIZE, 4);
+        assert_eq!(PortsStandard::BLACKBOARDS, 4);
+        assert_eq!(PortsStandard::BLACKBOARD_MAX_MSG_SIZE, 4);
+        assert_eq!(PortsStandard::BLACKBOARD_WAITQ, 4);
     }
 
     #[test]
