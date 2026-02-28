@@ -196,6 +196,15 @@ pub trait PartitionConfig {
     const STACK_WORDS: usize;
 }
 
+/// Preset: 1 partition, 4 schedule entries, 256-word (1 KiB) stacks.
+pub struct Partitions1;
+
+impl PartitionConfig for Partitions1 {
+    const COUNT: usize = 1;
+    const SCHEDULE_CAPACITY: usize = 4;
+    const STACK_WORDS: usize = 256;
+}
+
 /// Preset: 2 partitions, 4 schedule entries, 256-word (1 KiB) stacks.
 pub struct Partitions2;
 
@@ -863,6 +872,56 @@ macro_rules! kernel_config {
         impl $crate::config::KernelConfig for $name {
             $crate::_kernel_config_body!($($body)*);
             $crate::kernel_config_types!($stack);
+        }
+        $crate::_kernel_config_inherent_consts!($vis $name);
+    };
+}
+
+/// Composes a [`KernelConfig`] from five sub-config preset types.
+///
+/// Each type parameter must implement the corresponding sub-config trait:
+/// - `$parts`: [`PartitionConfig`]
+/// - `$sync`: [`SyncConfig`]
+/// - `$msg`: [`MsgConfig`]
+/// - `$ports`: [`PortsConfig`]
+/// - `$debug`: [`DebugConfig`]
+///
+/// The macro generates a zero-sized struct, bridges every sub-config
+/// constant to the flat [`KernelConfig`] constant, and calls
+/// [`kernel_config_types!`] and [`_kernel_config_inherent_consts!`].
+#[macro_export]
+macro_rules! compose_kernel_config {
+    ($vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty >) => {
+        $vis struct $name;
+
+        impl $crate::config::KernelConfig for $name {
+            // PartitionConfig
+            const N: usize = <$parts as $crate::config::PartitionConfig>::COUNT;
+            const SCHED: usize = <$parts as $crate::config::PartitionConfig>::SCHEDULE_CAPACITY;
+            const STACK_WORDS: usize = <$parts as $crate::config::PartitionConfig>::STACK_WORDS;
+            // SyncConfig
+            const S: usize = <$sync as $crate::config::SyncConfig>::SEMAPHORES;
+            const SW: usize = <$sync as $crate::config::SyncConfig>::SEMAPHORE_WAITQ;
+            const MS: usize = <$sync as $crate::config::SyncConfig>::MUTEXES;
+            const MW: usize = <$sync as $crate::config::SyncConfig>::MUTEX_WAITQ;
+            // MsgConfig
+            const QS: usize = <$msg as $crate::config::MsgConfig>::QUEUES;
+            const QD: usize = <$msg as $crate::config::MsgConfig>::QUEUE_DEPTH;
+            const QM: usize = <$msg as $crate::config::MsgConfig>::MAX_MSG_SIZE;
+            const QW: usize = <$msg as $crate::config::MsgConfig>::QUEUE_WAITQ;
+            // PortsConfig
+            const SP: usize = <$ports as $crate::config::PortsConfig>::SAMPLING_PORTS;
+            const SM: usize = <$ports as $crate::config::PortsConfig>::SAMPLING_MAX_MSG_SIZE;
+            const BS: usize = <$ports as $crate::config::PortsConfig>::BLACKBOARDS;
+            const BM: usize = <$ports as $crate::config::PortsConfig>::BLACKBOARD_MAX_MSG_SIZE;
+            const BW: usize = <$ports as $crate::config::PortsConfig>::BLACKBOARD_WAITQ;
+            // DebugConfig
+            #[cfg(feature = "partition-debug")]
+            const DEBUG_BUFFER_SIZE: usize = <$debug as $crate::config::DebugConfig>::BUFFER_SIZE;
+            const DEBUG_AUTO_DRAIN_BUDGET: usize =
+                <$debug as $crate::config::DebugConfig>::AUTO_DRAIN_BUDGET;
+
+            $crate::kernel_config_types!();
         }
         $crate::_kernel_config_inherent_consts!($vis $name);
     };
@@ -1632,5 +1691,65 @@ mod tests {
         {
             assert_eq!(FeatureGatedE2EConfig::DEBUG_BUFFER_SIZE, 512);
         }
+    }
+
+    // ============ Partitions1 preset tests ============
+
+    #[test]
+    fn partitions1_preset_values() {
+        assert_eq!(Partitions1::COUNT, 1);
+        assert_eq!(Partitions1::SCHEDULE_CAPACITY, 4);
+        assert_eq!(Partitions1::STACK_WORDS, 256);
+    }
+
+    // ============ compose_kernel_config! tests ============
+
+    compose_kernel_config!(ComposedConfig<Partitions2, SyncRich, MsgRich, PortsRich, DebugDisabled>);
+
+    #[test]
+    fn composed_bridges_all_sub_configs() {
+        // PartitionConfig
+        assert_eq!(ComposedConfig::N, Partitions2::COUNT);
+        assert_eq!(ComposedConfig::SCHED, Partitions2::SCHEDULE_CAPACITY);
+        // SyncConfig
+        assert_eq!(ComposedConfig::S, SyncRich::SEMAPHORES);
+        assert_eq!(ComposedConfig::SW, SyncRich::SEMAPHORE_WAITQ);
+        assert_eq!(ComposedConfig::MS, SyncRich::MUTEXES);
+        assert_eq!(ComposedConfig::MW, SyncRich::MUTEX_WAITQ);
+        // MsgConfig
+        assert_eq!(ComposedConfig::QS, MsgRich::QUEUES);
+        assert_eq!(ComposedConfig::QD, MsgRich::QUEUE_DEPTH);
+        assert_eq!(ComposedConfig::QM, MsgRich::MAX_MSG_SIZE);
+        assert_eq!(ComposedConfig::QW, MsgRich::QUEUE_WAITQ);
+        // PortsConfig
+        assert_eq!(ComposedConfig::SP, PortsRich::SAMPLING_PORTS);
+        assert_eq!(ComposedConfig::SM, PortsRich::SAMPLING_MAX_MSG_SIZE);
+        assert_eq!(ComposedConfig::BS, PortsRich::BLACKBOARDS);
+        assert_eq!(ComposedConfig::BM, PortsRich::BLACKBOARD_MAX_MSG_SIZE);
+        assert_eq!(ComposedConfig::BW, PortsRich::BLACKBOARD_WAITQ);
+        // DebugConfig
+        assert_eq!(
+            ComposedConfig::DEBUG_AUTO_DRAIN_BUDGET,
+            DebugDisabled::AUTO_DRAIN_BUDGET
+        );
+        // Non-overridden defaults
+        assert_eq!(ComposedConfig::CORE_CLOCK_HZ, 12_000_000);
+        assert_eq!(ComposedConfig::TICK_PERIOD_US, 1000);
+    }
+
+    compose_kernel_config!(ComposedP1<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+
+    #[test]
+    fn composed_with_partitions1() {
+        assert_eq!(ComposedP1::N, 1);
+        assert_eq!(ComposedP1::SCHED, 4);
+        assert_eq!(ComposedP1::STACK_WORDS, 256);
+        assert_eq!(ComposedP1::S, SyncMinimal::SEMAPHORES);
+        assert_eq!(ComposedP1::SP, PortsTiny::SAMPLING_PORTS);
+        assert_eq!(ComposedP1::BS, PortsTiny::BLACKBOARDS);
+        assert_eq!(
+            ComposedP1::DEBUG_AUTO_DRAIN_BUDGET,
+            DebugEnabled::AUTO_DRAIN_BUDGET
+        );
     }
 }
