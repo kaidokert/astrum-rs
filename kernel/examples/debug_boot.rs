@@ -41,25 +41,19 @@ use kernel::{
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
-const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = 256;
-
-kernel::kernel_config! { TestConfig {
-    partitions = 2;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-}}
+kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Manual stacks (not using define_unified_harness!)
 #[repr(C, align(1024))]
-struct AlignedStack([u32; STACK_WORDS]);
+struct AlignedStack([u32; TestConfig::STACK_WORDS]);
 
-static mut STACKS: [AlignedStack; NUM_PARTITIONS] = {
-    const ZERO: AlignedStack = AlignedStack([0; STACK_WORDS]);
-    [ZERO; NUM_PARTITIONS]
+static mut STACKS: [AlignedStack; TestConfig::N] = {
+    const ZERO: AlignedStack = AlignedStack([0; TestConfig::STACK_WORDS]);
+    [ZERO; TestConfig::N]
 };
 
 // Use define_unified_kernel! to provide kernel storage and offset symbols for PendSV
@@ -134,15 +128,18 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(0, 2)).expect("sched");
 
     // Build partition configs
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
+    // SAFETY: single-core Cortex-M, interrupts not yet enabled — exclusive
+    // access to all static-mut variables (STACKS). Exception priorities are
+    // configured before SysTick is enabled.
+    let cfgs: [PartitionConfig; TestConfig::N] = unsafe {
         core::array::from_fn(|i| {
             let b = STACKS[i].0.as_ptr() as u32;
             PartitionConfig {
                 id: i as u8,
                 entry_point: 0,
                 stack_base: b,
-                stack_size: (STACK_WORDS * 4) as u32,
-                mpu_region: MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0),
+                stack_size: (TestConfig::STACK_WORDS * 4) as u32,
+                mpu_region: MpuRegion::new(b, (TestConfig::STACK_WORDS * 4) as u32, 0),
                 peripheral_regions: heapless::Vec::new(),
             }
         })

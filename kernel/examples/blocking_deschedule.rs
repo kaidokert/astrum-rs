@@ -24,20 +24,11 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{try_transition, Kernel},
     syscall::{SYS_GET_TIME, SYS_QUEUING_RECV_TIMED, SYS_YIELD},
+    DebugEnabled, MsgSmall, Partitions1, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
-const NP: usize = 1;
-
-kernel::kernel_config! { Cfg {
-    partitions = 1;
-    queues = 2;
-    queue_depth = 4;
-    max_msg_size = 4;
-    queue_waitq = 4;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-}}
+kernel::compose_kernel_config!(Cfg<Partitions1, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
 
 // Use define_unified_kernel! which generates KERNEL static, dispatch_hook, and store_kernel
 kernel::define_unified_kernel!(Cfg, |k| {
@@ -56,9 +47,9 @@ kernel::define_pendsv!();
 
 #[repr(C, align(1024))]
 struct Stack([u32; Cfg::STACK_WORDS]);
-static mut STACKS: [Stack; NP] = {
+static mut STACKS: [Stack; Cfg::N] = {
     const Z: Stack = Stack([0; Cfg::STACK_WORDS]);
-    [Z; NP]
+    [Z; Cfg::N]
 };
 
 /// Tick when partition called blocking recv
@@ -163,7 +154,7 @@ fn main() -> ! {
     // SAFETY: single-core Cortex-M, interrupts not yet enabled — exclusive
     // access to all static-mut variables (STACKS, PARTITION_SP). Exception
     // priorities are configured before SysTick is enabled.
-    let cfgs: [PartitionConfig; NP] = unsafe {
+    let cfgs: [PartitionConfig; Cfg::N] = unsafe {
         [{
             let b = STACKS[0].0.as_ptr() as u32;
             PartitionConfig {

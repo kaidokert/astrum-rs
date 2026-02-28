@@ -18,6 +18,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     syscall::{SYS_QUEUING_RECV, SYS_QUEUING_SEND, SYS_YIELD},
+    DebugEnabled, MsgSmall, Partitions2, PortsTiny, SyncMinimal,
 };
 #[cfg(panic_backend = "halt")]
 use panic_halt as _;
@@ -27,15 +28,7 @@ use panic_rtt_target as _;
 use panic_semihosting as _;
 // TODO: replace ERR bitmask with a typed Result abstraction once syscall API supports it
 const ERR: u32 = 0x8000_0000;
-kernel::kernel_config! { Cfg {
-    partitions = 2;
-    queues = 2;
-    queue_depth = 4;
-    max_msg_size = 4;
-    queue_waitq = 2;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-}}
+kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
 static P0_SENT: AtomicU32 = AtomicU32::new(0);
 static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);
 static PARTS_RAN: AtomicU32 = AtomicU32::new(0);
