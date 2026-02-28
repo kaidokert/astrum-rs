@@ -15,7 +15,7 @@ stack buffer.
 ## Root Cause
 
 `Kernel::new()` copies `c.mpu_region` from user-supplied `PartitionConfig`
-directly into the PCB (`svc.rs:1101` -- `let mpu_region = c.mpu_region`).
+directly into the PCB (`svc.rs:1127` -- `let mpu_region = c.mpu_region`).
 For sentinel partitions (size==0), the base address is derived from the
 internal stack pointer before struct placement. After `Kernel::new()` returns
 and the struct is moved into `UNIFIED_KERNEL_STORAGE` (or heap via `Box`),
@@ -38,7 +38,7 @@ keep their original base untouched.
 3. **Boot fixup loop** (`boot.rs:314-321`) -- After stack relocation, calls
    `fix_mpu_data_region_if_sentinel()` with the real `core_stack` base.
 
-4. **`Kernel::new()`** (`svc.rs:1101`) -- Simplified to passthrough copy;
+4. **`Kernel::new()`** (`svc.rs:1127`) -- Simplified to passthrough copy;
    fixup deferred to boot time.
 
 5. **Invariant check** (`boot.rs:325-336`) -- `assert_pcb_addresses_in_storage()`
@@ -49,11 +49,12 @@ keep their original base untouched.
 | File | Lines | Description |
 |------|-------|-------------|
 | `kernel/src/boot.rs` | 218-228 | `fix_mpu_data_region_if_sentinel()` helper |
+| `kernel/src/boot.rs` | 290-303 | Stack relocation and AAPCS alignment |
 | `kernel/src/boot.rs` | 314-321 | Post-move fixup loop in `boot()` |
 | `kernel/src/boot.rs` | 325-336 | `assert_pcb_addresses_in_storage()` invariant |
 | `kernel/src/partition.rs` | 260-263 | `fix_mpu_data_region()` base-patching method |
-| `kernel/src/svc.rs` | 1101 | `Kernel::new()` passthrough copy |
-| `kernel/src/svc.rs` | 2230-2237 | `Kernel::fix_mpu_data_region()` public wrapper |
+| `kernel/src/svc.rs` | 1127 | `Kernel::new()` passthrough copy |
+| `kernel/src/svc.rs` | 2256-2263 | `Kernel::fix_mpu_data_region()` public wrapper |
 
 ## Resolution Checklist
 
