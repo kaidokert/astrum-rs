@@ -1219,17 +1219,20 @@ macro_rules! _kernel_config_body {
     };
 }
 
+/// # Deprecated — use `compose_kernel_config!` instead
+///
+/// This macro is **soft-deprecated**. New code should use
+/// [`compose_kernel_config!`], which builds a [`KernelConfig`] from
+/// reusable sub-config presets with compile-time validation.
+///
+/// `kernel_config!` is retained as a **low-level escape hatch** for cases
+/// that require direct `const` control over individual fields not covered
+/// by any existing preset.
+///
+/// ---
+///
 /// Generates a config struct, `impl KernelConfig`, and the associated type
 /// aliases from just the non-default overrides.
-///
-/// For the higher-level preset-based API, see [`compose_kernel_config!`].
-///
-/// # Prefer `compose_kernel_config!` for new configs
-///
-/// Most configurations should use `compose_kernel_config!` instead, which
-/// composes a [`KernelConfig`] from reusable sub-config presets. Use this
-/// macro only when you need fine-grained control over individual fields not
-/// covered by an existing preset.
 ///
 /// The macro also generates an inherent `impl` block that re-exports every
 /// trait constant, so callers can write `MyConfig::SCHED` without importing
