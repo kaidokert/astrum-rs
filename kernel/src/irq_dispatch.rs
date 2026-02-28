@@ -3,6 +3,8 @@
 //! Each `IrqBinding` records which partition should be notified (and with
 //! which event bits) when a particular hardware IRQ fires.
 
+#[cfg(not(test))]
+use crate::config::KernelConfig;
 use crate::events;
 use crate::partition::{PartitionState, PartitionTable};
 
@@ -24,6 +26,59 @@ pub fn signal_partition_inner<const N: usize>(
     was_waiting
         && t.get(target)
             .is_some_and(|p| p.state() == PartitionState::Ready)
+}
+
+/// ISR-callable wrapper that signals a partition and pends a context switch
+/// if the partition was woken.
+///
+/// This is intended to be called from a hardware IRQ handler. It:
+/// 1. Acquires mutable access to the kernel state in a critical section
+/// 2. Calls [`signal_partition_inner`] on the kernel's partition table
+/// 3. Pends PendSV if the target partition transitioned to `Ready`
+///
+/// # Type Parameters
+///
+/// - `C`: The kernel configuration type, which determines partition table size
+///   and other kernel parameters.
+#[cfg(not(test))]
+pub fn signal_partition_from_isr<C: KernelConfig>(partition_id: u8, event_bits: u32)
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+    C::Core: crate::config::CoreOps<
+        PartTable = crate::partition::PartitionTable<{ C::N }>,
+        SchedTable = crate::scheduler::ScheduleTable<{ C::SCHED }>,
+    >,
+    C::Sync: crate::config::SyncOps<
+        SemPool = crate::semaphore::SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = crate::mutex::MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: crate::config::MsgOps<
+        MsgPool = crate::message::MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = crate::queuing::QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: crate::config::PortsOps<
+        SamplingPool = crate::sampling::SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    crate::state::with_kernel_mut::<C, _, _>(|kernel| {
+        let woken =
+            signal_partition_inner(kernel.partitions_mut(), partition_id as usize, event_bits);
+        if woken {
+            // SAFETY: SCB::set_pendsv() sets the PendSV pending bit in the
+            // ICSR register. This is always safe on Cortex-M — it merely
+            // requests a PendSV exception at the next opportunity and has no
+            // preconditions beyond running on a Cortex-M core.
+            cortex_m::peripheral::SCB::set_pendsv();
+        }
+    });
 }
 
 /// A const-friendly mapping from an IRQ number to a (partition, event_bits) pair.
