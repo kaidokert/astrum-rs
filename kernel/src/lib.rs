@@ -32,10 +32,10 @@ pub mod blackboard;
 pub mod buffer_pool;
 pub mod config;
 pub use config::{
-    DebugConfig, DebugDisabled, DebugEnabled, DefaultConfig, MsgConfig, MsgMinimal, MsgRich,
-    MsgSmall, MsgStandard, PartitionConfig, Partitions1, Partitions2, Partitions3, Partitions4,
-    PortsConfig, PortsMinimal, PortsRich, PortsSmall, PortsStandard, PortsTiny, SyncConfig,
-    SyncMinimal, SyncRich, SyncStandard,
+    DebugConfig, DebugDisabled, DebugEnabled, DefaultConfig, KernelConfig, MsgConfig, MsgMinimal,
+    MsgRich, MsgSmall, MsgStandard, PartitionConfig, Partitions1, Partitions2, Partitions3,
+    Partitions4, PortsConfig, PortsMinimal, PortsRich, PortsSmall, PortsStandard, PortsTiny,
+    SyncConfig, SyncMinimal, SyncRich, SyncStandard,
 };
 pub mod context;
 #[cfg(feature = "partition-debug")]
@@ -169,6 +169,13 @@ mod reexport_tests {
 
         const { assert!(DebugEnabled::AUTO_DRAIN_BUDGET > 0) };
         assert_eq!(DebugDisabled::AUTO_DRAIN_BUDGET, 0);
+    }
+
+    fn _assert_kernel_cfg<T: KernelConfig>() {}
+
+    #[test]
+    fn kernel_config_trait_via_root() {
+        _assert_kernel_cfg::<DefaultConfig>();
     }
 
     #[test]

@@ -1038,7 +1038,8 @@ macro_rules! kernel_config {
 /// ```
 #[macro_export]
 macro_rules! compose_kernel_config {
-    ($vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty > { $($overrides:tt)* }) => {
+    ($(#[$meta:meta])* $vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty > { $($overrides:tt)* }) => {
+        $(#[$meta])*
         $vis struct $name;
 
         impl $crate::config::KernelConfig for $name {
@@ -1077,8 +1078,8 @@ macro_rules! compose_kernel_config {
         const _: () = $crate::config::assert_priority_order::<$name>();
         const _: () = $crate::config::assert_systick_reload::<$name>();
     };
-    ($vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty >) => {
-        $crate::compose_kernel_config!($vis $name < $parts, $sync, $msg, $ports, $debug > {});
+    ($(#[$meta:meta])* $vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty >) => {
+        $crate::compose_kernel_config!($(#[$meta])* $vis $name < $parts, $sync, $msg, $ports, $debug > {});
     };
 }
 
@@ -2168,6 +2169,19 @@ mod tests {
     fn custom_presets_preserve_kernel_defaults() {
         assert_eq!(CustomPresetConfig::CORE_CLOCK_HZ, 12_000_000);
         assert_eq!(CustomPresetConfig::TICK_PERIOD_US, 1000);
+    }
+
+    // ============ compose_kernel_config! doc-attribute forwarding ============
+
+    compose_kernel_config!(
+        /// A documented composed config for testing attribute forwarding.
+        DocComposedConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugDisabled>
+    );
+
+    #[test]
+    fn compose_doc_attribute_compiles() {
+        // If this compiles, the doc-attribute was forwarded to the struct.
+        assert_eq!(DocComposedConfig::N, 2);
     }
 
     // ============ DefaultConfig tests ============
