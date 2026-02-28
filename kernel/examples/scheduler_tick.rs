@@ -11,16 +11,10 @@ use kernel::partition::{MpuRegion, PartitionConfig, PartitionState};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::tick::configure_systick;
+use kernel::{DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncStandard};
 use panic_semihosting as _;
 
-kernel::kernel_config! { TestConfig {
-    partitions = 4;
-    schedule_capacity = 8;
-    semaphores = 4;
-    semaphore_waitq = 4;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-}}
+kernel::compose_kernel_config!(TestConfig<Partitions4, SyncStandard, MsgMinimal, PortsTiny, DebugEnabled>);
 
 kernel::define_unified_kernel!(TestConfig);
 

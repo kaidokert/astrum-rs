@@ -35,6 +35,7 @@ use kernel::{
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
@@ -60,12 +61,15 @@ static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
 
-kernel::kernel_config!(TestConfig {
-    partitions = 2;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-    buffer_pool_regions = 2;
-});
+kernel::compose_kernel_config!(
+    TestConfig < Partitions2,
+    SyncMinimal,
+    MsgMinimal,
+    PortsTiny,
+    DebugEnabled > {
+        buffer_pool_regions = 2;
+    }
+);
 
 // Use define_unified_kernel! to create the KERNEL static and dispatch hook.
 // The yield handler is empty since this test uses a custom SysTick handler.

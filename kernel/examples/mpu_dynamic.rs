@@ -32,6 +32,7 @@ use kernel::{
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
@@ -54,12 +55,15 @@ static mut CURRENT_PARTITION: u32 = u32::MAX;
 #[no_mangle]
 static mut NEXT_PARTITION: u32 = 0;
 
-kernel::kernel_config! { TestConfig {
-    partitions = 2;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-    dynamic_regions = 4;
-}}
+kernel::compose_kernel_config!(
+    TestConfig < Partitions2,
+    SyncMinimal,
+    MsgMinimal,
+    PortsTiny,
+    DebugEnabled > {
+        dynamic_regions = 4;
+    }
+);
 
 // Use define_unified_kernel! with empty yield handler (this test doesn't use SVC yield).
 kernel::define_unified_kernel!(TestConfig, |_k| {});
