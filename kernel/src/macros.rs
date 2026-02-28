@@ -196,6 +196,92 @@ macro_rules! partition_trampoline {
     };
 }
 
+/// Generate a custom interrupt vector table and dispatch handler.
+///
+/// This macro binds hardware IRQ numbers to (partition, event_bits) pairs and
+/// generates the static IVT required by cortex-m-rt 0.7.
+///
+/// # Syntax
+///
+/// ```ignore
+/// kernel::bind_interrupts!(MyConfig, 70,
+///     5  => (0, 0x01),  // IRQ 5  → partition 0, event 0x01
+///     23 => (1, 0x04),  // IRQ 23 → partition 1, event 0x04
+/// );
+/// ```
+///
+/// # Generated Items
+///
+/// | Item | Description |
+/// |------|-------------|
+/// | `__IRQ_BINDINGS` | `static` array of `IrqBinding` |
+/// | `__irq_dispatch` | Dispatch handler reading IPSR |
+/// | `__INTERRUPTS` | IVT in `.vector_table.interrupts` |
+#[macro_export]
+macro_rules! bind_interrupts {
+    ($Config:ty, $count:expr, $( $irq:expr => ($pid:expr, $evt:expr) ),+ $(,)?) => {
+        // ---- compile-time validation (runs on all targets) ----
+        const _: () = {
+            const BINDINGS: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = [
+                $( $crate::irq_dispatch::IrqBinding::new($irq, $pid, $evt), )+
+            ];
+            assert!(
+                !$crate::irq_dispatch::has_duplicate_irqs(&BINDINGS),
+                "bind_interrupts!: duplicate IRQ number"
+            );
+            $(
+                assert!(
+                    ($irq as usize) < ($count as usize),
+                    "bind_interrupts!: IRQ number >= count"
+                );
+            )+
+        };
+
+        // ---- feature gate (ARM only) ----
+        #[cfg(all(not(test), target_arch = "arm", not(feature = "custom-ivt")))]
+        compile_error!(
+            "bind_interrupts! requires the `custom-ivt` feature; \
+             add `features = [\"custom-ivt\"]` to your Cargo.toml"
+        );
+
+        // ---- binding table (ARM only) ----
+        // TODO: binding list is repeated in validation and here; acceptable for a declarative macro
+        #[cfg(all(not(test), target_arch = "arm"))]
+        static __IRQ_BINDINGS: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = [
+            $( $crate::irq_dispatch::IrqBinding::new($irq, $pid, $evt), )+
+        ];
+
+        // ---- dispatch handler (ARM only) ----
+        #[cfg(all(not(test), target_arch = "arm"))]
+        extern "C" fn __irq_dispatch() {
+            let ipsr: u32;
+            // SAFETY: `mrs` reads the IPSR register, which is always
+            // readable in any execution mode on Cortex-M.  The register
+            // is read-only and has no side effects.
+            unsafe { core::arch::asm!("mrs {}, ipsr", out(reg) ipsr) };
+            let irq_num = (ipsr & 0x1FF).wrapping_sub(16) as u8;
+            if let Some(idx) = $crate::irq_dispatch::lookup_binding(&__IRQ_BINDINGS, irq_num) {
+                if let Some(b) = __IRQ_BINDINGS.get(idx) {
+                    $crate::irq_dispatch::signal_partition_from_isr::<$Config>(
+                        b.partition_id,
+                        b.event_bits,
+                    );
+                }
+            }
+        }
+
+        // ---- IVT static (ARM only) ----
+        #[cfg(all(not(test), target_arch = "arm"))]
+        #[link_section = ".vector_table.interrupts"]
+        #[no_mangle]
+        pub static __INTERRUPTS: [unsafe extern "C" fn(); $count] = {
+            const HANDLER: unsafe extern "C" fn() =
+                __irq_dispatch as unsafe extern "C" fn();
+            [HANDLER; $count]
+        };
+    };
+}
+
 /// Generate a SysTick exception handler that advances the scheduler.
 ///
 /// This macro emits a `SysTick` exception handler that calls
@@ -263,4 +349,37 @@ mod tests {
     // macro generates code using cortex_m::interrupt::free and other ARM
     // intrinsics. The QEMU integration tests verify the actual functionality.
     // See svc.rs::unified_kernel_macro_tests for the gating pattern.
+
+    // ---- bind_interrupts! compile-time validation tests ----
+    // The const assertion block runs on all targets (including host).
+    // ARM-specific codegen (IVT, dispatch handler) is cfg-gated out on host.
+
+    // DefaultConfig is passed to bind_interrupts! as the Config type parameter.
+    // On non-ARM hosts the ARM-specific codegen is cfg-gated out, so the type
+    // is only consumed by the const validation block (which doesn't reference it).
+    #[allow(unused_imports)]
+    use crate::config::DefaultConfig;
+
+    // Invoke the macro with valid bindings — the const assertion block
+    // succeeds, and the ARM-only items are cfg-gated out on host.
+    bind_interrupts!(DefaultConfig, 70,
+        5  => (0, 0x01),
+        23 => (1, 0x04),
+    );
+
+    #[test]
+    fn bind_interrupts_const_validation_passes() {
+        // If we reach here, the const assertion block in bind_interrupts!
+        // accepted the bindings (no duplicates, all IRQs < 70).
+    }
+
+    // Verify the const validation also works with a single binding.
+    bind_interrupts!(DefaultConfig, 10,
+        9 => (0, 0xFF),
+    );
+
+    #[test]
+    fn bind_interrupts_single_binding_accepted() {
+        // Single binding: IRQ 9 < 10, no duplicates — const assertion passes.
+    }
 }
