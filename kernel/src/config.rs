@@ -29,31 +29,37 @@
 //! **nRF52840 — 64 MHz core clock, default 1 ms tick:**
 //!
 //! ```ignore
-//! kernel::kernel_config!(Nrf52840Config {
-//!     const N: usize = 4;
-//!     const CORE_CLOCK_HZ: u32 = 64_000_000;
-//! });
+//! kernel::compose_kernel_config!(
+//!     pub Nrf52840Config<Partitions4, SyncStandard, MsgStandard,
+//!                        PortsStandard, DebugEnabled> {
+//!         core_clock_hz = 64_000_000;
+//!     }
+//! );
 //! ```
 //!
 //! **STM32F4 — 168 MHz core clock, 500 µs tick:**
 //!
 //! ```ignore
-//! kernel::kernel_config!(Stm32f4Config {
-//!     const N: usize = 4;
-//!     const CORE_CLOCK_HZ: u32 = 168_000_000;
-//!     const TICK_PERIOD_US: u32 = 500;
-//! });
+//! kernel::compose_kernel_config!(
+//!     pub Stm32f4Config<Partitions4, SyncStandard, MsgStandard,
+//!                       PortsStandard, DebugEnabled> {
+//!         core_clock_hz = 168_000_000;
+//!         tick_period_us = 500;
+//!     }
+//! );
 //! ```
 //!
 //! **SAMD51 — 120 MHz core clock, external reference clock:**
 //!
 //! ```ignore
-//! kernel::kernel_config!(Samd51Config {
-//!     const N: usize = 4;
-//!     const CORE_CLOCK_HZ: u32 = 15_000_000; // HCLK/8 external ref
-//!     const TICK_PERIOD_US: u32 = 2000;
-//!     const USE_PROCESSOR_CLOCK: bool = false;
-//! });
+//! kernel::compose_kernel_config!(
+//!     pub Samd51Config<Partitions4, SyncStandard, MsgStandard,
+//!                      PortsStandard, DebugEnabled> {
+//!         core_clock_hz = 15_000_000; // HCLK/8 external ref
+//!         tick_period_us = 2000;
+//!         use_processor_clock = false;
+//!     }
+//! );
 //! ```
 //!
 //! ## Consequences of Incorrect `CORE_CLOCK_HZ`
@@ -934,6 +940,8 @@ macro_rules! _kernel_config_body {
 
 /// Generates a config struct, `impl KernelConfig`, and the associated type
 /// aliases from just the non-default overrides.
+///
+/// For the higher-level preset-based API, see [`compose_kernel_config!`].
 ///
 /// # Prefer `compose_kernel_config!` for new configs
 ///
