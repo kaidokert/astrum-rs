@@ -1037,9 +1037,31 @@ where
 {
     /// Create a new `Kernel` with the given schedule and partition configs.
     ///
+    /// Forwards to [`with_config`](Self::with_config). Provided for backward
+    /// compatibility — all existing `Kernel::<Config>::new()` call sites
+    /// continue to work unchanged.
+    pub fn new(
+        schedule: ScheduleTable<{ C::SCHED }>,
+        configs: &[PartitionConfig],
+        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
+            'static,
+            { C::DR },
+        >,
+    ) -> Result<Self, ConfigError> {
+        Self::with_config(
+            schedule,
+            configs,
+            #[cfg(feature = "dynamic-mpu")]
+            registry,
+        )
+    }
+
+    /// Primary constructor for custom kernel configurations.
+    ///
     /// Validates that: schedule is non-empty, all schedule entries reference
     /// valid partitions, and all partition configs pass MPU/stack validation.
-    pub fn new(
+    /// Use this when explicitly supplying a `KernelConfig` type parameter.
+    pub fn with_config(
         schedule: ScheduleTable<{ C::SCHED }>,
         configs: &[PartitionConfig],
         #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
