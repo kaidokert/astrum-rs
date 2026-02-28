@@ -2114,6 +2114,62 @@ mod tests {
         assert_eq!(ComposedClockOverride::SYSTICK_CYCLES, 32_000);
     }
 
+    // ============ custom user-defined preset tests ============
+
+    struct CustomPartitions;
+
+    impl PartitionConfig for CustomPartitions {
+        const COUNT: usize = 6;
+        const SCHEDULE_CAPACITY: usize = 16;
+        const STACK_WORDS: usize = 512;
+    }
+
+    struct CustomSync;
+
+    impl SyncConfig for CustomSync {
+        const SEMAPHORES: usize = 16;
+        const SEMAPHORE_WAITQ: usize = 8;
+        const MUTEXES: usize = 8;
+        const MUTEX_WAITQ: usize = 8;
+    }
+
+    compose_kernel_config!(CustomPresetConfig<CustomPartitions, CustomSync, MsgStandard, PortsSmall, DebugEnabled>);
+
+    #[test]
+    fn custom_presets_bridge_correctly() {
+        // CustomPartitions bridges
+        assert_eq!(CustomPresetConfig::N, 6);
+        assert_eq!(CustomPresetConfig::SCHED, 16);
+        assert_eq!(CustomPresetConfig::STACK_WORDS, 512);
+        // CustomSync bridges
+        assert_eq!(CustomPresetConfig::S, 16);
+        assert_eq!(CustomPresetConfig::SW, 8);
+        assert_eq!(CustomPresetConfig::MS, 8);
+        assert_eq!(CustomPresetConfig::MW, 8);
+        // MsgStandard bridges (non-custom, still correct)
+        assert_eq!(CustomPresetConfig::QS, MsgStandard::QUEUES);
+        assert_eq!(CustomPresetConfig::QD, MsgStandard::QUEUE_DEPTH);
+        assert_eq!(CustomPresetConfig::QM, MsgStandard::MAX_MSG_SIZE);
+        assert_eq!(CustomPresetConfig::QW, MsgStandard::QUEUE_WAITQ);
+        // PortsSmall bridges
+        assert_eq!(CustomPresetConfig::SP, PortsSmall::SAMPLING_PORTS);
+        assert_eq!(CustomPresetConfig::SM, PortsSmall::SAMPLING_MAX_MSG_SIZE);
+        assert_eq!(CustomPresetConfig::BS, PortsSmall::BLACKBOARDS);
+        assert_eq!(CustomPresetConfig::BM, PortsSmall::BLACKBOARD_MAX_MSG_SIZE);
+        assert_eq!(CustomPresetConfig::BW, PortsSmall::BLACKBOARD_WAITQ);
+        // DebugConfig bridges
+        assert_eq!(
+            CustomPresetConfig::DEBUG_AUTO_DRAIN_BUDGET,
+            DebugEnabled::AUTO_DRAIN_BUDGET
+        );
+    }
+
+    #[test]
+    fn custom_presets_preserve_kernel_defaults() {
+        assert_eq!(CustomPresetConfig::CORE_CLOCK_HZ, 12_000_000);
+        assert_eq!(CustomPresetConfig::TICK_PERIOD_US, 1000);
+    }
+
     // ============ DefaultConfig tests ============
 
     #[test]
