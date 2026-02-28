@@ -843,6 +843,35 @@ macro_rules! _kernel_config_field {
     };
 }
 
+/// Emits the `DEBUG_BUFFER_SIZE` bridge constant from a debug preset
+/// **unless** the override tokens already contain `debug_buffer_size = …;`.
+///
+/// This prevents duplicate-const errors when a user overrides
+/// `debug_buffer_size` inside a `compose_kernel_config!` block.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _compose_debug_default {
+    // Found `debug_buffer_size` override — skip the bridge.
+    ($debug:ty; debug_buffer_size = $v:expr; $($rest:tt)*) => {};
+    // Skip friendly-name fields that are not `debug_buffer_size`.
+    ($debug:ty; $field:ident = $v:expr; $($rest:tt)*) => {
+        $crate::_compose_debug_default!($debug; $($rest)*);
+    };
+    // Skip raw `const` items.
+    ($debug:ty; const $name:ident : $ty:ty = $v:expr; $($rest:tt)*) => {
+        $crate::_compose_debug_default!($debug; $($rest)*);
+    };
+    // Skip attributed `const` items.
+    ($debug:ty; #[$attr:meta] const $name:ident : $ty:ty = $v:expr; $($rest:tt)*) => {
+        $crate::_compose_debug_default!($debug; $($rest)*);
+    };
+    // End of tokens — no override found, emit the bridge.
+    ($debug:ty;) => {
+        #[cfg(feature = "partition-debug")]
+        const DEBUG_BUFFER_SIZE: usize = <$debug as $crate::config::DebugConfig>::BUFFER_SIZE;
+    };
+}
+
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _kernel_config_body {
@@ -916,12 +945,16 @@ macro_rules! kernel_config {
 /// - `$ports`: [`PortsConfig`]
 /// - `$debug`: [`DebugConfig`]
 ///
+/// An optional `{ field = value; ... }` block after the type parameters
+/// overrides non-sub-config fields (e.g. `mpu_enforce`, `core_clock_hz`).
+/// The body is processed by [`_kernel_config_body!`].
+///
 /// The macro generates a zero-sized struct, bridges every sub-config
 /// constant to the flat [`KernelConfig`] constant, and calls
 /// [`kernel_config_types!`] and [`_kernel_config_inherent_consts!`].
 #[macro_export]
 macro_rules! compose_kernel_config {
-    ($vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty >) => {
+    ($vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty > { $($overrides:tt)* }) => {
         $vis struct $name;
 
         impl $crate::config::KernelConfig for $name {
@@ -945,17 +978,23 @@ macro_rules! compose_kernel_config {
             const BS: usize = <$ports as $crate::config::PortsConfig>::BLACKBOARDS;
             const BM: usize = <$ports as $crate::config::PortsConfig>::BLACKBOARD_MAX_MSG_SIZE;
             const BW: usize = <$ports as $crate::config::PortsConfig>::BLACKBOARD_WAITQ;
-            // DebugConfig
-            #[cfg(feature = "partition-debug")]
-            const DEBUG_BUFFER_SIZE: usize = <$debug as $crate::config::DebugConfig>::BUFFER_SIZE;
+            // DebugConfig — DEBUG_BUFFER_SIZE is conditionally bridged via
+            // _compose_debug_default! so that an override block can replace it.
+            $crate::_compose_debug_default!($debug; $($overrides)*);
             const DEBUG_AUTO_DRAIN_BUDGET: usize =
                 <$debug as $crate::config::DebugConfig>::AUTO_DRAIN_BUDGET;
+
+            // Non-sub-config overrides
+            $crate::_kernel_config_body!($($overrides)*);
 
             $crate::kernel_config_types!();
         }
         $crate::_kernel_config_inherent_consts!($vis $name);
         const _: () = $crate::config::assert_priority_order::<$name>();
         const _: () = $crate::config::assert_systick_reload::<$name>();
+    };
+    ($vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty >) => {
+        $crate::compose_kernel_config!($vis $name < $parts, $sync, $msg, $ports, $debug > {});
     };
 }
 
@@ -1833,6 +1872,65 @@ mod tests {
         assert_eq!(ComposedP3MsgSmall::QD, 4);
         assert_eq!(ComposedP3MsgSmall::QM, 4);
         assert_eq!(ComposedP3MsgSmall::QW, 2);
+    }
+
+    // ============ compose_kernel_config! override tests ============
+
+    compose_kernel_config!(
+        ComposedMpuOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugEnabled > {
+            mpu_enforce = true;
+        }
+    );
+
+    #[test]
+    fn compose_with_mpu_enforce_override() {
+        // Override takes effect
+        const { assert!(ComposedMpuOverride::MPU_ENFORCE) };
+        // Preset-derived values preserved
+        assert_eq!(ComposedMpuOverride::N, Partitions2::COUNT);
+        assert_eq!(ComposedMpuOverride::SCHED, Partitions2::SCHEDULE_CAPACITY);
+        assert_eq!(ComposedMpuOverride::STACK_WORDS, Partitions2::STACK_WORDS);
+        assert_eq!(ComposedMpuOverride::S, SyncMinimal::SEMAPHORES);
+        assert_eq!(ComposedMpuOverride::QS, MsgMinimal::QUEUES);
+        assert_eq!(ComposedMpuOverride::SP, PortsTiny::SAMPLING_PORTS);
+        assert_eq!(
+            ComposedMpuOverride::DEBUG_AUTO_DRAIN_BUDGET,
+            DebugEnabled::AUTO_DRAIN_BUDGET
+        );
+    }
+
+    compose_kernel_config!(
+        ComposedDebugBufOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugEnabled > {
+            debug_buffer_size = 1024;
+        }
+    );
+
+    #[test]
+    fn compose_with_debug_buffer_size_override() {
+        // Feature-gated override takes effect
+        #[cfg(feature = "partition-debug")]
+        {
+            assert_eq!(ComposedDebugBufOverride::DEBUG_BUFFER_SIZE, 1024);
+            // Confirm it actually differs from the preset default
+            assert_ne!(
+                ComposedDebugBufOverride::DEBUG_BUFFER_SIZE,
+                DebugEnabled::BUFFER_SIZE
+            );
+        }
+        // Non-overridden sub-config values preserved
+        assert_eq!(ComposedDebugBufOverride::N, Partitions2::COUNT);
+        assert_eq!(
+            ComposedDebugBufOverride::DEBUG_AUTO_DRAIN_BUDGET,
+            DebugEnabled::AUTO_DRAIN_BUDGET
+        );
     }
 
     // ============ DefaultConfig tests ============
