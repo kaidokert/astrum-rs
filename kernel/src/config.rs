@@ -865,6 +865,8 @@ macro_rules! kernel_config {
             $crate::kernel_config_types!();
         }
         $crate::_kernel_config_inherent_consts!($vis $name);
+        const _: () = $crate::config::assert_priority_order::<$name>();
+        const _: () = $crate::config::assert_systick_reload::<$name>();
     };
     ($(#[$meta:meta])* $vis:vis $name:ident [$stack:ty] { $($body:tt)* }) => {
         $(#[$meta])*
@@ -874,6 +876,8 @@ macro_rules! kernel_config {
             $crate::kernel_config_types!($stack);
         }
         $crate::_kernel_config_inherent_consts!($vis $name);
+        const _: () = $crate::config::assert_priority_order::<$name>();
+        const _: () = $crate::config::assert_systick_reload::<$name>();
     };
 }
 
@@ -924,6 +928,8 @@ macro_rules! compose_kernel_config {
             $crate::kernel_config_types!();
         }
         $crate::_kernel_config_inherent_consts!($vis $name);
+        const _: () = $crate::config::assert_priority_order::<$name>();
+        const _: () = $crate::config::assert_systick_reload::<$name>();
     };
 }
 
