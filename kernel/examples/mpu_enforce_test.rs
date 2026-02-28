@@ -19,6 +19,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     syscall::SYS_YIELD,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
@@ -26,13 +27,15 @@ const NP: usize = 2;
 const SW: usize = 256; // AlignedStack1K = 256 words = 1024 bytes
 const REGION_SZ: u32 = 1024;
 
-kernel::kernel_config! { TestConfig {
-    partitions = 2;
-    mpu_enforce = true;
-    stack_words = SW;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-}}
+kernel::compose_kernel_config!(
+    TestConfig < Partitions2,
+    SyncMinimal,
+    MsgMinimal,
+    PortsTiny,
+    DebugEnabled > {
+        mpu_enforce = true;
+    }
+);
 
 // Partition entries: yield in a loop. No memory access beyond the
 // stack (covered by the MPU data region) and registers (SVC ABI).

@@ -12,19 +12,10 @@ use kernel::mpu;
 use kernel::partition::{MpuRegion, PartitionConfig, PartitionState};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
-use kernel::{boot, events};
+use kernel::{boot, events, DebugEnabled, MsgStandard, Partitions4, PortsTiny, SyncMinimal};
 use panic_semihosting as _;
 
-kernel::kernel_config! { IntegrationConfig {
-    partitions = 4;
-    schedule_capacity = 8;
-    queues = 4;
-    queue_depth = 4;
-    max_msg_size = 4;
-    queue_waitq = 4;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-}}
+kernel::compose_kernel_config!(IntegrationConfig<Partitions4, SyncMinimal, MsgStandard, PortsTiny, DebugEnabled>);
 
 static P_RAN: AtomicU32 = AtomicU32::new(u32::MAX);
 static SW: AtomicU32 = AtomicU32::new(0);
