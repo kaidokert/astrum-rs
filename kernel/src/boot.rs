@@ -322,6 +322,18 @@ where
         }
         // Reject sentinel partitions when MPU enforcement is active.
         check_sentinel_mpu_enforce(k.partitions().as_slice(), C::MPU_ENFORCE)?;
+        // Verify all PCB addresses were patched into the live storage range;
+        // catches stale pre-move addresses left over from static init.
+        #[cfg(debug_assertions)]
+        {
+            let storage_start = k as *const _ as u32;
+            let storage_end = storage_start + core::mem::size_of_val(k) as u32;
+            crate::invariants::assert_pcb_addresses_in_storage(
+                k.partitions().as_slice(),
+                storage_start,
+                storage_end,
+            );
+        }
         Ok::<(), BootError>(())
     })?;
 
