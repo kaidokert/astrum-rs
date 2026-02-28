@@ -88,6 +88,34 @@ impl<const N: usize> ScheduleTable<N> {
         }
     }
 
+    /// Create a round-robin schedule with equal-duration slots.
+    ///
+    /// Builds a table with one entry per partition (indices `0..num_partitions`),
+    /// each assigned `ticks_per_slot` ticks. The table is **not** started;
+    /// call [`start`](Self::start) after construction.
+    pub fn round_robin(num_partitions: usize, ticks_per_slot: u32) -> Result<Self, &'static str> {
+        if num_partitions == 0 {
+            return Err("num_partitions must be > 0");
+        }
+        if ticks_per_slot == 0 {
+            return Err("ticks_per_slot must be > 0");
+        }
+        if num_partitions > N {
+            return Err("num_partitions exceeds table capacity");
+        }
+        if num_partitions - 1 > u8::MAX as usize {
+            return Err("num_partitions exceeds u8 partition index range");
+        }
+        let mut table = Self::new();
+        for i in 0..num_partitions {
+            let entry = ScheduleEntry::new(i as u8, ticks_per_slot);
+            table
+                .add(entry)
+                .map_err(|_| "failed to add schedule entry")?;
+        }
+        Ok(table)
+    }
+
     /// Returns a slice of the current schedule entries.
     pub fn entries(&self) -> &[ScheduleEntry] {
         &self.entries
@@ -356,6 +384,51 @@ mod tests {
         assert!(t.add(ScheduleEntry::new(0, 0)).is_err());
         assert_eq!(t.major_frame_ticks, 0);
         assert!(t.entries.is_empty());
+    }
+
+    #[test]
+    fn round_robin_single_partition() {
+        let t: ScheduleTable<4> = ScheduleTable::round_robin(1, 10).unwrap();
+        assert_eq!(t.len(), 1);
+        assert_eq!(t.major_frame_ticks, 10);
+        assert_eq!(t.entries()[0], ScheduleEntry::new(0, 10));
+    }
+
+    #[test]
+    fn round_robin_two_partitions() {
+        let t: ScheduleTable<4> = ScheduleTable::round_robin(2, 5).unwrap();
+        assert_eq!(t.len(), 2);
+        assert_eq!(t.major_frame_ticks, 10);
+        assert_eq!(t.entries()[0], ScheduleEntry::new(0, 5));
+        assert_eq!(t.entries()[1], ScheduleEntry::new(1, 5));
+    }
+
+    #[test]
+    fn round_robin_four_partitions() {
+        let t: ScheduleTable<4> = ScheduleTable::round_robin(4, 3).unwrap();
+        assert_eq!(t.len(), 4);
+        assert_eq!(t.major_frame_ticks, 12);
+        for i in 0..4 {
+            assert_eq!(t.entries()[i], ScheduleEntry::new(i as u8, 3));
+        }
+    }
+
+    #[test]
+    fn round_robin_zero_partitions_err() {
+        let r: Result<ScheduleTable<4>, _> = ScheduleTable::round_robin(0, 10);
+        assert!(matches!(r, Err("num_partitions must be > 0")));
+    }
+
+    #[test]
+    fn round_robin_zero_ticks_err() {
+        let r: Result<ScheduleTable<4>, _> = ScheduleTable::round_robin(2, 0);
+        assert!(matches!(r, Err("ticks_per_slot must be > 0")));
+    }
+
+    #[test]
+    fn round_robin_capacity_overflow_err() {
+        let r: Result<ScheduleTable<2>, _> = ScheduleTable::round_robin(3, 10);
+        assert!(matches!(r, Err("num_partitions exceeds table capacity")));
     }
 
     #[test]
