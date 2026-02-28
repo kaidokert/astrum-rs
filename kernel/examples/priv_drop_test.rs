@@ -24,17 +24,14 @@ use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
+    DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal,
 };
 use panic_semihosting as _;
 
-const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = 256;
+kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-kernel::kernel_config! { TestConfig {
-    partitions = 1;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-}}
+const NUM_PARTITIONS: usize = TestConfig::N;
+const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 
 /// Partition stores CONTROL reading here; 0 = not yet read.
 static CONTROL_VAL: AtomicU32 = AtomicU32::new(0);

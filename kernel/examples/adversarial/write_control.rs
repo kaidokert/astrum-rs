@@ -24,18 +24,17 @@ use kernel::{
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
+    DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, SyncMinimal,
 };
 use panic_semihosting as _;
 
 /// Test name for reporting.
 const TEST_NAME: &str = "write_control";
 
-const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = 256;
+kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsMinimal, DebugEnabled>);
 
-kernel::kernel_config! { TestConfig {
-    partitions = 1;
-}}
+const NUM_PARTITIONS: usize = TestConfig::N;
+const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 
 // 0 = pending, 1 = pass, 2 = fail (partition not unpriv), 3 = fail (escalated)
 static RESULT: AtomicU32 = AtomicU32::new(0);

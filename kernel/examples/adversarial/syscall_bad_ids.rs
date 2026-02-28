@@ -22,6 +22,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::{SYS_EVT_SET, SYS_QUEUING_SEND},
+    DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, SyncMinimal,
 };
 use panic_semihosting as _;
 
@@ -47,15 +48,13 @@ const TEST_NAME: &str = "syscall_bad_ids";
 // Kernel configuration
 // ---------------------------------------------------------------------------
 
-const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = 256;
+kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsMinimal, DebugEnabled>);
+
+const NUM_PARTITIONS: usize = TestConfig::N;
+const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 
 /// Stack size in bytes (must be power of 2 for MPU).
 const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
-
-kernel::kernel_config! { TestConfig {
-    partitions = 1;
-}}
 
 // 0 = pending, 1 = pass, 2 = fail (EVT_SET), 3 = fail (QUEUING_SEND)
 static RESULT: AtomicU32 = AtomicU32::new(0);

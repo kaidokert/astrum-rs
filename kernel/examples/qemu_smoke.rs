@@ -21,16 +21,13 @@ use kernel::partition::PartitionConfig;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::syscall::SYS_YIELD;
+use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 use panic_semihosting as _;
 
-const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = 256;
+kernel::compose_kernel_config!(SmokeConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-kernel::kernel_config!(SmokeConfig {
-    partitions = 1;
-    sampling_msg_size = 1;
-    blackboard_msg_size = 1;
-});
+const NUM_PARTITIONS: usize = SmokeConfig::N;
+const STACK_WORDS: usize = SmokeConfig::STACK_WORDS;
 
 /// Stores the SYS_YIELD return code (0xFFFF_FFFF = not yet called).
 static YIELD_RC: AtomicU32 = AtomicU32::new(u32::MAX);
