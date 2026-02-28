@@ -100,6 +100,57 @@ impl IrqBinding {
     }
 }
 
+/// Const-safe bounds-checked element access.  `slice::get` is not yet
+/// const-stable, so we use pointer arithmetic with an explicit bounds check
+/// to avoid the implicit panic in `slice[i]`.
+const fn get_binding(bindings: &[IrqBinding], i: usize) -> Option<&IrqBinding> {
+    if i < bindings.len() {
+        // SAFETY: `i` is verified to be within `bindings.len()`.
+        Some(unsafe { &*bindings.as_ptr().add(i) })
+    } else {
+        None
+    }
+}
+
+/// Linear scan of `bindings` for the first entry whose `irq_num` matches `irq`.
+/// Returns `Some(index)` on hit, `None` on miss or empty slice.
+///
+/// Uses a `while` loop (not iterators) so the function is `const`-compatible.
+pub const fn lookup_binding(bindings: &[IrqBinding], irq: u8) -> Option<usize> {
+    let mut i = 0;
+    while i < bindings.len() {
+        if let Some(b) = get_binding(bindings, i) {
+            if b.irq_num == irq {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// O(n²) check for duplicate `irq_num` values in `bindings`.
+/// Returns `true` if any two entries share the same IRQ number.
+///
+/// Intended for use in `const` assertions inside the `bind_interrupts!` macro
+/// to reject invalid configurations at compile time.
+pub const fn has_duplicate_irqs(bindings: &[IrqBinding]) -> bool {
+    let mut i = 0;
+    while i < bindings.len() {
+        let mut j = i + 1;
+        while j < bindings.len() {
+            if let (Some(bi), Some(bj)) = (get_binding(bindings, i), get_binding(bindings, j)) {
+                if bi.irq_num == bj.irq_num {
+                    return true;
+                }
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +328,103 @@ mod tests {
         assert_eq!(TABLE[0].irq_num, 0);
         assert_eq!(TABLE[1].event_bits, 0x02);
         assert_eq!(TABLE[2].partition_id, 1);
+    }
+
+    // ---- lookup_binding tests ----
+
+    const BINDINGS: [IrqBinding; 3] = [
+        IrqBinding::new(5, 0, 0x01),
+        IrqBinding::new(10, 1, 0x02),
+        IrqBinding::new(15, 2, 0x04),
+    ];
+
+    #[test]
+    fn lookup_binding_finds_first_entry() {
+        assert_eq!(lookup_binding(&BINDINGS, 5), Some(0));
+    }
+
+    #[test]
+    fn lookup_binding_finds_middle_entry() {
+        assert_eq!(lookup_binding(&BINDINGS, 10), Some(1));
+    }
+
+    #[test]
+    fn lookup_binding_finds_last_entry() {
+        assert_eq!(lookup_binding(&BINDINGS, 15), Some(2));
+    }
+
+    #[test]
+    fn lookup_binding_returns_none_on_miss() {
+        assert_eq!(lookup_binding(&BINDINGS, 99), None);
+    }
+
+    #[test]
+    fn lookup_binding_empty_slice() {
+        assert_eq!(lookup_binding(&[], 5), None);
+    }
+
+    #[test]
+    fn lookup_binding_returns_first_match() {
+        const DUPS: [IrqBinding; 3] = [
+            IrqBinding::new(7, 0, 0x01),
+            IrqBinding::new(7, 1, 0x02),
+            IrqBinding::new(7, 2, 0x04),
+        ];
+        assert_eq!(lookup_binding(&DUPS, 7), Some(0));
+    }
+
+    #[test]
+    fn lookup_binding_usable_in_const() {
+        const RESULT: Option<usize> = lookup_binding(&BINDINGS, 10);
+        assert_eq!(RESULT, Some(1));
+    }
+
+    // ---- has_duplicate_irqs tests ----
+
+    #[test]
+    fn has_duplicate_irqs_false_for_unique() {
+        assert!(!has_duplicate_irqs(&BINDINGS));
+    }
+
+    #[test]
+    fn has_duplicate_irqs_true_for_duplicates() {
+        const DUPS: [IrqBinding; 3] = [
+            IrqBinding::new(5, 0, 0x01),
+            IrqBinding::new(10, 1, 0x02),
+            IrqBinding::new(5, 2, 0x04),
+        ];
+        assert!(has_duplicate_irqs(&DUPS));
+    }
+
+    #[test]
+    fn has_duplicate_irqs_false_for_empty() {
+        assert!(!has_duplicate_irqs(&[]));
+    }
+
+    #[test]
+    fn has_duplicate_irqs_false_for_single() {
+        const ONE: [IrqBinding; 1] = [IrqBinding::new(3, 0, 0x01)];
+        assert!(!has_duplicate_irqs(&ONE));
+    }
+
+    #[test]
+    fn has_duplicate_irqs_adjacent_duplicates() {
+        const ADJ: [IrqBinding; 2] = [IrqBinding::new(8, 0, 0x01), IrqBinding::new(8, 1, 0x02)];
+        assert!(has_duplicate_irqs(&ADJ));
+    }
+
+    #[test]
+    fn has_duplicate_irqs_usable_in_const() {
+        const {
+            assert!(!has_duplicate_irqs(&[
+                IrqBinding::new(5, 0, 0x01),
+                IrqBinding::new(10, 1, 0x02),
+                IrqBinding::new(15, 2, 0x04),
+            ]));
+            assert!(has_duplicate_irqs(&[
+                IrqBinding::new(1, 0, 0x01),
+                IrqBinding::new(1, 1, 0x02),
+            ]));
+        }
     }
 }
