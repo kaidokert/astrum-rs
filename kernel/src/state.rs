@@ -543,13 +543,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel_config;
+    use crate::{
+        compose_kernel_config, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    };
 
-    kernel_config!(TestConfig {
-        const N: usize = 2;
-        const SM: usize = 1;
-        const BM: usize = 1;
-    });
+    compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
     /// Helper to create a test kernel instance.
     ///
