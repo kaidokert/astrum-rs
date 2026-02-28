@@ -3058,16 +3058,22 @@ mod tests {
         fix_mpu_for_ipc(&mut h);
         let payload: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 
+        // Byte offset within the shared mmap page, chosen to avoid data
+        // races with parallel tests that also write to low32_buf at offset 0.
+        const BUF_OFFSET: usize = 256;
+
         // P0 sends: r1=queue_id, r2=sender_pid, r3=data_ptr
-        let send_ptr = low32_buf(0);
-        // SAFETY: send_ptr is valid for 4096 bytes via low32_buf mmap.
+        // SAFETY: low32_buf(0) is a 4096-byte mmap; BUF_OFFSET+4 is in bounds.
+        let send_ptr = unsafe { low32_buf(0).add(BUF_OFFSET) };
+        // SAFETY: send_ptr is within the mmap page; writing 4 bytes is in bounds.
         unsafe { core::ptr::copy_nonoverlapping(payload.as_ptr(), send_ptr, 4) };
         let sf = h.dispatch_as(0, SYS_MSG_SEND, 0, 0, send_ptr as u32);
         assert_eq!(sf.r0, 0, "SYS_MSG_SEND must return 0");
 
         // P1 receives: r1=queue_id, r2=caller_pid, r3=buf_ptr
-        let recv_ptr = low32_buf(1);
-        // SAFETY: recv_ptr is valid for 4096 bytes via low32_buf mmap.
+        // SAFETY: low32_buf(1) is a 4096-byte mmap; BUF_OFFSET+4 is in bounds.
+        let recv_ptr = unsafe { low32_buf(1).add(BUF_OFFSET) };
+        // SAFETY: recv_ptr is within the mmap page; zeroing 4 bytes is in bounds.
         unsafe { core::ptr::write_bytes(recv_ptr, 0, 4) };
         let rf = h.dispatch_as(1, SYS_MSG_RECV, 0, 1, recv_ptr as u32);
         assert_eq!(rf.r0, 0, "SYS_MSG_RECV must return 0");
@@ -3076,7 +3082,7 @@ mod tests {
             PartitionState::Running,
             "P1 must remain Running after non-blocking recv"
         );
-        // SAFETY: recv_ptr is valid for 4096 bytes; dispatch wrote 4 bytes.
+        // SAFETY: recv_ptr is valid; dispatch wrote 4 bytes.
         let received = unsafe { core::slice::from_raw_parts(recv_ptr, 4) };
         assert_eq!(received, &payload, "recv payload mismatch");
     }
@@ -3105,20 +3111,26 @@ mod tests {
             .unwrap();
         let payload: [u8; 4] = [0xCA, 0xFE, 0xBA, 0xBE];
 
+        // Byte offset within the shared mmap page, chosen to avoid data
+        // races with parallel tests that also write to low32_buf at offset 0.
+        const BUF_OFFSET: usize = 256;
+
         // P0 writes via SYS_SAMPLING_WRITE
-        let wr = low32_buf(0);
-        // SAFETY: wr is valid for 4096 bytes via low32_buf mmap.
+        // SAFETY: low32_buf(0) is a 4096-byte mmap; BUF_OFFSET+4 is in bounds.
+        let wr = unsafe { low32_buf(0).add(BUF_OFFSET) };
+        // SAFETY: wr is within the mmap page; writing 4 bytes is in bounds.
         unsafe { core::ptr::copy_nonoverlapping(payload.as_ptr(), wr, 4) };
         let wf = h.dispatch_as(0, SYS_SAMPLING_WRITE, src as u32, 4, wr as u32);
         assert_eq!(wf.r0, 0, "SYS_SAMPLING_WRITE must return 0");
 
         // P1 reads via SYS_SAMPLING_READ
-        let rd = low32_buf(1);
-        // SAFETY: rd is valid for 4096 bytes via low32_buf mmap.
+        // SAFETY: low32_buf(1) is a 4096-byte mmap; BUF_OFFSET+4 is in bounds.
+        let rd = unsafe { low32_buf(1).add(BUF_OFFSET) };
+        // SAFETY: rd is within the mmap page; zeroing 4 bytes is in bounds.
         unsafe { core::ptr::write_bytes(rd, 0, 4) };
         let rf = h.dispatch_as(1, SYS_SAMPLING_READ, dst as u32, 0, rd as u32);
         assert_eq!(rf.r0, 4, "SYS_SAMPLING_READ must return 4");
-        // SAFETY: rd is valid for 4096 bytes; dispatch wrote 4 bytes.
+        // SAFETY: rd is valid; dispatch wrote 4 bytes.
         let received = unsafe { core::slice::from_raw_parts(rd, 4) };
         assert_eq!(received, &payload, "sampling read payload mismatch");
     }
@@ -3132,20 +3144,26 @@ mod tests {
         let bid = h.kernel_mut().blackboards_mut().create().unwrap();
         let payload: [u8; 4] = [0x12, 0x34, 0x56, 0x78];
 
+        // Byte offset within the shared mmap page, chosen to avoid data
+        // races with parallel tests that also write to low32_buf at offset 0.
+        const BUF_OFFSET: usize = 256;
+
         // P0 writes via SYS_BB_DISPLAY
-        let wr = low32_buf(0);
-        // SAFETY: wr is valid for 4096 bytes via low32_buf mmap.
+        // SAFETY: low32_buf(0) is a 4096-byte mmap; BUF_OFFSET+4 is in bounds.
+        let wr = unsafe { low32_buf(0).add(BUF_OFFSET) };
+        // SAFETY: wr is within the mmap page; writing 4 bytes is in bounds.
         unsafe { core::ptr::copy_nonoverlapping(payload.as_ptr(), wr, 4) };
         let wf = h.dispatch_as(0, SYS_BB_DISPLAY, bid as u32, 4, wr as u32);
         assert_eq!(wf.r0, 0, "SYS_BB_DISPLAY must return 0");
 
         // P1 reads via SYS_BB_READ (timeout=0, non-blocking)
-        let rd = low32_buf(1);
-        // SAFETY: rd is valid for 4096 bytes via low32_buf mmap.
+        // SAFETY: low32_buf(1) is a 4096-byte mmap; BUF_OFFSET+4 is in bounds.
+        let rd = unsafe { low32_buf(1).add(BUF_OFFSET) };
+        // SAFETY: rd is within the mmap page; zeroing 4 bytes is in bounds.
         unsafe { core::ptr::write_bytes(rd, 0, 4) };
         let rf = h.dispatch_as(1, SYS_BB_READ, bid as u32, 0, rd as u32);
         assert_eq!(rf.r0, 4, "SYS_BB_READ must return 4");
-        // SAFETY: rd is valid for 4096 bytes; dispatch wrote 4 bytes.
+        // SAFETY: rd is valid; dispatch wrote 4 bytes.
         let received = unsafe { core::slice::from_raw_parts(rd, 4) };
         assert_eq!(received, &payload, "blackboard read payload mismatch");
     }
