@@ -1947,8 +1947,59 @@ mod tests {
         assert_eq!(ComposedP3MsgSmall::QW, 2);
     }
 
-    // Compile-only: new Standard/Small presets compose successfully.
+    compose_kernel_config!(ComposedP4<Partitions4, SyncStandard, MsgStandard, PortsStandard, DebugEnabled>);
+
+    #[test]
+    fn composed_with_partitions4() {
+        // PartitionConfig
+        assert_eq!(ComposedP4::N, 4);
+        assert_eq!(ComposedP4::SCHED, 8);
+        assert_eq!(ComposedP4::STACK_WORDS, 256);
+        // SyncConfig
+        assert_eq!(ComposedP4::S, SyncStandard::SEMAPHORES);
+        assert_eq!(ComposedP4::SW, SyncStandard::SEMAPHORE_WAITQ);
+        assert_eq!(ComposedP4::MS, SyncStandard::MUTEXES);
+        assert_eq!(ComposedP4::MW, SyncStandard::MUTEX_WAITQ);
+        // MsgConfig
+        assert_eq!(ComposedP4::QS, MsgStandard::QUEUES);
+        assert_eq!(ComposedP4::QD, MsgStandard::QUEUE_DEPTH);
+        assert_eq!(ComposedP4::QM, MsgStandard::MAX_MSG_SIZE);
+        assert_eq!(ComposedP4::QW, MsgStandard::QUEUE_WAITQ);
+        // PortsConfig
+        assert_eq!(ComposedP4::SP, PortsStandard::SAMPLING_PORTS);
+        assert_eq!(ComposedP4::SM, PortsStandard::SAMPLING_MAX_MSG_SIZE);
+        assert_eq!(ComposedP4::BS, PortsStandard::BLACKBOARDS);
+        assert_eq!(ComposedP4::BM, PortsStandard::BLACKBOARD_MAX_MSG_SIZE);
+        assert_eq!(ComposedP4::BW, PortsStandard::BLACKBOARD_WAITQ);
+        // DebugConfig
+        assert_eq!(
+            ComposedP4::DEBUG_AUTO_DRAIN_BUDGET,
+            DebugEnabled::AUTO_DRAIN_BUDGET
+        );
+    }
+
     compose_kernel_config!(ComposedStdSmall<Partitions2, SyncStandard, MsgStandard, PortsSmall, DebugDisabled>);
+
+    #[test]
+    fn composed_std_small_runtime() {
+        // SyncStandard bridges
+        assert_eq!(ComposedStdSmall::S, SyncStandard::SEMAPHORES);
+        assert_eq!(ComposedStdSmall::SW, SyncStandard::SEMAPHORE_WAITQ);
+        assert_eq!(ComposedStdSmall::MS, SyncStandard::MUTEXES);
+        assert_eq!(ComposedStdSmall::MW, SyncStandard::MUTEX_WAITQ);
+        // MsgStandard bridges
+        assert_eq!(ComposedStdSmall::QS, MsgStandard::QUEUES);
+        assert_eq!(ComposedStdSmall::QD, MsgStandard::QUEUE_DEPTH);
+        assert_eq!(ComposedStdSmall::QM, MsgStandard::MAX_MSG_SIZE);
+        assert_eq!(ComposedStdSmall::QW, MsgStandard::QUEUE_WAITQ);
+        // PortsSmall bridges
+        assert_eq!(ComposedStdSmall::SP, PortsSmall::SAMPLING_PORTS);
+        assert_eq!(ComposedStdSmall::SM, PortsSmall::SAMPLING_MAX_MSG_SIZE);
+        assert_eq!(ComposedStdSmall::BS, PortsSmall::BLACKBOARDS);
+        assert_eq!(ComposedStdSmall::BM, PortsSmall::BLACKBOARD_MAX_MSG_SIZE);
+        assert_eq!(ComposedStdSmall::BW, PortsSmall::BLACKBOARD_WAITQ);
+    }
+
     // ============ compose_kernel_config! override tests ============
 
     compose_kernel_config!(
@@ -2006,6 +2057,25 @@ mod tests {
             ComposedDebugBufOverride::DEBUG_AUTO_DRAIN_BUDGET,
             DebugEnabled::AUTO_DRAIN_BUDGET
         );
+    }
+
+    compose_kernel_config!(
+        ComposedClockOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            core_clock_hz = 64_000_000;
+            tick_period_us = 500;
+        }
+    );
+
+    #[test]
+    fn compose_with_clock_override() {
+        assert_eq!(ComposedClockOverride::CORE_CLOCK_HZ, 64_000_000);
+        assert_eq!(ComposedClockOverride::TICK_PERIOD_US, 500);
+        // 64_000_000 * 500 / 1_000_000 = 32_000
+        assert_eq!(ComposedClockOverride::SYSTICK_CYCLES, 32_000);
     }
 
     // ============ DefaultConfig tests ============
