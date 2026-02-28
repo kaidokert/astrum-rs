@@ -2716,6 +2716,103 @@ mod tests {
         );
     }
 
+    // ============ compose_kernel_config! comprehensive override tests ============
+
+    // Multi-domain override: one field from each of the 5 sub-config domains
+    // plus non-sub-config fields (core_clock_hz, mpu_enforce) in a single block.
+    compose_kernel_config!(
+        ComposedMultiDomain < Partitions3,
+        SyncStandard,
+        MsgSmall,
+        PortsSmall,
+        DebugEnabled > {
+            stack_words = 512;
+            semaphores = 16;
+            queues = 8;
+            sampling_ports = 12;
+            debug_auto_drain = 128;
+            core_clock_hz = 48_000_000;
+            mpu_enforce = true;
+        }
+    );
+
+    #[test]
+    fn compose_combined_multi_domain_overrides() {
+        // --- Overridden fields take effect ---
+        // Partition domain
+        assert_eq!(ComposedMultiDomain::STACK_WORDS, 512);
+        // Sync domain
+        assert_eq!(ComposedMultiDomain::S, 16);
+        // Msg domain
+        assert_eq!(ComposedMultiDomain::QS, 8);
+        // Ports domain
+        assert_eq!(ComposedMultiDomain::SP, 12);
+        // Debug domain
+        assert_eq!(ComposedMultiDomain::DEBUG_AUTO_DRAIN_BUDGET, 128);
+        // Non-sub-config fields
+        assert_eq!(ComposedMultiDomain::CORE_CLOCK_HZ, 48_000_000);
+        const { assert!(ComposedMultiDomain::MPU_ENFORCE) };
+
+        // --- Non-overridden preset fields are bridged correctly ---
+        // Partitions3: COUNT=3, SCHEDULE_CAPACITY=8 (STACK_WORDS overridden above)
+        assert_eq!(ComposedMultiDomain::N, Partitions3::COUNT);
+        assert_eq!(ComposedMultiDomain::SCHED, Partitions3::SCHEDULE_CAPACITY);
+        // SyncStandard: SEMAPHORE_WAITQ=4, MUTEXES=4, MUTEX_WAITQ=4
+        assert_eq!(ComposedMultiDomain::SW, SyncStandard::SEMAPHORE_WAITQ);
+        assert_eq!(ComposedMultiDomain::MS, SyncStandard::MUTEXES);
+        assert_eq!(ComposedMultiDomain::MW, SyncStandard::MUTEX_WAITQ);
+        // MsgSmall: QUEUE_DEPTH=4, MAX_MSG_SIZE=4, QUEUE_WAITQ=2
+        assert_eq!(ComposedMultiDomain::QD, MsgSmall::QUEUE_DEPTH);
+        assert_eq!(ComposedMultiDomain::QM, MsgSmall::MAX_MSG_SIZE);
+        assert_eq!(ComposedMultiDomain::QW, MsgSmall::QUEUE_WAITQ);
+        // PortsSmall: SM=4, BS=4, BM=4, BW=4
+        assert_eq!(ComposedMultiDomain::SM, PortsSmall::SAMPLING_MAX_MSG_SIZE);
+        assert_eq!(ComposedMultiDomain::BS, PortsSmall::BLACKBOARDS);
+        assert_eq!(ComposedMultiDomain::BM, PortsSmall::BLACKBOARD_MAX_MSG_SIZE);
+        assert_eq!(ComposedMultiDomain::BW, PortsSmall::BLACKBOARD_WAITQ);
+        // DebugEnabled: BUFFER_SIZE=256 (only DEBUG_AUTO_DRAIN_BUDGET overridden)
+        #[cfg(feature = "partition-debug")]
+        assert_eq!(
+            ComposedMultiDomain::DEBUG_BUFFER_SIZE,
+            DebugEnabled::BUFFER_SIZE
+        );
+        // Clock: tick_period_us retains default
+        assert_eq!(ComposedMultiDomain::TICK_PERIOD_US, 1000);
+        // SYSTICK_CYCLES derived from overridden clock: 48_000_000 * 1000 / 1_000_000
+        assert_eq!(ComposedMultiDomain::SYSTICK_CYCLES, 48_000);
+    }
+
+    // Dynamic-MPU overrides via compose_kernel_config!, cfg-gated.
+    compose_kernel_config!(
+        ComposedDynMpu < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            buffer_pool_regions = 16;
+            buffer_zone_size = 128;
+            dynamic_regions = 8;
+            system_window_max_gap_ticks = 200;
+        }
+    );
+
+    #[test]
+    fn compose_dynamic_mpu_overrides() {
+        // Preset fields still bridged correctly.
+        assert_eq!(ComposedDynMpu::N, Partitions2::COUNT);
+        assert_eq!(ComposedDynMpu::S, SyncMinimal::SEMAPHORES);
+        assert_eq!(ComposedDynMpu::QS, MsgMinimal::QUEUES);
+        assert_eq!(ComposedDynMpu::SP, PortsTiny::SAMPLING_PORTS);
+        // Dynamic-MPU overrides (only compiled when feature is active).
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            assert_eq!(ComposedDynMpu::BP, 16);
+            assert_eq!(ComposedDynMpu::BZ, 128);
+            assert_eq!(ComposedDynMpu::DR, 8);
+            assert_eq!(ComposedDynMpu::SYSTEM_WINDOW_MAX_GAP_TICKS, 200);
+        }
+    }
+
     // ============ DefaultConfig tests ============
 
     #[test]
