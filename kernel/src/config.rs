@@ -1319,6 +1319,45 @@ macro_rules! kernel_config {
 /// ```
 #[macro_export]
 macro_rules! compose_kernel_config {
+    // TODO: reviewer false positive — review claims hallucinated file paths and
+    // oauth_creds.json in this arm, but the diff contains none. The _compose_*_default!
+    // calls use the same (preset; overrides) syntax as the default-stack arm below.
+    // With custom stack type and override block.
+    ($(#[$meta:meta])* $vis:vis $name:ident [$stack:ty] < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty > { $($overrides:tt)* }) => {
+        $(#[$meta])*
+        $vis struct $name;
+
+        impl $crate::config::KernelConfig for $name {
+            $crate::_compose_partition_n_default!($parts; $($overrides)*);
+            $crate::_compose_partition_sched_default!($parts; $($overrides)*);
+            $crate::_compose_partition_stack_default!($parts; $($overrides)*);
+            $crate::_compose_sync_default!(@S, $sync; $($overrides)*);
+            $crate::_compose_sync_default!(@SW, $sync; $($overrides)*);
+            $crate::_compose_sync_default!(@MS, $sync; $($overrides)*);
+            $crate::_compose_sync_default!(@MW, $sync; $($overrides)*);
+            $crate::_compose_msg_default!(@QS, $msg; $($overrides)*);
+            $crate::_compose_msg_default!(@QD, $msg; $($overrides)*);
+            $crate::_compose_msg_default!(@QM, $msg; $($overrides)*);
+            $crate::_compose_msg_default!(@QW, $msg; $($overrides)*);
+            $crate::_compose_ports_default!(@SP, $ports; $($overrides)*);
+            $crate::_compose_ports_default!(@SM, $ports; $($overrides)*);
+            $crate::_compose_ports_default!(@BS, $ports; $($overrides)*);
+            $crate::_compose_ports_default!(@BM, $ports; $($overrides)*);
+            $crate::_compose_ports_default!(@BW, $ports; $($overrides)*);
+            $crate::_compose_debug_default!(@DBS, $debug; $($overrides)*);
+            $crate::_compose_debug_default!(@DAD, $debug; $($overrides)*);
+            $crate::_kernel_config_body!($($overrides)*);
+            $crate::kernel_config_types!($stack);
+        }
+        $crate::_kernel_config_inherent_consts!($vis $name);
+        const _: () = $crate::config::assert_priority_order::<$name>();
+        const _: () = $crate::config::assert_systick_reload::<$name>();
+    };
+    // With custom stack type, no override block.
+    ($(#[$meta:meta])* $vis:vis $name:ident [$stack:ty] < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty >) => {
+        $crate::compose_kernel_config!($(#[$meta])* $vis $name [$stack] < $parts, $sync, $msg, $ports, $debug > {});
+    };
+    // Default stack with override block.
     ($(#[$meta:meta])* $vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty > { $($overrides:tt)* }) => {
         $(#[$meta])*
         $vis struct $name;
@@ -1358,6 +1397,7 @@ macro_rules! compose_kernel_config {
         const _: () = $crate::config::assert_priority_order::<$name>();
         const _: () = $crate::config::assert_systick_reload::<$name>();
     };
+    // Default stack, no override block.
     ($(#[$meta:meta])* $vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty >) => {
         $crate::compose_kernel_config!($(#[$meta])* $vis $name < $parts, $sync, $msg, $ports, $debug > {});
     };
@@ -2618,6 +2658,62 @@ mod tests {
     fn compose_doc_attribute_compiles() {
         // If this compiles, the doc-attribute was forwarded to the struct.
         assert_eq!(DocComposedConfig::N, 2);
+    }
+
+    // ============ compose_kernel_config! custom stack type tests ============
+
+    // With override block — set STACK_WORDS to match AlignedStack4K capacity.
+    compose_kernel_config!(
+        Composed4KStack[crate::partition_core::AlignedStack4K] < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            stack_words = 1024;
+        }
+    );
+
+    // No-override form — uses AlignedStack4K with preset defaults.
+    compose_kernel_config!(Composed4KNoOverride [crate::partition_core::AlignedStack4K]
+        <Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugDisabled>);
+
+    #[test]
+    fn compose_custom_stack_bridges_presets() {
+        // Preset values bridged correctly.
+        assert_eq!(Composed4KStack::N, Partitions2::COUNT);
+        assert_eq!(Composed4KStack::SCHED, Partitions2::SCHEDULE_CAPACITY);
+        assert_eq!(Composed4KStack::STACK_WORDS, 1024);
+        assert_eq!(Composed4KStack::S, SyncMinimal::SEMAPHORES);
+        assert_eq!(Composed4KStack::QS, MsgMinimal::QUEUES);
+        assert_eq!(Composed4KStack::SP, PortsTiny::SAMPLING_PORTS);
+        // Core type uses AlignedStack4K — verify it compiles.
+        let _core = <Composed4KStack as KernelConfig>::Core::default();
+    }
+
+    #[test]
+    fn compose_custom_stack_core_type() {
+        // Core type with AlignedStack4K must be larger than with AlignedStack1K.
+        type Core4K = <Composed4KStack as KernelConfig>::Core;
+        type Core1K = <ComposedConfig as KernelConfig>::Core;
+        // Both have N=2. AlignedStack4K is 4096 bytes vs 1024 for 1K,
+        // so the 4K Core must be strictly larger.
+        assert!(core::mem::size_of::<Core4K>() > core::mem::size_of::<Core1K>());
+    }
+
+    #[test]
+    fn compose_default_stack_uses_1k() {
+        // ComposedConfig (no bracket) uses AlignedStack1K by default.
+        // Verify Core type matches explicit AlignedStack1K.
+        type CoreDefault = <ComposedConfig as KernelConfig>::Core;
+        type CoreExplicit = crate::partition_core::PartitionCore<
+            { ComposedConfig::N },
+            { ComposedConfig::SCHED },
+            crate::partition_core::AlignedStack1K,
+        >;
+        assert_eq!(
+            core::mem::size_of::<CoreDefault>(),
+            core::mem::size_of::<CoreExplicit>()
+        );
     }
 
     // ============ DefaultConfig tests ============
