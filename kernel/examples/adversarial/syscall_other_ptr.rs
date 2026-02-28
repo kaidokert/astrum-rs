@@ -22,6 +22,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::SYS_SAMPLING_WRITE,
+    DebugEnabled, MsgMinimal, Partitions2, PortsSmall, SyncMinimal,
 };
 use panic_semihosting as _;
 
@@ -45,11 +46,7 @@ const STACK_WORDS: usize = 256;
 /// Stack size in bytes (must be power of 2 for MPU).
 const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 
-kernel::kernel_config! { TestConfig {
-    partitions = 2;
-    sampling_ports = 4;
-    sampling_msg_size = 4;
-}}
+kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsSmall, DebugEnabled>);
 
 static SVC_RESULT: AtomicU32 = AtomicU32::new(0);
 static SVC_DONE: AtomicU32 = AtomicU32::new(0);

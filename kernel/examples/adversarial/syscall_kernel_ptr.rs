@@ -22,6 +22,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::SYS_SAMPLING_WRITE,
+    DebugEnabled, MsgMinimal, Partitions2, PortsSmall, SyncMinimal,
 };
 use panic_semihosting as _;
 
@@ -46,15 +47,17 @@ const TEST_NAME: &str = "syscall_kernel_ptr";
 const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = 256;
 
-kernel::kernel_config!(TestConfig {
-    partitions = 2;
-    sampling_ports = 4;
-    sampling_msg_size = 4;
-    blackboard_msg_size = 1;
-    buffer_pool_regions = 1;
-    buffer_zone_size = 32;
-    dynamic_regions = 4;
-});
+kernel::compose_kernel_config!(
+    TestConfig < Partitions2,
+    SyncMinimal,
+    MsgMinimal,
+    PortsSmall,
+    DebugEnabled > {
+        buffer_pool_regions = 1;
+        buffer_zone_size = 32;
+        dynamic_regions = 4;
+    }
+);
 
 // 0 = pending, result value when done (set SVC_DONE to 1)
 static SVC_RESULT: AtomicU32 = AtomicU32::new(0);
