@@ -357,6 +357,56 @@ pub fn assert_waiting_implies_yield_requested(
 ) {
 }
 
+/// Assert that all non-zero PCB stack_base and mpu_region.base values fall
+/// within the storage address range [storage_start, storage_end).
+///
+/// Zero addresses are skipped as they indicate sentinel/uninitialized values.
+///
+/// # Panics
+///
+/// Panics if any non-zero address falls outside the valid range.
+#[cfg(any(debug_assertions, test))]
+pub fn assert_pcb_addresses_in_storage(
+    partitions: &[PartitionControlBlock],
+    storage_start: u32,
+    storage_end: u32,
+) {
+    for pcb in partitions {
+        let sb = pcb.stack_base();
+        if sb != 0 && (sb < storage_start || sb >= storage_end) {
+            panic!(
+                "invariant violation: partition {} stack_base 0x{:08x} outside storage \
+                 [0x{:08x}, 0x{:08x})",
+                pcb.id(),
+                sb,
+                storage_start,
+                storage_end
+            );
+        }
+        let mb = pcb.mpu_region().base();
+        if mb != 0 && (mb < storage_start || mb >= storage_end) {
+            panic!(
+                "invariant violation: partition {} mpu_region base 0x{:08x} outside storage \
+                 [0x{:08x}, 0x{:08x})",
+                pcb.id(),
+                mb,
+                storage_start,
+                storage_end
+            );
+        }
+    }
+}
+
+/// No-op version for release builds.
+#[cfg(not(any(debug_assertions, test)))]
+#[inline(always)]
+pub fn assert_pcb_addresses_in_storage(
+    _partitions: &[PartitionControlBlock],
+    _storage_start: u32,
+    _storage_end: u32,
+) {
+}
+
 /// Assert all kernel invariants hold.
 ///
 /// In debug builds and tests, this function performs runtime validation of
@@ -1092,5 +1142,51 @@ mod tests {
             &[PartitionState::Ready],
             false,
         );
+    }
+
+    // ------------------------------------------------------------------
+    // assert_pcb_addresses_in_storage
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn pcb_addresses_in_storage_empty() {
+        assert_pcb_addresses_in_storage(&[], 0x2000_0000, 0x2001_0000);
+    }
+
+    #[test]
+    fn pcb_addresses_in_storage_valid() {
+        // stack_base=0x2000_0000, mpu base=0x2000_1000 — both in range.
+        let p = make_region_pcb(0, 0x2000_1000, 0x1000, 0x2000_0000, 0x400);
+        assert_pcb_addresses_in_storage(&[p], 0x2000_0000, 0x2000_2000);
+    }
+
+    #[test]
+    #[should_panic(expected = "stack_base 0x1fff0000 outside storage")]
+    fn pcb_addresses_stack_base_out_of_range() {
+        let p = make_region_pcb(0, 0x2000_0000, 0x1000, 0x1FFF_0000, 0x400);
+        assert_pcb_addresses_in_storage(&[p], 0x2000_0000, 0x2001_0000);
+    }
+
+    #[test]
+    #[should_panic(expected = "mpu_region base 0x30000000 outside storage")]
+    fn pcb_addresses_mpu_base_out_of_range() {
+        let p = make_region_pcb(0, 0x3000_0000, 0x1000, 0x2000_0000, 0x400);
+        assert_pcb_addresses_in_storage(&[p], 0x2000_0000, 0x2001_0000);
+    }
+
+    #[test]
+    fn pcb_addresses_zero_skipped() {
+        // Both stack_base=0 and mpu_base=0 — should be skipped.
+        let p = PartitionControlBlock::new(0, 0x0800_0000, 0, 0, MpuRegion::new(0, 0, 0));
+        assert_pcb_addresses_in_storage(&[p], 0x2000_0000, 0x2001_0000);
+    }
+
+    #[test]
+    fn pcb_addresses_multiple_mixed() {
+        // P0: valid addresses. P1: all zeros (sentinel). P2: valid addresses.
+        let p0 = make_region_pcb(0, 0x2000_0000, 0x1000, 0x2000_1000, 0x400);
+        let p1 = PartitionControlBlock::new(1, 0x0800_0000, 0, 0, MpuRegion::new(0, 0, 0));
+        let p2 = make_region_pcb(2, 0x2000_2000, 0x1000, 0x2000_3000, 0x400);
+        assert_pcb_addresses_in_storage(&[p0, p1, p2], 0x2000_0000, 0x2000_4000);
     }
 }
