@@ -929,32 +929,46 @@ macro_rules! _kernel_config_field {
     };
 }
 
-/// Emits the `DEBUG_BUFFER_SIZE` bridge constant from a debug preset
-/// **unless** the override tokens already contain `debug_buffer_size = …;`.
+/// Conditional bridge for **DebugConfig** — see [`_compose_sync_default!`].
 ///
-/// This prevents duplicate-const errors when a user overrides
-/// `debug_buffer_size` inside a `compose_kernel_config!` block.
+/// Tag-dispatched: `@DBS` = `DEBUG_BUFFER_SIZE`, `@DAD` = `DEBUG_AUTO_DRAIN_BUDGET`.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _compose_debug_default {
-    // Found `debug_buffer_size` override — skip the bridge.
-    ($debug:ty; debug_buffer_size = $v:expr; $($rest:tt)*) => {};
-    // Skip friendly-name fields that are not `debug_buffer_size`.
-    ($debug:ty; $field:ident = $v:expr; $($rest:tt)*) => {
-        $crate::_compose_debug_default!($debug; $($rest)*);
+    // ── DBS hit arms ──
+    (@DBS, $debug:ty; #[$a:meta] debug_buffer_size = $v:expr; $($r:tt)*) => {};
+    (@DBS, $debug:ty; debug_buffer_size = $v:expr; $($r:tt)*) => {};
+    (@DBS, $debug:ty; #[$a:meta] const DEBUG_BUFFER_SIZE : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@DBS, $debug:ty; const DEBUG_BUFFER_SIZE : $ty:ty = $v:expr; $($r:tt)*) => {};
+    // ── DAD hit arms ──
+    (@DAD, $debug:ty; #[$a:meta] debug_auto_drain = $v:expr; $($r:tt)*) => {};
+    (@DAD, $debug:ty; debug_auto_drain = $v:expr; $($r:tt)*) => {};
+    (@DAD, $debug:ty; #[$a:meta] const DEBUG_AUTO_DRAIN_BUDGET : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@DAD, $debug:ty; const DEBUG_AUTO_DRAIN_BUDGET : $ty:ty = $v:expr; $($r:tt)*) => {};
+    // ── Skip: non-matching attributed friendly-name (shared) ──
+    (@ $tag:tt, $debug:ty; #[$a:meta] $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_debug_default!(@ $tag, $debug; $($r)*);
     };
-    // Skip raw `const` items.
-    ($debug:ty; const $name:ident : $ty:ty = $v:expr; $($rest:tt)*) => {
-        $crate::_compose_debug_default!($debug; $($rest)*);
+    // ── Skip: non-matching bare friendly-name (shared) ──
+    (@ $tag:tt, $debug:ty; $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_debug_default!(@ $tag, $debug; $($r)*);
     };
-    // Skip attributed `const` items.
-    ($debug:ty; #[$attr:meta] const $name:ident : $ty:ty = $v:expr; $($rest:tt)*) => {
-        $crate::_compose_debug_default!($debug; $($rest)*);
+    // ── Skip: non-matching attributed const (shared) ──
+    (@ $tag:tt, $debug:ty; #[$a:meta] const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_debug_default!(@ $tag, $debug; $($r)*);
     };
-    // End of tokens — no override found, emit the bridge.
-    ($debug:ty;) => {
+    // ── Skip: non-matching bare const (shared) ──
+    (@ $tag:tt, $debug:ty; const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_debug_default!(@ $tag, $debug; $($r)*);
+    };
+    // ── Terminal: emit preset bridge ──
+    (@DBS, $debug:ty;) => {
         #[cfg(feature = "partition-debug")]
         const DEBUG_BUFFER_SIZE: usize = <$debug as $crate::config::DebugConfig>::BUFFER_SIZE;
+    };
+    (@DAD, $debug:ty;) => {
+        const DEBUG_AUTO_DRAIN_BUDGET: usize =
+            <$debug as $crate::config::DebugConfig>::AUTO_DRAIN_BUDGET;
     };
 }
 
@@ -1331,11 +1345,9 @@ macro_rules! compose_kernel_config {
             $crate::_compose_ports_default!(@BS, $ports; $($overrides)*);
             $crate::_compose_ports_default!(@BM, $ports; $($overrides)*);
             $crate::_compose_ports_default!(@BW, $ports; $($overrides)*);
-            // DebugConfig — DEBUG_BUFFER_SIZE is conditionally bridged via
-            // _compose_debug_default! so that an override block can replace it.
-            $crate::_compose_debug_default!($debug; $($overrides)*);
-            const DEBUG_AUTO_DRAIN_BUDGET: usize =
-                <$debug as $crate::config::DebugConfig>::AUTO_DRAIN_BUDGET;
+            // DebugConfig — conditionally bridged so overrides can replace them.
+            $crate::_compose_debug_default!(@DBS, $debug; $($overrides)*);
+            $crate::_compose_debug_default!(@DAD, $debug; $($overrides)*);
 
             // Non-sub-config overrides
             $crate::_kernel_config_body!($($overrides)*);
@@ -2361,6 +2373,32 @@ mod tests {
         assert_eq!(
             ComposedDebugBufOverride::DEBUG_AUTO_DRAIN_BUDGET,
             DebugEnabled::AUTO_DRAIN_BUDGET
+        );
+    }
+
+    compose_kernel_config!(
+        ComposedDebugDrainOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugEnabled > {
+            debug_auto_drain = 512;
+        }
+    );
+
+    #[test]
+    fn compose_with_debug_drain_override() {
+        assert_eq!(ComposedDebugDrainOverride::DEBUG_AUTO_DRAIN_BUDGET, 512);
+        assert_ne!(
+            ComposedDebugDrainOverride::DEBUG_AUTO_DRAIN_BUDGET,
+            DebugEnabled::AUTO_DRAIN_BUDGET
+        );
+        // Non-overridden sub-config values preserved
+        assert_eq!(ComposedDebugDrainOverride::N, Partitions2::COUNT);
+        #[cfg(feature = "partition-debug")]
+        assert_eq!(
+            ComposedDebugDrainOverride::DEBUG_BUFFER_SIZE,
+            DebugEnabled::BUFFER_SIZE
         );
     }
 
