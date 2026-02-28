@@ -3,6 +3,29 @@
 //! Each `IrqBinding` records which partition should be notified (and with
 //! which event bits) when a particular hardware IRQ fires.
 
+use crate::events;
+use crate::partition::{PartitionState, PartitionTable};
+
+/// Signal a partition with event bits, returning `true` if it was woken
+/// (transitioned from `Waiting` to `Ready`).
+///
+/// This is the testable inner logic used by ISR dispatch handlers.
+/// Returns `false` for invalid partition indices or when the target
+/// does not transition to `Ready`.
+pub fn signal_partition_inner<const N: usize>(
+    t: &mut PartitionTable<N>,
+    target: usize,
+    event_bits: u32,
+) -> bool {
+    let was_waiting = t
+        .get(target)
+        .is_some_and(|p| p.state() == PartitionState::Waiting);
+    events::event_set(t, target, event_bits);
+    was_waiting
+        && t.get(target)
+            .is_some_and(|p| p.state() == PartitionState::Ready)
+}
+
 /// A const-friendly mapping from an IRQ number to a (partition, event_bits) pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IrqBinding {
@@ -25,6 +48,96 @@ impl IrqBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events;
+    use crate::partition::{MpuRegion, PartitionControlBlock, PartitionState};
+
+    fn pcb(id: u8) -> PartitionControlBlock {
+        let o = (id as u32) * 0x1000;
+        PartitionControlBlock::new(
+            id,
+            0x0800_0000 + o,
+            0x2000_0000 + o,
+            0x2000_0400 + o,
+            MpuRegion::new(0x2000_0000 + o, 4096, 0),
+        )
+    }
+
+    fn tbl() -> PartitionTable<4> {
+        let mut t = PartitionTable::new();
+        t.add(pcb(0)).unwrap();
+        t.add(pcb(1)).unwrap();
+        // Both start Ready; transition to Running for testing.
+        t.get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        t.get_mut(1)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        t
+    }
+
+    #[test]
+    fn signal_running_partition_sets_flags_returns_false() {
+        let mut t = tbl();
+        let woke = signal_partition_inner(&mut t, 0, 0b0101);
+        assert!(!woke);
+        assert_eq!(t.get(0).unwrap().event_flags(), 0b0101);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Running);
+    }
+
+    #[test]
+    fn signal_waiting_with_matching_mask_wakes() {
+        let mut t = tbl();
+        // Put partition 0 into Waiting on bit 0.
+        events::event_wait(&mut t, 0, 0b0001);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+
+        let woke = signal_partition_inner(&mut t, 0, 0b0001);
+        assert!(woke);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn signal_waiting_with_nonmatching_mask_stays_waiting() {
+        let mut t = tbl();
+        events::event_wait(&mut t, 0, 0b0001);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+
+        let woke = signal_partition_inner(&mut t, 0, 0b1100);
+        assert!(!woke);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(t.get(0).unwrap().event_flags(), 0b1100);
+    }
+
+    #[test]
+    fn signal_invalid_partition_returns_false() {
+        let mut t = tbl();
+        let woke = signal_partition_inner(&mut t, 99, 0b0001);
+        assert!(!woke);
+    }
+
+    #[test]
+    fn multiple_signals_accumulate_flags() {
+        let mut t = tbl();
+        // Put partition 0 into Waiting on bits 0 and 1.
+        events::event_wait(&mut t, 0, 0b0011);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+
+        // First signal: bit 2 — no overlap with wait mask.
+        let woke1 = signal_partition_inner(&mut t, 0, 0b0100);
+        assert!(!woke1);
+        assert_eq!(t.get(0).unwrap().event_flags(), 0b0100);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+
+        // Second signal: bit 0 — overlaps wait mask, should wake.
+        let woke2 = signal_partition_inner(&mut t, 0, 0b0001);
+        assert!(woke2);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+        // Both signals accumulated.
+        assert_eq!(t.get(0).unwrap().event_flags(), 0b0101);
+    }
 
     #[test]
     fn new_constructor_sets_fields() {
