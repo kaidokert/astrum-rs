@@ -856,16 +856,31 @@ macro_rules! _kernel_config_field {
     (sampling_ports = $v:expr) => {
         const SP: usize = $v;
     };
+    (SP = $v:expr) => {
+        const SP: usize = $v;
+    };
     (sampling_msg_size = $v:expr) => {
+        const SM: usize = $v;
+    };
+    (SM = $v:expr) => {
         const SM: usize = $v;
     };
     (blackboards = $v:expr) => {
         const BS: usize = $v;
     };
+    (BS = $v:expr) => {
+        const BS: usize = $v;
+    };
     (blackboard_msg_size = $v:expr) => {
         const BM: usize = $v;
     };
+    (BM = $v:expr) => {
+        const BM: usize = $v;
+    };
     (blackboard_waitq = $v:expr) => {
+        const BW: usize = $v;
+    };
+    (BW = $v:expr) => {
         const BW: usize = $v;
     };
     (core_clock_hz = $v:expr) => {
@@ -1122,6 +1137,55 @@ macro_rules! _compose_msg_default {
     (@QW, $p:ty;) => { const QW: usize = <$p as $crate::config::MsgConfig>::QUEUE_WAITQ; };
 }
 
+/// Conditional bridge for **PortsConfig** — see [`_compose_sync_default!`].
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _compose_ports_default {
+    (@SP, $p:ty; #[$a:meta] sampling_ports = $v:expr; $($r:tt)*) => {};
+    (@SP, $p:ty; sampling_ports = $v:expr; $($r:tt)*) => {};
+    (@SP, $p:ty; SP = $v:expr; $($r:tt)*) => {};
+    (@SP, $p:ty; #[$a:meta] const SP : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@SP, $p:ty; const SP : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@SM, $p:ty; #[$a:meta] sampling_msg_size = $v:expr; $($r:tt)*) => {};
+    (@SM, $p:ty; sampling_msg_size = $v:expr; $($r:tt)*) => {};
+    (@SM, $p:ty; SM = $v:expr; $($r:tt)*) => {};
+    (@SM, $p:ty; #[$a:meta] const SM : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@SM, $p:ty; const SM : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@BS, $p:ty; #[$a:meta] blackboards = $v:expr; $($r:tt)*) => {};
+    (@BS, $p:ty; blackboards = $v:expr; $($r:tt)*) => {};
+    (@BS, $p:ty; BS = $v:expr; $($r:tt)*) => {};
+    (@BS, $p:ty; #[$a:meta] const BS : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@BS, $p:ty; const BS : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@BM, $p:ty; #[$a:meta] blackboard_msg_size = $v:expr; $($r:tt)*) => {};
+    (@BM, $p:ty; blackboard_msg_size = $v:expr; $($r:tt)*) => {};
+    (@BM, $p:ty; BM = $v:expr; $($r:tt)*) => {};
+    (@BM, $p:ty; #[$a:meta] const BM : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@BM, $p:ty; const BM : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@BW, $p:ty; #[$a:meta] blackboard_waitq = $v:expr; $($r:tt)*) => {};
+    (@BW, $p:ty; blackboard_waitq = $v:expr; $($r:tt)*) => {};
+    (@BW, $p:ty; BW = $v:expr; $($r:tt)*) => {};
+    (@BW, $p:ty; #[$a:meta] const BW : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@BW, $p:ty; const BW : $ty:ty = $v:expr; $($r:tt)*) => {};
+    (@ $tag:tt, $p:ty; #[$a:meta] $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_ports_default!(@ $tag, $p; $($r)*);
+    };
+    (@ $tag:tt, $p:ty; $f:ident = $v:expr; $($r:tt)*) => {
+        $crate::_compose_ports_default!(@ $tag, $p; $($r)*);
+    };
+    (@ $tag:tt, $p:ty; #[$a:meta] const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_ports_default!(@ $tag, $p; $($r)*);
+    };
+    (@ $tag:tt, $p:ty; const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
+        $crate::_compose_ports_default!(@ $tag, $p; $($r)*);
+    };
+    // ── terminal: emit preset bridge ──
+    (@SP, $p:ty;) => { const SP: usize = <$p as $crate::config::PortsConfig>::SAMPLING_PORTS; };
+    (@SM, $p:ty;) => { const SM: usize = <$p as $crate::config::PortsConfig>::SAMPLING_MAX_MSG_SIZE; };
+    (@BS, $p:ty;) => { const BS: usize = <$p as $crate::config::PortsConfig>::BLACKBOARDS; };
+    (@BM, $p:ty;) => { const BM: usize = <$p as $crate::config::PortsConfig>::BLACKBOARD_MAX_MSG_SIZE; };
+    (@BW, $p:ty;) => { const BW: usize = <$p as $crate::config::PortsConfig>::BLACKBOARD_WAITQ; };
+}
+
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _kernel_config_body {
@@ -1261,12 +1325,12 @@ macro_rules! compose_kernel_config {
             $crate::_compose_msg_default!(@QD, $msg; $($overrides)*);
             $crate::_compose_msg_default!(@QM, $msg; $($overrides)*);
             $crate::_compose_msg_default!(@QW, $msg; $($overrides)*);
-            // PortsConfig
-            const SP: usize = <$ports as $crate::config::PortsConfig>::SAMPLING_PORTS;
-            const SM: usize = <$ports as $crate::config::PortsConfig>::SAMPLING_MAX_MSG_SIZE;
-            const BS: usize = <$ports as $crate::config::PortsConfig>::BLACKBOARDS;
-            const BM: usize = <$ports as $crate::config::PortsConfig>::BLACKBOARD_MAX_MSG_SIZE;
-            const BW: usize = <$ports as $crate::config::PortsConfig>::BLACKBOARD_WAITQ;
+            // PortsConfig — conditionally bridged so overrides can replace them.
+            $crate::_compose_ports_default!(@SP, $ports; $($overrides)*);
+            $crate::_compose_ports_default!(@SM, $ports; $($overrides)*);
+            $crate::_compose_ports_default!(@BS, $ports; $($overrides)*);
+            $crate::_compose_ports_default!(@BM, $ports; $($overrides)*);
+            $crate::_compose_ports_default!(@BW, $ports; $($overrides)*);
             // DebugConfig — DEBUG_BUFFER_SIZE is conditionally bridged via
             // _compose_debug_default! so that an override block can replace it.
             $crate::_compose_debug_default!($debug; $($overrides)*);
@@ -2422,6 +2486,31 @@ mod tests {
         assert_eq!(MsgRawNameOverride::QS, MsgMinimal::QUEUES);
         assert_eq!(MsgRawNameOverride::QM, MsgMinimal::MAX_MSG_SIZE);
         assert_eq!(MsgRawNameOverride::QW, MsgMinimal::QUEUE_WAITQ);
+    }
+
+    // ============ compose_kernel_config! ports override tests ============
+
+    // friendly-name + raw short-name overrides coexist; non-overridden fields bridge the preset.
+    compose_kernel_config!(
+        PortsOverrideMixed < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            sampling_ports = 8;
+            BM = 128;
+        }
+    );
+
+    #[test]
+    fn compose_with_ports_overrides() {
+        assert_eq!(PortsOverrideMixed::SP, 8);
+        assert_eq!(PortsOverrideMixed::BM, 128);
+        assert_ne!(PortsOverrideMixed::SP, PortsTiny::SAMPLING_PORTS);
+        assert_ne!(PortsOverrideMixed::BM, PortsTiny::BLACKBOARD_MAX_MSG_SIZE);
+        assert_eq!(PortsOverrideMixed::SM, PortsTiny::SAMPLING_MAX_MSG_SIZE);
+        assert_eq!(PortsOverrideMixed::BS, PortsTiny::BLACKBOARDS);
+        assert_eq!(PortsOverrideMixed::BW, PortsTiny::BLACKBOARD_WAITQ);
     }
 
     // ============ custom user-defined preset tests ============
