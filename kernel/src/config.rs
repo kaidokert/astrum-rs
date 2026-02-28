@@ -214,6 +214,18 @@ impl PartitionConfig for Partitions2 {
     const STACK_WORDS: usize = 256;
 }
 
+/// Preset: 3 partitions, 8 schedule entries, 256-word (1 KiB) stacks.
+///
+/// Fills the gap between [`Partitions2`] and [`Partitions4`] for demos
+/// and applications that use exactly three partitions (e.g. blackboard_demo).
+pub struct Partitions3;
+
+impl PartitionConfig for Partitions3 {
+    const COUNT: usize = 3;
+    const SCHEDULE_CAPACITY: usize = 8;
+    const STACK_WORDS: usize = 256;
+}
+
 /// Preset: 4 partitions, 8 schedule entries, 256-word (1 KiB) stacks.
 pub struct Partitions4;
 
@@ -298,6 +310,20 @@ impl MsgConfig for MsgMinimal {
     const QUEUE_DEPTH: usize = 1;
     const MAX_MSG_SIZE: usize = 1;
     const QUEUE_WAITQ: usize = 1;
+}
+
+/// Preset: small messaging (2 queues, depth 4, 4-byte messages, wait-queue depth 2).
+///
+/// Covers the common intermediate messaging pattern used by hw_integration
+/// and blocking_deschedule tests where minimal is too constrained but rich
+/// is overkill.
+pub struct MsgSmall;
+
+impl MsgConfig for MsgSmall {
+    const QUEUES: usize = 2;
+    const QUEUE_DEPTH: usize = 4;
+    const MAX_MSG_SIZE: usize = 4;
+    const QUEUE_WAITQ: usize = 2;
 }
 
 /// Preset: rich messaging (4 queues, depth 4, 64-byte messages, wait-queue depth 4).
@@ -1244,6 +1270,18 @@ mod tests {
     const _: () = assert!(Partitions2::SCHEDULE_CAPACITY == 4);
     const _: () = assert!(Partitions2::STACK_WORDS == 256);
 
+    // Compile-time assertions for Partitions3 preset values.
+    const _: () = assert!(Partitions3::COUNT == 3);
+    const _: () = assert!(Partitions3::SCHEDULE_CAPACITY == 8);
+    const _: () = assert!(Partitions3::STACK_WORDS == 256);
+
+    #[test]
+    fn partitions3_field_values() {
+        assert_eq!(Partitions3::COUNT, 3);
+        assert_eq!(Partitions3::SCHEDULE_CAPACITY, 8);
+        assert_eq!(Partitions3::STACK_WORDS, 256);
+    }
+
     // Compile-time assertions for Partitions4 preset values.
     const _: () = assert!(Partitions4::COUNT == 4);
     const _: () = assert!(Partitions4::SCHEDULE_CAPACITY == 8);
@@ -1317,6 +1355,20 @@ mod tests {
     const _: () = assert!(MsgMinimal::QUEUE_DEPTH == 1);
     const _: () = assert!(MsgMinimal::MAX_MSG_SIZE == 1);
     const _: () = assert!(MsgMinimal::QUEUE_WAITQ == 1);
+
+    // Compile-time assertions for MsgSmall preset values.
+    const _: () = assert!(MsgSmall::QUEUES == 2);
+    const _: () = assert!(MsgSmall::QUEUE_DEPTH == 4);
+    const _: () = assert!(MsgSmall::MAX_MSG_SIZE == 4);
+    const _: () = assert!(MsgSmall::QUEUE_WAITQ == 2);
+
+    #[test]
+    fn msg_small_field_values() {
+        assert_eq!(MsgSmall::QUEUES, 2);
+        assert_eq!(MsgSmall::QUEUE_DEPTH, 4);
+        assert_eq!(MsgSmall::MAX_MSG_SIZE, 4);
+        assert_eq!(MsgSmall::QUEUE_WAITQ, 2);
+    }
 
     // Compile-time assertions for MsgRich preset values.
     const _: () = assert!(MsgRich::QUEUES == 4);
@@ -1767,6 +1819,20 @@ mod tests {
             ComposedP1::DEBUG_AUTO_DRAIN_BUDGET,
             DebugEnabled::AUTO_DRAIN_BUDGET
         );
+    }
+
+    // Compile-only: compose_kernel_config! works with Partitions3 and MsgSmall.
+    compose_kernel_config!(ComposedP3MsgSmall<Partitions3, SyncMinimal, MsgSmall, PortsTiny, DebugDisabled>);
+
+    #[test]
+    fn composed_with_partitions3_and_msg_small() {
+        assert_eq!(ComposedP3MsgSmall::N, 3);
+        assert_eq!(ComposedP3MsgSmall::SCHED, 8);
+        assert_eq!(ComposedP3MsgSmall::STACK_WORDS, 256);
+        assert_eq!(ComposedP3MsgSmall::QS, 2);
+        assert_eq!(ComposedP3MsgSmall::QD, 4);
+        assert_eq!(ComposedP3MsgSmall::QM, 4);
+        assert_eq!(ComposedP3MsgSmall::QW, 2);
     }
 
     // ============ DefaultConfig tests ============
