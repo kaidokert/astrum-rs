@@ -38,7 +38,7 @@ static CONTROL_VAL: AtomicU32 = AtomicU32::new(0);
 /// Set to 1 once the partition has stored its reading.
 static DONE: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+kernel::define_unified_harness!(TestConfig, |tick, _k| {
     if DONE.load(Ordering::Acquire) == 1 {
         let control = CONTROL_VAL.load(Ordering::Acquire);
         let npriv = control & 1;

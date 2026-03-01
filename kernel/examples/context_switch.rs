@@ -27,7 +27,7 @@ const TARGET_SWITCHES: u32 = 6;
 static PARTITION_RUNNING: AtomicU32 = AtomicU32::new(u32::MAX);
 static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+kernel::define_unified_harness!(DemoConfig, |tick, _k| {
     let who = PARTITION_RUNNING.load(Ordering::Acquire);
     if who != u32::MAX {
         let count = SWITCH_COUNT.fetch_add(1, Ordering::Relaxed) + 1;

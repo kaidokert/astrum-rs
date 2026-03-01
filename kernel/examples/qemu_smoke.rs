@@ -51,7 +51,7 @@ static WAIT_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 
 // TODO: hprintln!/kexit! in SysTick ISR is heavy for an interrupt handler;
 // acceptable for QEMU smoke tests but must not be used in production code.
-kernel::define_unified_harness!(SmokeConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+kernel::define_unified_harness!(SmokeConfig, |tick, _k| {
     let y = YIELD_RC.load(Ordering::Acquire);
     let sig = SIG_RC.load(Ordering::Acquire);
     let wait = WAIT_RC.load(Ordering::Acquire);

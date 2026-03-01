@@ -18,7 +18,7 @@ kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, 
 const NUM_PARTITIONS: usize = 1;
 const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS);
+kernel::define_unified_harness!(TestConfig);
 
 // Atomic flag for partition to signal it ran (semihosting requires privileged mode)
 static PARTITION_RAN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);

@@ -43,7 +43,7 @@ static TIME_READING: AtomicU32 = AtomicU32::new(0);
 static FIRST_NONZERO: AtomicU32 = AtomicU32::new(0);
 
 // Use the unified harness macro with SysTick hook for verification.
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+kernel::define_unified_harness!(TestConfig, |tick, _k| {
     match tick {
         // By tick 5, the partition should have read a non-zero time.
         5 => {
