@@ -116,6 +116,10 @@ name = "qemu_custom_ivt"
 required-features = ["qemu", "log-semihosting", "custom-ivt"]
 
 [[example]]
+name = "irq_dispatch_test"
+required-features = ["qemu", "log-semihosting", "custom-ivt"]
+
+[[example]]
 name = "smoke_test"
 required-features = ["qemu", "log-semihosting"]
 
