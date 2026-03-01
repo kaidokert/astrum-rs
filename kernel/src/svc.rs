@@ -1859,6 +1859,44 @@ where
                 }
             }
             #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::BufferLend) => {
+                let slot = frame.r1 as usize;
+                let target_raw = frame.r2 as usize;
+                if target_raw >= self.partitions().len() {
+                    SvcError::InvalidPartition.to_u32()
+                } else {
+                    let target = target_raw as u8;
+                    match self.buffers.share_with_partition(
+                        slot,
+                        self.current_partition,
+                        target,
+                        &self.dynamic_strategy,
+                    ) {
+                        Ok(region_id) => region_id as u32,
+                        Err(_) => SvcError::InvalidResource.to_u32(),
+                    }
+                }
+            }
+            #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::BufferRevoke) => {
+                let slot = frame.r1 as usize;
+                let target_raw = frame.r2 as usize;
+                if target_raw >= self.partitions().len() {
+                    SvcError::InvalidPartition.to_u32()
+                } else {
+                    let target = target_raw as u8;
+                    match self.buffers.unshare_from_partition(
+                        slot,
+                        self.current_partition,
+                        target,
+                        &self.dynamic_strategy,
+                    ) {
+                        Ok(()) => 0,
+                        Err(_) => SvcError::InvalidResource.to_u32(),
+                    }
+                }
+            }
+            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferWrite) => {
                 validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
                     use crate::buffer_pool::BorrowState;
@@ -4304,6 +4342,43 @@ mod tests {
         let slot1 = ef.r0 as usize;
         assert_eq!(slot1, 1);
         assert_eq!(k.buffers().deadline(slot1), Some(100));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lend_revoke_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
+        let eres = SvcError::InvalidResource.to_u32();
+        let epart = SvcError::InvalidPartition.to_u32();
+        let mut k = kernel(0, 0, 0);
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr) => {{
+                let mut ef = frame($r0, $r1, $r2);
+                // SAFETY: See module-level SAFETY docs for test dispatch.
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+        }
+        // Allocate a writable buffer (mode=1) as partition 0
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        // Lend to partition 1
+        let region = svc!(SYS_BUF_LEND, slot, 1);
+        assert!(region < 0x8000_0000, "lend should return region_id");
+        // Revoke from partition 1
+        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0);
+        // Error: revoke when not lent
+        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), eres);
+        // Error: invalid partition (only 2 exist)
+        assert_eq!(svc!(SYS_BUF_LEND, slot, 99), epart);
+        // Error: truncation — 256 must not wrap to partition 0
+        assert_eq!(svc!(SYS_BUF_LEND, slot, 256), epart);
+        assert_eq!(svc!(SYS_BUF_LEND, slot, 257), epart);
+        // Error: self-lend (partition 0 lending to itself)
+        assert_eq!(svc!(SYS_BUF_LEND, slot, 0), eres);
+        // Error: invalid partition in BufferRevoke
+        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 99), epart);
+        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 256), epart);
     }
 
     #[cfg(feature = "dynamic-mpu")]
