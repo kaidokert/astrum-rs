@@ -3,7 +3,7 @@
 
 use cortex_m_rt::entry;
 use cortex_m_semihosting::{debug, hprintln};
-use panic_semihosting as _;
+use kernel as _;
 
 #[entry]
 fn main() -> ! {

@@ -4,7 +4,6 @@
 use cortex_m_rt::entry;
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::mpu;
-use panic_semihosting as _;
 
 #[entry]
 fn main() -> ! {

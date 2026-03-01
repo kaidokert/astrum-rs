@@ -33,7 +33,6 @@ use kernel::{
     virtual_device::VirtualDevice,
     DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncMinimal,
 };
-use panic_semihosting as _;
 
 const NUM_PARTITIONS: usize = 2;
 const STACK_WORDS: usize = DemoConfig::STACK_WORDS;

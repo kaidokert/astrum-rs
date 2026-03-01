@@ -7,7 +7,6 @@ use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::mpu;
-use panic_semihosting as _;
 
 /// Partition index toggled by SysTick. Starts at u32::MAX so the first
 /// tick (setting it to 0) is detected as a change.

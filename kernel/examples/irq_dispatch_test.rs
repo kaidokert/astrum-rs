@@ -24,7 +24,6 @@ use kernel::scheduler::ScheduleTable;
 use kernel::svc::{Kernel, SvcError};
 use kernel::syscall::SYS_EVT_WAIT;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
-use panic_semihosting as _;
 
 kernel::compose_kernel_config!(IrqTestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 

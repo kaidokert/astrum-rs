@@ -34,7 +34,6 @@ use kernel::{
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
-use panic_semihosting as _;
 
 const NP: usize = 2;
 const DATA_BASES: [u32; NP] = [0x2000_0000, 0x2000_8000];

@@ -2,7 +2,7 @@
 #![no_main]
 
 use cortex_m_rt::entry;
-use panic_semihosting as _;
+use kernel as _;
 
 #[entry]
 fn main() -> ! {

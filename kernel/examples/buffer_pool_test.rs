@@ -37,7 +37,6 @@ use kernel::{
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
-use panic_semihosting as _;
 
 const NP: usize = 2;
 const STACK_WORDS: usize = 256;

@@ -6,7 +6,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use panic_semihosting as _;
 
 static TICK_COUNT: AtomicU32 = AtomicU32::new(0);
 

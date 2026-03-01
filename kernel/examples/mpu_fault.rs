@@ -13,7 +13,6 @@ use cortex_m::asm;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::mpu;
-use panic_semihosting as _;
 
 /// Base address of the no-access region.
 const FAULT_ADDR: u32 = 0x2000_F000;
