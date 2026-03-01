@@ -14,13 +14,13 @@
 // and the panic handler is linked.
 // Only active in no_std builds; tests use std's panic handler.
 
-#[cfg(all(not(test), panic_backend = "semihosting"))]
+#[cfg(all(not(test), panic_backend = "semihosting", feature = "log-semihosting"))]
 use panic_semihosting as _;
 
-#[cfg(all(not(test), panic_backend = "rtt"))]
+#[cfg(all(not(test), panic_backend = "rtt", feature = "log-rtt"))]
 use panic_rtt_target as _;
 
-#[cfg(all(not(test), panic_backend = "halt"))]
+#[cfg(all(not(test), panic_backend = "halt", feature = "panic-halt"))]
 use panic_halt as _;
 
 #[cfg(test)]

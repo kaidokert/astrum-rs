@@ -20,11 +20,11 @@ use kernel::{
     syscall::{SYS_QUEUING_RECV, SYS_QUEUING_SEND, SYS_YIELD},
     DebugEnabled, MsgSmall, Partitions2, PortsTiny, SyncMinimal,
 };
-#[cfg(panic_backend = "halt")]
+#[cfg(all(panic_backend = "halt", feature = "panic-halt"))]
 use panic_halt as _;
-#[cfg(panic_backend = "rtt")]
+#[cfg(all(panic_backend = "rtt", feature = "log-rtt"))]
 use panic_rtt_target as _;
-#[cfg(panic_backend = "semihosting")]
+#[cfg(all(panic_backend = "semihosting", feature = "log-semihosting"))]
 use panic_semihosting as _;
 // TODO: replace ERR bitmask with a typed Result abstraction once syscall API supports it
 const ERR: u32 = 0x8000_0000;
