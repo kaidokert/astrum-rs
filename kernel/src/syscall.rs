@@ -53,6 +53,10 @@ pub const SYS_DEV_READ_TIMED: u32 = 30;
 // bottom-half health monitoring unconditional as it's a core architectural concern.
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_QUERY_BOTTOM_HALF: u32 = 33;
+#[cfg(feature = "dynamic-mpu")]
+pub const SYS_BUF_LEND: u32 = 34;
+#[cfg(feature = "dynamic-mpu")]
+pub const SYS_BUF_REVOKE: u32 = 35;
 
 // Re-export SYS_DEBUG_NOTIFY and SYS_DEBUG_WRITE from shared traits crate for ABI isolation
 #[cfg(feature = "partition-debug")]
@@ -105,6 +109,10 @@ pub enum SyscallId {
     // TODO: QueryBottomHalf gated behind dynamic-mpu; see SYS_QUERY_BOTTOM_HALF comment.
     #[cfg(feature = "dynamic-mpu")]
     QueryBottomHalf,
+    #[cfg(feature = "dynamic-mpu")]
+    BufferLend,
+    #[cfg(feature = "dynamic-mpu")]
+    BufferRevoke,
     #[cfg(feature = "partition-debug")]
     DebugNotify,
     #[cfg(feature = "partition-debug")]
@@ -161,6 +169,10 @@ impl SyscallId {
             SYS_DEV_READ_TIMED => Some(Self::DevReadTimed),
             #[cfg(feature = "dynamic-mpu")]
             SYS_QUERY_BOTTOM_HALF => Some(Self::QueryBottomHalf),
+            #[cfg(feature = "dynamic-mpu")]
+            SYS_BUF_LEND => Some(Self::BufferLend),
+            #[cfg(feature = "dynamic-mpu")]
+            SYS_BUF_REVOKE => Some(Self::BufferRevoke),
             #[cfg(feature = "partition-debug")]
             SYS_DEBUG_NOTIFY => Some(Self::DebugNotify),
             #[cfg(feature = "partition-debug")]
@@ -215,6 +227,10 @@ impl SyscallId {
             Self::DevReadTimed => SYS_DEV_READ_TIMED,
             #[cfg(feature = "dynamic-mpu")]
             Self::QueryBottomHalf => SYS_QUERY_BOTTOM_HALF,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::BufferLend => SYS_BUF_LEND,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::BufferRevoke => SYS_BUF_REVOKE,
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => SYS_DEBUG_NOTIFY,
             #[cfg(feature = "partition-debug")]
@@ -272,6 +288,10 @@ mod tests {
         (SYS_DEV_READ_TIMED, SyscallId::DevReadTimed),
         #[cfg(feature = "dynamic-mpu")]
         (SYS_QUERY_BOTTOM_HALF, SyscallId::QueryBottomHalf),
+        #[cfg(feature = "dynamic-mpu")]
+        (SYS_BUF_LEND, SyscallId::BufferLend),
+        #[cfg(feature = "dynamic-mpu")]
+        (SYS_BUF_REVOKE, SyscallId::BufferRevoke),
         #[cfg(feature = "partition-debug")]
         (SYS_DEBUG_NOTIFY, SyscallId::DebugNotify),
     ];
@@ -301,11 +321,11 @@ mod tests {
         assert_eq!(SyscallId::from_u32(1), None);
         // Just above the defined range depends on features:
         // - Without dynamic-mpu: 33 is invalid (after SYS_DEBUG_EXIT=32)
-        // - With dynamic-mpu: 34 is invalid (after SYS_QUERY_BOTTOM_HALF=33)
+        // - With dynamic-mpu: 36 is invalid (after SYS_BUF_REVOKE=35)
         #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(SyscallId::from_u32(33), None);
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(SyscallId::from_u32(34), None);
+        assert_eq!(SyscallId::from_u32(36), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -314,15 +334,15 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        // Base: 23, +10 for dynamic-mpu, +1 for partition-debug
+        // Base: 23, +12 for dynamic-mpu, +1 for partition-debug
         #[cfg(all(not(feature = "dynamic-mpu"), not(feature = "partition-debug")))]
         assert_eq!(ALL_VARIANTS.len(), 23);
         #[cfg(all(feature = "dynamic-mpu", not(feature = "partition-debug")))]
-        assert_eq!(ALL_VARIANTS.len(), 33);
+        assert_eq!(ALL_VARIANTS.len(), 35);
         #[cfg(all(not(feature = "dynamic-mpu"), feature = "partition-debug"))]
         assert_eq!(ALL_VARIANTS.len(), 24);
         #[cfg(all(feature = "dynamic-mpu", feature = "partition-debug"))]
-        assert_eq!(ALL_VARIANTS.len(), 34);
+        assert_eq!(ALL_VARIANTS.len(), 36);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);
