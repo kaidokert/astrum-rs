@@ -32,7 +32,7 @@ kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgSmall, PortsTiny
 static P0_SENT: AtomicU32 = AtomicU32::new(0);
 static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);
 static PARTS_RAN: AtomicU32 = AtomicU32::new(0);
-kernel::define_unified_harness!(no_boot, Cfg, { Cfg::N }, { Cfg::STACK_WORDS }, |tick, k| {
+kernel::define_unified_harness!(no_boot, Cfg, |tick, k| {
     let addr = k as *const _ as usize;
     if (addr & (kernel::state::KERNEL_ALIGNMENT - 1)) != 0 { kexit!(failure); }
     if tick.is_multiple_of(5) {

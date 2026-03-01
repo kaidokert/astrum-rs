@@ -26,8 +26,8 @@ use kernel::{
 };
 use panic_semihosting as _;
 
+// Actual partition count (3) differs from DemoConfig::N (4, from Partitions4 capacity).
 const NUM_PARTITIONS: usize = 3;
-const STACK_WORDS: usize = 256;
 
 // Atomic state for partition progress tracking (handler mode reads these).
 /// Sensor: last value written (increments each cycle)
@@ -38,48 +38,59 @@ static CONTROL_READ: AtomicU32 = AtomicU32::new(0);
 static CONTROL_STATUS: AtomicU32 = AtomicU32::new(0);
 /// Display: cycle count (test passes when this reaches 4)
 static DISPLAY_CYCLES: AtomicU32 = AtomicU32::new(0);
+/// Data integrity errors (display verifies status is 0 or 1)
+static DATA_ERRORS: AtomicU32 = AtomicU32::new(0);
 
 kernel::compose_kernel_config!(DemoConfig<kernel::Partitions4, kernel::SyncStandard, kernel::MsgStandard, kernel::PortsStandard, kernel::DebugEnabled>);
 
 // Use the unified harness macro (no_boot variant) with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.
 // We call kernel::boot directly instead of the macro-generated boot().
-kernel::define_unified_harness!(
-    no_boot,
-    DemoConfig,
-    NUM_PARTITIONS,
-    STACK_WORDS,
-    |tick, _k| {
-        // Check progress every 10 ticks
-        if tick.is_multiple_of(10) {
-            let sensor = SENSOR_VALUE.load(Ordering::Acquire);
-            let ctrl_read = CONTROL_READ.load(Ordering::Acquire);
-            let ctrl_status = CONTROL_STATUS.load(Ordering::Acquire);
-            let cycles = DISPLAY_CYCLES.load(Ordering::Acquire);
+kernel::define_unified_harness!(no_boot, DemoConfig, |tick, _k| {
+    // Check progress every 10 ticks
+    if tick.is_multiple_of(10) {
+        let sensor = SENSOR_VALUE.load(Ordering::Acquire);
+        let ctrl_read = CONTROL_READ.load(Ordering::Acquire);
+        let ctrl_status = CONTROL_STATUS.load(Ordering::Acquire);
+        let cycles = DISPLAY_CYCLES.load(Ordering::Acquire);
 
-            hprintln!(
-                "[tick {}] sensor={} ctrl_read={} status={} cycles={}",
-                tick,
-                sensor,
-                ctrl_read,
-                ctrl_status,
-                cycles
-            );
+        hprintln!(
+            "[tick {}] sensor={} ctrl_read={} status={} cycles={}",
+            tick,
+            sensor,
+            ctrl_read,
+            ctrl_status,
+            cycles
+        );
 
-            // Test passes when display has completed 4 cycles
-            if cycles >= 4 {
-                hprintln!("sampling_demo: all checks passed");
-                debug::exit(debug::EXIT_SUCCESS);
-            }
+        // Data integrity: fail on corrupted status values from display
+        let data_err = DATA_ERRORS.load(Ordering::Acquire);
+        if data_err > 0 {
+            hprintln!("sampling_demo: FAIL - {} data integrity errors", data_err);
+            debug::exit(debug::EXIT_FAILURE);
+        }
 
-            // Timeout after 200 ticks
-            if tick > 200 {
-                hprintln!("sampling_demo: FAIL - timeout");
+        // Test passes when display has completed 4 cycles AND data flowed through pipeline
+        if cycles >= 4 {
+            if sensor == 0 || ctrl_read == 0 {
+                hprintln!(
+                    "sampling_demo: FAIL - no data flow (sensor={} ctrl={})",
+                    sensor,
+                    ctrl_read
+                );
                 debug::exit(debug::EXIT_FAILURE);
             }
+            hprintln!("sampling_demo: all checks passed");
+            debug::exit(debug::EXIT_SUCCESS);
+        }
+
+        // Timeout after 200 ticks
+        if tick > 200 {
+            hprintln!("sampling_demo: FAIL - timeout");
+            debug::exit(debug::EXIT_FAILURE);
         }
     }
-);
+});
 
 extern "C" fn sensor_main_body(r0: u32) -> ! {
     let (src, mut v) = (r0 >> 16, 0u8);
@@ -122,6 +133,10 @@ extern "C" fn display_main_body(r0: u32) -> ! {
             buf.len() as u32,
             buf.as_mut_ptr() as u32
         );
+        // Verify data: control writes u8::from(v > 2), so status must be 0 or 1
+        if _sz > 0 && _sz != u32::MAX && buf[0] > 1 {
+            DATA_ERRORS.fetch_add(1, Ordering::Release);
+        }
         // Track cycle count; SysTick handler checks this for completion
         cyc += 1;
         DISPLAY_CYCLES.store(cyc, Ordering::Release);
@@ -140,8 +155,9 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
-        core::array::from_fn(|i| PartitionConfig::sentinel(i as u8, (STACK_WORDS * 4) as u32));
+    let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| {
+        PartitionConfig::sentinel(i as u8, (DemoConfig::STACK_WORDS * 4) as u32)
+    });
 
     // Create the unified kernel with schedule and partitions.
     #[cfg(feature = "dynamic-mpu")]

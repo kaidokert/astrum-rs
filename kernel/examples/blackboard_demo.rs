@@ -34,10 +34,8 @@ use kernel::{
 use panic_semihosting as _;
 
 // ---------------------------------------------------------------------------
-// Kernel sizing constants and config (tuned to this example's resource needs)
+// Kernel configuration (tuned to this example's resource needs)
 // ---------------------------------------------------------------------------
-const NUM_PARTITIONS: usize = 3;
-const STACK_WORDS: usize = 256;
 
 // Kernel configuration for the blackboard demo.
 //
@@ -74,10 +72,12 @@ static WORKER_A_SEM: AtomicU32 = AtomicU32::new(0);
 static WORKER_B_READS: AtomicU32 = AtomicU32::new(0);
 /// WorkerB: number of sem acquire/release cycles
 static WORKER_B_SEM: AtomicU32 = AtomicU32::new(0);
+/// Data integrity errors (workers verify blackboard content)
+static DATA_ERRORS: AtomicU32 = AtomicU32::new(0);
 
 // Use the unified harness macro with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.
-kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+kernel::define_unified_harness!(DemoConfig, |tick, _k| {
     // Check progress every 10 ticks
     if tick.is_multiple_of(10) {
         let round = CONFIG_ROUND.load(Ordering::Acquire);
@@ -100,8 +100,19 @@ kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, 
             wb_sem
         );
 
-        // Test passes when config has completed 2 rounds
+        // Data integrity: fail if any worker read corrupted blackboard data
+        let data_err = DATA_ERRORS.load(Ordering::Acquire);
+        if data_err > 0 {
+            hprintln!("blackboard_demo: FAIL - {} data integrity errors", data_err);
+            debug::exit(debug::EXIT_FAILURE);
+        }
+
+        // Test passes when config has completed 2 rounds and workers performed IPC
         if done >= 2 {
+            if wa_reads == 0 || wb_reads == 0 {
+                hprintln!("blackboard_demo: FAIL - no worker reads");
+                debug::exit(debug::EXIT_FAILURE);
+            }
             hprintln!("blackboard_demo: all checks passed");
             debug::exit(debug::EXIT_SUCCESS);
         }
@@ -158,6 +169,11 @@ fn worker(
         let mut buf = [0u8; 4];
         let sz = svc!(SYS_BB_READ, bb, 0u32, buf.as_mut_ptr() as u32);
         if sz > 0 && sz != u32::MAX {
+            // Verify blackboard data: config writes [round+1, 10+round],
+            // so buf[1] must equal buf[0]+9 when both bytes are present.
+            if sz >= 2 && buf[1] != buf[0].wrapping_add(9) {
+                DATA_ERRORS.fetch_add(1, Ordering::Release);
+            }
             read_counter.fetch_add(1, Ordering::Release);
             svc!(SYS_SEM_WAIT, sem, partition_id, 0u32);
             sem_counter.fetch_add(1, Ordering::Release);
@@ -204,12 +220,13 @@ fn main() -> ! {
 
     // Build schedule: each partition runs for 2 ticks per slot.
     let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();
-    for i in 0..NUM_PARTITIONS as u8 {
+    for i in 0..DemoConfig::N as u8 {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
-        core::array::from_fn(|i| PartitionConfig::sentinel(i as u8, (STACK_WORDS * 4) as u32));
+    let cfgs: [PartitionConfig; DemoConfig::N] = core::array::from_fn(|i| {
+        PartitionConfig::sentinel(i as u8, (DemoConfig::STACK_WORDS * 4) as u32)
+    });
 
     // Create the unified kernel with schedule and partitions.
     #[cfg(feature = "dynamic-mpu")]
@@ -230,13 +247,13 @@ fn main() -> ! {
     //   config_main (partition 0): only needs blackboard ID
     //   worker_a    (partition 1): needs partition_id=1, sem, bb
     //   worker_b    (partition 2): needs partition_id=2, sem, bb
-    let hints: [u32; NUM_PARTITIONS] = [
+    let hints: [u32; DemoConfig::N] = [
         pack_r0(0, sem, bb),
         pack_r0(1, sem, bb),
         pack_r0(2, sem, bb),
     ];
-    let eps: [extern "C" fn() -> !; NUM_PARTITIONS] = [config_main, worker_a, worker_b];
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
+    let eps: [extern "C" fn() -> !; DemoConfig::N] = [config_main, worker_a, worker_b];
+    let parts: [(extern "C" fn() -> !, u32); DemoConfig::N] =
         core::array::from_fn(|i| (eps[i], hints[i]));
 
     match boot(&parts, &mut p).expect("blackboard_demo: boot failed") {}

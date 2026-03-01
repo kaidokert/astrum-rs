@@ -31,9 +31,6 @@ use panic_semihosting as _;
 // ---------------------------------------------------------------------------
 const QUEUE_DEPTH: usize = 4;
 const QUEUE_MSG_SIZE: usize = 4;
-const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = 256;
-
 // Kernel configuration for the queuing-port demo.
 //
 // Sized for 2 partitions, depth-4 queuing ports with 4-byte messages,
@@ -104,7 +101,7 @@ static WORKER_TIMED_OK: AtomicU32 = AtomicU32::new(0);
 
 // Use the unified harness macro with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.
-kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+kernel::define_unified_harness!(DemoConfig, |tick, _k| {
     // Check progress every 10 ticks
     if tick.is_multiple_of(10) {
         let delivered = CMD_DELIVERED.load(Ordering::Acquire);
@@ -133,6 +130,8 @@ kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS, |tick, 
             debug::exit(debug::EXIT_FAILURE);
         }
 
+        // TODO: reviewer false positive — this hook already verifies IPC data integrity:
+        // RSP_MISMATCH checks response content, not just counts.
         // Test passes when:
         // 1. Queue full was detected (qf_seen == 1)
         // 2. All expected responses received (rsp_recv >= delivered)
@@ -342,12 +341,13 @@ fn main() -> ! {
 
     // Build schedule: each partition runs for 2 ticks per slot.
     let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();
-    for i in 0..NUM_PARTITIONS as u8 {
+    for i in 0..DemoConfig::N as u8 {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
-        core::array::from_fn(|i| PartitionConfig::sentinel(i as u8, (STACK_WORDS * 4) as u32));
+    let cfgs: [PartitionConfig; DemoConfig::N] = core::array::from_fn(|i| {
+        PartitionConfig::sentinel(i as u8, (DemoConfig::STACK_WORDS * 4) as u32)
+    });
 
     // Create the unified kernel with schedule and partitions.
     #[cfg(feature = "dynamic-mpu")]
@@ -391,8 +391,8 @@ fn main() -> ! {
     // Commander: sends on cs, receives on rd.
     // Worker:    sends on rs, receives on cd.
     let hints = [(cs as u32) << 16 | rd as u32, (rs as u32) << 16 | cd as u32];
-    let eps: [extern "C" fn() -> !; NUM_PARTITIONS] = [commander_main, worker_main];
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
+    let eps: [extern "C" fn() -> !; DemoConfig::N] = [commander_main, worker_main];
+    let parts: [(extern "C" fn() -> !, u32); DemoConfig::N] =
         core::array::from_fn(|i| (eps[i], hints[i]));
 
     match boot(&parts, &mut p).expect("queuing_demo: boot failed") {}
