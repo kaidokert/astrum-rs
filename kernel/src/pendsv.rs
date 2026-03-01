@@ -91,10 +91,13 @@ macro_rules! define_pendsv {
         //    - Exported as #[no_mangle] symbols, linking the same values used here
         //
         // 4. Register convention compliance: The assembly follows ARM AAPCS.
-        //    - r0-r3 are caller-saved scratch registers used for arguments
-        //    - r4-r11 are callee-saved and explicitly preserved across calls
+        //    - Before pendsv_context_save: only r0-r3 (hardware-saved on
+        //      exception entry) are used as scratch. r4-r11 are untouched,
+        //      preserving the outgoing partition's callee-saved state for
+        //      the save routine.
+        //    - After save: r4-r11 are free for use as callee-saved working
+        //      registers (e.g. r4 holds partition index, r5 holds kernel base).
         //    - lr is saved/restored around bl instructions
-        //    - The partition index is held in r4 (callee-saved) across calls
         //
         // 5. PSP/register save ordering: The outgoing partition's r4-r11 are
         //    pushed to its process stack before modifying kernel state.
@@ -117,23 +120,26 @@ macro_rules! define_pendsv {
             .thumb_func
 
         PendSV:
-            /* Load kernel base address into r5 (callee-saved) */
-            ldr     r5, =__kernel_state_start
+            /* r4-r11 contain the outgoing partition's callee-saved registers
+             * and must NOT be modified before pendsv_context_save. */
 
-            /* Load current_partition offset and read the field */
-            ldr     r0, =KERNEL_CURRENT_PARTITION_OFFSET
-            ldr     r0, [r0]            /* r0 = offset value */
-            ldrb    r4, [r5, r0]        /* r4 = current_partition (callee-saved) */
+            /* Load current_partition using only r0-r3 (hardware-saved) */
+            ldr     r0, =__kernel_state_start
+            ldr     r1, =KERNEL_CURRENT_PARTITION_OFFSET
+            ldr     r1, [r1]            /* r1 = offset value */
+            ldrb    r1, [r0, r1]        /* r1 = current_partition */
 
             /* Skip save if current_partition == 0xFF (first switch) */
-            cmp     r4, #0xFF
+            cmp     r1, #0xFF
             beq     .Lpendsv_skip_save
 
             /* Save outgoing partition context: r0 = partition index */
-            mov     r0, r4
+            mov     r0, r1
             bl      pendsv_context_save
 
         .Lpendsv_skip_save:
+            /* Load kernel base into r5 (safe now: context is saved) */
+            ldr     r5, =__kernel_state_start
             /* Dynamic mode: program MPU regions (empty string = no-op) */
             "#,
                 $mpu_call,
