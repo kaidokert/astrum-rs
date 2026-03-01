@@ -416,6 +416,33 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         Ok(())
     }
 
+    /// Copy data from a borrowed slot's internal buffer into `dst`.
+    ///
+    /// Both `BorrowedRead` and `BorrowedWrite` owners may read.  The copy
+    /// length is `min(dst.len(), slot.data.len())`.  Returns the number of
+    /// bytes copied on success.
+    pub fn read_from_slot(
+        &self,
+        slot: usize,
+        owner: u8,
+        dst: &mut [u8],
+    ) -> Result<usize, BufferError> {
+        let s = self.slots.get(slot).ok_or(BufferError::InvalidSlot)?;
+        match s.state {
+            BorrowState::Free => return Err(BufferError::SlotNotBorrowed),
+            BorrowState::BorrowedRead { owner: o } | BorrowState::BorrowedWrite { owner: o } => {
+                if o != owner {
+                    return Err(BufferError::NotOwner);
+                }
+            }
+        }
+        let len = dst.len().min(s.data.len());
+        let dst_slice = dst.get_mut(..len).ok_or(BufferError::InvalidSlot)?;
+        let src_slice = s.data.get(..len).ok_or(BufferError::InvalidSlot)?;
+        dst_slice.copy_from_slice(src_slice);
+        Ok(len)
+    }
+
     /// Iterate all slots, revoking any whose deadline has passed
     /// (`deadline <= current_tick`). Each revoked slot has its MPU window
     /// removed via `strategy.remove_window`. Slots without a deadline
@@ -1077,5 +1104,104 @@ mod tests {
         pool.alloc(1, BorrowMode::Write).unwrap();
         pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
         assert_eq!(pool.transfer_ownership(0, 1, 3), Err(BufferError::AlreadyLent));
+    }
+
+    // ------------------------------------------------------------------
+    // read_from_slot tests
+    // ------------------------------------------------------------------
+
+    #[test] fn read_from_slot_invalid_slot() {
+        let pool = BufferPool::<2, 32>::new();
+        let mut dst = [0u8; 32];
+        assert_eq!(pool.read_from_slot(5, 1, &mut dst), Err(BufferError::InvalidSlot));
+    }
+
+    #[test] fn read_from_slot_free_slot() {
+        let pool = BufferPool::<1, 32>::new();
+        let mut dst = [0u8; 32];
+        assert_eq!(pool.read_from_slot(0, 1, &mut dst), Err(BufferError::SlotNotBorrowed));
+    }
+
+    #[test] fn read_from_slot_wrong_owner() {
+        let mut pool = BufferPool::<1, 32>::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.get_mut(0).unwrap().data_mut().fill(0xAB);
+        let mut dst = [0u8; 32];
+        assert_eq!(pool.read_from_slot(0, 99, &mut dst), Err(BufferError::NotOwner));
+        // dst must be untouched (all zeros).
+        assert_eq!(dst, [0u8; 32]);
+    }
+
+    #[test] fn read_from_slot_wrong_owner_borrowed_read() {
+        let mut pool = BufferPool::<1, 32>::new();
+        pool.alloc(1, BorrowMode::Read).unwrap();
+        pool.get_mut(0).unwrap().data_mut().fill(0xAB);
+        let mut dst = [0u8; 32];
+        assert_eq!(pool.read_from_slot(0, 99, &mut dst), Err(BufferError::NotOwner));
+        // dst must be untouched (all zeros).
+        assert_eq!(dst, [0u8; 32]);
+    }
+
+    #[test] fn read_from_slot_lent_slot_succeeds() {
+        // A slot that is BorrowedWrite + lent_to is still readable by the owner.
+        // BorrowState has no Lent variant; lending is tracked via the lent_to field.
+        // TODO: reviewer asked about rejecting reads on lent slots — current design
+        // allows the owner to read even while the slot is lent (non-destructive).
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let pattern: [u8; 32] = core::array::from_fn(|i| i as u8);
+        pool.get_mut(0).unwrap().data_mut().copy_from_slice(&pattern);
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        let mut dst = [0u8; 32];
+        let n = pool.read_from_slot(0, 1, &mut dst).unwrap();
+        assert_eq!(n, 32);
+        assert_eq!(dst, pattern);
+    }
+
+    #[test] fn read_from_slot_borrowed_write_success() {
+        let mut pool = BufferPool::<1, 32>::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let pattern: [u8; 32] = core::array::from_fn(|i| i as u8);
+        pool.get_mut(0).unwrap().data_mut().copy_from_slice(&pattern);
+        let mut dst = [0u8; 32];
+        let n = pool.read_from_slot(0, 1, &mut dst).unwrap();
+        assert_eq!(n, 32);
+        assert_eq!(dst, pattern);
+    }
+
+    #[test] fn read_from_slot_borrowed_read_success() {
+        let mut pool = BufferPool::<1, 32>::new();
+        pool.alloc(1, BorrowMode::Read).unwrap();
+        let pattern: [u8; 32] = core::array::from_fn(|i| (0xFF - i) as u8);
+        pool.get_mut(0).unwrap().data_mut().copy_from_slice(&pattern);
+        let mut dst = [0u8; 32];
+        let n = pool.read_from_slot(0, 1, &mut dst).unwrap();
+        assert_eq!(n, 32);
+        assert_eq!(dst, pattern);
+    }
+
+    #[test] fn read_from_slot_dst_smaller_than_buffer() {
+        let mut pool = BufferPool::<1, 32>::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let pattern: [u8; 32] = core::array::from_fn(|i| i as u8);
+        pool.get_mut(0).unwrap().data_mut().copy_from_slice(&pattern);
+        let mut dst = [0u8; 8];
+        let n = pool.read_from_slot(0, 1, &mut dst).unwrap();
+        assert_eq!(n, 8);
+        assert_eq!(dst, pattern[..8]);
+    }
+
+    #[test] fn read_from_slot_dst_larger_than_buffer() {
+        let mut pool = BufferPool::<1, 32>::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let pattern: [u8; 32] = core::array::from_fn(|i| i as u8);
+        pool.get_mut(0).unwrap().data_mut().copy_from_slice(&pattern);
+        let mut dst = [0xFFu8; 64];
+        let n = pool.read_from_slot(0, 1, &mut dst).unwrap();
+        assert_eq!(n, 32);
+        assert_eq!(dst[..32], pattern);
+        // Bytes beyond the buffer size remain untouched.
+        assert_eq!(dst[32..], [0xFF; 32]);
     }
 }
