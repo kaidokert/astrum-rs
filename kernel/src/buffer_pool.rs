@@ -226,13 +226,14 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         self.slots.get_mut(slot)
     }
 
-    /// Share a `BorrowedWrite` slot with another partition as read-only.
+    /// Share a borrowed slot with another partition.
     ///
-    /// The owner retains write access; the target partition gets a read-only
-    /// MPU window (`AP_RO_RO`).  A [`LendRecord`] is stored in the slot so
-    /// the mapping can later be revoked.
+    /// Accepts `BorrowedWrite` (any `writable` value) or `BorrowedRead`
+    /// (only when `writable == false`).  A `BorrowedRead` owner requesting
+    /// `writable == true` gets `Err(BufferError::NotOwner)`.
     ///
-    /// Returns the MPU region ID on success.
+    /// A [`LendRecord`] is stored in the slot so the mapping can later be
+    /// revoked.  Returns the MPU region ID on success.
     pub fn share_with_partition(
         &mut self,
         slot: usize,
@@ -247,6 +248,11 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         let s = self.slots.get_mut(slot).ok_or(BufferError::InvalidSlot)?;
         match s.state {
             BorrowState::BorrowedWrite { owner: o } if o == owner => {}
+            BorrowState::BorrowedRead { owner: o } if o == owner => {
+                if writable {
+                    return Err(BufferError::NotOwner);
+                }
+            }
             _ => return Err(BufferError::NotOwner),
         }
         if s.lent_to.is_some() {
@@ -274,12 +280,12 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         Ok(region_id)
     }
 
-    /// Remove the read-only MPU window previously created by
+    /// Remove the MPU window previously created by
     /// [`share_with_partition`](Self::share_with_partition).
     ///
-    /// The slot must be `BorrowedWrite` by `owner` and currently lent to
-    /// `target`.  On success the MPU window is removed, the `lent_to` field
-    /// is cleared, and the slot remains `BorrowedWrite` by `owner`.
+    /// The slot must be borrowed (`BorrowedWrite` or `BorrowedRead`) by
+    /// `owner` and currently lent to `target`.  On success the MPU window
+    /// is removed and the `lent_to` field is cleared.
     pub fn unshare_from_partition(
         &mut self,
         slot: usize,
@@ -289,7 +295,8 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
     ) -> Result<(), BufferError> {
         let s = self.slots.get_mut(slot).ok_or(BufferError::InvalidSlot)?;
         match s.state {
-            BorrowState::BorrowedWrite { owner: o } if o == owner => {}
+            BorrowState::BorrowedWrite { owner: o } | BorrowState::BorrowedRead { owner: o }
+                if o == owner => {}
             _ => return Err(BufferError::NotOwner),
         }
         let lr = s.lent_to.ok_or(BufferError::NotLent)?;
@@ -852,11 +859,12 @@ mod tests {
         assert_eq!(pool.share_with_partition(0, 99, 2, false, &ds), Err(BufferError::NotOwner));
     }
 
-    #[test] fn share_read_mode_owner_rejected() {
+    #[test] fn share_read_mode_owner_writable_rejected() {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
-        pool.alloc(1, BorrowMode::Read).unwrap(); // BorrowedRead, not Write
-        assert_eq!(pool.share_with_partition(0, 1, 2, false, &ds), Err(BufferError::NotOwner));
+        pool.alloc(1, BorrowMode::Read).unwrap(); // BorrowedRead
+        // writable=true from BorrowedRead is not allowed.
+        assert_eq!(pool.share_with_partition(0, 1, 2, true, &ds), Err(BufferError::NotOwner));
     }
 
     #[test] fn share_self_lend_rejected() {
@@ -936,11 +944,38 @@ mod tests {
         assert_eq!(pool.unshare_from_partition(5, 1, 2, &ds), Err(BufferError::InvalidSlot));
     }
 
-    #[test] fn unshare_read_mode_rejected() {
+    #[test] fn share_read_mode_owner_readonly_success() {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
-        pool.alloc(1, BorrowMode::Read).unwrap();
-        assert_eq!(pool.unshare_from_partition(0, 1, 2, &ds), Err(BufferError::NotOwner));
+        pool.alloc(1, BorrowMode::Read).unwrap(); // BorrowedRead
+        let rid = pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        // MPU window created with AP_RO_RO for the target.
+        let desc = ds.slot(rid).expect("window should exist");
+        let ap = (desc.permissions >> RASR_AP_SHIFT) & RASR_AP_MASK;
+        assert_eq!(ap, AP_RO_RO);
+        assert_eq!(desc.owner, 2);
+        // Slot remains BorrowedRead by owner 1.
+        let s = pool.get(0).unwrap();
+        assert_eq!(s.state(), BorrowState::BorrowedRead { owner: 1 });
+        let lr = s.lent_to().expect("lent_to should be set");
+        assert_eq!(lr.target, 2);
+        assert_eq!(lr.region_id, rid);
+        assert!(!lr.writable);
+    }
+
+    #[test] fn unshare_read_mode_owner_success() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Read).unwrap(); // BorrowedRead
+        let rid = pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        assert!(ds.slot(rid).is_some());
+        pool.unshare_from_partition(0, 1, 2, &ds).unwrap();
+        // MPU window removed.
+        assert!(ds.slot(rid).is_none());
+        // lent_to cleared.
+        assert_eq!(pool.get(0).unwrap().lent_to(), None);
+        // Slot remains BorrowedRead by owner (not corrupted).
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedRead { owner: 1 });
     }
 
     // ------------------------------------------------------------------
