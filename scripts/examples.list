@@ -20,6 +20,11 @@ EXAMPLES=(
     callee_save_check
 )
 
+CUSTOM_IVT_EXAMPLES=(
+    qemu_custom_ivt
+    irq_dispatch_test
+)
+
 # Dynamic-MPU examples require MPU region configuration that works with
 # unprivileged partition execution (CONTROL.nPRIV=1). Currently broken
 # because partition_mpu_regions sets a background no-access region that

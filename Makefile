@@ -6,7 +6,7 @@
 TARGET   ?= thumbv7m-none-eabi
 FEATURES ?= qemu,log-semihosting
 
-.PHONY: smoke-test qemu-smoke build-smoke test-qemu
+.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test
 
 # Minimal single-partition smoke test (SYS_YIELD)
 smoke-test:
@@ -20,6 +20,14 @@ qemu-smoke:
 build-smoke:
 	cargo build -p kernel --target $(TARGET) --features $(FEATURES) --example smoke_test
 	cargo build -p kernel --target $(TARGET) --features $(FEATURES) --example qemu_smoke
+
+# Run custom-IVT example (qemu_custom_ivt)
+custom-ivt-test:
+	cargo run -p kernel --target $(TARGET) --features $(FEATURES),custom-ivt --example qemu_custom_ivt
+
+# Run IRQ dispatch test (irq_dispatch_test)
+irq-dispatch-test:
+	cargo run -p kernel --target $(TARGET) --features $(FEATURES),custom-ivt --example irq_dispatch_test
 
 # Run all QEMU integration examples
 test-qemu:

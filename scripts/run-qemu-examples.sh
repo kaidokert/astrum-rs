@@ -31,6 +31,10 @@ run_examples() {
 echo "=== Static-mode examples ==="
 run_examples "qemu,log-semihosting" "${EXAMPLES[@]}"
 
+echo ""
+echo "=== Custom-IVT examples ==="
+run_examples "qemu,log-semihosting,custom-ivt" "${CUSTOM_IVT_EXAMPLES[@]}"
+
 if [[ "${1:-}" == "--dynamic-mpu" ]]; then
     echo ""
     echo "=== Dynamic-MPU examples ==="
