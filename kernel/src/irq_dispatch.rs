@@ -81,6 +81,23 @@ where
     });
 }
 
+/// Generic newtype wrapping a raw IRQ number.
+///
+/// This eliminates the need for per-peripheral newtype wrappers — any IRQ
+/// number can be used with `NVIC::unmask`/`mask`/`pend` via `IrqNr(n)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IrqNr(pub u8);
+
+#[cfg(all(not(test), target_arch = "arm"))]
+// SAFETY: All u8 values (0..=255) are architecturally valid external
+// interrupt numbers on Cortex-M.  The caller is responsible for only
+// using numbers that exist on their specific device.
+unsafe impl cortex_m::interrupt::InterruptNumber for IrqNr {
+    fn number(self) -> u16 {
+        self.0 as u16
+    }
+}
+
 /// A const-friendly mapping from an IRQ number to a (partition, event_bits) pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IrqBinding {
@@ -426,5 +443,49 @@ mod tests {
                 IrqBinding::new(1, 1, 0x02),
             ]));
         }
+    }
+
+    // ---- IrqNr tests ----
+
+    #[test]
+    fn irq_nr_construction() {
+        let irq = IrqNr(42);
+        assert_eq!(irq.0, 42);
+    }
+
+    #[test]
+    fn irq_nr_equality() {
+        assert_eq!(IrqNr(7), IrqNr(7));
+        assert_ne!(IrqNr(7), IrqNr(8));
+    }
+
+    #[test]
+    fn irq_nr_boundary_values() {
+        let zero = IrqNr(0);
+        assert_eq!(zero.0, 0);
+
+        let max = IrqNr(255);
+        assert_eq!(max.0, 255);
+    }
+
+    #[test]
+    fn irq_nr_copy_semantics() {
+        let a = IrqNr(10);
+        let b = a; // Copy
+        assert_eq!(a, b); // `a` still usable — Copy
+    }
+
+    #[test]
+    fn irq_nr_clone() {
+        let a = IrqNr(33);
+        let b = Clone::clone(&a);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn irq_nr_debug() {
+        let dbg = format!("{:?}", IrqNr(99));
+        assert!(dbg.contains("IrqNr"));
+        assert!(dbg.contains("99"));
     }
 }
