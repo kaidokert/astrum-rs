@@ -337,8 +337,8 @@ pub fn assert_waiting_implies_yield_requested(
 ) {
 }
 
-/// Assert that all non-zero PCB stack_base and mpu_region.base values fall
-/// within the storage address range [storage_start, storage_end).
+/// Assert that all non-zero PCB stack_base values fall within the storage
+/// address range [storage_start, storage_end).
 ///
 /// Zero addresses are skipped as they indicate sentinel/uninitialized values.
 ///
@@ -363,17 +363,9 @@ pub fn assert_pcb_addresses_in_storage(
                 storage_end
             );
         }
-        let mb = pcb.mpu_region().base();
-        if mb != 0 && (mb < storage_start || mb >= storage_end) {
-            panic!(
-                "invariant violation: partition {} mpu_region base 0x{:08x} outside storage \
-                 [0x{:08x}, 0x{:08x})",
-                pcb.id(),
-                mb,
-                storage_start,
-                storage_end
-            );
-        }
+        // mpu_region.base() is a hardware MPU region address (e.g. 0x2000_0000
+        // for SRAM, 0x5000_0000 for OTG_FS) — deliberately outside kernel
+        // storage. Do NOT validate it against the storage range.
     }
 }
 
@@ -1148,7 +1140,7 @@ mod tests {
 
     #[test]
     fn pcb_addresses_in_storage_valid() {
-        // stack_base=0x2000_0000, mpu base=0x2000_1000 — both in range.
+        // stack_base=0x2000_0000 — in range. mpu base is not validated.
         let p = make_region_pcb(0, 0x2000_1000, 0x1000, 0x2000_0000, 0x400);
         assert_pcb_addresses_in_storage(&[p], 0x2000_0000, 0x2000_2000);
     }
@@ -1161,8 +1153,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "mpu_region base 0x30000000 outside storage")]
-    fn pcb_addresses_mpu_base_out_of_range() {
+    fn pcb_addresses_mpu_base_out_of_storage_allowed() {
+        // mpu_region.base() is a hardware address — must NOT be validated
+        // against kernel storage, so an out-of-range base must not panic.
         let p = make_region_pcb(0, 0x3000_0000, 0x1000, 0x2000_0000, 0x400);
         assert_pcb_addresses_in_storage(&[p], 0x2000_0000, 0x2001_0000);
     }

@@ -322,7 +322,7 @@ where
         }
         // Reject sentinel partitions when MPU enforcement is active.
         check_sentinel_mpu_enforce(k.partitions().as_slice(), C::MPU_ENFORCE)?;
-        // Verify all PCB addresses were patched into the live storage range;
+        // Verify PCB stack_base addresses were patched into the live storage range;
         // catches stale pre-move addresses left over from static init.
         #[cfg(debug_assertions)]
         {
