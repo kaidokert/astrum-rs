@@ -1,12 +1,13 @@
 //! Kernel panic handler with compile-time backend selection.
 //!
-//! Re-exports the appropriate panic handler based on `panic_backend` cfg.
+//! Provides a single-import panic handler for all feature combinations.
 //! Examples can use `use kernel::kpanic as _;` for uniform panic handling.
 //!
 //! Backend selection is handled by build.rs which emits `panic_backend`:
-//! - `semihosting`: Uses `panic_semihosting` (exits QEMU on panic)
-//! - `rtt`: Uses `panic_rtt_target` (outputs via RTT)
-//! - `halt`: Uses `panic_halt` (infinite loop, no output)
+//! - `semihosting`: Re-exports `panic_semihosting` (exits QEMU on panic)
+//! - `rtt`: Re-exports `panic_rtt_target` (outputs via RTT)
+//! - `halt` + `panic-halt` feature: Re-exports `panic_halt`
+//! - `halt` without `panic-halt` feature: Inline halt-loop fallback
 
 // Import the panic handler for the selected backend.
 // The `use ... as _` pattern pulls in the #[panic_handler] without naming it.
@@ -23,22 +24,35 @@ use panic_rtt_target as _;
 #[cfg(all(not(test), panic_backend = "halt", feature = "panic-halt"))]
 use panic_halt as _;
 
+// Inline fallback: halt-loop when panic_backend is "halt" but the
+// `panic-halt` crate feature is not enabled.  This makes kpanic a
+// complete single-import solution for every feature combination.
+#[cfg(all(
+    not(test),
+    target_arch = "arm",
+    panic_backend = "halt",
+    not(feature = "panic-halt")
+))]
+#[panic_handler]
+fn _fallback_panic(_: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
+
 #[cfg(test)]
 mod tests {
     //! Verify module structure compiles for all backend configurations.
-    //! The actual panic handler is pulled in by `use kernel::kpanic as _;`
-    //! in examples, so we just verify the module compiles.
     //!
-    //! Note: We cannot test the actual re-exports here because:
-    //! 1. Tests run with std which provides its own panic handler
-    //! 2. The handler re-exports are gated on `not(test)`
-    //!
-    //! Real verification is done by building examples with each feature set.
+    //! Note: The actual panic handlers (re-exports and inline fallback) are
+    //! gated on `not(test)` and `target_arch = "arm"`, so they cannot be
+    //! exercised in host unit tests.  Real verification is done by:
+    //! - `cargo check --lib --no-default-features` (no duplicate handler)
+    //! - Building hw_integration with each feature set on ARM targets
 
     #[test]
     fn module_compiles() {
-        // This test verifies that the kpanic module compiles.
-        // The actual panic handler selection is tested by building
-        // examples with different feature combinations.
+        // Verifies kpanic module compiles on host.  All four cfg paths
+        // (semihosting, rtt, panic-halt, inline fallback) are gated on
+        // not(test), so this confirms no syntax or type errors in the
+        // module-level items that are visible during test builds.
     }
 }

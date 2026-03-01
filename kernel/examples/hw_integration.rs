@@ -20,16 +20,8 @@ use kernel::{
     syscall::{SYS_QUEUING_RECV, SYS_QUEUING_SEND, SYS_YIELD},
     DebugEnabled, MsgSmall, Partitions2, PortsTiny, SyncMinimal,
 };
-#[cfg(all(panic_backend = "halt", feature = "panic-halt"))]
-use panic_halt as _;
-#[cfg(all(panic_backend = "rtt", feature = "log-rtt"))]
-use panic_rtt_target as _;
-#[cfg(all(panic_backend = "semihosting", feature = "log-semihosting"))]
-use panic_semihosting as _;
-// Fallback: inline halt-loop when no panic-handler crate feature is active.
-#[cfg(not(any(feature = "panic-halt", feature = "log-semihosting", feature = "log-rtt")))]
-#[panic_handler]
-fn _fallback_panic(_: &core::panic::PanicInfo) -> ! { loop {} }
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 // TODO: replace ERR bitmask with a typed Result abstraction once syscall API supports it
 const ERR: u32 = 0x8000_0000;
 kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
