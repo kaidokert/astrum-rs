@@ -151,6 +151,10 @@ name = "uart1_loopback"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
+name = "callee_save_check"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "adversarial_mod_stub"
 required-features = ["qemu", "log-semihosting"]
 
