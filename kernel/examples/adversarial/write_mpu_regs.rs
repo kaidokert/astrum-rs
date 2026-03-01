@@ -20,8 +20,9 @@ use cortex_m::peripheral::scb::Exception;
 use cortex_m::register::{control, psp};
 use cortex_m_rt::entry;
 use cortex_m_semihosting::hprintln;
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::mpu;
-use panic_semihosting as _;
 
 #[path = "mod.rs"]
 mod adversarial;

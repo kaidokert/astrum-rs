@@ -13,7 +13,8 @@
 use core::ptr;
 
 use cortex_m_rt::entry;
-use panic_semihosting as _;
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 
 #[path = "mod.rs"]
 mod adversarial;

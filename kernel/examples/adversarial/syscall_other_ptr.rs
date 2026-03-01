@@ -16,7 +16,9 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
 use kernel::{
+    kpanic as _,
     partition::{MpuRegion, PartitionConfig},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
@@ -24,7 +26,6 @@ use kernel::{
     syscall::SYS_SAMPLING_WRITE,
     DebugEnabled, MsgMinimal, Partitions2, PortsSmall, SyncMinimal,
 };
-use panic_semihosting as _;
 
 // ---------------------------------------------------------------------------
 // Test constants

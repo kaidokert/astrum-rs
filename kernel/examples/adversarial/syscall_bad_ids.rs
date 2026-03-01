@@ -17,14 +17,15 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
 use kernel::{
+    kpanic as _,
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::{SYS_EVT_SET, SYS_QUEUING_SEND},
     DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, SyncMinimal,
 };
-use panic_semihosting as _;
 
 // ---------------------------------------------------------------------------
 // Test constants
