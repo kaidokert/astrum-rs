@@ -376,7 +376,6 @@ impl MsgConfig for MsgStandard {
 /// | `BLACKBOARDS` | `BS` | Blackboard pool capacity |
 /// | `BLACKBOARD_MAX_MSG_SIZE` | `BM` | Blackboard maximum message size in bytes |
 /// | `BLACKBOARD_WAITQ` | `BW` | Blackboard wait-queue depth |
-// TODO: integrate as KernelConfig associated type (same as PartitionConfig/SyncConfig/MsgConfig)
 pub trait PortsConfig {
     /// Sampling-port pool capacity (maps to [`KernelConfig::SP`]).
     const SAMPLING_PORTS: usize;
@@ -636,6 +635,17 @@ pub trait KernelConfig {
     /// Sampling ports and blackboards operations. Must implement `PortsOps`
     /// for sampling port and blackboard syscall dispatch.
     type Ports: Default + PortsOps;
+
+    /// Partition sub-config preset used to derive N, SCHED, STACK_WORDS.
+    type PartitionCfg: PartitionConfig;
+    /// Sync sub-config preset used to derive S, SW, MS, MW.
+    type SyncCfg: SyncConfig;
+    /// Messaging sub-config preset used to derive QS, QD, QM, QW.
+    type MsgCfg: MsgConfig;
+    /// Ports sub-config preset used to derive SP, SM, BS, BM, BW.
+    type PortsCfg: PortsConfig;
+    /// Debug sub-config preset used to derive DEBUG_BUFFER_SIZE, DEBUG_AUTO_DRAIN_BUDGET.
+    type DebugCfg: DebugConfig;
 }
 
 /// Maximum value for the SysTick RELOAD register (24-bit).
@@ -714,15 +724,36 @@ pub const fn assert_priority_order<C: KernelConfig>() {
 ///
 /// # Forms
 ///
-/// - `kernel_config_types!()` — uses
-///   [`AlignedStack1K`](crate::partition_core::AlignedStack1K).
-/// - `kernel_config_types!($stack)` — uses the provided stack type.
+/// - `kernel_config_types!()` — uses default stack and default sub-config presets.
+/// - `kernel_config_types!($stack)` — uses the provided stack type with default sub-config presets.
+/// - `kernel_config_types!(@cfg $parts, $sync, $msg, $ports, $debug)` — default stack, explicit sub-configs.
+/// - `kernel_config_types!(@cfg $parts, $sync, $msg, $ports, $debug; $stack)` — explicit stack and sub-configs.
 #[macro_export]
 macro_rules! kernel_config_types {
     () => {
-        $crate::kernel_config_types!($crate::partition_core::AlignedStack1K);
+        $crate::kernel_config_types!(@cfg
+            $crate::config::Partitions2,
+            $crate::config::SyncMinimal,
+            $crate::config::MsgMinimal,
+            $crate::config::PortsTiny,
+            $crate::config::DebugEnabled;
+            $crate::partition_core::AlignedStack1K
+        );
     };
     ($stack:ty) => {
+        $crate::kernel_config_types!(@cfg
+            $crate::config::Partitions2,
+            $crate::config::SyncMinimal,
+            $crate::config::MsgMinimal,
+            $crate::config::PortsTiny,
+            $crate::config::DebugEnabled;
+            $stack
+        );
+    };
+    (@cfg $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty) => {
+        $crate::kernel_config_types!(@cfg $parts, $sync, $msg, $ports, $debug; $crate::partition_core::AlignedStack1K);
+    };
+    (@cfg $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty; $stack:ty) => {
         type Core = $crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }, $stack>;
         type Sync =
             $crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
@@ -735,6 +766,11 @@ macro_rules! kernel_config_types {
             { Self::BM },
             { Self::BW },
         >;
+        type PartitionCfg = $parts;
+        type SyncCfg = $sync;
+        type MsgCfg = $msg;
+        type PortsCfg = $ports;
+        type DebugCfg = $debug;
     };
 }
 
@@ -1350,7 +1386,7 @@ macro_rules! compose_kernel_config {
             $crate::_compose_debug_default!(@DBS, $debug; $($overrides)*);
             $crate::_compose_debug_default!(@DAD, $debug; $($overrides)*);
             $crate::_kernel_config_body!($($overrides)*);
-            $crate::kernel_config_types!($stack);
+            $crate::kernel_config_types!(@cfg $parts, $sync, $msg, $ports, $debug; $stack);
         }
         $crate::_kernel_config_inherent_consts!($vis $name);
         const _: () = $crate::config::assert_priority_order::<$name>();
@@ -1394,7 +1430,7 @@ macro_rules! compose_kernel_config {
             // Non-sub-config overrides
             $crate::_kernel_config_body!($($overrides)*);
 
-            $crate::kernel_config_types!();
+            $crate::kernel_config_types!(@cfg $parts, $sync, $msg, $ports, $debug);
         }
         $crate::_kernel_config_inherent_consts!($vis $name);
         const _: () = $crate::config::assert_priority_order::<$name>();
@@ -1522,7 +1558,6 @@ mod tests {
     }
 
     /// Minimal config using all default values (only N and type aliases required).
-    // TODO: type aliases cannot be defaulted - Rust's associated_type_defaults feature is unstable.
     struct DefaultPriority;
     impl KernelConfig for DefaultPriority {
         const N: usize = 2; // N has no default - must be specified
@@ -1694,6 +1729,39 @@ mod tests {
     const _: () = assert!(!DefaultPriority::MPU_ENFORCE);
     const _: () = assert_priority_order::<MpuEnabledConfig>();
     const _: () = assert_systick_reload::<MpuEnabledConfig>();
+
+    // ============ Sub-config associated type consistency tests ============
+
+    /// Verify that each sub-config associated type's constants match the
+    /// corresponding raw KernelConfig constants on DefaultPriority.
+    #[test]
+    fn sub_config_types_match_raw_constants() {
+        type D = DefaultPriority;
+        // PartitionCfg
+        assert_eq!(<D as KernelConfig>::PartitionCfg::COUNT, D::N);
+        assert_eq!(
+            <D as KernelConfig>::PartitionCfg::SCHEDULE_CAPACITY,
+            D::SCHED
+        );
+        assert_eq!(
+            <D as KernelConfig>::PartitionCfg::STACK_WORDS,
+            D::STACK_WORDS
+        );
+        // SyncCfg
+        assert_eq!(<D as KernelConfig>::SyncCfg::SEMAPHORES, D::S);
+        assert_eq!(<D as KernelConfig>::SyncCfg::MUTEXES, D::MS);
+        // MsgCfg
+        assert_eq!(<D as KernelConfig>::MsgCfg::QUEUES, D::QS);
+        assert_eq!(<D as KernelConfig>::MsgCfg::MAX_MSG_SIZE, D::QM);
+        // PortsCfg
+        assert_eq!(<D as KernelConfig>::PortsCfg::SAMPLING_PORTS, D::SP);
+        assert_eq!(<D as KernelConfig>::PortsCfg::BLACKBOARDS, D::BS);
+        // DebugCfg
+        assert_eq!(
+            <D as KernelConfig>::DebugCfg::AUTO_DRAIN_BUDGET,
+            D::DEBUG_AUTO_DRAIN_BUDGET
+        );
+    }
 
     // ============ PartitionConfig tests ============
 
