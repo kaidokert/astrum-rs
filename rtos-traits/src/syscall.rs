@@ -60,6 +60,25 @@ impl SvcError {
         code & Self::ERROR_BIT != 0
     }
 
+    /// Convert a raw `u32` error code back to a typed [`SvcError`].
+    ///
+    /// Returns `None` if the code does not match any known variant.
+    pub const fn from_u32(code: u32) -> Option<Self> {
+        match code {
+            0xFFFF_FFFF => Some(Self::InvalidSyscall),
+            0xFFFF_FFFE => Some(Self::InvalidResource),
+            0xFFFF_FFFD => Some(Self::WaitQueueFull),
+            0xFFFF_FFFC => Some(Self::TransitionFailed),
+            0xFFFF_FFFB => Some(Self::InvalidPartition),
+            0xFFFF_FFFA => Some(Self::OperationFailed),
+            0xFFFF_FFF9 => Some(Self::InvalidPointer),
+            0xFFFF_FFF8 => Some(Self::NotImplemented),
+            0xFFFF_FFF7 => Some(Self::BufferFull),
+            0xFFFF_FFF6 => Some(Self::NotSupported),
+            _ => None,
+        }
+    }
+
     /// Map this error to a unique `u32` value with the high bit set.
     ///
     /// The values count down from `0xFFFF_FFFF` so they are easy to inspect in

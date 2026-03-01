@@ -33,6 +33,8 @@ pub mod harness;
 
 pub mod blackboard;
 #[cfg(feature = "dynamic-mpu")]
+pub mod buf_syscall;
+#[cfg(feature = "dynamic-mpu")]
 pub mod buffer_pool;
 pub mod config;
 pub use config::{
