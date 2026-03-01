@@ -13,6 +13,7 @@ EXAMPLES=(
     mpu_region systick mpu_wx mpu_fault
     partition_switch context_switch mpu_partition
     svc_yield integration sampling_demo queuing_demo blackboard_demo
+    callee_save_check  # committed in prior commits; see kernel/examples/callee_save_check.rs
 )
 
 DYNAMIC_MPU_EXAMPLES=(
