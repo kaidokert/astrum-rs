@@ -45,6 +45,8 @@ pub enum SvcError {
     BufferFull,
     /// The requested operation is not supported (e.g., debug buffer not configured).
     NotSupported,
+    /// The caller lacks the required ownership or permission.
+    PermissionDenied,
 }
 
 impl SvcError {
@@ -75,6 +77,7 @@ impl SvcError {
             0xFFFF_FFF8 => Some(Self::NotImplemented),
             0xFFFF_FFF7 => Some(Self::BufferFull),
             0xFFFF_FFF6 => Some(Self::NotSupported),
+            0xFFFF_FFF5 => Some(Self::PermissionDenied),
             _ => None,
         }
     }
@@ -95,6 +98,7 @@ impl SvcError {
             Self::NotImplemented => 0xFFFF_FFF8,
             Self::BufferFull => 0xFFFF_FFF7,
             Self::NotSupported => 0xFFFF_FFF6,
+            Self::PermissionDenied => 0xFFFF_FFF5,
         }
     }
 }

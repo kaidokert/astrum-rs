@@ -43,6 +43,33 @@ pub enum BufferError {
     SelfLend,
 }
 
+impl BufferError {
+    /// Map this buffer error to the corresponding [`rtos_traits::syscall::SvcError`].
+    pub fn to_svc_error(&self) -> rtos_traits::syscall::SvcError {
+        use rtos_traits::syscall::SvcError;
+        match self {
+            Self::NotOwner => SvcError::PermissionDenied,
+            Self::AlreadyLent | Self::NotLent | Self::SelfLend => SvcError::OperationFailed,
+            Self::InvalidSlot | Self::SlotNotFree | Self::SlotNotBorrowed => {
+                SvcError::InvalidResource
+            }
+            Self::InvalidSize | Self::Mpu(_) => SvcError::OperationFailed,
+        }
+    }
+}
+
+impl BufferPoolError {
+    /// Map this buffer-pool error to the corresponding [`rtos_traits::syscall::SvcError`].
+    pub fn to_svc_error(&self) -> rtos_traits::syscall::SvcError {
+        use rtos_traits::syscall::SvcError;
+        match self {
+            Self::NotOwner => SvcError::PermissionDenied,
+            Self::InvalidSlot | Self::NotBorrowed => SvcError::InvalidResource,
+            Self::AlreadyBorrowed => SvcError::OperationFailed,
+        }
+    }
+}
+
 /// Tracks a cross-partition buffer lending: which partition the buffer was
 /// lent to and the MPU region used for the mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1229,5 +1256,27 @@ mod tests {
         let pool = BufferPool::<2, 64>::new();
         assert!(pool.slot_base_address(2).is_none());
         assert!(pool.slot_base_address(99).is_none());
+    }
+
+    #[test]
+    fn error_to_svc_error_mappings() {
+        use rtos_traits::syscall::SvcError;
+        // BufferError: NotOwner → PermissionDenied
+        assert_eq!(BufferError::NotOwner.to_svc_error(), SvcError::PermissionDenied);
+        // BufferError: operational/state → OperationFailed
+        for e in [BufferError::AlreadyLent, BufferError::NotLent, BufferError::SelfLend,
+                   BufferError::InvalidSize, BufferError::Mpu(MpuError::SlotExhausted)] {
+            assert_eq!(e.to_svc_error(), SvcError::OperationFailed, "{e:?}");
+        }
+        // BufferError: invalid resource → InvalidResource
+        for e in [BufferError::InvalidSlot, BufferError::SlotNotFree,
+                   BufferError::SlotNotBorrowed] {
+            assert_eq!(e.to_svc_error(), SvcError::InvalidResource, "{e:?}");
+        }
+        // BufferPoolError mappings
+        assert_eq!(BufferPoolError::NotOwner.to_svc_error(), SvcError::PermissionDenied);
+        assert_eq!(BufferPoolError::InvalidSlot.to_svc_error(), SvcError::InvalidResource);
+        assert_eq!(BufferPoolError::NotBorrowed.to_svc_error(), SvcError::InvalidResource);
+        assert_eq!(BufferPoolError::AlreadyBorrowed.to_svc_error(), SvcError::OperationFailed);
     }
 }

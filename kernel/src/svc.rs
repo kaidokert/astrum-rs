@@ -1855,7 +1855,7 @@ where
                     .release(frame.r1 as usize, self.current_partition)
                 {
                     Ok(()) => 0,
-                    Err(_) => SvcError::InvalidResource.to_u32(),
+                    Err(e) => e.to_svc_error().to_u32(),
                 }
             }
             #[cfg(feature = "dynamic-mpu")]
@@ -1879,7 +1879,7 @@ where
                             frame.r1 = self.buffers.slot_base_address(slot).unwrap_or(0);
                             region_id as u32
                         }
-                        Err(_) => SvcError::InvalidResource.to_u32(),
+                        Err(e) => e.to_svc_error().to_u32(),
                     }
                 }
             }
@@ -1898,7 +1898,7 @@ where
                         &self.dynamic_strategy,
                     ) {
                         Ok(()) => 0,
-                        Err(_) => SvcError::InvalidResource.to_u32(),
+                        Err(e) => e.to_svc_error().to_u32(),
                     }
                 }
             }
@@ -1908,15 +1908,13 @@ where
                 let new_owner_raw = frame.r2 as usize;
                 match u8::try_from(new_owner_raw) {
                     Ok(new_owner) if (new_owner as usize) < self.partitions().len() => {
-                        use crate::buffer_pool::BufferError;
                         match self.buffers.transfer_ownership(
                             slot,
                             self.current_partition,
                             new_owner,
                         ) {
                             Ok(()) => 0,
-                            Err(BufferError::SelfLend) => SvcError::OperationFailed.to_u32(),
-                            Err(_) => SvcError::InvalidResource.to_u32(),
+                            Err(e) => e.to_svc_error().to_u32(),
                         }
                     }
                     _ => SvcError::InvalidPartition.to_u32(),
@@ -1949,7 +1947,8 @@ where
                                 None => SvcError::OperationFailed.to_u32(),
                             }
                         }
-                        _ => SvcError::InvalidResource.to_u32(),
+                        Some(_) => SvcError::PermissionDenied.to_u32(),
+                        None => SvcError::InvalidResource.to_u32(),
                     }
                 })
             }
@@ -1967,7 +1966,7 @@ where
                         .read_from_slot(slot_idx, self.current_partition, dst)
                     {
                         Ok(n) => n as u32,
-                        Err(_) => SvcError::InvalidResource.to_u32(),
+                        Err(e) => e.to_svc_error().to_u32(),
                     }
                 })
             }
@@ -4313,6 +4312,7 @@ mod tests {
         SvcError::OperationFailed,
         SvcError::InvalidPointer,
         SvcError::NotImplemented,
+        SvcError::PermissionDenied,
     ];
 
     #[test]
@@ -4358,7 +4358,10 @@ mod tests {
         assert_eq!(svc!(SYS_BUF_RELEASE, 0), 0); // release 0 again
         assert_eq!(svc!(SYS_BUF_RELEASE, 0), eres); // double-release
         k.set_current_partition(1); // switch to partition 1
-        assert_eq!(svc!(SYS_BUF_RELEASE, 1), eres); // wrong owner
+        assert_eq!(
+            svc!(SYS_BUF_RELEASE, 1),
+            SvcError::PermissionDenied.to_u32()
+        ); // wrong owner
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -4392,7 +4395,7 @@ mod tests {
     #[test]
     fn buf_lend_revoke_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
-        let eres = SvcError::InvalidResource.to_u32();
+        let eop = SvcError::OperationFailed.to_u32();
         let epart = SvcError::InvalidPartition.to_u32();
         let mut k = kernel(0, 0, 0);
         macro_rules! svc {
@@ -4419,12 +4422,12 @@ mod tests {
         }
         // Revoke from partition 1
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0);
-        // Error: revoke when not lent
-        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), eres);
+        // Error: revoke when not lent → OperationFailed (NotLent)
+        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), eop);
         // Error: invalid partition (only 2 exist); r2 bits[7:0]=99
         assert_eq!(svc!(SYS_BUF_LEND, slot, 99), epart);
-        // r2=0x100 → target=0 (self), flags=WRITABLE → self-lend error
-        assert_eq!(svc!(SYS_BUF_LEND, slot, 256), eres);
+        // r2=0x100 → target=0 (self), flags=WRITABLE → SelfLend → OperationFailed
+        assert_eq!(svc!(SYS_BUF_LEND, slot, 256), eop);
         // r2=0x101 → target=1, flags=WRITABLE → writable lend succeeds
         let writable_region = svc!(SYS_BUF_LEND, slot, 257);
         assert!(
@@ -4433,8 +4436,8 @@ mod tests {
         );
         // Revoke the writable lend before further tests
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0);
-        // Error: self-lend (partition 0 lending to itself)
-        assert_eq!(svc!(SYS_BUF_LEND, slot, 0), eres);
+        // Error: self-lend (partition 0 lending to itself) → OperationFailed
+        assert_eq!(svc!(SYS_BUF_LEND, slot, 0), eop);
         // Error: invalid partition in BufferRevoke
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 99), epart);
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 256), epart);
@@ -4444,7 +4447,7 @@ mod tests {
     #[test]
     fn buf_transfer_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_TRANSFER};
-        let eres = SvcError::InvalidResource.to_u32();
+        let eperm = SvcError::PermissionDenied.to_u32();
         let epart = SvcError::InvalidPartition.to_u32();
         let eop = SvcError::OperationFailed.to_u32();
         let mut k = kernel(0, 0, 0);
@@ -4462,18 +4465,18 @@ mod tests {
         assert!(slot < 0x8000_0000, "alloc should succeed");
         // Successful transfer: partition 0 → partition 1
         assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), 0);
-        // Wrong owner: partition 0 no longer owns it
-        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), eres);
+        // Wrong owner: partition 0 no longer owns it → PermissionDenied
+        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), eperm);
         // Transfer back via partition 1
         k.current_partition = 1;
         assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 0), 0);
         k.current_partition = 0;
         // Self-transfer → OperationFailed
         assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 0), eop);
-        // Transfer while lent → InvalidResource
+        // Transfer while lent → OperationFailed (AlreadyLent)
         let region = svc!(SYS_BUF_LEND, slot, 1);
         assert!(region < 0x8000_0000, "lend should succeed");
-        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), eres);
+        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), eop);
         // Invalid partition ID → InvalidPartition
         assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 99), epart);
     }
@@ -4483,6 +4486,7 @@ mod tests {
     fn buf_read_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_READ};
         let eres = SvcError::InvalidResource.to_u32();
+        let eperm = SvcError::PermissionDenied.to_u32();
         let mut k = kernel(0, 0, 0);
         macro_rules! svc {
             ($r0:expr, $r1:expr, $r2:expr, $r3:expr) => {{
@@ -4504,8 +4508,8 @@ mod tests {
         // SAFETY: ptr valid for 4096 bytes (mmap), 32 written.
         let out = unsafe { core::slice::from_raw_parts(ptr, 32) };
         assert_eq!(out, &pat, "read data must match written pattern");
-        k.current_partition = 1; // wrong owner
-        assert_eq!(svc!(SYS_BUF_READ, slot, 32, low32_buf(1) as u32), eres);
+        k.current_partition = 1; // wrong owner → PermissionDenied
+        assert_eq!(svc!(SYS_BUF_READ, slot, 32, low32_buf(1) as u32), eperm);
         k.current_partition = 0; // invalid slot
         assert_eq!(svc!(SYS_BUF_READ, 99, 32, ptr as u32), eres);
     }
@@ -4515,6 +4519,7 @@ mod tests {
     fn buf_write_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_WRITE};
         let eres = SvcError::InvalidResource.to_u32();
+        let eperm = SvcError::PermissionDenied.to_u32();
         let mut k = kernel(0, 0, 0);
         macro_rules! svc {
             ($r0:expr, $r1:expr, $r2:expr, $r3:expr) => {{
@@ -4539,16 +4544,16 @@ mod tests {
             &pat,
             "backing data must match written pattern"
         );
-        // Wrong owner → InvalidResource
+        // Wrong owner → PermissionDenied
         k.current_partition = 1;
-        assert_eq!(svc!(SYS_BUF_WRITE, slot, 32, low32_buf(1) as u32), eres);
+        assert_eq!(svc!(SYS_BUF_WRITE, slot, 32, low32_buf(1) as u32), eperm);
         // Invalid slot → InvalidResource
         k.current_partition = 0;
         assert_eq!(svc!(SYS_BUF_WRITE, 99, 32, ptr as u32), eres);
-        // BorrowedRead slot → InvalidResource
+        // BorrowedRead slot → PermissionDenied (not write-owner)
         let rd_slot = svc!(SYS_BUF_ALLOC, 0, 0, 0); // r1=0 → BorrowedRead
         assert!(rd_slot < 0x8000_0000, "read alloc should succeed");
-        assert_eq!(svc!(SYS_BUF_WRITE, rd_slot, 32, ptr as u32), eres);
+        assert_eq!(svc!(SYS_BUF_WRITE, rd_slot, 32, ptr as u32), eperm);
     }
 
     /// SYS_BUF_WRITE and SYS_BUF_READ must reject out-of-bounds pointers
