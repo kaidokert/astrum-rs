@@ -4512,6 +4512,69 @@ mod tests {
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
+    fn buf_write_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_WRITE};
+        let eres = SvcError::InvalidResource.to_u32();
+        let mut k = kernel(0, 0, 0);
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr, $r3:expr) => {{
+                let mut ef = frame4($r0, $r1, $r2, $r3);
+                unsafe { k.dispatch(&mut ef) }; // SAFETY: see module docs
+                ef.r0
+            }};
+        }
+        // Allocate a writable buffer (r1=1 → BorrowedWrite)
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0, 0);
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        // Write a known pattern via SYS_BUF_WRITE
+        let pat: [u8; 32] = core::array::from_fn(|i| (i as u8).wrapping_add(0xA0));
+        let ptr = low32_buf(0);
+        // SAFETY: ptr valid for 4096 bytes (mmap), writing 32.
+        unsafe { core::ptr::copy_nonoverlapping(pat.as_ptr(), ptr, 32) };
+        assert_eq!(svc!(SYS_BUF_WRITE, slot, 32, ptr as u32), 32);
+        // Verify backing data matches
+        let backing = k.buffers().get(slot as usize).unwrap().data();
+        assert_eq!(
+            &backing[..32],
+            &pat,
+            "backing data must match written pattern"
+        );
+        // Wrong owner → InvalidResource
+        k.current_partition = 1;
+        assert_eq!(svc!(SYS_BUF_WRITE, slot, 32, low32_buf(1) as u32), eres);
+        // Invalid slot → InvalidResource
+        k.current_partition = 0;
+        assert_eq!(svc!(SYS_BUF_WRITE, 99, 32, ptr as u32), eres);
+        // BorrowedRead slot → InvalidResource
+        let rd_slot = svc!(SYS_BUF_ALLOC, 0, 0, 0); // r1=0 → BorrowedRead
+        assert!(rd_slot < 0x8000_0000, "read alloc should succeed");
+        assert_eq!(svc!(SYS_BUF_WRITE, rd_slot, 32, ptr as u32), eres);
+    }
+
+    /// SYS_BUF_WRITE and SYS_BUF_READ must reject out-of-bounds pointers
+    /// with `SvcError::InvalidPointer`.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buffer_syscalls_reject_out_of_bounds_pointer() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_READ, SYS_BUF_WRITE};
+        let eptr = SvcError::InvalidPointer.to_u32();
+        let mut k = kernel(0, 0, 0);
+        let mut ef = frame(SYS_BUF_ALLOC, 1, 0); // alloc writable
+        unsafe { k.dispatch(&mut ef) }; // SAFETY: see module docs
+        let slot = ef.r0;
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        // BUF_WRITE with out-of-bounds pointer
+        let mut ef = frame4(SYS_BUF_WRITE, slot, 4, 0xDEAD_0000);
+        unsafe { k.dispatch(&mut ef) }; // SAFETY: see module docs
+        assert_eq!(ef.r0, eptr, "BufWrite should reject out-of-bounds pointer");
+        // BUF_READ with out-of-bounds pointer
+        let mut ef = frame4(SYS_BUF_READ, slot, 4, 0xDEAD_0000);
+        unsafe { k.dispatch(&mut ef) }; // SAFETY: see module docs
+        assert_eq!(ef.r0, eptr, "BufRead should reject out-of-bounds pointer");
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
     fn dev_open_dispatch_valid_and_invalid() {
         use crate::syscall::SYS_DEV_OPEN;
         let mut k = kernel(0, 0, 0);
