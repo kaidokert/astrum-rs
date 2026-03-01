@@ -1,7 +1,9 @@
 //! User-space convenience wrappers for buffer-pool lending syscalls.
 
 use crate::buffer_pool::lend_flags;
-use crate::syscall::{SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_REVOKE, SYS_BUF_TRANSFER};
+use crate::syscall::{
+    SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_REVOKE, SYS_BUF_TRANSFER, SYS_BUF_WRITE,
+};
 use rtos_traits::syscall::SvcError;
 
 /// Pack target partition ID and writable flag into r2.
@@ -20,6 +22,29 @@ fn parse_result(raw: u32) -> Result<u32, SvcError> {
     } else {
         Ok(raw)
     }
+}
+
+/// Allocate a buffer slot.  Returns the slot index on success.
+///
+/// `writable`: `true` = `BorrowedWrite`, `false` = `BorrowedRead`.
+/// `max_ticks`: deadline in ticks (0 = no deadline).
+#[inline]
+pub fn buf_alloc(writable: bool, max_ticks: u32) -> Result<u8, SvcError> {
+    let mode = if writable { 1u32 } else { 0u32 };
+    let raw = crate::svc!(SYS_BUF_ALLOC, mode, max_ticks, 0u32);
+    parse_result(raw).map(|v| v as u8)
+}
+
+/// Write `data` into a buffer slot.  Returns bytes written on success.
+#[inline]
+pub fn buf_write(slot: u8, data: &[u8]) -> Result<usize, SvcError> {
+    let raw = crate::svc!(
+        SYS_BUF_WRITE,
+        slot as u32,
+        data.len() as u32,
+        data.as_ptr() as u32
+    );
+    parse_result(raw).map(|v| v as usize)
 }
 
 /// Lend a buffer slot to a target partition.  Returns MPU region ID.
@@ -99,6 +124,9 @@ mod tests {
 
     #[test]
     fn wrappers_return_ok_on_host() {
+        assert_eq!(buf_alloc(true, 0), Ok(0));
+        assert_eq!(buf_alloc(false, 50), Ok(0));
+        assert_eq!(buf_write(0, &[1, 2, 3]), Ok(0));
         assert_eq!(buf_lend(0, 1, false), Ok(0));
         assert_eq!(buf_transfer(0, 1), Ok(()));
         assert_eq!(buf_revoke(0, 1), Ok(()));
