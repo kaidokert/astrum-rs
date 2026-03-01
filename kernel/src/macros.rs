@@ -227,6 +227,13 @@ macro_rules! bind_interrupts {
                 !$crate::irq_dispatch::has_duplicate_irqs(&BINDINGS),
                 "bind_interrupts!: duplicate IRQ number"
             );
+            assert!(
+                !$crate::irq_dispatch::has_invalid_partition_id(
+                    &BINDINGS,
+                    <$Config as $crate::config::KernelConfig>::N,
+                ),
+                "bind_interrupts!: partition_id out of range"
+            );
             $(
                 assert!(
                     ($irq as usize) < ($count as usize),

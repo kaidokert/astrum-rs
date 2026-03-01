@@ -168,6 +168,24 @@ pub const fn has_duplicate_irqs(bindings: &[IrqBinding]) -> bool {
     false
 }
 
+/// Check whether any binding has a `partition_id` that is out of range.
+/// Returns `true` if any entry has `partition_id >= max_partitions`.
+///
+/// Intended for use in `const` assertions inside the `bind_interrupts!` macro
+/// to reject invalid partition mappings at compile time.
+pub const fn has_invalid_partition_id(bindings: &[IrqBinding], max_partitions: usize) -> bool {
+    let mut i = 0;
+    while i < bindings.len() {
+        if let Some(b) = get_binding(bindings, i) {
+            if (b.partition_id as usize) >= max_partitions {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,6 +460,57 @@ mod tests {
                 IrqBinding::new(1, 0, 0x01),
                 IrqBinding::new(1, 1, 0x02),
             ]));
+        }
+    }
+
+    // ---- has_invalid_partition_id tests ----
+
+    #[test]
+    fn has_invalid_partition_id_false_for_valid() {
+        const TABLE: [IrqBinding; 3] = [
+            IrqBinding::new(0, 0, 0x01),
+            IrqBinding::new(1, 1, 0x02),
+            IrqBinding::new(2, 2, 0x04),
+        ];
+        assert!(!has_invalid_partition_id(&TABLE, 4));
+    }
+
+    #[test]
+    fn has_invalid_partition_id_true_for_out_of_range() {
+        const TABLE: [IrqBinding; 3] = [
+            IrqBinding::new(0, 0, 0x01),
+            IrqBinding::new(1, 5, 0x02), // partition 5 >= max 4
+            IrqBinding::new(2, 1, 0x04),
+        ];
+        assert!(has_invalid_partition_id(&TABLE, 4));
+    }
+
+    #[test]
+    fn has_invalid_partition_id_false_for_empty() {
+        assert!(!has_invalid_partition_id(&[], 4));
+    }
+
+    #[test]
+    fn has_invalid_partition_id_boundary_equal_is_invalid() {
+        // partition_id == max_partitions is out of range
+        const TABLE: [IrqBinding; 1] = [IrqBinding::new(0, 4, 0x01)];
+        assert!(has_invalid_partition_id(&TABLE, 4));
+    }
+
+    #[test]
+    fn has_invalid_partition_id_boundary_max_minus_one_is_valid() {
+        const TABLE: [IrqBinding; 1] = [IrqBinding::new(0, 3, 0x01)];
+        assert!(!has_invalid_partition_id(&TABLE, 4));
+    }
+
+    #[test]
+    fn has_invalid_partition_id_usable_in_const() {
+        const {
+            assert!(!has_invalid_partition_id(
+                &[IrqBinding::new(0, 0, 0x01), IrqBinding::new(1, 1, 0x02),],
+                2,
+            ));
+            assert!(has_invalid_partition_id(&[IrqBinding::new(0, 2, 0x01)], 2,));
         }
     }
 
