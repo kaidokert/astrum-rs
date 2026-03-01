@@ -56,6 +56,35 @@ pub fn buf_lend(slot: u8, target: u8, writable: bool) -> Result<u8, SvcError> {
     parse_result(raw).map(|v| v as u8)
 }
 
+/// Result of [`buf_lend_with_addr`]: the MPU region ID and the buffer's
+/// base address in the target partition's address space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LendResult {
+    /// MPU region ID assigned to the lent buffer.
+    pub region_id: u8,
+    /// Base address of the buffer in the target's memory map.
+    pub base_addr: u32,
+}
+
+/// Lend a buffer slot to a target partition, returning both the MPU region
+/// ID and the buffer base address.
+///
+/// This variant uses [`svc_r01!`] to capture both `r0` (region ID) and
+/// `r1` (base address) from the kernel's `SYS_BUF_LEND` handler.
+#[inline]
+pub fn buf_lend_with_addr(slot: u8, target: u8, writable: bool) -> Result<LendResult, SvcError> {
+    let r2 = pack_lend_r2(target, writable);
+    let (r0, r1) = crate::svc_r01!(SYS_BUF_LEND, slot as u32, r2, 0u32);
+    if SvcError::is_error(r0) {
+        Err(SvcError::from_u32(r0).unwrap_or(SvcError::InvalidSyscall))
+    } else {
+        Ok(LendResult {
+            region_id: r0 as u8,
+            base_addr: r1,
+        })
+    }
+}
+
 /// Revoke a previously lent buffer slot from a target partition.
 #[inline]
 pub fn buf_revoke(slot: u8, target: u8) -> Result<(), SvcError> {
@@ -140,6 +169,34 @@ mod tests {
         assert_eq!(buf_revoke(0, 1), Ok(()));
         let mut dst = [0u8; 16];
         assert_eq!(buf_read(0, &mut dst), Ok(0));
+    }
+
+    #[test]
+    fn lend_result_fields() {
+        let lr = LendResult {
+            region_id: 3,
+            base_addr: 0x2000_1000,
+        };
+        assert_eq!(lr.region_id, 3);
+        assert_eq!(lr.base_addr, 0x2000_1000);
+    }
+
+    #[test]
+    fn buf_lend_with_addr_success_on_host() {
+        // On host svc_r01! returns (0, 0) — both are valid success values.
+        let result = buf_lend_with_addr(0, 1, false);
+        let lr = result.expect("should be Ok on host");
+        assert_eq!(lr.region_id, 0);
+        assert_eq!(lr.base_addr, 0);
+    }
+
+    #[test]
+    fn buf_lend_with_addr_error_path() {
+        // Verify the error-parsing branch with known error codes.
+        let raw_err = SvcError::InvalidResource.to_u32();
+        assert!(SvcError::is_error(raw_err));
+        let parsed = SvcError::from_u32(raw_err);
+        assert_eq!(parsed, Some(SvcError::InvalidResource));
     }
 
     #[test]

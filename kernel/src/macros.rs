@@ -142,6 +142,47 @@ macro_rules! define_kernel_runtime {
     };
 }
 
+/// Issue an SVC #0 system call, passing a syscall ID in `r0` and up to
+/// three arguments in `r1`–`r3`.  Returns `(r0, r1)` — both values the
+/// kernel placed in those registers after dispatch.
+///
+/// On non-ARM hosts the macro is a no-op that returns `(0, 0)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let (r0, r1) = kernel::svc_r01!(SYS_BUF_LEND, slot, r2, 0u32);
+/// ```
+#[macro_export]
+macro_rules! svc_r01 {
+    ($id:expr, $a:expr, $b:expr, $c:expr) => {{
+        let r0: u32;
+        let r1: u32;
+        #[cfg(target_arch = "arm")]
+        // SAFETY: The inline `svc #0` instruction triggers the SVCall
+        // exception whose handler inspects and validates the arguments.
+        // The register constraints match the kernel's SVC ABI (id in r0,
+        // args in r1-r3, result in r0+r1, r12 clobbered).
+        unsafe {
+            core::arch::asm!(
+                "svc #0",
+                inout("r0") $id => r0,
+                inout("r1") $a => r1,
+                in("r2") $b,
+                in("r3") $c,
+                out("r12") _,
+            )
+        }
+        #[cfg(not(target_arch = "arm"))]
+        {
+            let _ = ($id, $a, $b, $c);
+            r0 = 0;
+            r1 = 0;
+        }
+        (r0, r1)
+    }};
+}
+
 /// Generate a `#[naked] extern "C" fn() -> !` trampoline that tail-calls a
 /// partition body function of type `extern "C" fn(u32) -> !`.
 ///
@@ -380,6 +421,13 @@ mod tests {
     }
 
     partition_trampoline!(test_trampoline => test_body);
+
+    #[test]
+    fn svc_r01_returns_zero_pair_on_host() {
+        let (r0, r1) = svc_r01!(1u32, 2u32, 3u32, 4u32);
+        assert_eq!(r0, 0);
+        assert_eq!(r1, 0);
+    }
 
     #[test]
     fn partition_trampoline_has_correct_fn_type() {
