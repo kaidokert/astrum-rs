@@ -6,7 +6,7 @@
 //! # Testing
 //!
 //! Tests for this crate live in `kernel/src/debug.rs` to avoid panic handler
-//! conflicts between std (used in tests) and kernel's panic-halt dependency.
+//! conflicts between std (used in tests) and kernel's optional panic-halt dependency.
 
 #![no_std]
 

@@ -638,10 +638,9 @@ mod tests {
         assert!(align_of::<Kernel<TestConfig>>() <= KERNEL_ALIGNMENT);
     }
 
-    // TODO: These alignment tests are unit tests rather than integration tests because
-    // the kernel crate's panic-halt dependency conflicts with std's panic handler,
-    // preventing integration tests in tests/ from compiling. Moving these to integration
-    // tests would require making panic-halt optional or restructuring the crate.
+    // NOTE: These alignment tests are unit tests rather than integration tests.
+    // panic-halt is now an optional dependency, so integration tests in tests/ may
+    // be feasible. Consider migrating these if integration test infrastructure is added.
     #[test]
     fn init_kernel_state_at_succeeds_with_aligned_pointer() {
         #[repr(C, align(4096))]

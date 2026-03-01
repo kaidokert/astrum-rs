@@ -156,7 +156,7 @@ macro_rules! define_kernel_runtime {
 /// # Usage
 ///
 /// ```ignore
-/// // (`ignore` — no_std crate cannot compile doc tests due to panic_halt;
+/// // (`ignore` — no_std crate cannot compile doc tests without a std harness;
 /// //  see mod tests::partition_trampoline_has_correct_fn_type for host test.)
 /// extern "C" fn my_partition_body(r0: u32) -> ! {
 ///     let _port_id = r0;

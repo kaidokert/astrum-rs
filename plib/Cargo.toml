@@ -4,10 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "Partition library: user-space helpers for partitions"
 
-# Note: kernel depends on panic-halt unconditionally, which conflicts with std
-# when running tests. The kernel crate gates panic_halt import with not(test),
-# but the dependency is still compiled, causing link errors.
-# This is a known limitation - run tests via `cargo test -p kernel` instead.
 [dependencies]
 kernel = { path = "../kernel", default-features = false }
 rtos-traits = { path = "../rtos-traits" }
