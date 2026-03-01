@@ -3,13 +3,15 @@
 ## Bug Summary
 
 The PCB `mpu_region` field retained a stale pre-move stack address after the
-Kernel struct was `Box`-allocated to the heap, causing the MPU to be programmed
-with the wrong base address. On a Cortex-M target this leaves the actual
-partition stack unprotected while guarding invalidated memory, leading to
-silent corruption or MemManage faults on context switch.
+Kernel struct was placed into `UNIFIED_KERNEL_STORAGE` via `ptr::write()`
+(`state.rs:321`), causing the MPU to be programmed with the wrong base
+address. On a Cortex-M target this leaves the actual partition stack
+unprotected while guarding invalidated memory, leading to silent corruption
+or MemManage faults on context switch.
 
-**Symptom:** `pcb.mpu_region().base()` pointed to the original stack-local
-address rather than the heap-relocated `PartitionCore` stack buffer.
+**Symptom:** `pcb.mpu_region().base()` pointed to the original pre-placement
+address rather than the relocated `PartitionCore` stack buffer inside
+`UNIFIED_KERNEL_STORAGE` (`state.rs:177`).
 
 ## Root Cause
 
@@ -18,7 +20,8 @@ copies each `PartitionConfig.mpu_region` directly into the PCB
 (`svc.rs:1168` — `let mpu_region = c.mpu_region`). For sentinel partitions
 (size == 0), the base address is derived from the internal stack pointer
 before struct placement. After `Kernel::new()` returns and the struct is
-moved into heap storage via `Box`, all internal `PartitionCore` stack buffer
+moved into `UNIFIED_KERNEL_STORAGE` via `ptr::write()`, all internal
+`PartitionCore` stack buffer
 addresses change. The PCB's `mpu_region.base()` is never updated, leaving a
 stale pre-move address.
 
@@ -50,13 +53,13 @@ User-configured partitions (size > 0) keep their original base untouched.
 | File | Lines | Description |
 |------|-------|-------------|
 | `kernel/src/boot.rs` | 218-228 | `fix_mpu_data_region_if_sentinel()` helper |
-| `kernel/src/boot.rs` | 290-303 | Stack base/size computation and SP init |
+| `kernel/src/boot.rs` | 284-300 | Stack base/size computation and SP init |
 | `kernel/src/boot.rs` | 310-321 | Post-move fixup: `fix_stack_region` + sentinel guard |
 | `kernel/src/boot.rs` | 327-336 | Debug assertion: `assert_pcb_addresses_in_storage` |
 | `kernel/src/partition.rs` | 260-263 | `fix_mpu_data_region()` base-patching method |
 | `kernel/src/svc.rs` | 1043-1057 | `Kernel::new()` simplified passthrough |
 | `kernel/src/svc.rs` | 1168 | `let mpu_region = c.mpu_region` — direct copy |
-| `kernel/src/svc.rs` | 2297 | `Kernel::fix_mpu_data_region()` public wrapper |
+| `kernel/src/svc.rs` | 2295 | `Kernel::fix_mpu_data_region()` public wrapper |
 
 ## Resolution Checklist
 
@@ -79,9 +82,9 @@ User-configured partitions (size > 0) keep their original base untouched.
 | `fix_mpu_data_region_returns_false_for_out_of_bounds` | 1426 | Out-of-bounds index returns false |
 | `fix_mpu_data_region_returns_true_and_updates_base` | 1444 | Valid index updates base correctly |
 | `harness_build_applies_fix_mpu_data_region` | 1479 | Integration: `build_kernel` applies fixup |
-| `mpu_base_stable_across_schedule_cycles` | 2543 | MPU base stable across 60 ticks |
-| `pcb_mpu_region_not_stale_pre_move_address` | 2613 | Base != config-time address after move |
-| `selective_sentinel_fixup_mixed_config` | 2709 | Sentinel updated, user-configured untouched |
+| `mpu_base_stable_across_schedule_cycles` | 2537 | MPU base stable across 60 ticks |
+| `pcb_mpu_region_not_stale_pre_move_address` | 2607 | Base != config-time address after move |
+| `selective_sentinel_fixup_mixed_config` | 2703 | Sentinel updated, user-configured untouched |
 
 ### `partition.rs` (2 tests)
 
