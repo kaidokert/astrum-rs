@@ -385,6 +385,37 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         self.deadlines.get(slot).copied().flatten()
     }
 
+    /// Transfer ownership of a borrowed slot to a different partition.
+    ///
+    /// Preserves the borrow mode (Read/Write) — only the `owner` field in
+    /// the `BorrowState` is changed.  No MPU operations, no data movement.
+    pub fn transfer_ownership(
+        &mut self,
+        slot: usize,
+        current_owner: u8,
+        new_owner: u8,
+    ) -> Result<(), BufferError> {
+        let s = self.slots.get_mut(slot).ok_or(BufferError::InvalidSlot)?;
+        let new_state = match s.state {
+            BorrowState::Free => return Err(BufferError::SlotNotBorrowed),
+            BorrowState::BorrowedRead { owner } | BorrowState::BorrowedWrite { owner }
+                if owner != current_owner =>
+            {
+                return Err(BufferError::NotOwner);
+            }
+            BorrowState::BorrowedRead { .. } => BorrowState::BorrowedRead { owner: new_owner },
+            BorrowState::BorrowedWrite { .. } => BorrowState::BorrowedWrite { owner: new_owner },
+        };
+        if new_owner == current_owner {
+            return Err(BufferError::SelfLend);
+        }
+        if s.lent_to.is_some() {
+            return Err(BufferError::AlreadyLent);
+        }
+        s.state = new_state;
+        Ok(())
+    }
+
     /// Iterate all slots, revoking any whose deadline has passed
     /// (`deadline <= current_tick`). Each revoked slot has its MPU window
     /// removed via `strategy.remove_window`. Slots without a deadline
@@ -998,5 +1029,53 @@ mod tests {
         pool.unshare_from_partition(0, 1, 2, &ds).unwrap();
         pool.release(0, 1).unwrap();
         assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
+    }
+
+    // ------------------------------------------------------------------
+    // transfer_ownership tests
+    // ------------------------------------------------------------------
+
+    #[test] fn transfer_ownership_preserves_borrowed_read() {
+        let mut pool = BufferPool::<2, 32>::new();
+        pool.alloc(1, BorrowMode::Read).unwrap(); // slot 0, BorrowedRead { owner: 1 }
+        pool.transfer_ownership(0, 1, 2).unwrap();
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedRead { owner: 2 });
+    }
+
+    #[test] fn transfer_ownership_preserves_borrowed_write() {
+        let mut pool = BufferPool::<2, 32>::new();
+        pool.alloc(1, BorrowMode::Write).unwrap(); // slot 0, BorrowedWrite { owner: 1 }
+        pool.transfer_ownership(0, 1, 3).unwrap();
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedWrite { owner: 3 });
+    }
+
+    #[test] fn transfer_ownership_invalid_slot() {
+        let mut pool = BufferPool::<1, 32>::new();
+        assert_eq!(pool.transfer_ownership(5, 1, 2), Err(BufferError::InvalidSlot));
+    }
+
+    #[test] fn transfer_ownership_free_slot() {
+        let mut pool = BufferPool::<1, 32>::new();
+        assert_eq!(pool.transfer_ownership(0, 1, 2), Err(BufferError::SlotNotBorrowed));
+    }
+
+    #[test] fn transfer_ownership_wrong_owner() {
+        let mut pool = BufferPool::<1, 32>::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        assert_eq!(pool.transfer_ownership(0, 99, 2), Err(BufferError::NotOwner));
+    }
+
+    #[test] fn transfer_ownership_self_transfer() {
+        let mut pool = BufferPool::<1, 32>::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        assert_eq!(pool.transfer_ownership(0, 1, 1), Err(BufferError::SelfLend));
+    }
+
+    #[test] fn transfer_ownership_already_lent() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        assert_eq!(pool.transfer_ownership(0, 1, 3), Err(BufferError::AlreadyLent));
     }
 }
