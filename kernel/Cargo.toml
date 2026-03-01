@@ -133,7 +133,6 @@ required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "hw_integration"
-required-features = ["panic-halt"]
 
 [[example]]
 name = "mpu_dynamic"
@@ -241,6 +240,7 @@ custom-ivt = []
 qemu = []
 dynamic-mpu = []
 partition-debug = ["rtos-traits/partition-debug"]
+panic-halt = ["dep:panic-halt"]
 log-semihosting = ["dep:cortex-m-semihosting", "dep:panic-semihosting"]
 log-rtt = ["dep:rtt-target", "dep:panic-rtt-target"]
 log-swo = []

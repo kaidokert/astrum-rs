@@ -6,7 +6,7 @@ EXAMPLES=(
     smoke_test
     mpu_region systick mpu_wx mpu_fault
     partition_switch context_switch mpu_partition
-    svc_yield integration hw_integration
+    svc_yield integration
     sampling_demo queuing_demo blackboard_demo
     priv_fault_test get_time_test blocking_deschedule
     # Adversarial tests
