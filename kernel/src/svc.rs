@@ -1861,7 +1861,9 @@ where
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferLend) => {
                 let slot = frame.r1 as usize;
-                let target_raw = frame.r2 as usize;
+                use crate::buffer_pool::lend_flags;
+                let target_raw = (frame.r2 & 0xFF) as usize;
+                let writable = (frame.r2 & lend_flags::WRITABLE) != 0;
                 if target_raw >= self.partitions().len() {
                     SvcError::InvalidPartition.to_u32()
                 } else {
@@ -1870,6 +1872,7 @@ where
                         slot,
                         self.current_partition,
                         target,
+                        writable,
                         &self.dynamic_strategy,
                     ) {
                         Ok(region_id) => region_id as u32,
@@ -4369,11 +4372,18 @@ mod tests {
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0);
         // Error: revoke when not lent
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), eres);
-        // Error: invalid partition (only 2 exist)
+        // Error: invalid partition (only 2 exist); r2 bits[7:0]=99
         assert_eq!(svc!(SYS_BUF_LEND, slot, 99), epart);
-        // Error: truncation — 256 must not wrap to partition 0
-        assert_eq!(svc!(SYS_BUF_LEND, slot, 256), epart);
-        assert_eq!(svc!(SYS_BUF_LEND, slot, 257), epart);
+        // r2=0x100 → target=0 (self), flags=WRITABLE → self-lend error
+        assert_eq!(svc!(SYS_BUF_LEND, slot, 256), eres);
+        // r2=0x101 → target=1, flags=WRITABLE → writable lend succeeds
+        let writable_region = svc!(SYS_BUF_LEND, slot, 257);
+        assert!(
+            writable_region < 0x8000_0000,
+            "writable lend should succeed"
+        );
+        // Revoke the writable lend before further tests
+        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0);
         // Error: self-lend (partition 0 lending to itself)
         assert_eq!(svc!(SYS_BUF_LEND, slot, 0), eres);
         // Error: invalid partition in BufferRevoke

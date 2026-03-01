@@ -49,6 +49,7 @@ pub enum BufferError {
 pub struct LendRecord {
     pub target: u8,
     pub region_id: u8,
+    pub writable: bool,
 }
 
 /// The access mode requested when borrowing a buffer slot.
@@ -56,6 +57,12 @@ pub struct LendRecord {
 pub enum BorrowMode {
     Read,
     Write,
+}
+
+/// Flags for SYS_BUF_LEND, packed into upper bits of r2.
+pub mod lend_flags {
+    /// Grant AP_FULL_ACCESS instead of AP_RO_RO to the target.
+    pub const WRITABLE: u32 = 1 << 8;
 }
 
 /// A single buffer slot containing a fixed-size byte array and metadata.
@@ -231,6 +238,7 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         slot: usize,
         owner: u8,
         target: u8,
+        writable: bool,
         strategy: &dyn MpuStrategy,
     ) -> Result<u8, BufferError> {
         if owner == target {
@@ -245,20 +253,24 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
             return Err(BufferError::AlreadyLent);
         }
 
+        let ap = if writable {
+            crate::mpu::AP_FULL_ACCESS
+        } else {
+            crate::mpu::AP_RO_RO
+        };
         let base = s.data.as_ptr() as u32;
         let size_field = crate::mpu::encode_size(SIZE as u32).ok_or(BufferError::InvalidSize)?;
-        let rasr = crate::mpu::build_rasr(
-            size_field,
-            crate::mpu::AP_RO_RO,
-            true,
-            (false, false, false),
-        );
+        let rasr = crate::mpu::build_rasr(size_field, ap, true, (false, false, false));
 
         let region_id = strategy
             .add_window(base, SIZE as u32, rasr, target)
             .map_err(BufferError::Mpu)?;
 
-        s.lent_to = Some(LendRecord { target, region_id });
+        s.lent_to = Some(LendRecord {
+            target,
+            region_id,
+            writable,
+        });
         Ok(region_id)
     }
 
@@ -764,11 +776,13 @@ mod tests {
     }
 
     #[test] fn lend_record_equality() {
-        let a = LendRecord { target: 1, region_id: 5 };
-        let b = LendRecord { target: 1, region_id: 5 };
-        let c = LendRecord { target: 2, region_id: 5 };
+        let a = LendRecord { target: 1, region_id: 5, writable: false };
+        let b = LendRecord { target: 1, region_id: 5, writable: false };
+        let c = LendRecord { target: 2, region_id: 5, writable: false };
+        let d = LendRecord { target: 1, region_id: 5, writable: true };
         assert_eq!(a, b);
         assert_ne!(a, c);
+        assert_ne!(a, d);
     }
 
     #[test] fn buffer_error_new_variants_are_distinct() {
@@ -793,7 +807,7 @@ mod tests {
         let mut pool = BufferPool::<2, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Write).unwrap(); // slot 0, owner 1
-        let rid = pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        let rid = pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
         // MPU window created with AP_RO_RO for the *target* partition.
         let desc = ds.slot(rid).expect("window should exist");
         let ap = (desc.permissions >> RASR_AP_SHIFT) & RASR_AP_MASK;
@@ -807,47 +821,69 @@ mod tests {
         let lr = s.lent_to().expect("lent_to should be set");
         assert_eq!(lr.target, 2);
         assert_eq!(lr.region_id, rid);
+        assert!(!lr.writable);
+    }
+
+    #[test] fn share_writable_sets_ap_full_access_and_lend_record() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap(); // slot 0, owner 1
+        let rid = pool.share_with_partition(0, 1, 2, true, &ds).unwrap();
+        // MPU window created with AP_FULL_ACCESS for the *target* partition.
+        let desc = ds.slot(rid).expect("window should exist");
+        let ap = (desc.permissions >> RASR_AP_SHIFT) & RASR_AP_MASK;
+        assert_eq!(ap, AP_FULL_ACCESS);
+        assert_eq!(desc.owner, 2);
+        assert_eq!(desc.size, 32);
+        // Slot state unchanged — still BorrowedWrite by owner 1.
+        let s = pool.get(0).unwrap();
+        assert_eq!(s.state(), BorrowState::BorrowedWrite { owner: 1 });
+        // LendRecord populated correctly with writable=true.
+        let lr = s.lent_to().expect("lent_to should be set");
+        assert_eq!(lr.target, 2);
+        assert_eq!(lr.region_id, rid);
+        assert!(lr.writable);
     }
 
     #[test] fn share_not_owner_wrong_partition() {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Write).unwrap();
-        assert_eq!(pool.share_with_partition(0, 99, 2, &ds), Err(BufferError::NotOwner));
+        assert_eq!(pool.share_with_partition(0, 99, 2, false, &ds), Err(BufferError::NotOwner));
     }
 
     #[test] fn share_read_mode_owner_rejected() {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Read).unwrap(); // BorrowedRead, not Write
-        assert_eq!(pool.share_with_partition(0, 1, 2, &ds), Err(BufferError::NotOwner));
+        assert_eq!(pool.share_with_partition(0, 1, 2, false, &ds), Err(BufferError::NotOwner));
     }
 
     #[test] fn share_self_lend_rejected() {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Write).unwrap();
-        assert_eq!(pool.share_with_partition(0, 1, 1, &ds), Err(BufferError::SelfLend));
+        assert_eq!(pool.share_with_partition(0, 1, 1, false, &ds), Err(BufferError::SelfLend));
     }
 
     #[test] fn share_already_lent_rejected() {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Write).unwrap();
-        pool.share_with_partition(0, 1, 2, &ds).unwrap();
-        assert_eq!(pool.share_with_partition(0, 1, 3, &ds), Err(BufferError::AlreadyLent));
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        assert_eq!(pool.share_with_partition(0, 1, 3, false, &ds), Err(BufferError::AlreadyLent));
     }
 
     #[test] fn share_free_slot_rejected() {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
-        assert_eq!(pool.share_with_partition(0, 1, 2, &ds), Err(BufferError::NotOwner));
+        assert_eq!(pool.share_with_partition(0, 1, 2, false, &ds), Err(BufferError::NotOwner));
     }
 
     #[test] fn share_invalid_slot_rejected() {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
-        assert_eq!(pool.share_with_partition(5, 1, 2, &ds), Err(BufferError::InvalidSlot));
+        assert_eq!(pool.share_with_partition(5, 1, 2, false, &ds), Err(BufferError::InvalidSlot));
     }
 
     // ------------------------------------------------------------------
@@ -858,7 +894,7 @@ mod tests {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Write).unwrap();
-        let rid = pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        let rid = pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
         assert!(ds.slot(rid).is_some());
         pool.unshare_from_partition(0, 1, 2, &ds).unwrap();
         // MPU window removed.
@@ -873,7 +909,7 @@ mod tests {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Write).unwrap();
-        pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
         assert_eq!(pool.unshare_from_partition(0, 99, 2, &ds), Err(BufferError::NotOwner));
     }
 
@@ -889,7 +925,7 @@ mod tests {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Write).unwrap();
-        pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
         // Lent to 2, but unshare says 3.
         assert_eq!(pool.unshare_from_partition(0, 1, 3, &ds), Err(BufferError::NotOwner));
     }
@@ -915,7 +951,7 @@ mod tests {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Write).unwrap();
-        pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
         assert_eq!(pool.release(0, 1), Err(BufferPoolError::AlreadyBorrowed));
     }
 
@@ -923,7 +959,7 @@ mod tests {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Write).unwrap();
-        pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
         pool.unshare_from_partition(0, 1, 2, &ds).unwrap();
         pool.release(0, 1).unwrap();
         assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
