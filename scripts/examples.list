@@ -3,6 +3,7 @@
 
 EXAMPLES=(
     qemu_smoke
+    smoke_test
     mpu_region systick mpu_wx mpu_fault
     partition_switch context_switch mpu_partition
     svc_yield integration hw_integration
