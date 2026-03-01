@@ -117,18 +117,6 @@ impl IrqBinding {
     }
 }
 
-/// Const-safe bounds-checked element access.  `slice::get` is not yet
-/// const-stable, so we use pointer arithmetic with an explicit bounds check
-/// to avoid the implicit panic in `slice[i]`.
-const fn get_binding(bindings: &[IrqBinding], i: usize) -> Option<&IrqBinding> {
-    if i < bindings.len() {
-        // SAFETY: `i` is verified to be within `bindings.len()`.
-        Some(unsafe { &*bindings.as_ptr().add(i) })
-    } else {
-        None
-    }
-}
-
 /// Linear scan of `bindings` for the first entry whose `irq_num` matches `irq`.
 /// Returns `Some(index)` on hit, `None` on miss or empty slice.
 ///
@@ -136,7 +124,7 @@ const fn get_binding(bindings: &[IrqBinding], i: usize) -> Option<&IrqBinding> {
 pub const fn lookup_binding(bindings: &[IrqBinding], irq: u8) -> Option<usize> {
     let mut i = 0;
     while i < bindings.len() {
-        if let Some(b) = get_binding(bindings, i) {
+        if let Some(b) = bindings.get(i) {
             if b.irq_num == irq {
                 return Some(i);
             }
@@ -156,7 +144,7 @@ pub const fn has_duplicate_irqs(bindings: &[IrqBinding]) -> bool {
     while i < bindings.len() {
         let mut j = i + 1;
         while j < bindings.len() {
-            if let (Some(bi), Some(bj)) = (get_binding(bindings, i), get_binding(bindings, j)) {
+            if let (Some(bi), Some(bj)) = (bindings.get(i), bindings.get(j)) {
                 if bi.irq_num == bj.irq_num {
                     return true;
                 }
@@ -176,7 +164,7 @@ pub const fn has_duplicate_irqs(bindings: &[IrqBinding]) -> bool {
 pub const fn has_invalid_partition_id(bindings: &[IrqBinding], max_partitions: usize) -> bool {
     let mut i = 0;
     while i < bindings.len() {
-        if let Some(b) = get_binding(bindings, i) {
+        if let Some(b) = bindings.get(i) {
             if (b.partition_id as usize) >= max_partitions {
                 return true;
             }

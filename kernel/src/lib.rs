@@ -1,5 +1,9 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(incomplete_features)]
+// TODO: reviewer false positive – const slice::get requires these features on our
+// nightly (built 2026-02-24); remove once const_trait_impl / const_index stabilise.
+#![feature(const_index)]
+#![feature(const_trait_impl)]
 #![feature(generic_const_exprs)]
 #![feature(where_clause_attrs)]
 // Require SAFETY comments for all unsafe blocks in the kernel library
