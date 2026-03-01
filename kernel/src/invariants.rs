@@ -919,6 +919,17 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "overlaps partition 1")]
+    fn overlap_stack_peripheral() {
+        // P0 stack [0x4000_0000, 0x4000_0400) overlaps P1 peripheral [0x4000_0200, 0x4000_1200).
+        // Both are exclusive regions, so this must be rejected.
+        let p0 = make_region_pcb(0, 0x2000_0000, 0x1000, 0x4000_0000, 0x400);
+        let p1 = make_region_pcb(1, 0x2000_2000, 0x1000, 0x2000_4000, 0x400)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0200, 0x1000, 0)]);
+        assert_no_overlapping_mpu_regions(&[p0, p1]);
+    }
+
+    #[test]
     fn data_overlapping_peripheral_allowed() {
         // P0 data [0x4000_0000, 0x4000_2000) overlaps P1 peripheral [0x4000_0800, 0x4000_1800).
         // Data-vs-exclusive overlaps are permitted because data regions
