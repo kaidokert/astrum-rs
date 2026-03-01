@@ -355,9 +355,6 @@ macro_rules! define_unified_harness {
                 $crate::mpu::mpu_enable(&p.MPU);
             }
         }
-        // TODO: reviewer false positive — `@impl` is a Rust macro internal
-        // dispatch arm (see pendsv.rs), not a filesystem path.  No AI slop or
-        // environment leak exists here.
         $crate::define_pendsv!(@impl "bl __pendsv_program_mpu");
 
         #[exception]

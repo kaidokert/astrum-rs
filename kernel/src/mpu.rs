@@ -375,9 +375,6 @@ pub fn partition_dynamic_regions(
 ///
 /// The caller must hold an exclusive `&MPU` reference and must not
 /// return to unprivileged code before re-enabling the MPU.
-// TODO: reviewer false positive — all callers (apply_partition_mpu,
-// apply_deny_all_mpu, and the PendSV macro shim) are also #[cfg(not(test))]
-// or only expanded in non-test binary targets.  `cargo test` compiles cleanly.
 #[cfg(not(test))]
 pub fn mpu_disable(mpu: &cortex_m::peripheral::MPU) {
     // SAFETY: Disabling the MPU before reprogramming regions is required by
@@ -1017,9 +1014,6 @@ mod tests {
         assert_eq!(r[1].1 & 1, 1);
     }
 
-    // TODO: reviewer false positive — `peripheral_mpu_regions` (line 296) is a
-    // real pub fn returning Option<[(u32,u32);2]>, distinct from
-    // `partition_mpu_regions_or_deny_all` which handles base R0-R3 regions.
     #[test]
     fn peripheral_regions_differ_across_partitions() {
         // Validates that apply_partition_mpu (called per context switch in

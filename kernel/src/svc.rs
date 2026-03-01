@@ -2148,8 +2148,6 @@ where
         // In real builds, verify linker-placed 4096-byte alignment. Skipped in
         // tests because Box only guarantees the type's natural alignment; the
         // test harness checks type alignment separately.
-        // TODO: reviewer false positive — KERNEL_ALIGNMENT is `usize` (generated
-        // by `define_aligned_storage!`), so no `as usize` cast is needed here.
         #[cfg(not(test))]
         crate::invariants::assert_storage_alignment(
             self as *const Self as usize,
@@ -2835,11 +2833,6 @@ mod tests {
     use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_YIELD};
 
     /// Test kernel configuration with small, fixed pool sizes.
-    // TODO: reviewer false positive — AlignedStack4K (and STACK_WORDS=1024) is
-    // required globally, not just for the overlap tests. The debug-mode
-    // assert_no_overlapping_mpu_regions check in Kernel::new fires for ALL
-    // tests. With AlignedStack1K (1K spacing), the many existing tests using
-    // mpu_region size 4096 would panic on the overlap assertion.
     struct TestConfig;
     impl KernelConfig for TestConfig {
         const N: usize = 4;
@@ -3766,10 +3759,6 @@ mod tests {
         );
     }
 
-    // TODO: reviewer false positive — the blocking/contested MutexLock test already
-    // exists above as `dispatch_mutex_lock_blocking_triggers_deschedule`. This test
-    // covers the complementary uncontested path. The URGENT backlog item is satisfied
-    // by the pre-existing blocking test.
     #[test]
     fn dispatch_mutex_lock_immediate_no_deschedule() {
         let mut k = kernel(0, 1, 0);

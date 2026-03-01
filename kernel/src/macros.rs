@@ -183,8 +183,6 @@ macro_rules! partition_trampoline {
             unsafe { core::arch::naked_asm!("b {0}", sym $body) }
         }
 
-        // TODO: reviewer false positive — host-side implementation exists below
-        // but was not visible in the truncated diff the reviewer saw.
         #[cfg(not(target_arch = "arm"))]
         // TODO: migrate to #[unsafe(no_mangle)] when moving to edition 2024.
         #[no_mangle]

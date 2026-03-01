@@ -1825,9 +1825,6 @@ mod tests {
         );
     }
 
-    // TODO: reviewer false positive — this integration test was added in commit
-    // 591c526 and is present in the codebase; the staged diff only contains the
-    // low32_buf DRY-up refactoring, not this test (already committed).
     /// Full blocking IPC round-trip: P0 blocks on SemWait, schedule advances
     /// to P1, P1 signals the semaphore waking P0, schedule returns to P0.
     #[test]
@@ -2461,9 +2458,6 @@ mod tests {
         );
     }
 
-    // TODO: reviewer false positive — queuing_recv_timed_expiry_waiting_to_ready
-    // already exists from a prior commit; the staged diff only showed the new
-    // SemWait test, but this QueuingRecvTimed test was already present.
     /// Timed IPC expiry: QueuingRecvTimed on an empty queue blocks P0
     /// (Running→Waiting), then expire_timed_waits at the expiry tick
     /// transitions P0 back (Waiting→Ready) and r0 reflects the IPC outcome.

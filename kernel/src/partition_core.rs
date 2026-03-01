@@ -18,8 +18,6 @@ use crate::tick::TickCounter;
 /// | [`AlignedStack1K`] | 1 KiB | 256 | 1024 |
 /// | [`AlignedStack2K`] | 2 KiB | 512 | 2048 |
 /// | [`AlignedStack4K`] | 4 KiB | 1024 | 4096 |
-// TODO: reviewer false positive — doc links like [`AlignedStack1K`] resolve
-// correctly because these types are defined in the same module.
 pub trait StackStorage: Copy + Default {
     const ZERO: Self;
     const WORDS: usize;

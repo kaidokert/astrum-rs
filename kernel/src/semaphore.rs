@@ -109,9 +109,6 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
             .expect("wait_queue push after len check");
         Ok(false)
     }
-    // TODO: reviewer false positive — queuing port timeout logic already
-    // existed in expire_timed_waits (queuing.tick_timeouts) before this diff;
-    // this commit adds only the semaphore tick_timeouts hook.
     pub fn tick_timeouts<const E: usize>(
         &mut self,
         current_tick: u64,

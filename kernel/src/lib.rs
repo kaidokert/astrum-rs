@@ -188,4 +188,29 @@ mod reexport_tests {
         assert_eq!(DefaultConfig::QS, 1); // MsgMinimal
         assert_eq!(DefaultConfig::SP, 1); // PortsTiny
     }
+
+    #[test]
+    fn default_config_associated_types() {
+        // Verify DefaultConfig's associated config types match expected presets.
+        assert_eq!(
+            <DefaultConfig as KernelConfig>::PartitionCfg::COUNT,
+            Partitions2::COUNT
+        );
+        assert_eq!(
+            <DefaultConfig as KernelConfig>::SyncCfg::SEMAPHORES,
+            SyncMinimal::SEMAPHORES
+        );
+        assert_eq!(
+            <DefaultConfig as KernelConfig>::MsgCfg::QUEUES,
+            MsgMinimal::QUEUES
+        );
+        assert_eq!(
+            <DefaultConfig as KernelConfig>::PortsCfg::SAMPLING_PORTS,
+            PortsTiny::SAMPLING_PORTS
+        );
+        assert_eq!(
+            <DefaultConfig as KernelConfig>::DebugCfg::AUTO_DRAIN_BUDGET,
+            DebugEnabled::AUTO_DRAIN_BUDGET
+        );
+    }
 }

@@ -717,9 +717,6 @@ mod tests {
 
     /// Verifies that Kernel<TestConfig> type alignment and size fit within
     /// the storage constants.
-    // TODO: reviewer false positive – align_of/size_of are imported at module
-    // level (line 99: `use core::mem::{align_of, size_of, …}`) and pulled
-    // into the test module via `use super::*`.
     #[test]
     fn kernel_type_fits_storage_constants() {
         assert!(

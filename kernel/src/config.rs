@@ -307,7 +307,6 @@ impl SyncConfig for SyncStandard {
 /// | `QUEUE_DEPTH` | `QD` | Messages per queue |
 /// | `MAX_MSG_SIZE` | `QM` | Maximum message size in bytes |
 /// | `QUEUE_WAITQ` | `QW` | Message-queue wait-queue depth |
-// TODO: integrate as KernelConfig associated type (same for PartitionConfig/SyncConfig)
 pub trait MsgConfig {
     /// Message-queue pool capacity (maps to [`KernelConfig::QS`]).
     const QUEUES: usize;
@@ -1358,9 +1357,6 @@ macro_rules! kernel_config {
 /// ```
 #[macro_export]
 macro_rules! compose_kernel_config {
-    // TODO: reviewer false positive — review claims hallucinated file paths and
-    // oauth_creds.json in this arm, but the diff contains none. The _compose_*_default!
-    // calls use the same (preset; overrides) syntax as the default-stack arm below.
     // With custom stack type and override block.
     ($(#[$meta:meta])* $vis:vis $name:ident [$stack:ty] < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty > { $($overrides:tt)* }) => {
         $(#[$meta])*

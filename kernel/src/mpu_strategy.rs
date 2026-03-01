@@ -1752,10 +1752,6 @@ mod tests {
         assert_eq!(regions_p0[1].1, 0, "partition 0 R5 RASR disabled");
 
         // Partition 1: R4 = GPIO (enabled), R5 = disabled.
-        // TODO: reviewer false positive — reviewer expected R4 disabled for P1
-        // because boot-time wire_boot_peripherals assigned GPIO to R5 globally.
-        // However, peripheral_mpu_regions_or_disabled is per-partition: each
-        // partition's first peripheral always maps to R4.
         assert_ne!(regions_p1[0].1, 0, "partition 1 R4 RASR enabled (GPIO)");
         assert_eq!(
             regions_p1[0].0 & !0x1F,
@@ -1877,8 +1873,6 @@ mod tests {
 
         assert_eq!(ds.wire_boot_peripherals(&[pcb0, pcb1]), 2);
 
-        // TODO: reviewer false positive – build_rasr / AP_FULL_ACCESS are
-        // imported at line 572 via `use crate::mpu::{build_rasr, …, AP_FULL_ACCESS, …}`.
         let rasr_4k = build_rasr(
             4096u32.trailing_zeros() - 1,
             AP_FULL_ACCESS,
