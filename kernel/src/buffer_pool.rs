@@ -443,6 +443,11 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         Ok(len)
     }
 
+    /// Return the physical base address of a slot's data buffer.
+    pub fn slot_base_address(&self, slot: usize) -> Option<u32> {
+        self.slots.get(slot).map(|s| s.data.as_ptr() as u32)
+    }
+
     /// Iterate all slots, revoking any whose deadline has passed
     /// (`deadline <= current_tick`). Each revoked slot has its MPU window
     /// removed via `strategy.remove_window`. Slots without a deadline
@@ -1203,5 +1208,26 @@ mod tests {
         assert_eq!(dst[..32], pattern);
         // Bytes beyond the buffer size remain untouched.
         assert_eq!(dst[32..], [0xFF; 32]);
+    }
+
+    #[test] fn slot_base_address_valid() {
+        let pool = BufferPool::<2, 64>::new();
+        let addr0 = pool.slot_base_address(0);
+        assert!(addr0.is_some());
+        let addr1 = pool.slot_base_address(1);
+        assert!(addr1.is_some());
+        // Each slot has a distinct, non-zero base address.
+        assert_ne!(addr0.unwrap(), 0);
+        assert_ne!(addr1.unwrap(), 0);
+        assert_ne!(addr0.unwrap(), addr1.unwrap());
+        // Address must match the slot data pointer.
+        assert_eq!(addr0.unwrap(), pool.get(0).unwrap().data().as_ptr() as u32);
+        assert_eq!(addr1.unwrap(), pool.get(1).unwrap().data().as_ptr() as u32);
+    }
+
+    #[test] fn slot_base_address_invalid() {
+        let pool = BufferPool::<2, 64>::new();
+        assert!(pool.slot_base_address(2).is_none());
+        assert!(pool.slot_base_address(99).is_none());
     }
 }

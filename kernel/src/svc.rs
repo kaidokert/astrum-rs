@@ -1875,7 +1875,10 @@ where
                         writable,
                         &self.dynamic_strategy,
                     ) {
-                        Ok(region_id) => region_id as u32,
+                        Ok(region_id) => {
+                            frame.r1 = self.buffers.slot_base_address(slot).unwrap_or(0);
+                            region_id as u32
+                        }
                         Err(_) => SvcError::InvalidResource.to_u32(),
                     }
                 }
@@ -4403,9 +4406,17 @@ mod tests {
         // Allocate a writable buffer (mode=1) as partition 0
         let slot = svc!(SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
-        // Lend to partition 1
-        let region = svc!(SYS_BUF_LEND, slot, 1);
-        assert!(region < 0x8000_0000, "lend should return region_id");
+        // Lend to partition 1 and verify r1 contains the slot's base address
+        let expected_addr = k.buffers().slot_base_address(slot as usize).unwrap();
+        {
+            let mut ef = frame(SYS_BUF_LEND, slot, 1);
+            unsafe { k.dispatch(&mut ef) };
+            assert!(ef.r0 < 0x8000_0000, "lend should return region_id");
+            assert_eq!(
+                ef.r1, expected_addr,
+                "r1 should contain buffer base address"
+            );
+        }
         // Revoke from partition 1
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0);
         // Error: revoke when not lent
