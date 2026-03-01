@@ -59,7 +59,7 @@ const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 // 0 = pending, 1 = pass, 2 = fail (EVT_SET), 3 = fail (QUEUING_SEND)
 static RESULT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+kernel::define_unified_harness!(TestConfig, |tick, _k| {
     let r = RESULT.load(Ordering::Acquire);
     if r == 1 {
         hprintln!("{}: PASS", TEST_NAME);

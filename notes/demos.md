@@ -31,11 +31,8 @@ impl KernelConfig for DemoConfig {
     // ... other config constants
 }
 
-const NUM_PARTITIONS: usize = 3;
-const STACK_WORDS: usize = 256;
-
-// Generates: STACKS array, KERNEL static, store_kernel(), boot()
-kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS);
+// Generates: kernel state, store_kernel(), boot(), PendSV/SysTick handlers
+kernel::define_unified_harness!(DemoConfig);
 ```
 
 The `main()` function creates the kernel, configures IPC resources, then

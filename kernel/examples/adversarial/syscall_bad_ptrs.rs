@@ -56,7 +56,7 @@ kernel::compose_kernel_config!(
 // 0 = pending, 1 = pass, 2 = fail (null ptr), 3 = fail (wrap ptr)
 static RESULT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+kernel::define_unified_harness!(TestConfig, |tick, _k| {
     let r = RESULT.load(Ordering::Acquire);
     if r == 1 {
         hprintln!("{}: PASS", TEST_NAME);

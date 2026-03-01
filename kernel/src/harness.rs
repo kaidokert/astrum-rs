@@ -164,11 +164,6 @@ macro_rules! _unified_handle_yield {
 /// });
 /// ```
 ///
-/// Legacy forms with NP/SW parameters are still accepted but deprecated:
-/// ```ignore
-/// kernel::define_unified_harness!(DemoConfig, NUM_PARTITIONS, STACK_WORDS);
-/// ```
-///
 /// # Supported Stack Sizes
 ///
 /// The `KernelConfig::Core` type parameter selects the stack tier via one of
@@ -177,12 +172,9 @@ macro_rules! _unified_handle_yield {
 /// A compile-time assertion in `PartitionCore::new()` verifies this invariant.
 #[macro_export]
 macro_rules! define_unified_harness {
-    // TODO: reviewer false positive — all four review claims are invalid:
-    // (1) No AI-slop `@.claude/...` arm names exist; internal arms use @impl/@handlers.
-    // (2) The diff 'before' state matches HEAD exactly ($NP/$SW on all arms).
-    // (3) The simplified arms are new staged work, not a redundant duplicate.
-    // (4) No path-like syntax; only idiomatic @impl/@handlers identifiers.
-    // ── Simplified public arms (preferred) ──────────────────────────
+    // TODO: reviewer false positive — no `@.claude/...` arm names exist in this
+    // macro; all internal arms use idiomatic @impl/@handlers identifiers.
+    // ── Public arms ──────────────────────────────────────────────
     // Basic form: no SysTick hook
     ($Config:ty) => {
         $crate::define_unified_harness!(@impl $Config, |_tick, _k| {});
@@ -199,34 +191,8 @@ macro_rules! define_unified_harness {
     (no_boot, $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
     };
-    // ── Deprecated public arms (accept and discard NP/SW) ────────
-    // Basic form (deprecated: use ($Config) instead)
-    ($Config:ty, $NP:expr, $SW:expr) => {
-        $crate::define_unified_harness!($Config);
-    };
-    // Extended form (deprecated: use ($Config, |tick, k| { .. }) instead)
-    ($Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_unified_harness!($Config, |$tick, $k| $hook);
-    };
-    // no_boot form (deprecated: use (no_boot, $Config) instead)
-    (no_boot, $Config:ty, $NP:expr, $SW:expr) => {
-        $crate::define_unified_harness!(no_boot, $Config);
-    };
-    // no_boot form with hook (deprecated: use (no_boot, $Config, |t,k| {}) instead)
-    (no_boot, $Config:ty, $NP:expr, $SW:expr, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_unified_harness!(no_boot, $Config, |$tick, $k| $hook);
-    };
     // Internal: handlers only (SysTick, PendSV, SVC linkage, kernel state)
     (@handlers $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        // NOTE: Per-partition stacks are stored in PartitionCore within the Kernel
-        // struct, not as a separate static array.
-
-        // NOTE: CURRENT_PARTITION, NEXT_PARTITION, and PARTITION_SP statics are
-        // no longer needed. PendSV reads/writes these values via Rust shims:
-        // get_current_partition(), set_current_partition(), get_next_partition(),
-        // get_partition_sp(), set_partition_sp(). The partition_sp array now
-        // lives inside PartitionCore within the Kernel struct.
-
         #[cfg(feature = "dynamic-mpu")]
         static HARNESS_STRATEGY: $crate::mpu_strategy::DynamicStrategy =
             $crate::mpu_strategy::DynamicStrategy::new();

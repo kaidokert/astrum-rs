@@ -39,7 +39,7 @@ const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 // 0 = pending, 1 = pass, 2 = fail (partition not unpriv), 3 = fail (escalated)
 static RESULT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+kernel::define_unified_harness!(TestConfig, |tick, _k| {
     let r = RESULT.load(Ordering::Acquire);
     if r == 1 {
         hprintln!("{}: nPRIV unchanged (write ignored) — PASS", TEST_NAME);
