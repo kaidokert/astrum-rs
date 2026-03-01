@@ -1,0 +1,30 @@
+# Canonical QEMU example lists — sourced by ci.sh and run-qemu-examples.sh.
+# shellcheck shell=bash
+
+EXAMPLES=(
+    qemu_smoke
+    mpu_region systick mpu_wx mpu_fault
+    partition_switch context_switch mpu_partition
+    svc_yield integration hw_integration
+    sampling_demo queuing_demo blackboard_demo
+    priv_fault_test get_time_test blocking_deschedule
+    # Adversarial tests
+    read_kernel_mem read_other_stack write_other_stack stack_guard
+    write_mpu_regs disable_interrupts write_kernel_mem write_control
+    syscall_kernel_ptr syscall_other_ptr syscall_bad_ids syscall_bad_ptrs
+    # Privilege / security tests
+    priv_drop_test
+    # MPU enforcement test
+    mpu_enforce_test
+    callee_save_check
+)
+
+# Dynamic-MPU examples require MPU region configuration that works with
+# unprivileged partition execution (CONTROL.nPRIV=1). Currently broken
+# because partition_mpu_regions sets a background no-access region that
+# conflicts with PRIVDEFENA, and the code region size is too small.
+# TODO: Fix these examples to configure MPU without background no-access.
+DYNAMIC_MPU_EXAMPLES=(
+    # Disabled pending MPU config fixes:
+    # mpu_dynamic_test buffer_pool_test virtual_uart_demo uart1_loopback
+)

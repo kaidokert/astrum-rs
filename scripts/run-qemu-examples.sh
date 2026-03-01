@@ -8,17 +8,8 @@ PASS=0
 FAIL=0
 FAILED=""
 
-EXAMPLES=(
-    qemu_smoke
-    mpu_region systick mpu_wx mpu_fault
-    partition_switch context_switch mpu_partition
-    svc_yield integration sampling_demo queuing_demo blackboard_demo
-    callee_save_check  # committed in prior commits; see kernel/examples/callee_save_check.rs
-)
-
-DYNAMIC_MPU_EXAMPLES=(
-    mpu_dynamic_test buffer_pool_test virtual_uart_demo
-)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/examples.list"
 
 run_examples() {
     local features="$1"

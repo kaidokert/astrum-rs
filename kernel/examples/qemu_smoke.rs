@@ -1,12 +1,12 @@
-//! QEMU smoke test: 2-partition semaphore IPC under QEMU.
+//! QEMU smoke test: boot → yield → semaphore IPC → exit.
 //!
-//! Verifies the full boot → schedule → IPC → exit path:
+//! Regression gate exercising the full kernel lifecycle:
 //!
 //! 1. Kernel boots with two partitions via `define_unified_harness!`.
 //! 2. Round-robin scheduler gives each partition 3 ticks.
-//! 3. Partition 0 signals semaphore 0 (count 0→1), records rc=0.
-//! 4. Partition 1 waits on semaphore 0 (count 1→0), records rc=SEM_ACQUIRED.
-//! 5. SysTick callback verifies both return codes, exits via semihosting.
+//! 3. Partition 0 signals semaphore 0 (count 0→1), then calls SYS_YIELD.
+//! 4. Partition 1 waits on semaphore 0, records rc (0=blocked, 1=immediate).
+//! 5. SysTick callback verifies all three return codes, exits via `kexit!`.
 //!
 //! Run:  cargo run --target thumbv7m-none-eabi --features qemu,log-semihosting --example qemu_smoke
 #![no_std]
@@ -16,12 +16,12 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
-use cortex_m_semihosting::{debug, hprintln};
+use cortex_m_semihosting::hprintln;
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
 use kernel::svc::Kernel;
-use kernel::syscall::{SYS_SEM_SIGNAL, SYS_SEM_WAIT};
+use kernel::syscall::{SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD};
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 use panic_semihosting as _;
 
@@ -31,50 +31,65 @@ const NUM_PARTITIONS: usize = SmokeConfig::N;
 const STACK_WORDS: usize = SmokeConfig::STACK_WORDS;
 const TIMEOUT_TICKS: u32 = 50;
 
+/// SYS_YIELD success return code.
+const YIELD_OK: u32 = 0;
 /// SYS_SEM_SIGNAL success return code.
 const SEM_SIGNAL_OK: u32 = 0;
-/// SYS_SEM_WAIT returns 1 when the semaphore was acquired immediately
-/// (count was > 0 and decremented without blocking).
-const SEM_ACQUIRED: u32 = 1;
+/// SYS_SEM_WAIT returns 1 when acquired immediately (count > 0),
+/// or 0 when the partition blocked and was later unblocked by a signal.
+const SEM_WAIT_IMMEDIATE: u32 = 1;
+const SEM_WAIT_UNBLOCKED: u32 = 0;
 /// Sentinel: partition has not yet executed its syscall.
-const NOT_YET: u32 = u32::MAX;
+const NOT_YET: u32 = 0xDEAD_C0DE;
 
+/// Partition 0 stores SYS_YIELD return code here.
+static YIELD_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 /// Partition 0 stores SYS_SEM_SIGNAL return code here.
 static SIG_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 /// Partition 1 stores SYS_SEM_WAIT return code here.
 static WAIT_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 
-// TODO: hprintln!/debug::exit in SysTick ISR is heavy for an interrupt handler;
+// TODO: hprintln!/kexit! in SysTick ISR is heavy for an interrupt handler;
 // acceptable for QEMU smoke tests but must not be used in production code.
 kernel::define_unified_harness!(SmokeConfig, NUM_PARTITIONS, STACK_WORDS, |tick, _k| {
+    let y = YIELD_RC.load(Ordering::Acquire);
     let sig = SIG_RC.load(Ordering::Acquire);
     let wait = WAIT_RC.load(Ordering::Acquire);
 
-    // Guard: wait until both partitions have executed their syscalls.
-    if sig == NOT_YET || wait == NOT_YET {
+    // Guard: wait until all partitions have executed their syscalls.
+    if y == NOT_YET || sig == NOT_YET || wait == NOT_YET {
         if tick >= TIMEOUT_TICKS {
             hprintln!(
-                "qemu_smoke: FAIL timeout (sig={:#x}, wait={:#x})",
+                "qemu_smoke: FAIL timeout (yield={:#x}, sig={:#x}, wait={:#x})",
+                y,
                 sig,
                 wait
             );
-            debug::exit(debug::EXIT_FAILURE);
+            kernel::kexit!(failure);
         }
         return;
     }
 
-    if sig == SEM_SIGNAL_OK && wait == SEM_ACQUIRED {
-        hprintln!("qemu_smoke: PASS (sig={}, wait={})", sig, wait);
-        debug::exit(debug::EXIT_SUCCESS);
+    let wait_ok = wait == SEM_WAIT_IMMEDIATE || wait == SEM_WAIT_UNBLOCKED;
+    if y == YIELD_OK && sig == SEM_SIGNAL_OK && wait_ok {
+        hprintln!("qemu_smoke: PASS (yield={}, sig={}, wait={})", y, sig, wait);
+        kernel::kexit!(success);
     } else {
-        hprintln!("qemu_smoke: FAIL (sig={}, wait={})", sig, wait);
-        debug::exit(debug::EXIT_FAILURE);
+        hprintln!(
+            "qemu_smoke: FAIL (yield={:#x} expected {:#x}, sig={:#x} expected {:#x}, wait={:#x} expected 0 or 1)",
+            y, YIELD_OK, sig, SEM_SIGNAL_OK, wait
+        );
+        kernel::kexit!(failure);
     }
 });
 
 extern "C" fn p0_main() -> ! {
+    // Signal first so the semaphore count is >0 before P1 runs.
     let rc = kernel::svc!(SYS_SEM_SIGNAL, 0u32, 0u32, 0u32);
     SIG_RC.store(rc, Ordering::Release);
+    // Yield voluntarily — exercises SYS_YIELD and triggers context switch.
+    let rc = kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    YIELD_RC.store(rc, Ordering::Release);
     loop {
         cortex_m::asm::nop();
     }
@@ -90,7 +105,6 @@ extern "C" fn p1_main() -> ! {
 
 // NOTE: `store_kernel` and `boot` are generated by `define_unified_harness!`
 // (via `define_unified_kernel!`) — they are not explicit imports.
-// TODO: reviewer false positive — these symbols are macro-generated, not missing imports.
 #[entry]
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("qemu_smoke: Peripherals::take");
