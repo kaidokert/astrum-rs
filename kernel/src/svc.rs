@@ -1951,6 +1951,24 @@ where
                 })
             }
             #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::BufferRead) => {
+                validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
+                    let slot_idx = frame.r1 as usize;
+                    let len = frame.r2 as usize;
+                    let dst_ptr = frame.r3 as *mut u8;
+                    // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2)
+                    // lies within the calling partition's MPU region.
+                    let dst = unsafe { core::slice::from_raw_parts_mut(dst_ptr, len) };
+                    match self
+                        .buffers
+                        .read_from_slot(slot_idx, self.current_partition, dst)
+                    {
+                        Ok(n) => n as u32,
+                        Err(_) => SvcError::InvalidResource.to_u32(),
+                    }
+                })
+            }
+            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevOpen) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
                 dev.open(pid)?;
                 Ok(0)
@@ -4447,6 +4465,38 @@ mod tests {
         assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), eres);
         // Invalid partition ID → InvalidPartition
         assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 99), epart);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_read_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_READ};
+        let eres = SvcError::InvalidResource.to_u32();
+        let mut k = kernel(0, 0, 0);
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr, $r3:expr) => {{
+                let mut ef = frame4($r0, $r1, $r2, $r3);
+                unsafe { k.dispatch(&mut ef) }; // SAFETY: see module docs
+                ef.r0
+            }};
+        }
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0, 0); // alloc writable buffer
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        let pat: [u8; 32] = core::array::from_fn(|i| i as u8);
+        k.buffers_mut()
+            .get_mut(slot as usize)
+            .unwrap()
+            .data_mut()
+            .copy_from_slice(&pat);
+        let ptr = low32_buf(0);
+        assert_eq!(svc!(SYS_BUF_READ, slot, 32, ptr as u32), 32);
+        // SAFETY: ptr valid for 4096 bytes (mmap), 32 written.
+        let out = unsafe { core::slice::from_raw_parts(ptr, 32) };
+        assert_eq!(out, &pat, "read data must match written pattern");
+        k.current_partition = 1; // wrong owner
+        assert_eq!(svc!(SYS_BUF_READ, slot, 32, low32_buf(1) as u32), eres);
+        k.current_partition = 0; // invalid slot
+        assert_eq!(svc!(SYS_BUF_READ, 99, 32, ptr as u32), eres);
     }
 
     #[cfg(feature = "dynamic-mpu")]

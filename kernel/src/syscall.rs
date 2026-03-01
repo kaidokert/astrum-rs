@@ -59,6 +59,8 @@ pub const SYS_BUF_LEND: u32 = 34;
 pub const SYS_BUF_REVOKE: u32 = 35;
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_TRANSFER: u32 = 36;
+#[cfg(feature = "dynamic-mpu")]
+pub const SYS_BUF_READ: u32 = 37;
 
 // Re-export SYS_DEBUG_NOTIFY and SYS_DEBUG_WRITE from shared traits crate for ABI isolation
 #[cfg(feature = "partition-debug")]
@@ -117,6 +119,8 @@ pub enum SyscallId {
     BufferRevoke,
     #[cfg(feature = "dynamic-mpu")]
     BufferTransfer,
+    #[cfg(feature = "dynamic-mpu")]
+    BufferRead,
     #[cfg(feature = "partition-debug")]
     DebugNotify,
     #[cfg(feature = "partition-debug")]
@@ -179,6 +183,8 @@ impl SyscallId {
             SYS_BUF_REVOKE => Some(Self::BufferRevoke),
             #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_TRANSFER => Some(Self::BufferTransfer),
+            #[cfg(feature = "dynamic-mpu")]
+            SYS_BUF_READ => Some(Self::BufferRead),
             #[cfg(feature = "partition-debug")]
             SYS_DEBUG_NOTIFY => Some(Self::DebugNotify),
             #[cfg(feature = "partition-debug")]
@@ -239,6 +245,8 @@ impl SyscallId {
             Self::BufferRevoke => SYS_BUF_REVOKE,
             #[cfg(feature = "dynamic-mpu")]
             Self::BufferTransfer => SYS_BUF_TRANSFER,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::BufferRead => SYS_BUF_READ,
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => SYS_DEBUG_NOTIFY,
             #[cfg(feature = "partition-debug")]
@@ -302,6 +310,8 @@ mod tests {
         (SYS_BUF_REVOKE, SyscallId::BufferRevoke),
         #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_TRANSFER, SyscallId::BufferTransfer),
+        #[cfg(feature = "dynamic-mpu")]
+        (SYS_BUF_READ, SyscallId::BufferRead),
         #[cfg(feature = "partition-debug")]
         (SYS_DEBUG_NOTIFY, SyscallId::DebugNotify),
     ];
@@ -331,11 +341,11 @@ mod tests {
         assert_eq!(SyscallId::from_u32(1), None);
         // Just above the defined range depends on features:
         // - Without dynamic-mpu: 33 is invalid (after SYS_DEBUG_EXIT=32)
-        // - With dynamic-mpu: 36 is invalid (after SYS_BUF_REVOKE=35)
+        // - With dynamic-mpu: 38 is invalid (after SYS_BUF_READ=37)
         #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(SyscallId::from_u32(33), None);
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(SyscallId::from_u32(37), None);
+        assert_eq!(SyscallId::from_u32(38), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -344,15 +354,15 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        // Base: 23, +13 for dynamic-mpu, +1 for partition-debug
+        // Base: 23, +14 for dynamic-mpu, +1 for partition-debug
         #[cfg(all(not(feature = "dynamic-mpu"), not(feature = "partition-debug")))]
         assert_eq!(ALL_VARIANTS.len(), 23);
         #[cfg(all(feature = "dynamic-mpu", not(feature = "partition-debug")))]
-        assert_eq!(ALL_VARIANTS.len(), 36);
+        assert_eq!(ALL_VARIANTS.len(), 37);
         #[cfg(all(not(feature = "dynamic-mpu"), feature = "partition-debug"))]
         assert_eq!(ALL_VARIANTS.len(), 24);
         #[cfg(all(feature = "dynamic-mpu", feature = "partition-debug"))]
-        assert_eq!(ALL_VARIANTS.len(), 37);
+        assert_eq!(ALL_VARIANTS.len(), 38);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);
