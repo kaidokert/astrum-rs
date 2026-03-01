@@ -20,7 +20,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     virtual_device::DeviceRegistry,
-    DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 
 const NP: usize = 2;
@@ -28,7 +28,7 @@ const P1: u8 = 1;
 const MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 
 kernel::compose_kernel_config!(
-    TestConfig<Partitions4, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
+    TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
 kernel::define_unified_harness!(TestConfig, |_tick, _k| {});

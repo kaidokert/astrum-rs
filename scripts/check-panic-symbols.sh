@@ -51,6 +51,7 @@ STATIC_EXAMPLES=(
 DYNAMIC_MPU_EXAMPLES=(
     mpu_dynamic mpu_dynamic_test buffer_pool_test
     virtual_uart_demo uart1_loopback
+    buf_lend_rw_test buf_transfer_test
 )
 
 # ── Counters ─────────────────────────────────────────────────────────

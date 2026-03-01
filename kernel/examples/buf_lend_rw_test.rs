@@ -19,7 +19,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     virtual_device::DeviceRegistry,
-    DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 
 const NP: usize = 2;
@@ -28,7 +28,7 @@ const MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 const MODIFIED: [u8; 4] = [0xCA, 0xFE, 0xBA, 0xBE];
 
 kernel::compose_kernel_config!(
-    TestConfig<Partitions4, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
+    TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
 // The SVC handler stores MPU windows in `kernel.dynamic_strategy`, but PendSV
@@ -108,14 +108,16 @@ extern "C" fn p1_main() -> ! {
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("peripherals already taken");
     hprintln!("buf_lend_rw_test: start");
-    // Schedule: P0(3 ticks) → P1(3 ticks) → repeat.
+    // Schedule: P0(3) → sys(1) → P1(3) → sys(1) → repeat.
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched
         .add(ScheduleEntry::new(0, 3))
         .expect("add P0 schedule entry");
+    sched.add_system_window(1).expect("sys0");
     sched
         .add(ScheduleEntry::new(1, 3))
         .expect("add P1 schedule entry");
+    sched.add_system_window(1).expect("sys1");
     let cfgs: [PartitionConfig; NP] = core::array::from_fn(|i| {
         PartitionConfig::sentinel(i as u8, (TestConfig::STACK_WORDS * 4) as u32)
     });
