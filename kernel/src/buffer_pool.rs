@@ -33,6 +33,22 @@ pub enum BufferError {
     InvalidSize,
     /// An MPU operation failed — wraps the underlying [`MpuError`].
     Mpu(MpuError),
+    /// Caller does not own this buffer slot.
+    NotOwner,
+    /// Slot is already lent to another partition.
+    AlreadyLent,
+    /// Slot is not currently lent.
+    NotLent,
+    /// Cannot lend a buffer to the owning partition itself.
+    SelfLend,
+}
+
+/// Tracks a cross-partition buffer lending: which partition the buffer was
+/// lent to and the MPU region used for the mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LendRecord {
+    pub target: u8,
+    pub region_id: u8,
 }
 
 /// The access mode requested when borrowing a buffer slot.
@@ -55,6 +71,8 @@ pub struct BufferSlot<const SIZE: usize> {
     state: BorrowState,
     /// MPU region ID assigned by `lend_to_partition`, cleared on revoke.
     mpu_region: Option<u8>,
+    /// Cross-partition lend tracking, set by share/unshare operations.
+    lent_to: Option<LendRecord>,
 }
 
 impl<const SIZE: usize> Default for BufferSlot<SIZE> {
@@ -69,6 +87,7 @@ impl<const SIZE: usize> BufferSlot<SIZE> {
             data: [0u8; SIZE],
             state: BorrowState::Free,
             mpu_region: None,
+            lent_to: None,
         }
     }
 
@@ -87,6 +106,11 @@ impl<const SIZE: usize> BufferSlot<SIZE> {
     /// Return the MPU region ID assigned by `lend_to_partition`, if any.
     pub fn mpu_region(&self) -> Option<u8> {
         self.mpu_region
+    }
+
+    /// Return the active lend record, if this slot is lent to another partition.
+    pub fn lent_to(&self) -> Option<&LendRecord> {
+        self.lent_to.as_ref()
     }
 }
 
@@ -648,5 +672,43 @@ mod tests {
         // Manual revoke should also clear the deadline.
         pool.revoke_from_partition(0, &ds).unwrap();
         assert_eq!(pool.deadline(0), None);
+    }
+
+    // ------------------------------------------------------------------
+    // LendRecord & new BufferError variants
+    // ------------------------------------------------------------------
+
+    #[test] fn new_slot_lent_to_is_none() {
+        let slot = BufferSlot::<32>::new();
+        assert_eq!(slot.lent_to(), None);
+    }
+
+    #[test] fn new_pool_slots_lent_to_is_none() {
+        let pool = BufferPool::<3, 32>::new();
+        for i in 0..3 {
+            assert_eq!(pool.get(i).unwrap().lent_to(), None);
+        }
+    }
+
+    #[test] fn lend_record_equality() {
+        let a = LendRecord { target: 1, region_id: 5 };
+        let b = LendRecord { target: 1, region_id: 5 };
+        let c = LendRecord { target: 2, region_id: 5 };
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test] fn buffer_error_new_variants_are_distinct() {
+        let variants: [BufferError; 4] = [
+            BufferError::NotOwner,
+            BufferError::AlreadyLent,
+            BufferError::NotLent,
+            BufferError::SelfLend,
+        ];
+        for i in 0..variants.len() {
+            for j in (i + 1)..variants.len() {
+                assert_ne!(variants[i], variants[j]);
+            }
+        }
     }
 }
