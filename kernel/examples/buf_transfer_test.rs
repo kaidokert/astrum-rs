@@ -18,8 +18,7 @@ use kernel::{
     buf_syscall,
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc::{Kernel, SvcError},
-    syscall::SYS_BUF_RELEASE,
+    svc::Kernel,
     virtual_device::DeviceRegistry,
     DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncMinimal,
 };
@@ -93,12 +92,8 @@ extern "C" fn p1_main() -> ! {
     if n != MAGIC.len() || dst != MAGIC {
         fail_p1();
     }
-    // Release the buffer slot via SYS_BUF_RELEASE.
-    // TODO: use buf_syscall::buf_release(slot) wrapper when available
-    let rc = kernel::svc!(SYS_BUF_RELEASE, slot as u32, 0u32, 0u32);
-    if SvcError::is_error(rc) {
-        fail_p1();
-    }
+    // Release the buffer slot.
+    buf_syscall::buf_release(slot).unwrap_or_else(|_| fail_p1());
     // Verify the slot is invalid after release.
     if buf_syscall::buf_read(slot, &mut dst).is_ok() {
         fail_p1();

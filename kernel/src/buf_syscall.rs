@@ -2,7 +2,8 @@
 
 use crate::buffer_pool::lend_flags;
 use crate::syscall::{
-    SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_REVOKE, SYS_BUF_TRANSFER, SYS_BUF_WRITE,
+    SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_RELEASE, SYS_BUF_REVOKE, SYS_BUF_TRANSFER,
+    SYS_BUF_WRITE,
 };
 use rtos_traits::syscall::SvcError;
 
@@ -81,6 +82,13 @@ pub fn buf_read(slot: u8, dst: &mut [u8]) -> Result<usize, SvcError> {
     parse_result(raw).map(|v| v as usize)
 }
 
+/// Release a buffer slot back to the pool.
+#[inline]
+pub fn buf_release(slot: u8) -> Result<(), SvcError> {
+    let raw = crate::svc!(SYS_BUF_RELEASE, slot as u32, 0u32, 0u32);
+    parse_result(raw).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +159,36 @@ mod tests {
         let raw_op = SvcError::OperationFailed.to_u32();
         let result: Result<(), SvcError> = parse_result(raw_op).map(|_| ());
         assert_eq!(result, Err(SvcError::OperationFailed));
+    }
+
+    #[test]
+    fn buf_release_returns_ok_on_host() {
+        assert_eq!(buf_release(0), Ok(()));
+        assert_eq!(buf_release(255), Ok(()));
+        assert_eq!(buf_release(3), Ok(()));
+    }
+
+    #[test]
+    fn buf_release_parse_result_errors() {
+        let raw_err = SvcError::InvalidResource.to_u32();
+        let result: Result<(), SvcError> = parse_result(raw_err).map(|_| ());
+        assert_eq!(result, Err(SvcError::InvalidResource));
+
+        let raw_op = SvcError::OperationFailed.to_u32();
+        let result: Result<(), SvcError> = parse_result(raw_op).map(|_| ());
+        assert_eq!(result, Err(SvcError::OperationFailed));
+    }
+
+    #[test]
+    fn buf_release_round_trip_error_codes() {
+        for &err in &[
+            SvcError::InvalidResource,
+            SvcError::OperationFailed,
+            SvcError::InvalidSyscall,
+        ] {
+            let raw = err.to_u32();
+            let result: Result<(), SvcError> = parse_result(raw).map(|_| ());
+            assert_eq!(result, Err(err));
+        }
     }
 }
