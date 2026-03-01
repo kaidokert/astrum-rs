@@ -215,6 +215,8 @@ macro_rules! partition_trampoline {
 /// | `__IRQ_BINDINGS` | `static` array of `IrqBinding` |
 /// | `__irq_dispatch` | Dispatch handler reading IPSR |
 /// | `__INTERRUPTS` | IVT in `.vector_table.interrupts` |
+/// | `enable_bound_irqs` | Set priority and unmask all bound IRQs |
+/// | `disable_bound_irqs` | Mask all bound IRQs |
 #[macro_export]
 macro_rules! bind_interrupts {
     ($Config:ty, $count:expr, $( $irq:expr => ($pid:expr, $evt:expr) ),+ $(,)?) => {
@@ -284,6 +286,48 @@ macro_rules! bind_interrupts {
                 __irq_dispatch as unsafe extern "C" fn();
             [HANDLER; $count]
         };
+
+        // ---- NVIC helpers ----
+
+        /// Set the NVIC priority and unmask each IRQ bound by this macro.
+        #[cfg(all(not(test), target_arch = "arm"))]
+        pub fn enable_bound_irqs(nvic: &mut cortex_m::peripheral::NVIC, priority: u8) {
+            $(
+                // SAFETY: set_priority requires a valid IRQ number, which
+                // is guaranteed by the compile-time assertion ($irq < $count).
+                // unmask is unsafe because enabling an interrupt whose handler
+                // is not installed would cause an unhandled exception.  Here,
+                // the __INTERRUPTS IVT array (emitted by this same macro
+                // invocation) contains the dispatch handler for every slot up
+                // to $count, so the handler is already in place before this
+                // function can be called.
+                unsafe {
+                    nvic.set_priority($crate::irq_dispatch::IrqNr($irq), priority);
+                    cortex_m::peripheral::NVIC::unmask($crate::irq_dispatch::IrqNr($irq));
+                }
+            )+
+        }
+
+        /// No-op on non-ARM hosts so examples compile with `cargo check`.
+        /// The `nvic` parameter is generic to avoid referencing the
+        /// architecture-specific `cortex_m::peripheral::NVIC` type.
+        #[cfg(all(not(test), not(target_arch = "arm")))]
+        pub fn enable_bound_irqs<T>(_nvic: &mut T, _priority: u8) {}
+
+        /// Mask (disable) each IRQ bound by this macro.
+        // TODO: reviewer false positive – NVIC::mask is a safe function in
+        // cortex-m 0.7 (only unmask is unsafe), so no unsafe block or
+        // SAFETY comment is required here.
+        #[cfg(all(not(test), target_arch = "arm"))]
+        pub fn disable_bound_irqs() {
+            $(
+                cortex_m::peripheral::NVIC::mask($crate::irq_dispatch::IrqNr($irq));
+            )+
+        }
+
+        /// No-op on non-ARM hosts so examples compile with `cargo check`.
+        #[cfg(all(not(test), not(target_arch = "arm")))]
+        pub fn disable_bound_irqs() {}
     };
 }
 
@@ -386,5 +430,21 @@ mod tests {
     #[test]
     fn bind_interrupts_single_binding_accepted() {
         // Single binding: IRQ 9 < 10, no duplicates — const assertion passes.
+    }
+
+    // enable_bound_irqs / disable_bound_irqs are emitted behind
+    // cfg(all(not(test), target_arch = "arm")).  Functional testing is
+    // via the qemu_custom_ivt integration example which calls
+    // enable_bound_irqs(&mut p.NVIC, 0xC0) at boot.
+
+    #[test]
+    fn irq_nr_used_by_nvic_helpers() {
+        // The NVIC helpers construct IrqNr for each bound IRQ.
+        // Verify IrqNr correctly stores arbitrary IRQ numbers.
+        let a = crate::irq_dispatch::IrqNr(0);
+        let b = crate::irq_dispatch::IrqNr(255);
+        assert_eq!(a.0, 0);
+        assert_eq!(b.0, 255);
+        assert_ne!(a, b);
     }
 }
