@@ -24,14 +24,14 @@ prevents Handler-mode code from invoking syscalls.
 
 ## 2. Security Fixes Applied
 
-**Confused deputy fix (subtasks 290-291)** — `EventWait` and `EventClear`
+**Confused deputy fix** — `EventWait` and `EventClear`
 previously read the target partition index from the user-supplied register
 `r1`. A malicious partition could pass another partition's index to wait on
 or clear its events. Fix: both syscalls now use the kernel-derived `caller`
 parameter (`svc.rs:854-856`, `events.rs:6,37`). `EventSet` intentionally
 still uses `r1` since setting events on other partitions is by design.
 
-**KERNEL_DATA_END runtime derivation (subtask 292)** — Pointer validation
+**KERNEL_DATA_END runtime derivation** — Pointer validation
 previously used a compile-time constant for the kernel data boundary. Fix:
 on ARM targets, `kernel_data_end()` (`svc.rs:36-46`) reads the linker
 symbol `__kernel_state_end` at runtime. `validate_user_ptr()` rejects
@@ -58,7 +58,7 @@ pointers overlapping kernel code `[0, 0x10000)` or kernel data
 | `write_control` | Unprivileged CONTROL write is no-op / faults |
 | `svc_from_handler` | (covered by EXC_RETURN guard) |
 
-**MPU_ENFORCE integration test (subtask 293)** —
+**MPU_ENFORCE integration test** —
 `mpu_enforce_test.rs` runs two partitions with `MPU_ENFORCE=true`,
 validating that hardware MPU regions are programmed on every context
 switch and partitions execute correctly under full enforcement.

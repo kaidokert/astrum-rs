@@ -84,11 +84,11 @@ peripheral region. This means:
 
 | # | Subtask | Action | Status |
 |---|---------|--------|--------|
-| 1 | **#287** — Fix wire_boot_peripherals docstring; add RASR attribute test | Correct S/C/B=0 docstring to S=1,C=0,B=1; add unit test asserting the RASR bits match Shareable Device attributes | done |
-| 2 | **#288** — Document peripheral RASR override; add permissions-independence test | Add doc-comments to both code paths explaining the intentional override; add test proving `permissions` field is not consulted | done |
-| 3 | **#289** — Create peripheral_passthrough QEMU example for Approach D | Add a QEMU example that configures a non-empty `peripheral_regions` vec targeting a real MMIO range (e.g. UART0 on lm3s6965evb) | done |
-| 4 | **#290** — Update driver-architecture.md for static-mode and slot layout | Document the static-mode peripheral slot layout (R4/R5) and the intentional override rationale in design docs | done |
-| 5 | **#291** — Close CRITICAL-peripheral-regions-dead-code backlog item | After subtasks 287-290 are merged, mark this item done in backlog.json | done |
+| 1 | Fix wire_boot_peripherals docstring; add RASR attribute test | Correct S/C/B=0 docstring to S=1,C=0,B=1; add unit test asserting the RASR bits match Shareable Device attributes | done |
+| 2 | Document peripheral RASR override; add permissions-independence test | Add doc-comments to both code paths explaining the intentional override; add test proving `permissions` field is not consulted | done |
+| 3 | Create peripheral_passthrough QEMU example | Add a QEMU example that configures a non-empty `peripheral_regions` vec targeting a real MMIO range (e.g. UART0 on lm3s6965evb) | done |
+| 4 | Update driver-architecture.md for static-mode and slot layout | Document the static-mode peripheral slot layout (R4/R5) and the intentional override rationale in design docs | done |
+| 5 | **#286** — Close CRITICAL-peripheral-regions-dead-code backlog item | After resolution subtasks are merged, mark this item done in backlog.json | done |
 
 ---
 
@@ -107,6 +107,7 @@ paths forward:
   `build_rasr`. This adds flexibility but requires validating that users
   don't accidentally map MMIO as Normal-cacheable or executable.
 
-**Decision: Approach A was chosen and implemented.** Subtasks 287-291
-implemented Approach A (document and test the intentional override).
-Approach B is deferred unless a concrete use case emerges.
+**Decision: Approach A was chosen and implemented.** The resolution
+subtasks (see checklist above) implemented Approach A (document and test
+the intentional override). Approach B is deferred unless a concrete use
+case emerges.
