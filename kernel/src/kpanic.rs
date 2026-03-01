@@ -34,8 +34,11 @@ use panic_halt as _;
     not(feature = "panic-halt")
 ))]
 #[panic_handler]
+#[inline(never)]
 fn _fallback_panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
+    loop {
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]
