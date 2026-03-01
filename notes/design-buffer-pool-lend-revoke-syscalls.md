@@ -722,7 +722,7 @@ With only 3 dynamic window slots (R5-R7), buffer lending competes with periphera
 | 2 peripherals, 1 buffer grant | MMIO0 | MMIO1 | buf0 | 0 |
 | 2 peripherals, 0 buffer grants | MMIO0 | MMIO1 | — | 1 |
 
-### 8.2 Guidance for implementors
+### 8.2 Guidance for implementers
 
 1. **Prefer copy-based syscalls** (`SYS_BUF_WRITE` / `SYS_BUF_READ`) over MPU grants when the transfer size is small (< 64 bytes). This avoids consuming a dynamic slot.
 2. **Revoke promptly**: After a DMA transfer completes, immediately revoke the grant to free the MPU slot.
