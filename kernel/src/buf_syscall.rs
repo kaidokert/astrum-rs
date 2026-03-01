@@ -1,7 +1,7 @@
 //! User-space convenience wrappers for buffer-pool lending syscalls.
 
 use crate::buffer_pool::lend_flags;
-use crate::syscall::{SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_TRANSFER};
+use crate::syscall::{SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_REVOKE, SYS_BUF_TRANSFER};
 use rtos_traits::syscall::SvcError;
 
 /// Pack target partition ID and writable flag into r2.
@@ -28,6 +28,13 @@ pub fn buf_lend(slot: u8, target: u8, writable: bool) -> Result<u8, SvcError> {
     let r2 = pack_lend_r2(target, writable);
     let raw = crate::svc!(SYS_BUF_LEND, slot as u32, r2, 0u32);
     parse_result(raw).map(|v| v as u8)
+}
+
+/// Revoke a previously lent buffer slot from a target partition.
+#[inline]
+pub fn buf_revoke(slot: u8, target: u8) -> Result<(), SvcError> {
+    let raw = crate::svc!(SYS_BUF_REVOKE, slot as u32, target as u32, 0u32);
+    parse_result(raw).map(|_| ())
 }
 
 /// Transfer buffer slot ownership to a new partition.
@@ -94,7 +101,27 @@ mod tests {
     fn wrappers_return_ok_on_host() {
         assert_eq!(buf_lend(0, 1, false), Ok(0));
         assert_eq!(buf_transfer(0, 1), Ok(()));
+        assert_eq!(buf_revoke(0, 1), Ok(()));
         let mut dst = [0u8; 16];
         assert_eq!(buf_read(0, &mut dst), Ok(0));
+    }
+
+    #[test]
+    fn buf_revoke_returns_ok_on_host() {
+        assert_eq!(buf_revoke(0, 1), Ok(()));
+        assert_eq!(buf_revoke(255, 0), Ok(()));
+        assert_eq!(buf_revoke(3, 7), Ok(()));
+    }
+
+    #[test]
+    fn buf_revoke_parse_result_errors() {
+        // Verify parse_result correctly converts error codes that buf_revoke would encounter
+        let raw_err = SvcError::InvalidResource.to_u32();
+        let result: Result<(), SvcError> = parse_result(raw_err).map(|_| ());
+        assert_eq!(result, Err(SvcError::InvalidResource));
+
+        let raw_op = SvcError::OperationFailed.to_u32();
+        let result: Result<(), SvcError> = parse_result(raw_op).map(|_| ());
+        assert_eq!(result, Err(SvcError::OperationFailed));
     }
 }
