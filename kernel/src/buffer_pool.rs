@@ -200,6 +200,9 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
                 Err(BufferPoolError::NotOwner)
             }
             _ => {
+                if s.lent_to.is_some() {
+                    return Err(BufferPoolError::AlreadyBorrowed);
+                }
                 s.state = BorrowState::Free;
                 Ok(())
             }
@@ -257,6 +260,33 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
 
         s.lent_to = Some(LendRecord { target, region_id });
         Ok(region_id)
+    }
+
+    /// Remove the read-only MPU window previously created by
+    /// [`share_with_partition`](Self::share_with_partition).
+    ///
+    /// The slot must be `BorrowedWrite` by `owner` and currently lent to
+    /// `target`.  On success the MPU window is removed, the `lent_to` field
+    /// is cleared, and the slot remains `BorrowedWrite` by `owner`.
+    pub fn unshare_from_partition(
+        &mut self,
+        slot: usize,
+        owner: u8,
+        target: u8,
+        strategy: &dyn MpuStrategy,
+    ) -> Result<(), BufferError> {
+        let s = self.slots.get_mut(slot).ok_or(BufferError::InvalidSlot)?;
+        match s.state {
+            BorrowState::BorrowedWrite { owner: o } if o == owner => {}
+            _ => return Err(BufferError::NotOwner),
+        }
+        let lr = s.lent_to.ok_or(BufferError::NotLent)?;
+        if lr.target != target {
+            return Err(BufferError::NotOwner);
+        }
+        strategy.remove_window(lr.region_id);
+        s.lent_to = None;
+        Ok(())
     }
 
     /// Lend a buffer slot to a partition, installing an MPU window via `strategy`.
@@ -818,5 +848,84 @@ mod tests {
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         assert_eq!(pool.share_with_partition(5, 1, 2, &ds), Err(BufferError::InvalidSlot));
+    }
+
+    // ------------------------------------------------------------------
+    // unshare_from_partition tests
+    // ------------------------------------------------------------------
+
+    #[test] fn unshare_success_removes_window_and_clears_lend() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let rid = pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        assert!(ds.slot(rid).is_some());
+        pool.unshare_from_partition(0, 1, 2, &ds).unwrap();
+        // MPU window removed.
+        assert!(ds.slot(rid).is_none());
+        // lent_to cleared.
+        assert_eq!(pool.get(0).unwrap().lent_to(), None);
+        // Slot remains BorrowedWrite by owner.
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedWrite { owner: 1 });
+    }
+
+    #[test] fn unshare_not_owner_wrong_partition() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        assert_eq!(pool.unshare_from_partition(0, 99, 2, &ds), Err(BufferError::NotOwner));
+    }
+
+    #[test] fn unshare_not_lent() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        // Slot is BorrowedWrite but not lent.
+        assert_eq!(pool.unshare_from_partition(0, 1, 2, &ds), Err(BufferError::NotLent));
+    }
+
+    #[test] fn unshare_wrong_target() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        // Lent to 2, but unshare says 3.
+        assert_eq!(pool.unshare_from_partition(0, 1, 3, &ds), Err(BufferError::NotOwner));
+    }
+
+    #[test] fn unshare_invalid_slot() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        assert_eq!(pool.unshare_from_partition(5, 1, 2, &ds), Err(BufferError::InvalidSlot));
+    }
+
+    #[test] fn unshare_read_mode_rejected() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Read).unwrap();
+        assert_eq!(pool.unshare_from_partition(0, 1, 2, &ds), Err(BufferError::NotOwner));
+    }
+
+    // ------------------------------------------------------------------
+    // release guard: reject release while lent
+    // ------------------------------------------------------------------
+
+    #[test] fn release_while_lent_rejected() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        assert_eq!(pool.release(0, 1), Err(BufferPoolError::AlreadyBorrowed));
+    }
+
+    #[test] fn release_after_unshare_succeeds() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.share_with_partition(0, 1, 2, &ds).unwrap();
+        pool.unshare_from_partition(0, 1, 2, &ds).unwrap();
+        pool.release(0, 1).unwrap();
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
     }
 }
