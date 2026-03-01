@@ -7,13 +7,14 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::message::SendOutcome;
 use kernel::mpu;
 use kernel::partition::{MpuRegion, PartitionConfig, PartitionState};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::{boot, events, DebugEnabled, MsgStandard, Partitions4, PortsTiny, SyncMinimal};
-use panic_semihosting as _;
 
 kernel::compose_kernel_config!(IntegrationConfig<Partitions4, SyncMinimal, MsgStandard, PortsTiny, DebugEnabled>);
 

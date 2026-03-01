@@ -36,6 +36,8 @@ use cortex_m::peripheral::scb::SystemHandler;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception, ExceptionFrame};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::{
     context::init_stack_frame,
     partition::{MpuRegion, PartitionConfig},
@@ -43,7 +45,6 @@ use kernel::{
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
-use panic_semihosting as _;
 
 kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 

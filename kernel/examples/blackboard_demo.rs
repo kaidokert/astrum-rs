@@ -20,6 +20,8 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
@@ -31,7 +33,6 @@ use kernel::{
         SYS_YIELD,
     },
 };
-use panic_semihosting as _;
 
 // ---------------------------------------------------------------------------
 // Kernel configuration (tuned to this example's resource needs)

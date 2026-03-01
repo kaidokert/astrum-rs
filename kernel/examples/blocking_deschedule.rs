@@ -18,6 +18,8 @@ use cortex_m::peripheral::scb::SystemHandler;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::{
     partition::{MpuRegion, PartitionConfig, PartitionState},
     sampling::PortDirection,
@@ -26,7 +28,6 @@ use kernel::{
     syscall::{SYS_GET_TIME, SYS_QUEUING_RECV_TIMED, SYS_YIELD},
     DebugEnabled, MsgSmall, Partitions1, PortsTiny, SyncMinimal,
 };
-use panic_semihosting as _;
 
 kernel::compose_kernel_config!(Cfg<Partitions1, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
 

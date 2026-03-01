@@ -38,8 +38,9 @@ use cortex_m::peripheral::scb::Exception;
 use cortex_m::register::{control, psp};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::mpu;
-use panic_semihosting as _;
 
 // ---------------------------------------------------------------------------
 // Partition stack — 1 KiB, aligned to 1024 for MPU region base.

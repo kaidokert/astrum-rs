@@ -31,7 +31,8 @@
 use cortex_m::peripheral::scb::SystemHandler;
 use cortex_m_rt::entry;
 use cortex_m_semihosting::{debug, hprintln};
-use panic_semihosting as _;
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 
 // Force the linker to pull in the SVCall assembly trampoline + dispatch_svc
 // from the kernel library.

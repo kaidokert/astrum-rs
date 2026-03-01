@@ -15,6 +15,8 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::{
     boot,
     partition::PartitionConfig,
@@ -24,7 +26,6 @@ use kernel::{
     svc::Kernel,
     syscall::{SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_YIELD},
 };
-use panic_semihosting as _;
 
 // Actual partition count (3) differs from DemoConfig::N (4, from Partitions4 capacity).
 const NUM_PARTITIONS: usize = 3;

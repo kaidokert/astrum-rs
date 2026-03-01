@@ -10,9 +10,10 @@
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::mpu::{self, partition_mpu_regions};
 use kernel::partition::{MpuRegion, PartitionControlBlock};
-use panic_semihosting as _;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

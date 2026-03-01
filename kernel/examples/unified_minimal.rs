@@ -5,13 +5,14 @@
 #![feature(generic_const_exprs)]
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
-use panic_semihosting as _;
 
 kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 

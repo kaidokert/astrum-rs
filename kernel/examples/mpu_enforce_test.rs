@@ -13,6 +13,8 @@
 
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::{
     boot,
     partition::{MpuRegion, PartitionConfig},
@@ -21,7 +23,6 @@ use kernel::{
     syscall::SYS_YIELD,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
-use panic_semihosting as _;
 
 const NP: usize = 2;
 const SW: usize = 256; // AlignedStack1K = 256 words = 1024 bytes
