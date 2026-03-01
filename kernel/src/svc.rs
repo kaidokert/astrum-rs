@@ -1900,6 +1900,26 @@ where
                 }
             }
             #[cfg(feature = "dynamic-mpu")]
+            Some(SyscallId::BufferTransfer) => {
+                let slot = frame.r1 as usize;
+                let new_owner_raw = frame.r2 as usize;
+                match u8::try_from(new_owner_raw) {
+                    Ok(new_owner) if (new_owner as usize) < self.partitions().len() => {
+                        use crate::buffer_pool::BufferError;
+                        match self.buffers.transfer_ownership(
+                            slot,
+                            self.current_partition,
+                            new_owner,
+                        ) {
+                            Ok(()) => 0,
+                            Err(BufferError::SelfLend) => SvcError::OperationFailed.to_u32(),
+                            Err(_) => SvcError::InvalidResource.to_u32(),
+                        }
+                    }
+                    _ => SvcError::InvalidPartition.to_u32(),
+                }
+            }
+            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferWrite) => {
                 validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
                     use crate::buffer_pool::BorrowState;
@@ -4389,6 +4409,44 @@ mod tests {
         // Error: invalid partition in BufferRevoke
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 99), epart);
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 256), epart);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_transfer_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_TRANSFER};
+        let eres = SvcError::InvalidResource.to_u32();
+        let epart = SvcError::InvalidPartition.to_u32();
+        let eop = SvcError::OperationFailed.to_u32();
+        let mut k = kernel(0, 0, 0);
+        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
+        // consolidate into a shared test helper.
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr) => {{
+                let mut ef = frame($r0, $r1, $r2);
+                // SAFETY: See module-level SAFETY docs for test dispatch.
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+        }
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0); // writable buffer, partition 0
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        // Successful transfer: partition 0 → partition 1
+        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), 0);
+        // Wrong owner: partition 0 no longer owns it
+        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), eres);
+        // Transfer back via partition 1
+        k.current_partition = 1;
+        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 0), 0);
+        k.current_partition = 0;
+        // Self-transfer → OperationFailed
+        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 0), eop);
+        // Transfer while lent → InvalidResource
+        let region = svc!(SYS_BUF_LEND, slot, 1);
+        assert!(region < 0x8000_0000, "lend should succeed");
+        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), eres);
+        // Invalid partition ID → InvalidPartition
+        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 99), epart);
     }
 
     #[cfg(feature = "dynamic-mpu")]
