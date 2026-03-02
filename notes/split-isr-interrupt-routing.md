@@ -183,3 +183,59 @@ dispatch and acknowledge paths:
   `SYS_IRQ_ACK` success and error-path validation under QEMU.
 - **`irq_multi_test`** (`kernel/examples/irq_multi_test.rs`) —
   multi-partition IRQ binding with concurrent pend/ack cycles.
+
+## 10. Implementation Status
+
+All split-ISR interrupt routing primitives are implemented and tested.
+
+### 10.1 Custom-Handler Binding (`handler:` form)
+
+The `bind_interrupts!` macro supports a `handler:` variant that routes
+an IRQ to a custom ISR function instead of the default `__irq_dispatch`
+handler. This is the recommended pattern for driver ISRs that need to
+perform device-specific work (e.g. reading a FIFO) before signalling
+the partition.
+
+```rust
+// SAFETY: This function is only called by the NVIC as an interrupt handler.
+// It runs in Handler mode with access to kernel statics and must complete
+// before returning to the interrupted context.
+unsafe extern "C" fn uart_rx_isr() {
+    // Read UART DR, push into IsrRingBuffer, signal partition.
+}
+
+kernel::bind_interrupts!(AppConfig, 90,
+    11 => (0, 0x01, handler: uart_rx_isr),
+);
+```
+
+The `handler:` form still creates an `IrqBinding` entry (for
+`SYS_IRQ_ACK` ownership validation) but places the custom function
+pointer in the IVT slot instead of `__irq_dispatch`. The custom ISR
+is responsible for its own clear/mask logic and for calling
+`signal_partition_from_isr` if needed.
+
+### 10.2 Overflow Counter Observability
+
+`IsrRingBuffer` tracks dropped pushes via a saturating counter
+(`kernel/src/split_isr.rs`):
+
+- **`overflow_count(&self) -> usize`** — returns total drops since
+  last reset.
+- **`reset_overflow_count(&mut self) -> usize`** — returns the current
+  count and atomically resets it to zero.
+
+Partitions can poll this after draining the ring to detect back-pressure
+or log diagnostics without additional IPC.
+
+### 10.3 Compile-Time Validation
+
+Two additional `const` assertions fire at build time inside
+`bind_interrupts!` (defined in `kernel/src/macros.rs`, line 308):
+
+1. **Max IRQ count** — `count ≤ 240`, matching the Cortex-M3 maximum
+   external interrupt count.
+   Error: `"bind_interrupts!: count exceeds Cortex-M3 maximum (240)"`
+2. **Non-zero event_bits** — rejects any binding where `event_bits == 0`,
+   which would be a silent no-op at dispatch time.
+   Error: `"bind_interrupts!: event_bits == 0 is a no-op"`
