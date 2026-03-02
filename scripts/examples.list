@@ -26,6 +26,7 @@ CUSTOM_IVT_EXAMPLES=(
     irq_multi_test
     irq_ack_test
     irq_kernel_clears_test
+    irq_simultaneous_test
 )
 
 # Dynamic-MPU examples require MPU region configuration that works with
