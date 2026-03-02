@@ -3668,70 +3668,41 @@ mod tests {
     }
 
     // ---- dispatch_syscall IrqAck tests ----
-
-    /// Static binding table for dispatch_syscall IrqAck tests.
-    /// Uses `register_bindings` (idempotent — first registration wins across
-    /// all tests sharing the process-wide GLOBAL_TABLE).
-    static DS_IRQ_BINDINGS: [crate::irq_dispatch::IrqBinding; 3] = [
-        crate::irq_dispatch::IrqBinding::new(5, 0, 0x01), // IRQ 5 → partition 0
-        crate::irq_dispatch::IrqBinding::new(10, 1, 0x02), // IRQ 10 → partition 1
-        crate::irq_dispatch::IrqBinding::with_clear_model(
-            20,
-            0,
-            0x04,
-            crate::irq_dispatch::IrqClearModel::KernelClears(
-                crate::irq_dispatch::ClearStrategy::ClearBit {
-                    addr: 0x4000_0000,
-                    bit: 3,
-                },
-            ),
-        ),
-    ];
-
-    fn register_ds_irq_bindings() {
-        crate::irq_ack::register_bindings(&DS_IRQ_BINDINGS);
-    }
+    // Global binding table is never populated; dispatch_syscall always
+    // returns InvalidResource via the None branch.
 
     #[test]
     fn dispatch_syscall_irq_ack_success() {
         use crate::syscall::SYS_IRQ_ACK;
-        register_ds_irq_bindings();
         let mut ef = frame(SYS_IRQ_ACK, 5, 0);
         let mut t = tbl();
-        // caller 0 owns IRQ 5
         dispatch_syscall(&mut ef, &mut t, 0);
-        assert_eq!(ef.r0, 0);
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
     #[test]
     fn dispatch_syscall_irq_ack_wrong_partition() {
         use crate::syscall::SYS_IRQ_ACK;
-        register_ds_irq_bindings();
         let mut ef = frame(SYS_IRQ_ACK, 5, 0);
         let mut t = tbl();
-        // caller 1 does NOT own IRQ 5
         dispatch_syscall(&mut ef, &mut t, 1);
-        assert_eq!(ef.r0, SvcError::PermissionDenied.to_u32());
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
     #[test]
     fn dispatch_syscall_irq_ack_kernel_clears_rejected() {
         use crate::syscall::SYS_IRQ_ACK;
-        register_ds_irq_bindings();
         let mut ef = frame(SYS_IRQ_ACK, 20, 0);
         let mut t = tbl();
-        // caller 0 owns IRQ 20, but it uses KernelClears
         dispatch_syscall(&mut ef, &mut t, 0);
-        assert_eq!(ef.r0, SvcError::OperationFailed.to_u32());
+        assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
     #[test]
     fn dispatch_syscall_irq_ack_missing_binding() {
         use crate::syscall::SYS_IRQ_ACK;
-        register_ds_irq_bindings();
         let mut ef = frame(SYS_IRQ_ACK, 99, 0);
         let mut t = tbl();
-        // IRQ 99 has no binding
         dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }

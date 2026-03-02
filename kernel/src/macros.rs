@@ -415,12 +415,9 @@ macro_rules! bind_interrupts {
         /// Set the NVIC priority and unmask each IRQ bound by this macro.
         #[cfg(all(not(test), target_arch = "arm"))]
         pub fn enable_bound_irqs(nvic: &mut cortex_m::peripheral::NVIC, priority: u8) {
-            // TODO: If a project uses multiple bind_interrupts! invocations,
-            // only the first enable_bound_irqs call registers its table;
-            // subsequent calls are safely rejected by compare_exchange.
-            // A future design should merge all binding blocks into a single
-            // table (e.g. via a linker-set or build-time aggregation).
-            $crate::irq_ack::register_bindings(&__IRQ_BINDINGS);
+            $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+                k.store_irq_bindings(&__IRQ_BINDINGS);
+            });
             $(
                 // SAFETY: set_priority requires a valid IRQ number, which
                 // is guaranteed by the compile-time assertion ($irq < $count).
