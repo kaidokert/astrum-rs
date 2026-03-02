@@ -74,7 +74,6 @@ pub mod queuing;
 pub mod sampling;
 pub mod scheduler;
 pub mod semaphore;
-#[cfg(feature = "dynamic-mpu")]
 pub mod split_isr;
 pub mod state;
 pub mod svc;
