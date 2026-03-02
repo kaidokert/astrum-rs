@@ -3005,8 +3005,8 @@ only needs to know *that* an interrupt fired, not carry per-event payload.
 produce data in the ISR (e.g. UART RX bytes, ADC samples), the kernel's
 top-half pushes an `EventRecord` into the partition's `IsrRingBuffer<D,
 M>` (defined in `kernel/src/split_isr.rs`).  Each record carries a `tag`
-byte identifying the `DeviceNotification` variant (`DataAvailable`,
-`TxComplete`, or `Error`) and up to `M` bytes of payload.  The partition
+byte identifying the source device (e.g., 0 = UART-A) and up to `M`
+bytes of payload.  The partition
 pops records from the ring during its time slot.
 
 ```

@@ -192,7 +192,7 @@ acknowledgement (privileged, deterministic) from interrupt processing
 
    - **Ring buffer delivery** —
      `IsrRingBuffer::push_from_isr(tag, data)` enqueues an
-     `EventRecord` with a `DeviceNotification` tag and up to `M` bytes
+     `EventRecord` with a device-ID tag and up to `M` bytes
      of payload (`kernel/src/split_isr.rs`).  Used when the ISR must
      carry data (UART RX bytes, ADC samples).
 

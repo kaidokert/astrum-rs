@@ -8,14 +8,6 @@
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct RingBufferFull;
 
-/// Notification type delivered to a partition on a device event.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum DeviceNotification {
-    DataAvailable,
-    TxComplete,
-    Error,
-}
-
 /// A single event record in the ring buffer.
 #[derive(Clone)]
 struct EventRecord<const M: usize> {
@@ -136,22 +128,6 @@ impl<const D: usize, const M: usize> IsrRingBuffer<D, M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ===== DeviceNotification tests =====
-
-    #[test]
-    fn device_notification_variants_are_distinct() {
-        assert_ne!(
-            DeviceNotification::DataAvailable,
-            DeviceNotification::TxComplete
-        );
-        assert_ne!(DeviceNotification::TxComplete, DeviceNotification::Error);
-        assert_ne!(DeviceNotification::DataAvailable, DeviceNotification::Error);
-        // Verify Clone + Copy + Debug
-        let n = DeviceNotification::DataAvailable;
-        assert_eq!(n, n.clone());
-        assert!(format!("{:?}", DeviceNotification::Error).contains("Error"));
-    }
 
     // ===== Empty buffer tests =====
 
