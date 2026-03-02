@@ -3130,6 +3130,15 @@ mod tests {
         ef.r0
     }
 
+    /// Dispatch a 4-register SVC and return `r0`.
+    ///
+    /// Like [`dispatch_r0`] but passes all four argument registers.
+    fn dispatch_r04(k: &mut Kernel<TestConfig>, r0: u32, r1: u32, r2: u32, r3: u32) -> u32 {
+        let mut ef = frame4(r0, r1, r2, r3);
+        dispatch_checked(k, &mut ef);
+        ef.r0
+    }
+
     /// Register a new partition and transition it to `Running`.
     ///
     /// Useful for tests that need additional partitions beyond the default P0/P1
@@ -4693,7 +4702,7 @@ mod tests {
         );
     }
 
-    /// Verify one-level lend depth enforcement via the `svc!` dispatch macro:
+    /// Verify one-level lend depth enforcement via `dispatch_r0`:
     /// the lendee (P1) cannot re-lend a borrowed buffer back to P0 or forward
     /// to a third partition (P2).
     #[cfg(feature = "dynamic-mpu")]
@@ -4705,48 +4714,38 @@ mod tests {
         let epart = SvcError::InvalidPartition.to_u32();
         let mut k = kernel(0, 0, 0);
         add_running_partition(&mut k, 2);
-        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
-        // consolidate into a shared test helper.
-        macro_rules! svc {
-            ($r0:expr, $r1:expr, $r2:expr) => {{
-                let mut ef = frame($r0, $r1, $r2);
-                // SAFETY: See module-level SAFETY docs for test dispatch.
-                unsafe { k.dispatch(&mut ef) };
-                ef.r0
-            }};
-        }
 
         // P0 allocates and lends to P1
-        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
-        let region = svc!(SYS_BUF_LEND, slot, 1);
+        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
         assert!(region < 0x8000_0000, "lend should succeed");
 
         // Switch to lendee P1
         k.current_partition = 1;
         // Sanity: invalid slot → InvalidResource (not PermissionDenied)
         assert_eq!(
-            svc!(SYS_BUF_LEND, 99, 0),
+            dispatch_r0(&mut k, SYS_BUF_LEND, 99, 0),
             eres,
             "invalid slot must return InvalidResource"
         );
         // Sanity: out-of-bounds partition → InvalidPartition
         assert_eq!(
-            svc!(SYS_BUF_LEND, slot, 99),
+            dispatch_r0(&mut k, SYS_BUF_LEND, slot, 99),
             epart,
             "out-of-bounds partition must return InvalidPartition"
         );
 
         // P1 tries to re-lend back to P0 — must fail with ownership check
         assert_eq!(
-            svc!(SYS_BUF_LEND, slot, 0),
+            dispatch_r0(&mut k, SYS_BUF_LEND, slot, 0),
             eperm,
             "lendee P1 re-lending back to owner P0 must fail with PermissionDenied"
         );
 
         // P1 tries to re-lend to a third partition P2 — must also fail
         assert_eq!(
-            svc!(SYS_BUF_LEND, slot, 2),
+            dispatch_r0(&mut k, SYS_BUF_LEND, slot, 2),
             eperm,
             "lendee P1 re-lending to P2 must fail with PermissionDenied"
         );
@@ -4754,7 +4753,7 @@ mod tests {
         // Owner can still revoke — no state corruption
         k.current_partition = 0;
         assert_eq!(
-            svc!(SYS_BUF_REVOKE, slot, 1),
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
             0,
             "P0 must still revoke after P1's failed re-lend attempts"
         );
@@ -4770,41 +4769,31 @@ mod tests {
         let eres = SvcError::InvalidResource.to_u32();
         let epart = SvcError::InvalidPartition.to_u32();
         let mut k = kernel(0, 0, 0);
-        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
-        // consolidate into a shared test helper.
-        macro_rules! svc {
-            ($r0:expr, $r1:expr, $r2:expr) => {{
-                let mut ef = frame($r0, $r1, $r2);
-                // SAFETY: See module-level SAFETY docs for test dispatch.
-                unsafe { k.dispatch(&mut ef) };
-                ef.r0
-            }};
-        }
 
         // P0 allocates and lends to P1
-        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
-        let region = svc!(SYS_BUF_LEND, slot, 1);
+        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
         assert!(region < 0x8000_0000, "lend should succeed");
 
         // Switch to lendee P1
         k.current_partition = 1;
         // Sanity: invalid slot → InvalidResource (not PermissionDenied)
         assert_eq!(
-            svc!(SYS_BUF_REVOKE, 99, 1),
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, 99, 1),
             eres,
             "invalid slot must return InvalidResource"
         );
         // Sanity: out-of-bounds partition → InvalidPartition
         assert_eq!(
-            svc!(SYS_BUF_REVOKE, slot, 99),
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 99),
             epart,
             "out-of-bounds partition must return InvalidPartition"
         );
 
         // P1 tries to revoke — must fail with ownership check
         assert_eq!(
-            svc!(SYS_BUF_REVOKE, slot, 1),
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
             eperm,
             "lendee P1 revoking P0's lend must fail with PermissionDenied"
         );
@@ -4812,7 +4801,7 @@ mod tests {
         // Owner can still revoke — lend state intact
         k.current_partition = 0;
         assert_eq!(
-            svc!(SYS_BUF_REVOKE, slot, 1),
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
             0,
             "P0 must still revoke after P1's failed revoke attempt"
         );
@@ -4827,35 +4816,25 @@ mod tests {
         let eperm = SvcError::PermissionDenied.to_u32();
         let eres = SvcError::InvalidResource.to_u32();
         let mut k = kernel(0, 0, 0);
-        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
-        // consolidate into a shared test helper.
-        macro_rules! svc {
-            ($r0:expr, $r1:expr, $r2:expr) => {{
-                let mut ef = frame($r0, $r1, $r2);
-                // SAFETY: See module-level SAFETY docs for test dispatch.
-                unsafe { k.dispatch(&mut ef) };
-                ef.r0
-            }};
-        }
 
         // P0 allocates and lends to P1
-        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
-        let region = svc!(SYS_BUF_LEND, slot, 1);
+        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
         assert!(region < 0x8000_0000, "lend should succeed");
 
         // Switch to lendee P1
         k.current_partition = 1;
         // Sanity: invalid slot → InvalidResource (not PermissionDenied)
         assert_eq!(
-            svc!(SYS_BUF_RELEASE, 99, 0),
+            dispatch_r0(&mut k, SYS_BUF_RELEASE, 99, 0),
             eres,
             "invalid slot must return InvalidResource"
         );
 
         // P1 tries to release — must fail (not owner)
         assert_eq!(
-            svc!(SYS_BUF_RELEASE, slot, 0),
+            dispatch_r0(&mut k, SYS_BUF_RELEASE, slot, 0),
             eperm,
             "lendee P1 releasing P0's buffer must fail with PermissionDenied"
         );
@@ -4863,12 +4842,12 @@ mod tests {
         // Owner can revoke and then release — no state corruption
         k.current_partition = 0;
         assert_eq!(
-            svc!(SYS_BUF_REVOKE, slot, 1),
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
             0,
             "P0 must still revoke after P1's failed release"
         );
         assert_eq!(
-            svc!(SYS_BUF_RELEASE, slot, 0),
+            dispatch_r0(&mut k, SYS_BUF_RELEASE, slot, 0),
             0,
             "P0 must release after revoking"
         );
@@ -4978,20 +4957,10 @@ mod tests {
         use crate::mpu::{decode_rasr_ap, AP_RO_RO};
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
         let mut k = kernel(0, 0, 0);
-        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
-        // consolidate into a shared test helper.
-        macro_rules! svc {
-            ($r0:expr, $r1:expr, $r2:expr) => {{
-                let mut ef = frame($r0, $r1, $r2);
-                // SAFETY: See module-level SAFETY docs for test dispatch.
-                unsafe { k.dispatch(&mut ef) };
-                ef.r0
-            }};
-        }
-        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
         // Lend read-only: r2 = 1 (target=1, no WRITABLE flag)
-        let region_id = svc!(SYS_BUF_LEND, slot, 1);
+        let region_id = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
         assert!(
             region_id < 0x8000_0000,
             "lend should return valid region_id"
@@ -5005,7 +4974,11 @@ mod tests {
             AP_RO_RO,
             "read-only lend must set AP_RO_RO"
         );
-        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0, "revoke must succeed");
+        assert_eq!(
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
+            0,
+            "revoke must succeed"
+        );
     }
 
     /// Owner can still read a buffer via SYS_BUF_READ while it is lent.
@@ -5014,24 +4987,8 @@ mod tests {
     fn buf_read_while_lent_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_WRITE};
         let mut k = kernel(0, 0, 0);
-        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
-        // consolidate into a shared test helper.
-        macro_rules! svc {
-            ($r0:expr, $r1:expr, $r2:expr) => {{
-                let mut ef = frame($r0, $r1, $r2);
-                // SAFETY: See module-level SAFETY docs for test dispatch.
-                unsafe { k.dispatch(&mut ef) };
-                ef.r0
-            }};
-            ($r0:expr, $r1:expr, $r2:expr, $r3:expr) => {{
-                let mut ef = frame4($r0, $r1, $r2, $r3);
-                // SAFETY: See module-level SAFETY docs for test dispatch.
-                unsafe { k.dispatch(&mut ef) };
-                ef.r0
-            }};
-        }
         // Allocate writable buffer
-        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
         // Write a magic pattern via SYS_BUF_WRITE
         let pat: [u8; 32] = core::array::from_fn(|i| (i as u8) ^ 0x5A);
@@ -5039,20 +4996,20 @@ mod tests {
         // SAFETY: ptr valid for 4096 bytes (mmap via low32_buf), writing 32.
         unsafe { core::ptr::copy_nonoverlapping(pat.as_ptr(), ptr, 32) };
         assert_eq!(
-            svc!(SYS_BUF_WRITE, slot, 32, ptr as u32),
+            dispatch_r04(&mut k, SYS_BUF_WRITE, slot, 32, ptr as u32),
             32,
             "write should return 32 bytes"
         );
         // Lend to partition 1
         assert!(
-            svc!(SYS_BUF_LEND, slot, 1) < 0x8000_0000,
+            dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1) < 0x8000_0000,
             "lend should succeed"
         );
         // Clear the user buffer, then read back as owner while lent
         // SAFETY: ptr valid for 4096 bytes (mmap via low32_buf), zeroing 32.
         unsafe { core::ptr::write_bytes(ptr, 0, 32) };
         assert_eq!(
-            svc!(SYS_BUF_READ, slot, 32, ptr as u32),
+            dispatch_r04(&mut k, SYS_BUF_READ, slot, 32, ptr as u32),
             32,
             "owner must read while buffer is lent"
         );
@@ -5068,31 +5025,25 @@ mod tests {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_RELEASE, SYS_BUF_REVOKE};
         let eop = SvcError::OperationFailed.to_u32();
         let mut k = kernel(0, 0, 0);
-        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
-        // consolidate into a shared test helper.
-        macro_rules! svc {
-            ($r0:expr, $r1:expr, $r2:expr) => {{
-                let mut ef = frame($r0, $r1, $r2);
-                // SAFETY: See module-level SAFETY docs for test dispatch.
-                unsafe { k.dispatch(&mut ef) };
-                ef.r0
-            }};
-        }
-        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
-        let region_id = svc!(SYS_BUF_LEND, slot, 1);
+        let region_id = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
         assert!(region_id < 0x8000_0000, "lend should succeed");
         // Release while lent must fail
         assert_eq!(
-            svc!(SYS_BUF_RELEASE, slot, 0),
+            dispatch_r0(&mut k, SYS_BUF_RELEASE, slot, 0),
             eop,
             "release while lent must return OperationFailed"
         );
         // Revoke the lend
-        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0, "revoke must succeed");
+        assert_eq!(
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
+            0,
+            "revoke must succeed"
+        );
         // Release after revoke must succeed
         assert_eq!(
-            svc!(SYS_BUF_RELEASE, slot, 0),
+            dispatch_r0(&mut k, SYS_BUF_RELEASE, slot, 0),
             0,
             "release after revoke must succeed"
         );
