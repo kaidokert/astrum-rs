@@ -31,7 +31,7 @@ CUSTOM_IVT_EXAMPLES=(
 # conflicts with PRIVDEFENA, and the code region size is too small.
 # TODO: Fix these examples to configure MPU without background no-access.
 DYNAMIC_MPU_EXAMPLES=(
-    buf_lend_rw_test buf_transfer_test buf_lend_addr_test buf_deadline_test
+    buf_lend_rw_test buf_lend_ro_test buf_transfer_test buf_lend_addr_test buf_deadline_test
     # Disabled pending MPU config fixes:
     # mpu_dynamic_test buffer_pool_test virtual_uart_demo uart1_loopback
 )
