@@ -304,28 +304,26 @@ macro_rules! __make_irq_handler {
 #[macro_export]
 macro_rules! bind_interrupts {
     ($Config:ty, $count:expr, $( $irq:expr => $args:tt ),+ $(,)?) => {
+        const __IRQ_BINDINGS_INIT: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = [$( $crate::__make_irq_binding!($irq, $args), )+];
         // ---- compile-time validation (runs on all targets) ----
         const _: () = {
             assert!(
                 ($count as usize) <= 240,
                 "bind_interrupts!: count exceeds Cortex-M3 maximum (240)"
             );
-            const BINDINGS: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = [
-                $( $crate::__make_irq_binding!($irq, $args), )+
-            ];
             assert!(
-                !$crate::irq_dispatch::has_duplicate_irqs(&BINDINGS),
+                !$crate::irq_dispatch::has_duplicate_irqs(&__IRQ_BINDINGS_INIT),
                 "bind_interrupts!: duplicate IRQ number"
             );
             assert!(
                 !$crate::irq_dispatch::has_invalid_partition_id(
-                    &BINDINGS,
+                    &__IRQ_BINDINGS_INIT,
                     <$Config as $crate::config::KernelConfig>::N,
                 ),
                 "bind_interrupts!: partition_id out of range"
             );
             assert!(
-                !$crate::irq_dispatch::has_zero_event_bits(&BINDINGS),
+                !$crate::irq_dispatch::has_zero_event_bits(&__IRQ_BINDINGS_INIT),
                 "bind_interrupts!: event_bits == 0 is a no-op"
             );
             $(
@@ -344,11 +342,8 @@ macro_rules! bind_interrupts {
         );
 
         // ---- binding table (ARM only) ----
-        // TODO: binding list is repeated in validation and here; acceptable for a declarative macro
         #[cfg(all(not(test), target_arch = "arm"))]
-        static __IRQ_BINDINGS: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = [
-            $( $crate::__make_irq_binding!($irq, $args), )+
-        ];
+        static __IRQ_BINDINGS: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = __IRQ_BINDINGS_INIT;
 
         // ---- dispatch handler (ARM only) ----
         #[cfg(all(not(test), target_arch = "arm"))]
@@ -544,10 +539,9 @@ mod tests {
 
     // Invoke the macro with valid bindings — the const assertion block
     // succeeds, and the ARM-only items are cfg-gated out on host.
-    bind_interrupts!(DefaultConfig, 70,
-        5  => (0, 0x01),
-        23 => (1, 0x04),
-    );
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 70, 5 => (0, 0x01), 23 => (1, 0x04));
+    };
 
     #[test]
     fn bind_interrupts_const_validation_passes() {
@@ -556,9 +550,9 @@ mod tests {
     }
 
     // Verify the const validation also works with a single binding.
-    bind_interrupts!(DefaultConfig, 10,
-        9 => (0, 0xFF),
-    );
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 10, 9 => (0, 0xFF));
+    };
 
     #[test]
     fn bind_interrupts_single_binding_accepted() {
@@ -566,11 +560,13 @@ mod tests {
     }
 
     // Verify 3-tuple syntax with explicit clear model compiles.
-    bind_interrupts!(DefaultConfig, 70,
-        7 => (0, 0x02, crate::irq_dispatch::IrqClearModel::KernelClears(
-            crate::irq_dispatch::ClearStrategy::WriteRegister { addr: 0x100, value: 1 },
-        )),
-    );
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 70,
+            7 => (0, 0x02, crate::irq_dispatch::IrqClearModel::KernelClears(
+                crate::irq_dispatch::ClearStrategy::WriteRegister { addr: 0x100, value: 1 },
+            )),
+        );
+    };
 
     #[test]
     fn bind_interrupts_3tuple_accepted() {
@@ -578,13 +574,15 @@ mod tests {
     }
 
     // Verify mixed 2-tuple and 3-tuple bindings compile in a single invocation.
-    bind_interrupts!(DefaultConfig, 80,
-        10 => (0, 0x01),
-        20 => (1, 0x08, crate::irq_dispatch::IrqClearModel::KernelClears(
-            crate::irq_dispatch::ClearStrategy::ClearBit { addr: 0x200, bit: 3 },
-        )),
-        30 => (0, 0x10),
-    );
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 80,
+            10 => (0, 0x01),
+            20 => (1, 0x08, crate::irq_dispatch::IrqClearModel::KernelClears(
+                crate::irq_dispatch::ClearStrategy::ClearBit { addr: 0x200, bit: 3 },
+            )),
+            30 => (0, 0x10),
+        );
+    };
 
     #[test]
     fn bind_interrupts_mixed_tuples_accepted() {
@@ -706,20 +704,22 @@ mod tests {
 
     // ---- bind_interrupts! with handler: form ----
 
-    bind_interrupts!(DefaultConfig, 90,
-        11 => (0, 0x01, handler: test_custom_isr),
-    );
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 90, 11 => (0, 0x01, handler: test_custom_isr));
+    };
 
     #[test]
     fn bind_interrupts_handler_form_accepted() {
         // handler: form accepted by const validation.
     }
 
-    bind_interrupts!(DefaultConfig, 100,
-        15 => (0, 0x01),
-        25 => (1, 0x04, handler: test_custom_isr),
-        35 => (0, 0x10),
-    );
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 100,
+            15 => (0, 0x01),
+            25 => (1, 0x04, handler: test_custom_isr),
+            35 => (0, 0x10),
+        );
+    };
 
     #[test]
     fn bind_interrupts_mixed_with_handler_accepted() {
