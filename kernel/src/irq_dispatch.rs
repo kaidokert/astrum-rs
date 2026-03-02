@@ -117,6 +117,24 @@ impl IrqBinding {
     }
 }
 
+/// How the kernel should clear a pending interrupt source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearStrategy {
+    /// Write `value` to the MMIO register at `addr`.
+    WriteRegister { addr: u32, value: u32 },
+    /// Clear a single bit in the register at `addr`.
+    ClearBit { addr: u32, bit: u8 },
+}
+
+/// Who is responsible for acknowledging a hardware interrupt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IrqClearModel {
+    /// The partition will acknowledge the interrupt itself.
+    PartitionAcks,
+    /// The kernel clears the interrupt using the given strategy.
+    KernelClears(ClearStrategy),
+}
+
 /// Linear scan of `bindings` for the first entry whose `irq_num` matches `irq`.
 /// Returns `Some(index)` on hit, `None` on miss or empty slice.
 ///
@@ -544,5 +562,81 @@ mod tests {
         let dbg = format!("{:?}", IrqNr(99));
         assert!(dbg.contains("IrqNr"));
         assert!(dbg.contains("99"));
+    }
+
+    // ---- ClearStrategy tests ----
+
+    const WR: ClearStrategy = ClearStrategy::WriteRegister {
+        addr: 0x100,
+        value: 1,
+    };
+    const CB: ClearStrategy = ClearStrategy::ClearBit {
+        addr: 0x200,
+        bit: 3,
+    };
+
+    #[test]
+    fn clear_strategy_construct_match_eq_copy_clone() {
+        // Construction + exhaustive match
+        match WR {
+            ClearStrategy::WriteRegister { addr, value } => {
+                assert_eq!(addr, 0x100);
+                assert_eq!(value, 1);
+            }
+            ClearStrategy::ClearBit { .. } => panic!("wrong variant"),
+        }
+        match CB {
+            ClearStrategy::ClearBit { addr, bit } => {
+                assert_eq!(addr, 0x200);
+                assert_eq!(bit, 3);
+            }
+            ClearStrategy::WriteRegister { .. } => panic!("wrong variant"),
+        }
+        // Equality
+        assert_eq!(WR, WR);
+        assert_ne!(WR, CB);
+        // Copy: original still usable after move
+        let a = WR;
+        let b = a;
+        assert_eq!(a, b);
+        // Clone
+        assert_eq!(CB, Clone::clone(&CB));
+        // Debug
+        let d = format!("{WR:?}");
+        assert!(d.contains("WriteRegister") && d.contains("256") && d.contains("1"));
+        let d2 = format!("{CB:?}");
+        assert!(d2.contains("ClearBit") && d2.contains("512") && d2.contains("3"));
+    }
+
+    // ---- IrqClearModel tests ----
+
+    #[test]
+    fn irq_clear_model_construct_match_eq_copy_clone() {
+        let pa = IrqClearModel::PartitionAcks;
+        let kc = IrqClearModel::KernelClears(CB);
+        // Exhaustive match — PartitionAcks
+        match pa {
+            IrqClearModel::PartitionAcks => {}
+            IrqClearModel::KernelClears(_) => panic!("wrong variant"),
+        }
+        // Exhaustive match — KernelClears
+        match kc {
+            IrqClearModel::KernelClears(s) => assert_eq!(s, CB),
+            IrqClearModel::PartitionAcks => panic!("wrong variant"),
+        }
+        // Equality
+        assert_eq!(pa, IrqClearModel::PartitionAcks);
+        assert_eq!(kc, IrqClearModel::KernelClears(CB));
+        assert_ne!(pa, kc);
+        // Copy
+        let cp = kc;
+        assert_eq!(kc, cp);
+        // Clone
+        assert_eq!(pa, Clone::clone(&pa));
+        // Debug
+        let d = format!("{pa:?}");
+        assert!(d.contains("PartitionAcks"));
+        let d2 = format!("{kc:?}");
+        assert!(d2.contains("KernelClears") && d2.contains("ClearBit"));
     }
 }
