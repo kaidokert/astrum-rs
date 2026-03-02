@@ -209,6 +209,25 @@ pub const fn has_invalid_partition_id(bindings: &[IrqBinding], max_partitions: u
     false
 }
 
+/// Check whether any binding has `event_bits == 0`.
+/// Returns `true` if any entry has zero event bits, which indicates a
+/// configuration error (signaling zero bits is a no-op).
+///
+/// Intended for use in `const` assertions inside the `bind_interrupts!` macro
+/// to reject no-op bindings at compile time.
+pub const fn has_zero_event_bits(bindings: &[IrqBinding]) -> bool {
+    let mut i = 0;
+    while i < bindings.len() {
+        if let Some(b) = bindings.get(i) {
+            if b.event_bits == 0 {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,6 +614,43 @@ mod tests {
                 2,
             ));
             assert!(has_invalid_partition_id(&[IrqBinding::new(0, 2, 0x01)], 2,));
+        }
+    }
+
+    // ---- has_zero_event_bits tests ----
+
+    #[test]
+    fn has_zero_event_bits_true_for_single_zero() {
+        const TABLE: [IrqBinding; 1] = [IrqBinding::new(0, 0, 0)];
+        assert!(has_zero_event_bits(&TABLE));
+    }
+
+    #[test]
+    fn has_zero_event_bits_false_for_nonzero() {
+        const TABLE: [IrqBinding; 2] = [IrqBinding::new(0, 0, 0x01), IrqBinding::new(1, 1, 0x02)];
+        assert!(!has_zero_event_bits(&TABLE));
+    }
+
+    #[test]
+    fn has_zero_event_bits_true_when_any_zero_in_multi() {
+        const TABLE: [IrqBinding; 3] = [
+            IrqBinding::new(0, 0, 0x01),
+            IrqBinding::new(1, 1, 0),
+            IrqBinding::new(2, 0, 0x04),
+        ];
+        assert!(has_zero_event_bits(&TABLE));
+    }
+
+    #[test]
+    fn has_zero_event_bits_false_for_empty() {
+        assert!(!has_zero_event_bits(&[]));
+    }
+
+    #[test]
+    fn has_zero_event_bits_usable_in_const() {
+        const {
+            assert!(has_zero_event_bits(&[IrqBinding::new(0, 0, 0)]));
+            assert!(!has_zero_event_bits(&[IrqBinding::new(0, 0, 1)]));
         }
     }
 

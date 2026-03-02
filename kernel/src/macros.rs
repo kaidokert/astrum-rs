@@ -306,6 +306,10 @@ macro_rules! bind_interrupts {
     ($Config:ty, $count:expr, $( $irq:expr => $args:tt ),+ $(,)?) => {
         // ---- compile-time validation (runs on all targets) ----
         const _: () = {
+            assert!(
+                ($count as usize) <= 240,
+                "bind_interrupts!: count exceeds Cortex-M3 maximum (240)"
+            );
             const BINDINGS: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = [
                 $( $crate::__make_irq_binding!($irq, $args), )+
             ];
@@ -319,6 +323,10 @@ macro_rules! bind_interrupts {
                     <$Config as $crate::config::KernelConfig>::N,
                 ),
                 "bind_interrupts!: partition_id out of range"
+            );
+            assert!(
+                !$crate::irq_dispatch::has_zero_event_bits(&BINDINGS),
+                "bind_interrupts!: event_bits == 0 is a no-op"
             );
             $(
                 assert!(
