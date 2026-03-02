@@ -187,6 +187,7 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
                 owner: partition_id,
             },
         };
+        self.clear_deadline(idx);
         Some(idx)
     }
 
@@ -211,6 +212,7 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
                         owner: partition_id,
                     },
                 };
+                self.clear_deadline(slot);
                 Ok(())
             }
             _ => Err(BufferPoolError::AlreadyBorrowed),
@@ -238,6 +240,7 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
                     return Err(BufferPoolError::AlreadyBorrowed);
                 }
                 s.state = BorrowState::Free;
+                self.clear_deadline(slot);
                 Ok(())
             }
         }
@@ -332,6 +335,7 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         }
         strategy.remove_window(lr.region_id);
         s.lent_to = None;
+        self.clear_deadline(slot);
         Ok(())
     }
 
@@ -410,6 +414,13 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
     /// Return the deadline for the given slot, or `None` if unset/out-of-range.
     pub fn deadline(&self, slot: usize) -> Option<u64> {
         self.deadlines.get(slot).copied().flatten()
+    }
+
+    /// Clear the deadline for `slot` using safe indexing (no-op if out of range).
+    fn clear_deadline(&mut self, slot: usize) {
+        if let Some(d) = self.deadlines.get_mut(slot) {
+            *d = None;
+        }
     }
 
     /// Transfer ownership of a borrowed slot to a different partition.
@@ -1451,5 +1462,52 @@ mod tests {
         assert!(ds.slot(lend_rid).is_none());
         assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
         assert_eq!(pool.get(1).unwrap().state(), BorrowState::Free);
+    }
+
+    #[test] fn alloc_clears_stale_deadline() {
+        let mut pool = BufferPool::<2, 32>::new();
+        // Alloc slot 0, set a deadline, then release it
+        let idx = pool.alloc(1, BorrowMode::Write).unwrap();
+        assert_eq!(idx, 0);
+        pool.set_deadline(0, Some(100)).unwrap();
+        assert_eq!(pool.deadline(0), Some(100));
+        pool.release(0, 1).unwrap();
+        // Manually inject a stale deadline (simulating leftover from prior use)
+        pool.deadlines[0] = Some(42);
+        // Re-alloc the same slot — deadline must be cleared
+        let idx2 = pool.alloc(2, BorrowMode::Read).unwrap();
+        assert_eq!(idx2, 0);
+        assert_eq!(pool.deadline(0), None);
+    }
+
+    #[test] fn borrow_clears_stale_deadline() {
+        let mut pool = BufferPool::<2, 32>::new();
+        // Inject a stale deadline on a free slot
+        pool.deadlines[1] = Some(999);
+        // Borrow slot 1 — deadline must be cleared
+        pool.borrow(1, 3, BorrowMode::Write).unwrap();
+        assert_eq!(pool.deadline(1), None);
+    }
+
+    #[test] fn release_clears_deadline() {
+        let mut pool = BufferPool::<2, 32>::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.set_deadline(0, Some(500)).unwrap();
+        assert_eq!(pool.deadline(0), Some(500));
+        pool.release(0, 1).unwrap();
+        assert_eq!(pool.deadline(0), None);
+    }
+
+    #[test] fn unshare_clears_deadline() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        // Set a deadline while the slot is lent
+        pool.set_deadline(0, Some(200)).unwrap();
+        assert_eq!(pool.deadline(0), Some(200));
+        // Unshare must clear the deadline
+        pool.unshare_from_partition(0, 1, 2, &ds).unwrap();
+        assert_eq!(pool.deadline(0), None);
     }
 }
