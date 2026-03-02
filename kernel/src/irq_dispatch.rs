@@ -152,6 +152,18 @@ pub enum IrqClearModel {
     KernelClears(ClearStrategy),
 }
 
+/// Convert a raw IPSR register value to an external IRQ number.
+///
+/// The IPSR exception-number field is bits \[8:0\].  External interrupts
+/// start at exception number 16, so the IRQ number is `(ipsr & 0x1FF) - 16`.
+/// The subtraction uses `wrapping_sub` so callers that pass sub-16 exception
+/// numbers (e.g. HardFault = 3) get a well-defined wrapping result rather
+/// than a panic.
+#[allow(dead_code)] // used by bind_interrupts! on ARM targets
+pub(crate) const fn ipsr_to_irq_num(ipsr: u32) -> u8 {
+    (ipsr & 0x1FF).wrapping_sub(16) as u8
+}
+
 /// Linear scan of `bindings` for the first entry whose `irq_num` matches `irq`.
 /// Returns `Some(index)` on hit, `None` on miss or empty slice.
 ///
@@ -822,6 +834,53 @@ mod tests {
                 bit: 3,
             })
         );
+    }
+
+    // ---- ipsr_to_irq_num tests ----
+
+    #[test]
+    fn ipsr_to_irq_num_irq0_boundary() {
+        // IPSR 16 is the first external interrupt → IRQ 0
+        assert_eq!(ipsr_to_irq_num(16), 0);
+    }
+
+    #[test]
+    fn ipsr_to_irq_num_standard_irq() {
+        // IPSR 21 → IRQ 5
+        assert_eq!(ipsr_to_irq_num(21), 5);
+    }
+
+    #[test]
+    fn ipsr_to_irq_num_max_external_irq() {
+        // IPSR 255 → IRQ 239
+        assert_eq!(ipsr_to_irq_num(255), 239);
+    }
+
+    #[test]
+    fn ipsr_to_irq_num_wrapping_sub16_exceptions() {
+        // Sub-16 exception numbers wrap via wrapping_sub.
+        // IPSR 0 → (0 - 16) as u8 = 240
+        assert_eq!(ipsr_to_irq_num(0), 240);
+        // IPSR 3 (HardFault) → (3 - 16) as u8 = 243
+        assert_eq!(ipsr_to_irq_num(3), 243);
+        // IPSR 15 → (15 - 16) as u8 = 255
+        assert_eq!(ipsr_to_irq_num(15), 255);
+    }
+
+    #[test]
+    fn ipsr_to_irq_num_usable_in_const() {
+        const _: u8 = ipsr_to_irq_num(16);
+        const IRQ5: u8 = ipsr_to_irq_num(21);
+        assert_eq!(IRQ5, 5);
+    }
+
+    #[test]
+    fn ipsr_to_irq_num_masks_upper_bits() {
+        // Only bits [8:0] matter; upper bits are masked off.
+        // 0x200 | 21 = 0x215 → masked to 21 → IRQ 5
+        assert_eq!(ipsr_to_irq_num(0x200 | 21), 5);
+        // 0xFFFF_FF10 → masked to 0x110 = 272 → 272 & 0x1FF = 16 → IRQ 0
+        assert_eq!(ipsr_to_irq_num(0xFFFF_FF10), 0);
     }
 
     #[test]

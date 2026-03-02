@@ -358,7 +358,7 @@ macro_rules! bind_interrupts {
             // readable in any execution mode on Cortex-M.  The register
             // is read-only and has no side effects.
             unsafe { core::arch::asm!("mrs {}, ipsr", out(reg) ipsr) };
-            let irq_num = (ipsr & 0x1FF).wrapping_sub(16) as u8;
+            let irq_num = $crate::irq_dispatch::ipsr_to_irq_num(ipsr);
             if let Some(idx) = $crate::irq_dispatch::lookup_binding(&__IRQ_BINDINGS, irq_num) {
                 if let Some(b) = __IRQ_BINDINGS.get(idx) {
                     // Clear/mask the interrupt source before signaling.
