@@ -31,16 +31,16 @@ unsafe extern "C" fn ring_buffer_isr() {
     let _ = unsafe {
         (*core::ptr::addr_of_mut!(RING)).push_from_isr(tag, &[0xA0 | idx, idx, idx, idx])
     };
-    // TODO: reviewer false positive — handler: form bypasses __irq_dispatch,
-    // so manual signal + mask are required (not redundant).
+    // handler: form bypasses __irq_dispatch, so manual signal + mask are
+    // required (not redundant).
     #[cfg(target_arch = "arm")]
     kernel::irq_dispatch::signal_partition_from_isr::<Cfg>(0, 0x01);
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::NVIC::mask(kernel::irq_dispatch::IrqNr(0));
 }
 
-// TODO: reviewer false positive — 70 is the IVT $count, not IPSR;
-// the IRQ number ($irq) is 0, matching the IrqNr(0) NVIC calls below.
+// 70 is the IVT $count, not IPSR; the IRQ number ($irq) is 0, matching
+// the IrqNr(0) NVIC calls below.
 kernel::bind_interrupts!(Cfg, 70, 0 => (0, 0x01, handler: ring_buffer_isr));
 
 kernel::define_unified_harness!(Cfg, |tick, _k| {
@@ -118,7 +118,7 @@ fn main() -> ! {
     let cfgs = PartitionConfig::sentinel_array::<1>(Cfg::STACK_WORDS);
     let k = Kernel::<Cfg>::create(sched, &cfgs).expect("kernel");
     store_kernel(k);
-    enable_bound_irqs(&mut p.NVIC, 0xC0);
+    enable_bound_irqs(&mut p.NVIC, Cfg::IRQ_DEFAULT_PRIORITY);
     let parts: [(extern "C" fn() -> !, u32); 1] = [(p0_main, 0)];
     match boot(&parts, &mut p).expect("boot") {}
 }
