@@ -254,6 +254,24 @@ macro_rules! __make_irq_binding {
     };
 }
 
+/// Emit a `const` reference for `handler:` bindings to suppress `dead_code`
+/// on targets where `__INTERRUPTS` is not emitted (non-ARM / test hosts).
+///
+/// This is a `#[doc(hidden)]` helper for [`bind_interrupts!`]; it should not
+/// be invoked directly.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __ref_handler_if_custom {
+    // handler: form – emit a const reference to keep the function alive.
+    (($pid:expr, $evt:expr, handler: $handler:path)) => {
+        const _: unsafe extern "C" fn() = $handler;
+    };
+    // 2-tuple: no custom handler.
+    (($pid:expr, $evt:expr)) => {};
+    // 3-tuple with explicit clear model: no custom handler.
+    (($pid:expr, $evt:expr, $clear:expr)) => {};
+}
+
 /// Select the IVT handler for a binding: the default dispatch handler for
 /// standard forms, or the user-supplied function for `handler:` forms.
 ///
@@ -333,6 +351,9 @@ macro_rules! bind_interrupts {
                 );
             )+
         };
+
+        // ---- suppress dead_code for handler: functions on non-ARM ----
+        $( $crate::__ref_handler_if_custom!($args); )+
 
         // ---- feature gate (ARM only) ----
         #[cfg(all(not(test), target_arch = "arm", not(feature = "custom-ivt")))]
@@ -724,6 +745,25 @@ mod tests {
     #[test]
     fn bind_interrupts_mixed_with_handler_accepted() {
         // Mixed 2-tuple and handler: bindings compile in a single invocation.
+    }
+
+    // ---- handler: dead_code suppression on host ----
+
+    // This function is ONLY referenced through bind_interrupts! handler:
+    // form.  If the dead_code suppression emitted by __ref_handler_if_custom!
+    // is not working, this will fail to compile with a dead_code warning
+    // (the test crate uses #![deny(dead_code)]).
+    unsafe extern "C" fn handler_only_via_macro() {}
+
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 50, 3 => (0, 0x01, handler: handler_only_via_macro));
+    };
+
+    #[test]
+    fn bind_interrupts_handler_no_dead_code_on_host() {
+        // Confirms handler: functions referenced only through bind_interrupts!
+        // compile without #[allow(dead_code)] on host builds.  The function
+        // `handler_only_via_macro` has no other reference.
     }
 
     // enable_bound_irqs / disable_bound_irqs are emitted behind

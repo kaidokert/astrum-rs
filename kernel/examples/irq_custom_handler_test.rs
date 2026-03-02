@@ -18,10 +18,6 @@ kernel::compose_kernel_config!(
     CustomHandlerConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
-// TODO: bind_interrupts! gates __INTERRUPTS with #[cfg(target_arch = "arm")],
-// so the compiler cannot see this reference on host builds.  The macro should
-// emit a cfg-complementary use to avoid requiring #[allow(dead_code)] here.
-#[allow(dead_code)]
 // SAFETY: This function is placed in the Cortex-M vector table by
 // bind_interrupts! and is only called by hardware as an exception entry point.
 // It runs in ISR context with interrupts of equal/lower priority masked.
