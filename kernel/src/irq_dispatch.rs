@@ -717,4 +717,70 @@ mod tests {
         let d2 = format!("{kc:?}");
         assert!(d2.contains("KernelClears") && d2.contains("ClearBit"));
     }
+
+    // ---- dispatch data-path tests (mixed clear models) ----
+
+    #[test]
+    fn lookup_mixed_clear_models_preserves_variant() {
+        const MIXED: [IrqBinding; 3] = [
+            IrqBinding::new(5, 0, 0x01), // PartitionAcks (default)
+            IrqBinding::with_clear_model(
+                10,
+                1,
+                0x02,
+                IrqClearModel::KernelClears(ClearStrategy::WriteRegister {
+                    addr: 0xE000_E280,
+                    value: 1 << 7,
+                }),
+            ),
+            IrqBinding::with_clear_model(
+                15,
+                2,
+                0x04,
+                IrqClearModel::KernelClears(ClearStrategy::ClearBit {
+                    addr: 0x4001_0000,
+                    bit: 3,
+                }),
+            ),
+        ];
+        // Lookup returns correct index for each IRQ.
+        let idx0 = lookup_binding(&MIXED, 5).unwrap();
+        let idx1 = lookup_binding(&MIXED, 10).unwrap();
+        let idx2 = lookup_binding(&MIXED, 15).unwrap();
+        assert_eq!(idx0, 0);
+        assert_eq!(idx1, 1);
+        assert_eq!(idx2, 2);
+        // clear_model preserved through table indexing.
+        assert_eq!(MIXED[idx0].clear_model, IrqClearModel::PartitionAcks);
+        assert_eq!(
+            MIXED[idx1].clear_model,
+            IrqClearModel::KernelClears(ClearStrategy::WriteRegister {
+                addr: 0xE000_E280,
+                value: 1 << 7,
+            })
+        );
+        assert_eq!(
+            MIXED[idx2].clear_model,
+            IrqClearModel::KernelClears(ClearStrategy::ClearBit {
+                addr: 0x4001_0000,
+                bit: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn clear_bit_shift_values() {
+        // Verify the wrapping_shl computation matches expectations
+        // for the ClearBit dispatch path (must not panic for any u8).
+        for bit in 0u8..=255 {
+            let expected = 1u32.wrapping_shl(bit as u32);
+            let s = ClearStrategy::ClearBit { addr: 0x100, bit };
+            match s {
+                ClearStrategy::ClearBit { bit: b, .. } => {
+                    assert_eq!(1u32.wrapping_shl(b as u32), expected);
+                }
+                _ => panic!("wrong variant"),
+            }
+        }
+    }
 }

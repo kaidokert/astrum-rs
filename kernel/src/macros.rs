@@ -310,6 +310,35 @@ macro_rules! bind_interrupts {
             let irq_num = (ipsr & 0x1FF).wrapping_sub(16) as u8;
             if let Some(idx) = $crate::irq_dispatch::lookup_binding(&__IRQ_BINDINGS, irq_num) {
                 if let Some(b) = __IRQ_BINDINGS.get(idx) {
+                    // Clear/mask the interrupt source before signaling.
+                    // All paths are data-only (no function pointers),
+                    // guaranteeing bounded WCET.
+                    match b.clear_model {
+                        $crate::irq_dispatch::IrqClearModel::PartitionAcks => {
+                            // Mask IRQ in NVIC to prevent level-triggered
+                            // re-fire while the partition acknowledges.
+                            cortex_m::peripheral::NVIC::mask(
+                                $crate::irq_dispatch::IrqNr(irq_num),
+                            );
+                        }
+                        $crate::irq_dispatch::IrqClearModel::KernelClears(strategy) => {
+                            let (addr, value) = match strategy {
+                                $crate::irq_dispatch::ClearStrategy::WriteRegister {
+                                    addr, value,
+                                } => (addr, value),
+                                $crate::irq_dispatch::ClearStrategy::ClearBit {
+                                    addr, bit,
+                                } => (addr, 1u32.wrapping_shl(bit as u32)),
+                            };
+                            // SAFETY: The address is supplied by the caller of
+                            // bind_interrupts! and is assumed to be a valid,
+                            // 4-byte-aligned MMIO register suitable for a 32-bit
+                            // volatile write.  No other aliasing concern applies
+                            // because MMIO registers are inherently shared-access
+                            // hardware and this write has a single-word width.
+                            unsafe { (addr as *mut u32).write_volatile(value) };
+                        }
+                    }
                     $crate::irq_dispatch::signal_partition_from_isr::<$Config>(
                         b.partition_id,
                         b.event_bits,
