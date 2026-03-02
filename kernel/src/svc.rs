@@ -57,6 +57,7 @@ pub const KERNEL_DATA_END: u32 = 0x2000_0000;
 /// The 3-argument `frame(r0, r1, r2)` helper fills `r3` with this value.
 /// The SYS_BUF_LEND handler treats it as "no deadline" so that tests written
 /// before the r3-deadline feature continue to work unchanged.
+#[cfg(any(test, feature = "dynamic-mpu"))]
 const LEGACY_TEST_FRAME_R3_SENTINEL: u32 = 0xCC;
 
 /// Return the runtime end-address of the kernel data region.

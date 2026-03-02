@@ -544,6 +544,12 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
     /// removed via `strategy.remove_window`. Slots without a deadline
     /// (`None`) are never revoked.
     ///
+    /// Handles both kernel-initiated borrows (`mpu_region`) and
+    /// cross-partition shares (`lent_to`). Shared-buffer revocations
+    /// clear `lent_to` and the deadline but leave the slot in its
+    /// `BorrowedWrite`/`BorrowedRead` state so the owner retains
+    /// ownership.
+    ///
     /// Returns the number of slots revoked.
     pub fn revoke_expired(&mut self, current_tick: u64, strategy: &dyn MpuStrategy) -> usize {
         let mut count = 0usize;
@@ -553,6 +559,10 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
                 continue;
             }
             if self.revoke_from_partition(i, strategy).is_ok() {
+                count += 1;
+            } else if let Some(lr) = self.slots[i].lent_to.take() {
+                strategy.remove_window(lr.region_id);
+                self.deadlines[i] = None;
                 count += 1;
             }
         }
@@ -918,6 +928,91 @@ mod tests {
         // Manual revoke should also clear the deadline.
         pool.revoke_from_partition(0, &ds).unwrap();
         assert_eq!(pool.deadline(0), None);
+    }
+
+    // ------------------------------------------------------------------
+    // revoke_expired: shared-buffer (lent_to) deadline enforcement
+    // ------------------------------------------------------------------
+
+    #[test] fn revoke_expired_shared_buffer_deadline() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+
+        // Owner 1 borrows slot 0 in write mode, then shares with partition 2.
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let rid = pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        pool.set_deadline(0, Some(50)).unwrap();
+
+        // Verify preconditions.
+        assert!(pool.get(0).unwrap().lent_to().is_some());
+        assert!(ds.slot(rid).is_some());
+
+        // Advance past deadline.
+        assert_eq!(pool.revoke_expired(51, &ds), 1);
+
+        // lent_to cleared, deadline cleared, MPU window removed.
+        assert_eq!(pool.get(0).unwrap().lent_to(), None);
+        assert_eq!(pool.deadline(0), None);
+        assert!(ds.slot(rid).is_none());
+
+        // Slot remains BorrowedWrite — owner still holds ownership.
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedWrite { owner: 1 });
+    }
+
+    #[test] fn revoke_expired_mixed_kernel_and_shared_deadlines() {
+        let mut pool = BufferPool::<4, 32>::new();
+        let ds = DynamicStrategy::new();
+
+        // Slot 0: kernel-initiated borrow with expired deadline.
+        let rid0 = pool.lend_to_partition(0, 1, false, &ds).unwrap();
+        pool.set_deadline(0, Some(10)).unwrap();
+
+        // Slot 1: shared buffer with expired deadline.
+        pool.alloc(2, BorrowMode::Write).unwrap(); // slot 1, owner 2
+        let rid1 = pool.share_with_partition(1, 2, 3, true, &ds).unwrap();
+        pool.set_deadline(1, Some(20)).unwrap();
+
+        // Slot 2: shared buffer with future deadline — should NOT be revoked.
+        pool.alloc(1, BorrowMode::Read).unwrap(); // slot 2, owner 1
+        let rid2 = pool.share_with_partition(2, 1, 3, false, &ds).unwrap();
+        pool.set_deadline(2, Some(500)).unwrap();
+
+        let revoked = pool.revoke_expired(100, &ds);
+        assert_eq!(revoked, 2);
+
+        // Slot 0: kernel borrow — fully freed.
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
+        assert!(ds.slot(rid0).is_none());
+        assert_eq!(pool.deadline(0), None);
+
+        // Slot 1: shared buffer — lent_to cleared, still BorrowedWrite.
+        assert_eq!(pool.get(1).unwrap().state(), BorrowState::BorrowedWrite { owner: 2 });
+        assert_eq!(pool.get(1).unwrap().lent_to(), None);
+        assert!(ds.slot(rid1).is_none());
+        assert_eq!(pool.deadline(1), None);
+
+        // Slot 2: untouched — future deadline.
+        assert_eq!(pool.get(2).unwrap().state(), BorrowState::BorrowedRead { owner: 1 });
+        assert!(pool.get(2).unwrap().lent_to().is_some());
+        assert!(ds.slot(rid2).is_some());
+        assert_eq!(pool.deadline(2), Some(500));
+    }
+
+    #[test] fn revoke_expired_shared_buffer_no_deadline_not_revoked() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+
+        // Share a buffer without setting a deadline.
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let rid = pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        // No deadline set.
+
+        assert_eq!(pool.revoke_expired(1000, &ds), 0);
+
+        // Everything intact.
+        assert!(pool.get(0).unwrap().lent_to().is_some());
+        assert!(ds.slot(rid).is_some());
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedWrite { owner: 1 });
     }
 
     // ------------------------------------------------------------------
