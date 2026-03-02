@@ -4981,6 +4981,87 @@ mod tests {
         );
     }
 
+    /// Lend with WRITABLE flag must produce an AP_FULL_ACCESS window.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lend_writable_ap_dispatch() {
+        use crate::mpu::{decode_rasr_ap, AP_FULL_ACCESS};
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
+        let mut k = kernel(0, 0, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        // Lend writable: r2 = target(1) | WRITABLE(0x100)
+        let region_id = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1 | 0x100);
+        assert!(
+            region_id < 0x8000_0000,
+            "writable lend should return valid region_id"
+        );
+        let desc = k
+            .dynamic_strategy
+            .slot(region_id as u8)
+            .expect("window descriptor must exist after writable lend");
+        assert_eq!(
+            decode_rasr_ap(desc.permissions),
+            AP_FULL_ACCESS,
+            "writable lend must set AP_FULL_ACCESS"
+        );
+        assert_eq!(
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
+            0,
+            "revoke must succeed"
+        );
+    }
+
+    /// BorrowedRead owner can lend read-only through the SVC handler.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lend_read_owner_share_dispatch() {
+        use crate::mpu::{decode_rasr_ap, AP_RO_RO};
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
+        let mut k = kernel(0, 0, 0);
+        // Allocate BorrowedRead buffer: r1=0
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 0, 0);
+        assert!(slot < 0x8000_0000, "alloc BorrowedRead should succeed");
+        // Lend read-only to partition 1
+        let region_id = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!(
+            region_id < 0x8000_0000,
+            "read-only lend of BorrowedRead should return valid region_id"
+        );
+        let desc = k
+            .dynamic_strategy
+            .slot(region_id as u8)
+            .expect("window descriptor must exist after lend");
+        assert_eq!(
+            decode_rasr_ap(desc.permissions),
+            AP_RO_RO,
+            "BorrowedRead read-only lend must set AP_RO_RO"
+        );
+        assert_eq!(
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
+            0,
+            "revoke must succeed"
+        );
+    }
+
+    /// BorrowedRead owner cannot lend with WRITABLE flag — must get PermissionDenied.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lend_read_owner_writable_rejected_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND};
+        let mut k = kernel(0, 0, 0);
+        // Allocate BorrowedRead buffer: r1=0
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 0, 0);
+        assert!(slot < 0x8000_0000, "alloc BorrowedRead should succeed");
+        // Attempt writable lend — must be rejected
+        let result = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1 | 0x100);
+        assert_eq!(
+            result,
+            SvcError::PermissionDenied.to_u32(),
+            "BorrowedRead writable lend must return PermissionDenied"
+        );
+    }
+
     /// Owner can still read a buffer via SYS_BUF_READ while it is lent.
     #[cfg(feature = "dynamic-mpu")]
     #[test]
