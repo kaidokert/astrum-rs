@@ -997,6 +997,7 @@ where
     pub msg: C::Msg,
     /// Port primitives sub-struct (will replace individual fields).
     pub ports: C::Ports,
+    pub irq_bindings: &'static [crate::irq_dispatch::IrqBinding], // IrqAck dispatch table
 }
 
 /// Helper function to align an address down to an 8-byte boundary.
@@ -1238,6 +1239,7 @@ where
             sync: C::Sync::default(),
             msg: C::Msg::default(),
             ports: C::Ports::default(),
+            irq_bindings: &[],
         })
     }
 
@@ -1284,6 +1286,7 @@ where
             sync: C::Sync::default(),
             msg: C::Msg::default(),
             ports: C::Ports::default(),
+            irq_bindings: &[],
         }
     }
 
@@ -1403,6 +1406,11 @@ where
     #[cfg(feature = "dynamic-mpu")]
     pub fn set_hw_uart(&mut self, backend: crate::hw_uart::HwUartBackend) {
         self.hw_uart = Some(backend);
+    }
+
+    /// Store a per-kernel IRQ binding table for `IrqAck` dispatch.
+    pub fn store_irq_bindings(&mut self, bindings: &'static [crate::irq_dispatch::IrqBinding]) {
+        self.irq_bindings = bindings;
     }
 
     /// Trigger a deschedule by setting `yield_requested` and invoking PendSV.
@@ -2256,19 +2264,23 @@ where
             Some(SyscallId::IrqAck) => {
                 let irq_num = arg1 as u8;
                 let caller_id = self.current_partition;
-                match crate::irq_ack::with_bindings(|b| {
-                    crate::irq_ack::irq_ack_inner(b, caller_id, irq_num)
-                }) {
+                let bindings_result = if !self.irq_bindings.is_empty() {
+                    Some(crate::irq_ack::irq_ack_inner(
+                        self.irq_bindings,
+                        caller_id,
+                        irq_num,
+                    ))
+                } else {
+                    crate::irq_ack::with_bindings(|b| {
+                        crate::irq_ack::irq_ack_inner(b, caller_id, irq_num)
+                    })
+                };
+                match bindings_result {
                     None => SvcError::InvalidResource.to_u32(),
                     Some(result) => {
                         #[cfg(target_arch = "arm")]
                         if result == 0 {
-                            // Re-enable the IRQ that the split-ISR dispatch
-                            // handler masked before signalling user-space.
-                            // SAFETY: `irq_num` is a valid IRQ number validated
-                            // by `irq_ack_inner` (it found a matching binding).
-                            // NVIC::unmask is the standard way to re-enable an
-                            // interrupt after the split-ISR handler masked it.
+                            // SAFETY: irq_num was validated by irq_ack_inner (binding found).
                             unsafe {
                                 cortex_m::peripheral::NVIC::unmask(crate::irq_dispatch::IrqNr(
                                     irq_num,
@@ -3141,6 +3153,7 @@ mod tests {
             sync: <TestConfig as KernelConfig>::Sync::default(),
             msg: <TestConfig as KernelConfig>::Msg::default(),
             ports: <TestConfig as KernelConfig>::Ports::default(),
+            irq_bindings: &[],
         };
         // Add semaphores via facade method
         for _ in 0..sem_count {
@@ -11682,15 +11695,11 @@ mod tests {
         ),
     ];
 
-    fn register_irq_ack_bindings() {
-        crate::irq_ack::register_bindings(&IRQ_ACK_TEST_BINDINGS);
-    }
-
     #[test]
     fn irq_ack_success_returns_zero() {
         use crate::syscall::SYS_IRQ_ACK;
-        register_irq_ack_bindings();
         let mut k = kernel(0, 0, 0);
+        k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
         // Partition 0 owns IRQ 5.
         k.current_partition = 0;
         let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0);
@@ -11700,8 +11709,8 @@ mod tests {
     #[test]
     fn irq_ack_missing_binding_returns_invalid_resource() {
         use crate::syscall::SYS_IRQ_ACK;
-        register_irq_ack_bindings();
         let mut k = kernel(0, 0, 0);
+        k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
         k.current_partition = 0;
         // IRQ 99 has no binding.
         let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 99, 0);
@@ -11711,8 +11720,8 @@ mod tests {
     #[test]
     fn irq_ack_wrong_partition_returns_permission_denied() {
         use crate::syscall::SYS_IRQ_ACK;
-        register_irq_ack_bindings();
         let mut k = kernel(0, 0, 0);
+        k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
         // Partition 1 does not own IRQ 5.
         k.current_partition = 1;
         let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0);
@@ -11722,8 +11731,8 @@ mod tests {
     #[test]
     fn irq_ack_kernel_clears_returns_operation_failed() {
         use crate::syscall::SYS_IRQ_ACK;
-        register_irq_ack_bindings();
         let mut k = kernel(0, 0, 0);
+        k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
         // IRQ 20 uses KernelClears; even the correct owner is rejected.
         k.current_partition = 0;
         let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 20, 0);
@@ -11744,6 +11753,20 @@ mod tests {
             Some(r) => r,
         };
         assert_eq!(result, SvcError::InvalidResource.to_u32());
+    }
+
+    #[test]
+    fn store_irq_bindings_and_global_fallback() {
+        use crate::syscall::SYS_IRQ_ACK;
+        // Empty irq_bindings falls back to global table.
+        crate::irq_ack::register_bindings(&IRQ_ACK_TEST_BINDINGS);
+        let mut k = kernel(0, 0, 0);
+        assert!(k.irq_bindings.is_empty());
+        k.current_partition = 0;
+        assert_eq!(dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0), 0);
+        // store_irq_bindings sets the field.
+        k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
+        assert_eq!(k.irq_bindings.len(), 3);
     }
 
     /// Test module for `define_unified_kernel!` macro.
