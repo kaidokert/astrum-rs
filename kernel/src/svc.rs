@@ -1862,24 +1862,29 @@ where
             Some(SyscallId::BufferLend) => {
                 let slot = frame.r1 as usize;
                 use crate::buffer_pool::lend_flags;
-                let target_raw = (frame.r2 & 0xFF) as usize;
-                let writable = (frame.r2 & lend_flags::WRITABLE) != 0;
-                if target_raw >= self.partitions().len() {
-                    SvcError::InvalidPartition.to_u32()
+                const RESERVED_MASK: u32 = 0xFE00; // bits 9-15
+                if frame.r2 & RESERVED_MASK != 0 {
+                    SvcError::OperationFailed.to_u32()
                 } else {
-                    let target = target_raw as u8;
-                    match self.buffers.share_with_partition(
-                        slot,
-                        self.current_partition,
-                        target,
-                        writable,
-                        &self.dynamic_strategy,
-                    ) {
-                        Ok(region_id) => {
-                            frame.r1 = self.buffers.slot_base_address(slot).unwrap_or(0);
-                            region_id as u32
+                    let target_raw = (frame.r2 & 0xFF) as usize;
+                    let writable = (frame.r2 & lend_flags::WRITABLE) != 0;
+                    if target_raw >= self.partitions().len() {
+                        SvcError::InvalidPartition.to_u32()
+                    } else {
+                        let target = target_raw as u8;
+                        match self.buffers.share_with_partition(
+                            slot,
+                            self.current_partition,
+                            target,
+                            writable,
+                            &self.dynamic_strategy,
+                        ) {
+                            Ok(region_id) => {
+                                frame.r1 = self.buffers.slot_base_address(slot).unwrap_or(0);
+                                region_id as u32
+                            }
+                            Err(e) => e.to_svc_error().to_u32(),
                         }
-                        Err(e) => e.to_svc_error().to_u32(),
                     }
                 }
             }
@@ -4464,6 +4469,38 @@ mod tests {
         // Error: invalid partition in BufferRevoke
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 99), epart);
         assert_eq!(svc!(SYS_BUF_REVOKE, slot, 256), epart);
+    }
+
+    /// SYS_BUF_LEND must reject r2 values with reserved bits 9-15 set.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lend_reserved_bits_rejected() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND};
+        let eop = SvcError::OperationFailed.to_u32();
+        let mut k = kernel(0, 0, 0);
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr) => {{
+                let mut ef = frame($r0, $r1, $r2);
+                // SAFETY: test-only kernel with no real hardware; dispatch is safe to call.
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+        }
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+
+        // (1) bit 9 set alone → target=1, reserved bit 9 set
+        assert_eq!(svc!(SYS_BUF_LEND, slot, 0x0201), eop);
+
+        // (2) all reserved bits set (0xFE00) → target=1
+        assert_eq!(svc!(SYS_BUF_LEND, slot, 0xFE01), eop);
+
+        // (3) valid WRITABLE flag (0x100) with target=1 still works
+        let region = svc!(SYS_BUF_LEND, slot, 0x0101);
+        assert!(
+            region < 0x8000_0000,
+            "writable lend with no reserved bits should succeed"
+        );
     }
 
     #[cfg(feature = "dynamic-mpu")]

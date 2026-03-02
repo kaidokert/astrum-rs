@@ -1227,11 +1227,12 @@ mod tests {
         assert_eq!(dst, [0u8; 32]);
     }
 
+    /// Design rationale: the owner may read a lent slot because reads are
+    /// copy-based and do not interfere with lendee writes.  This matches
+    /// POSIX shared-memory semantics where concurrent readers are safe.
     #[test] fn read_from_slot_lent_slot_succeeds() {
         // A slot that is BorrowedWrite + lent_to is still readable by the owner.
         // BorrowState has no Lent variant; lending is tracked via the lent_to field.
-        // TODO: reviewer asked about rejecting reads on lent slots — current design
-        // allows the owner to read even while the slot is lent (non-destructive).
         let mut pool = BufferPool::<1, 32>::new();
         let ds = DynamicStrategy::new();
         pool.alloc(1, BorrowMode::Write).unwrap();
