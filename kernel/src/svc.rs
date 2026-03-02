@@ -2234,6 +2234,32 @@ where
                     }
                 }
             }
+            Some(SyscallId::IrqAck) => {
+                let irq_num = arg1 as u8;
+                let caller_id = self.current_partition;
+                match crate::irq_ack::with_bindings(|b| {
+                    crate::irq_ack::irq_ack_inner(b, caller_id, irq_num)
+                }) {
+                    None => SvcError::InvalidResource.to_u32(),
+                    Some(result) => {
+                        #[cfg(target_arch = "arm")]
+                        if result == 0 {
+                            // Re-enable the IRQ that the split-ISR dispatch
+                            // handler masked before signalling user-space.
+                            // SAFETY: `irq_num` is a valid IRQ number validated
+                            // by `irq_ack_inner` (it found a matching binding).
+                            // NVIC::unmask is the standard way to re-enable an
+                            // interrupt after the split-ISR handler masked it.
+                            unsafe {
+                                cortex_m::peripheral::NVIC::unmask(crate::irq_dispatch::IrqNr(
+                                    irq_num,
+                                ));
+                            }
+                        }
+                        result
+                    }
+                }
+            }
             #[allow(unreachable_patterns)]
             Some(_) => SvcError::InvalidSyscall.to_u32(),
             None => SvcError::InvalidSyscall.to_u32(),
@@ -11531,6 +11557,92 @@ mod tests {
         let p1 = k.partitions().get(1).unwrap();
         assert_eq!(p1.mpu_region().base(), 0x2004_0000);
         assert_eq!(p1.mpu_region().size(), 2048);
+    }
+
+    // -------------------------------------------------------------------------
+    // IrqAck dispatch tests
+    // -------------------------------------------------------------------------
+
+    /// Static binding table shared by IrqAck dispatch tests.
+    /// `register_bindings` is idempotent — first call wins.
+    static IRQ_ACK_TEST_BINDINGS: [crate::irq_dispatch::IrqBinding; 3] = [
+        crate::irq_dispatch::IrqBinding::new(5, 0, 0x01), // IRQ 5 → partition 0
+        crate::irq_dispatch::IrqBinding::new(10, 1, 0x02), // IRQ 10 → partition 1
+        crate::irq_dispatch::IrqBinding::with_clear_model(
+            20,
+            0,
+            0x04,
+            crate::irq_dispatch::IrqClearModel::KernelClears(
+                crate::irq_dispatch::ClearStrategy::ClearBit {
+                    addr: 0x4000_0000,
+                    bit: 3,
+                },
+            ),
+        ),
+    ];
+
+    fn register_irq_ack_bindings() {
+        crate::irq_ack::register_bindings(&IRQ_ACK_TEST_BINDINGS);
+    }
+
+    #[test]
+    fn irq_ack_success_returns_zero() {
+        use crate::syscall::SYS_IRQ_ACK;
+        register_irq_ack_bindings();
+        let mut k = kernel(0, 0, 0);
+        // Partition 0 owns IRQ 5.
+        k.current_partition = 0;
+        let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn irq_ack_missing_binding_returns_invalid_resource() {
+        use crate::syscall::SYS_IRQ_ACK;
+        register_irq_ack_bindings();
+        let mut k = kernel(0, 0, 0);
+        k.current_partition = 0;
+        // IRQ 99 has no binding.
+        let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 99, 0);
+        assert_eq!(result, SvcError::InvalidResource.to_u32());
+    }
+
+    #[test]
+    fn irq_ack_wrong_partition_returns_permission_denied() {
+        use crate::syscall::SYS_IRQ_ACK;
+        register_irq_ack_bindings();
+        let mut k = kernel(0, 0, 0);
+        // Partition 1 does not own IRQ 5.
+        k.current_partition = 1;
+        let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0);
+        assert_eq!(result, SvcError::PermissionDenied.to_u32());
+    }
+
+    #[test]
+    fn irq_ack_kernel_clears_returns_operation_failed() {
+        use crate::syscall::SYS_IRQ_ACK;
+        register_irq_ack_bindings();
+        let mut k = kernel(0, 0, 0);
+        // IRQ 20 uses KernelClears; even the correct owner is rejected.
+        k.current_partition = 0;
+        let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 20, 0);
+        assert_eq!(result, SvcError::OperationFailed.to_u32());
+    }
+
+    #[test]
+    fn irq_ack_no_table_returns_invalid_resource() {
+        // When no binding table is registered, with_bindings returns None,
+        // which the dispatch arm maps to InvalidResource.
+        // We verify this branch via the irq_ack module directly since the
+        // global table is process-wide and may already be registered.
+        let table = crate::irq_ack::BindingTableRef::new();
+        assert!(table.with(|_| ()).is_none());
+        // Confirm the dispatch arm logic: None → InvalidResource.
+        let result: u32 = match table.with(|b| crate::irq_ack::irq_ack_inner(b, 0, 5)) {
+            None => SvcError::InvalidResource.to_u32(),
+            Some(r) => r,
+        };
+        assert_eq!(result, SvcError::InvalidResource.to_u32());
     }
 
     /// Test module for `define_unified_kernel!` macro.
