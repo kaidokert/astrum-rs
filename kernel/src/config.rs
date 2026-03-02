@@ -552,6 +552,9 @@ pub trait KernelConfig {
     /// higher priority than PendSV; on Cortex-M a *larger* number means
     /// *lower* priority).
     const SYSTICK_PRIORITY: u8 = 0xFE;
+    /// Default NVIC priority for device IRQs in the four-tier model:
+    /// `SVCALL < IRQ_DEFAULT < SYSTICK < PENDSV` (numerically).
+    const IRQ_DEFAULT_PRIORITY: u8 = 0xC0;
 
     /// Core clock frequency in Hz.
     ///
@@ -698,23 +701,20 @@ pub const fn compute_systick_reload(core_clock_hz: u32, tick_period_us: u32) -> 
     reload as u32
 }
 
-/// Compile-time assertion that the three exception priorities are
-/// correctly ordered: SVCall < SysTick < PendSV (numerically).
-/// On Cortex-M a *larger* priority number means *lower* urgency, so
-/// this ensures SVCall is never preempted by the others, and PendSV
-/// never preempts SysTick.
+/// Compile-time assertion enforcing the four-tier priority ordering:
+/// SVCall < IRQ_DEFAULT < SysTick < PendSV (numerically, larger = lower urgency).
 pub const fn assert_priority_order<C: KernelConfig>() {
     assert!(
-        C::SVCALL_PRIORITY < C::SYSTICK_PRIORITY,
-        "SVCall priority must be strictly higher (smaller number) than SysTick priority"
+        C::SVCALL_PRIORITY < C::IRQ_DEFAULT_PRIORITY,
+        "SVCall priority must be strictly higher (smaller number) than IRQ default priority"
     );
     assert!(
-        C::SVCALL_PRIORITY < C::PENDSV_PRIORITY,
-        "SVCall priority must be strictly higher (smaller number) than PendSV priority"
+        C::IRQ_DEFAULT_PRIORITY < C::SYSTICK_PRIORITY,
+        "IRQ default priority must be strictly higher (smaller number) than SysTick priority"
     );
     assert!(
-        C::PENDSV_PRIORITY > C::SYSTICK_PRIORITY,
-        "PendSV priority must be strictly lower (larger number) than SysTick priority"
+        C::SYSTICK_PRIORITY < C::PENDSV_PRIORITY,
+        "SysTick priority must be strictly higher (smaller number) than PendSV priority"
     );
 }
 
@@ -818,6 +818,8 @@ macro_rules! _kernel_config_inherent_consts {
                 <$name as $crate::config::KernelConfig>::PENDSV_PRIORITY;
             $vis const SYSTICK_PRIORITY: u8 =
                 <$name as $crate::config::KernelConfig>::SYSTICK_PRIORITY;
+            $vis const IRQ_DEFAULT_PRIORITY: u8 =
+                <$name as $crate::config::KernelConfig>::IRQ_DEFAULT_PRIORITY;
             $vis const CORE_CLOCK_HZ: u32 = <$name as $crate::config::KernelConfig>::CORE_CLOCK_HZ;
             $vis const TICK_PERIOD_US: u32 = <$name as $crate::config::KernelConfig>::TICK_PERIOD_US;
             $vis const SYSTICK_CYCLES: u32 = <$name as $crate::config::KernelConfig>::SYSTICK_CYCLES;
@@ -938,6 +940,9 @@ macro_rules! _kernel_config_field {
     };
     (systick_priority = $v:expr) => {
         const SYSTICK_PRIORITY: u8 = $v;
+    };
+    (irq_priority = $v:expr) => {
+        const IRQ_DEFAULT_PRIORITY: u8 = $v;
     };
     (debug_auto_drain = $v:expr) => {
         const DEBUG_AUTO_DRAIN_BUDGET: usize = $v;
@@ -1566,6 +1571,7 @@ mod tests {
         const N: usize = 2;
         const PENDSV_PRIORITY: u8 = 0xE0;
         const SYSTICK_PRIORITY: u8 = 0xC0;
+        const IRQ_DEFAULT_PRIORITY: u8 = 0x80;
         const CORE_CLOCK_HZ: u32 = 80_000_000; // 10 ms tick at 80 MHz
         const TICK_PERIOD_US: u32 = 10_000;
         #[cfg(feature = "partition-debug")]
@@ -1581,6 +1587,7 @@ mod tests {
         assert_eq!(DefaultPriority::SVCALL_PRIORITY, 0x00);
         assert_eq!(DefaultPriority::PENDSV_PRIORITY, 0xFF);
         assert_eq!(DefaultPriority::SYSTICK_PRIORITY, 0xFE);
+        assert_eq!(DefaultPriority::IRQ_DEFAULT_PRIORITY, 0xC0);
     }
 
     #[test]
@@ -1608,6 +1615,7 @@ mod tests {
     fn custom_priorities_override_defaults() {
         assert_eq!(CustomPriority::PENDSV_PRIORITY, 0xE0);
         assert_eq!(CustomPriority::SYSTICK_PRIORITY, 0xC0);
+        assert_eq!(CustomPriority::IRQ_DEFAULT_PRIORITY, 0x80);
     }
 
     #[test]
@@ -2140,6 +2148,7 @@ mod tests {
         _kernel_config_field!(svcall_priority = 0x00);
         _kernel_config_field!(pendsv_priority = 0xFF);
         _kernel_config_field!(systick_priority = 0x80);
+        _kernel_config_field!(irq_priority = 0x40);
         _kernel_config_field!(debug_auto_drain = 512);
         kernel_config_types!();
     }
@@ -2170,6 +2179,7 @@ mod tests {
         assert_eq!(FieldMacroConfig::SVCALL_PRIORITY, 0x00);
         assert_eq!(FieldMacroConfig::PENDSV_PRIORITY, 0xFF);
         assert_eq!(FieldMacroConfig::SYSTICK_PRIORITY, 0x80);
+        assert_eq!(FieldMacroConfig::IRQ_DEFAULT_PRIORITY, 0x40);
         assert_eq!(FieldMacroConfig::DEBUG_AUTO_DRAIN_BUDGET, 512);
     }
 
@@ -2878,6 +2888,35 @@ mod tests {
             assert_eq!(ComposedDynMpu::DR, 8);
             assert_eq!(ComposedDynMpu::SYSTEM_WINDOW_MAX_GAP_TICKS, 200);
         }
+    }
+
+    compose_kernel_config!(
+        ComposedIrqOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            irq_priority = 0x60;
+        }
+    );
+
+    #[test]
+    fn compose_irq_priority_override() {
+        assert_eq!(ComposedIrqOverride::IRQ_DEFAULT_PRIORITY, 0x60);
+        assert_priority_order::<ComposedIrqOverride>();
+    }
+
+    struct IrqEqualsSystick;
+    impl KernelConfig for IrqEqualsSystick {
+        const N: usize = 2;
+        const IRQ_DEFAULT_PRIORITY: u8 = 0xFE;
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "IRQ default priority must be strictly higher")]
+    fn assert_priority_order_panics_irq_not_below_systick() {
+        assert_priority_order::<IrqEqualsSystick>();
     }
 
     // ============ DefaultConfig tests ============
