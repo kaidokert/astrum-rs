@@ -246,8 +246,33 @@ macro_rules! __make_irq_binding {
     ($irq:expr, ($pid:expr, $evt:expr)) => {
         $crate::irq_dispatch::IrqBinding::new($irq, $pid, $evt)
     };
+    ($irq:expr, ($pid:expr, $evt:expr, handler: $handler:path)) => {
+        $crate::irq_dispatch::IrqBinding::new($irq, $pid, $evt)
+    };
     ($irq:expr, ($pid:expr, $evt:expr, $clear:expr)) => {
         $crate::irq_dispatch::IrqBinding::with_clear_model($irq, $pid, $evt, $clear)
+    };
+}
+
+/// Select the IVT handler for a binding: the default dispatch handler for
+/// standard forms, or the user-supplied function for `handler:` forms.
+///
+/// This is a `#[doc(hidden)]` helper for [`bind_interrupts!`]; it should not
+/// be invoked directly.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __make_irq_handler {
+    // 2-tuple: standard dispatch
+    (($pid:expr, $evt:expr), $default:path) => {
+        $default as unsafe extern "C" fn()
+    };
+    // handler: form – custom ISR
+    (($pid:expr, $evt:expr, handler: $handler:path), $default:path) => {
+        $handler as unsafe extern "C" fn()
+    };
+    // 3-tuple with explicit clear model: standard dispatch
+    (($pid:expr, $evt:expr, $clear:expr), $default:path) => {
+        $default as unsafe extern "C" fn()
     };
 }
 
@@ -370,9 +395,11 @@ macro_rules! bind_interrupts {
         #[link_section = ".vector_table.interrupts"]
         #[no_mangle]
         pub static __INTERRUPTS: [unsafe extern "C" fn(); $count] = {
-            const HANDLER: unsafe extern "C" fn() =
+            const DEFAULT: unsafe extern "C" fn() =
                 __irq_dispatch as unsafe extern "C" fn();
-            [HANDLER; $count]
+            let mut table = [DEFAULT; $count];
+            $( table[$irq as usize] = $crate::__make_irq_handler!($args, __irq_dispatch); )+
+            table
         };
 
         // ---- NVIC helpers ----
@@ -607,6 +634,91 @@ mod tests {
         let from_macro = __make_irq_binding!(99, (3, 0xDEAD));
         let direct = crate::irq_dispatch::IrqBinding::new(99, 3, 0xDEAD);
         assert_eq!(from_macro, direct);
+    }
+
+    // ---- __make_irq_binding! handler: form tests ----
+
+    #[test]
+    fn make_irq_binding_handler_defaults_to_partition_acks() {
+        let b = __make_irq_binding!(5, (0, 0x01, handler: test_custom_isr));
+        assert_eq!(b.irq_num, 5);
+        assert_eq!(b.partition_id, 0);
+        assert_eq!(b.event_bits, 0x01);
+        assert_eq!(
+            b.clear_model,
+            crate::irq_dispatch::IrqClearModel::PartitionAcks
+        );
+    }
+
+    #[test]
+    fn make_irq_binding_handler_matches_irq_binding_new() {
+        let from_macro = __make_irq_binding!(7, (1, 0x04, handler: test_custom_isr));
+        let direct = crate::irq_dispatch::IrqBinding::new(7, 1, 0x04);
+        assert_eq!(from_macro, direct);
+    }
+
+    // ---- __make_irq_handler! unit tests ----
+
+    unsafe extern "C" fn test_default_dispatch() {}
+    unsafe extern "C" fn test_custom_isr() {}
+
+    #[test]
+    fn make_irq_handler_2tuple_returns_default() {
+        let h = __make_irq_handler!((0, 0x01), test_default_dispatch);
+        assert_eq!(
+            h as *const () as usize,
+            test_default_dispatch as *const () as usize
+        );
+    }
+
+    #[test]
+    fn make_irq_handler_3tuple_returns_default() {
+        let _clear = crate::irq_dispatch::IrqClearModel::KernelClears(
+            crate::irq_dispatch::ClearStrategy::WriteRegister {
+                addr: 0x100,
+                value: 1,
+            },
+        );
+        let h = __make_irq_handler!((0, 0x01, _clear), test_default_dispatch);
+        assert_eq!(
+            h as *const () as usize,
+            test_default_dispatch as *const () as usize
+        );
+    }
+
+    #[test]
+    fn make_irq_handler_custom_returns_custom_fn() {
+        let h = __make_irq_handler!((0, 0x01, handler: test_custom_isr), test_default_dispatch);
+        assert_eq!(
+            h as *const () as usize,
+            test_custom_isr as *const () as usize
+        );
+        assert_ne!(
+            h as *const () as usize,
+            test_default_dispatch as *const () as usize
+        );
+    }
+
+    // ---- bind_interrupts! with handler: form ----
+
+    bind_interrupts!(DefaultConfig, 90,
+        11 => (0, 0x01, handler: test_custom_isr),
+    );
+
+    #[test]
+    fn bind_interrupts_handler_form_accepted() {
+        // handler: form accepted by const validation.
+    }
+
+    bind_interrupts!(DefaultConfig, 100,
+        15 => (0, 0x01),
+        25 => (1, 0x04, handler: test_custom_isr),
+        35 => (0, 0x10),
+    );
+
+    #[test]
+    fn bind_interrupts_mixed_with_handler_accepted() {
+        // Mixed 2-tuple and handler: bindings compile in a single invocation.
     }
 
     // enable_bound_irqs / disable_bound_irqs are emitted behind
