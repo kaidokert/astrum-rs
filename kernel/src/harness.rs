@@ -172,8 +172,6 @@ macro_rules! _unified_handle_yield {
 /// A compile-time assertion in `PartitionCore::new()` verifies this invariant.
 #[macro_export]
 macro_rules! define_unified_harness {
-    // TODO: reviewer false positive — no `@.claude/...` arm names exist in this
-    // macro; all internal arms use idiomatic @impl/@handlers identifiers.
     // ── Public arms ──────────────────────────────────────────────
     // Basic form: no SysTick hook
     ($Config:ty) => {
@@ -309,6 +307,9 @@ macro_rules! define_unified_harness {
                 // (MPU already disabled above; R4-R5 overridden below).
                 #[cfg(feature = "dynamic-mpu")]
                 {
+                    // TODO: sentinel partitions (size==0) receive deny-all
+                    // regions here.  Future: give them real code-RX + data-RW
+                    // regions so tests exercise kernel-enforced isolation.
                     let regions = $crate::mpu::partition_mpu_regions_or_deny_all(pcb);
                     for &(rbar, rasr) in &regions {
                         $crate::mpu::configure_region(&p.MPU, rbar, rasr);

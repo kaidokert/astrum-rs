@@ -155,6 +155,10 @@ name = "buf_transfer_test"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
+name = "buf_lend_addr_test"
+required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+
+[[example]]
 name = "virtual_uart_demo"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
