@@ -256,6 +256,41 @@ pub fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> [(u32, 
     partition_mpu_regions(pcb).unwrap_or_else(deny_all_regions)
 }
 
+/// Compute four (RBAR, RASR) pairs for a permissive MPU layout used by
+/// sentinel test partitions (mpu_region size==0) in QEMU examples.
+///
+/// Region 0 = background AP_RO_RO + XN=false covering 4 GiB (unprivileged
+///            read + execute from flash),
+/// Region 1 = disabled,
+/// Region 2 = stack buffer AP_FULL_ACCESS + XN=true (writable SRAM),
+/// Region 3 = disabled.
+///
+/// Returns `None` if stack size is < 32 or not a power of two.
+pub fn partition_mpu_regions_permissive(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
+    let stack_size = pcb.stack_size();
+    let stack_base = pcb.stack_base();
+
+    let stack_size_field = encode_size(stack_size)?;
+    validate_mpu_region(stack_base, stack_size).ok()?;
+
+    let bg_size_field = 31u32; // 4 GiB = 2^32 → SIZE field = 31
+    let r0_rbar = build_rbar(0x0000_0000, 0)?;
+    let r0_rasr = build_rasr(bg_size_field, AP_RO_RO, false, (false, false, false));
+
+    let r2_rbar = build_rbar(stack_base, 2)?;
+    let r2_rasr = build_rasr(stack_size_field, AP_FULL_ACCESS, true, (true, true, false));
+
+    let r1_rbar = build_rbar(0, 1)?;
+    let r3_rbar = build_rbar(0, 3)?;
+
+    Some([
+        (r0_rbar, r0_rasr),
+        (r1_rbar, 0), // R1 disabled
+        (r2_rbar, r2_rasr),
+        (r3_rbar, 0), // R3 disabled
+    ])
+}
+
 /// (RBAR, RASR) pair for a disabled MPU region targeting slot 4.
 /// RBAR carries the VALID bit and region number so the MPU targets R4
 /// instead of overwriting whatever is in MPU_RNR.  RASR = 0 disables.
@@ -1481,6 +1516,71 @@ mod tests {
     // ------------------------------------------------------------------
     // peripheral_region_pair: permissions field is intentionally ignored
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // partition_mpu_regions_permissive: sentinel test partitions
+    // ------------------------------------------------------------------
+
+    fn make_sentinel_pcb(stack_base: u32, stack_size: u32) -> PartitionControlBlock {
+        PartitionControlBlock::new(
+            0,
+            0,
+            stack_base,
+            stack_base.wrapping_add(stack_size),
+            MpuRegion::new(0, 0, 0), // sentinel: size == 0
+        )
+    }
+
+    #[test]
+    fn permissive_valid_sentinel_produces_four_regions() {
+        let pcb = make_sentinel_pcb(0x2000_0000, 1024);
+        let regions = partition_mpu_regions_permissive(&pcb).unwrap();
+        // R0: enabled background
+        assert_eq!(regions[0].0, build_rbar(0x0000_0000, 0).unwrap());
+        assert_eq!(regions[0].1 & 1, 1, "R0 must be enabled");
+        // R1: disabled – RBAR must carry VALID + region 1
+        assert_eq!(regions[1], (build_rbar(0, 1).unwrap(), 0));
+        // R2: enabled stack
+        assert_eq!(regions[2].0, build_rbar(0x2000_0000, 2).unwrap());
+        assert_eq!(regions[2].1 & 1, 1, "R2 must be enabled");
+        // R3: disabled – RBAR must carry VALID + region 3
+        assert_eq!(regions[3], (build_rbar(0, 3).unwrap(), 0));
+    }
+
+    #[test]
+    fn permissive_invalid_stack_size_returns_none() {
+        // Size < 32
+        assert!(partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0000, 16)).is_none());
+        // Not power of two
+        assert!(partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0000, 100)).is_none());
+        // Zero
+        assert!(partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0000, 0)).is_none());
+    }
+
+    #[test]
+    fn permissive_r0_has_ap_ro_ro_xn_false() {
+        let pcb = make_sentinel_pcb(0x2000_0000, 256);
+        let regions = partition_mpu_regions_permissive(&pcb).unwrap();
+        let rasr = regions[0].1;
+        assert_eq!((rasr >> RASR_AP_SHIFT) & RASR_AP_MASK, AP_RO_RO);
+        assert_eq!((rasr >> 28) & 1, 0, "XN must be false for flash execute");
+        assert_eq!((rasr >> RASR_SIZE_SHIFT) & RASR_SIZE_MASK, 31); // 4 GiB
+    }
+
+    #[test]
+    fn permissive_r2_has_ap_full_access_xn_true() {
+        let pcb = make_sentinel_pcb(0x2000_0000, 512);
+        let regions = partition_mpu_regions_permissive(&pcb).unwrap();
+        let rasr = regions[2].1;
+        assert_eq!((rasr >> RASR_AP_SHIFT) & RASR_AP_MASK, AP_FULL_ACCESS);
+        assert_eq!((rasr >> 28) & 1, 1, "XN must be true for stack data");
+        assert_eq!(
+            decode_rasr_size_bytes(rasr),
+            Some(512),
+            "R2 size must match stack_size"
+        );
+        assert_eq!(decode_rbar_base(regions[2].0), 0x2000_0000);
+    }
 
     /// Prove `peripheral_region_pair` ignores `MpuRegion.permissions`:
     /// three values (0, 0xFF, 0xDEAD_BEEF) produce identical (RBAR, RASR)
