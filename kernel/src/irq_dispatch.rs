@@ -159,8 +159,10 @@ pub enum IrqClearModel {
 /// The subtraction uses `wrapping_sub` so callers that pass sub-16 exception
 /// numbers (e.g. HardFault = 3) get a well-defined wrapping result rather
 /// than a panic.
+// NOTE: pub (not pub(crate)) because bind_interrupts! references
+// $crate::irq_dispatch::ipsr_to_irq_num from example/application crates.
 #[allow(dead_code)] // used by bind_interrupts! on ARM targets
-pub(crate) const fn ipsr_to_irq_num(ipsr: u32) -> u8 {
+pub const fn ipsr_to_irq_num(ipsr: u32) -> u8 {
     (ipsr & 0x1FF).wrapping_sub(16) as u8
 }
 

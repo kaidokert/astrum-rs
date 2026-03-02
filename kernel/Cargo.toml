@@ -160,6 +160,10 @@ name = "irq_custom_handler_test"
 required-features = ["qemu", "log-semihosting", "custom-ivt"]
 
 [[example]]
+name = "irq_ring_buffer_test"
+required-features = ["qemu", "log-semihosting", "custom-ivt"]
+
+[[example]]
 name = "smoke_test"
 required-features = ["qemu", "log-semihosting"]
 
