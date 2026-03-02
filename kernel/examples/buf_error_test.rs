@@ -30,15 +30,11 @@ kernel::compose_kernel_config!(
 
 const PASS: u32 = 1;
 const FAIL: u32 = 2;
-// TODO: reviewer false positive — AtomicU32 statics are accessible from partition
-// code; same pattern used in buf_deadline_test.rs and all buf_*_test examples.
 static RESULT: AtomicU32 = AtomicU32::new(0);
 
 fn fail(msg: &str) -> ! {
     hprintln!("FAIL: {}", msg);
     RESULT.store(FAIL, Ordering::Release);
-    // TODO: reviewer false positive — wfi is unprivileged on Cortex-M;
-    // used in partition code across all test examples (e.g., buf_deadline_test.rs).
     loop {
         cortex_m::asm::wfi();
     }
@@ -102,17 +98,13 @@ extern "C" fn p0_main() -> ! {
 }
 
 extern "C" fn p1_main() -> ! {
-    // TODO: replace nop spin with blocking wait syscall when one becomes available
-    // (see buf_deadline_test.rs for same pattern and TODO).
     loop {
-        cortex_m::asm::nop();
+        cortex_m::asm::wfi();
     }
 }
 
 #[entry]
 fn main() -> ! {
-    // TODO: reviewer false positive — .expect() in main() is the standard test harness
-    // pattern used in buf_deadline_test.rs and all other QEMU test examples.
     let mut p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("buf_error_test: start");
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();

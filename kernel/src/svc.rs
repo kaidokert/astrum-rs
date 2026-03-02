@@ -5792,14 +5792,10 @@ mod tests {
         assert!(validate_user_ptr(&t, 0, 0x2000_1000, 16)); // data
     }
 
-    // ---- Dedicated pointer validation unit tests (subtask 273) ----
+    // ---- Dedicated pointer validation unit tests ----
     //
-    // TODO: subtask 273 requests tests for `validate_buffer_range` and other
-    // pointer validation helpers. `validate_buffer_range` does not exist in
-    // the codebase; alignment rejection is covered by `validate_mpu_region`
-    // (mpu.rs) and `PartitionConfig::validate` (partition.rs), which already
-    // have dedicated tests. If a `validate_buffer_range` helper is added in
-    // the future, corresponding tests should be added here.
+    // Pointer validation is covered by the tests below (null, boundary,
+    // misalignment) and by `validate_mpu_region` tests in mpu.rs.
 
     #[test]
     fn validate_ptr_null_pointer_rejected() {
@@ -5838,7 +5834,7 @@ mod tests {
 
     /// Misaligned pointer rejection: `validate_mpu_region` rejects bases
     /// that are not aligned to their size, which is the kernel's mechanism
-    /// for preventing misaligned memory regions (subtask 273 requirement).
+    /// for preventing misaligned memory regions.
     #[test]
     fn validate_mpu_region_rejects_misaligned_base_subtask273() {
         use crate::mpu::{validate_mpu_region, MpuError};
