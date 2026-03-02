@@ -23,6 +23,8 @@ EXAMPLES=(
 CUSTOM_IVT_EXAMPLES=(
     qemu_custom_ivt
     irq_dispatch_test
+    irq_multi_test
+    irq_ack_test
 )
 
 # Dynamic-MPU examples require MPU region configuration that works with
