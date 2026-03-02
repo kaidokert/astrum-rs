@@ -4578,6 +4578,133 @@ mod tests {
         assert_eq!(ef.r0, eptr, "BufRead should reject out-of-bounds pointer");
     }
 
+    /// Lend with r2=1 (no WRITABLE flag) must produce an AP_RO_RO window.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lend_readonly_dispatch() {
+        use crate::mpu::{decode_rasr_ap, AP_RO_RO};
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
+        let mut k = kernel(0, 0, 0);
+        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
+        // consolidate into a shared test helper.
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr) => {{
+                let mut ef = frame($r0, $r1, $r2);
+                // SAFETY: See module-level SAFETY docs for test dispatch.
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+        }
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        // Lend read-only: r2 = 1 (target=1, no WRITABLE flag)
+        let region_id = svc!(SYS_BUF_LEND, slot, 1);
+        assert!(
+            region_id < 0x8000_0000,
+            "lend should return valid region_id"
+        );
+        let desc = k
+            .dynamic_strategy
+            .slot(region_id as u8)
+            .expect("window descriptor must exist after lend");
+        assert_eq!(
+            decode_rasr_ap(desc.permissions),
+            AP_RO_RO,
+            "read-only lend must set AP_RO_RO"
+        );
+        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0, "revoke must succeed");
+    }
+
+    /// Owner can still read a buffer via SYS_BUF_READ while it is lent.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_read_while_lent_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_WRITE};
+        let mut k = kernel(0, 0, 0);
+        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
+        // consolidate into a shared test helper.
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr) => {{
+                let mut ef = frame($r0, $r1, $r2);
+                // SAFETY: See module-level SAFETY docs for test dispatch.
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+            ($r0:expr, $r1:expr, $r2:expr, $r3:expr) => {{
+                let mut ef = frame4($r0, $r1, $r2, $r3);
+                // SAFETY: See module-level SAFETY docs for test dispatch.
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+        }
+        // Allocate writable buffer
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        // Write a magic pattern via SYS_BUF_WRITE
+        let pat: [u8; 32] = core::array::from_fn(|i| (i as u8) ^ 0x5A);
+        let ptr = low32_buf(0);
+        // SAFETY: ptr valid for 4096 bytes (mmap via low32_buf), writing 32.
+        unsafe { core::ptr::copy_nonoverlapping(pat.as_ptr(), ptr, 32) };
+        assert_eq!(
+            svc!(SYS_BUF_WRITE, slot, 32, ptr as u32),
+            32,
+            "write should return 32 bytes"
+        );
+        // Lend to partition 1
+        assert!(
+            svc!(SYS_BUF_LEND, slot, 1) < 0x8000_0000,
+            "lend should succeed"
+        );
+        // Clear the user buffer, then read back as owner while lent
+        // SAFETY: ptr valid for 4096 bytes (mmap via low32_buf), zeroing 32.
+        unsafe { core::ptr::write_bytes(ptr, 0, 32) };
+        assert_eq!(
+            svc!(SYS_BUF_READ, slot, 32, ptr as u32),
+            32,
+            "owner must read while buffer is lent"
+        );
+        // SAFETY: ptr valid for 4096 bytes (mmap via low32_buf), dispatch wrote 32 bytes.
+        let out = unsafe { core::slice::from_raw_parts(ptr, 32) };
+        assert_eq!(out, &pat, "read data must match written pattern");
+    }
+
+    /// SYS_BUF_RELEASE must fail while the buffer is lent, succeed after revoke.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_release_while_lent_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_RELEASE, SYS_BUF_REVOKE};
+        let eop = SvcError::OperationFailed.to_u32();
+        let mut k = kernel(0, 0, 0);
+        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
+        // consolidate into a shared test helper.
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr) => {{
+                let mut ef = frame($r0, $r1, $r2);
+                // SAFETY: See module-level SAFETY docs for test dispatch.
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+        }
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        let region_id = svc!(SYS_BUF_LEND, slot, 1);
+        assert!(region_id < 0x8000_0000, "lend should succeed");
+        // Release while lent must fail
+        assert_eq!(
+            svc!(SYS_BUF_RELEASE, slot, 0),
+            eop,
+            "release while lent must return OperationFailed"
+        );
+        // Revoke the lend
+        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0, "revoke must succeed");
+        // Release after revoke must succeed
+        assert_eq!(
+            svc!(SYS_BUF_RELEASE, slot, 0),
+            0,
+            "release after revoke must succeed"
+        );
+    }
+
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_open_dispatch_valid_and_invalid() {
