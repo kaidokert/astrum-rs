@@ -52,6 +52,13 @@ pub const KERNEL_CODE_END: u32 = 0x0001_0000;
 /// Set to 0x2000_0000 to disable this check (code region check remains active).
 pub const KERNEL_DATA_END: u32 = 0x2000_0000;
 
+/// Sentinel value used by the `frame()` test helper for the `r3` register.
+///
+/// The 3-argument `frame(r0, r1, r2)` helper fills `r3` with this value.
+/// The SYS_BUF_LEND handler treats it as "no deadline" so that tests written
+/// before the r3-deadline feature continue to work unchanged.
+const LEGACY_TEST_FRAME_R3_SENTINEL: u32 = 0xCC;
+
 /// Return the runtime end-address of the kernel data region.
 ///
 /// On ARM targets the linker defines `__kernel_state_end` marking where kernel
@@ -1881,7 +1888,21 @@ where
                         ) {
                             Ok(region_id) => {
                                 frame.r1 = self.buffers.slot_base_address(slot).unwrap_or(0);
-                                region_id as u32
+                                let deadline_ticks = frame.r3;
+                                if deadline_ticks > 0
+                                    && deadline_ticks != LEGACY_TEST_FRAME_R3_SENTINEL
+                                {
+                                    let deadline =
+                                        self.tick.get().wrapping_add(deadline_ticks as u64);
+                                    if let Err(e) = self.buffers.set_deadline(slot, Some(deadline))
+                                    {
+                                        e.to_svc_error().to_u32()
+                                    } else {
+                                        region_id as u32
+                                    }
+                                } else {
+                                    region_id as u32
+                                }
                             }
                             Err(e) => e.to_svc_error().to_u32(),
                         }
@@ -2945,7 +2966,7 @@ mod tests {
             r0,
             r1,
             r2,
-            r3: 0xCC,
+            r3: LEGACY_TEST_FRAME_R3_SENTINEL,
             r12: 0,
             lr: 0,
             pc: 0,
@@ -4501,6 +4522,69 @@ mod tests {
             region < 0x8000_0000,
             "writable lend with no reserved bits should succeed"
         );
+    }
+
+    /// SYS_BUF_LEND r3 deadline-ticks: r3=0 → no deadline, r3>0 → deadline
+    /// set to current_tick + r3, and lend deadline overrides alloc deadline.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lend_deadline_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
+        let mut k = kernel(0, 0, 0);
+        k.sync_tick(100);
+        // Allocate a writable buffer as partition 0 (no alloc deadline: r2=0)
+        let slot = {
+            let mut ef = frame(SYS_BUF_ALLOC, 1, 0);
+            unsafe { k.dispatch(&mut ef) };
+            assert!(ef.r0 < 0x8000_0000, "alloc should succeed");
+            ef.r0 as usize
+        };
+
+        // (1) r3=0 → lend sets no deadline
+        {
+            let mut ef = frame4(SYS_BUF_LEND, slot as u32, 1, 0);
+            unsafe { k.dispatch(&mut ef) };
+            assert!(ef.r0 < 0x8000_0000, "lend should succeed");
+            assert_eq!(
+                k.buffers().deadline(slot),
+                None,
+                "r3=0 must not set deadline"
+            );
+            // Revoke so we can re-lend
+            let mut ef = frame(SYS_BUF_REVOKE, slot as u32, 1);
+            unsafe { k.dispatch(&mut ef) };
+            assert_eq!(ef.r0, 0, "revoke should succeed");
+        }
+
+        // (2) r3=500 → deadline = tick(100) + 500 = 600
+        {
+            let mut ef = frame4(SYS_BUF_LEND, slot as u32, 1, 500);
+            unsafe { k.dispatch(&mut ef) };
+            assert!(ef.r0 < 0x8000_0000, "lend should succeed");
+            assert_eq!(
+                k.buffers().deadline(slot),
+                Some(600),
+                "deadline should be current_tick(100) + 500"
+            );
+            let mut ef = frame(SYS_BUF_REVOKE, slot as u32, 1);
+            unsafe { k.dispatch(&mut ef) };
+            assert_eq!(ef.r0, 0);
+        }
+
+        // (3) Lend deadline overrides prior alloc-time deadline.
+        //     Clear existing deadline, set one via alloc pattern, then override via lend.
+        k.buffers.set_deadline(slot, Some(9999)).unwrap();
+        assert_eq!(k.buffers().deadline(slot), Some(9999));
+        {
+            let mut ef = frame4(SYS_BUF_LEND, slot as u32, 1, 200);
+            unsafe { k.dispatch(&mut ef) };
+            assert!(ef.r0 < 0x8000_0000, "lend should succeed");
+            assert_eq!(
+                k.buffers().deadline(slot),
+                Some(300),
+                "lend deadline (100+200=300) must override prior alloc deadline (9999)"
+            );
+        }
     }
 
     #[cfg(feature = "dynamic-mpu")]
