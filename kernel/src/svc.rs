@@ -818,10 +818,17 @@ macro_rules! define_unified_kernel {
 
 /// Dispatch an SVC call based on the syscall number in `frame.r0`.
 ///
-/// If a dispatch hook has been installed via [`set_dispatch_hook`], the
-/// call is forwarded to the application-provided handler. Otherwise a
-/// minimal built-in handler processes `Yield` and returns error codes
-/// for all other syscalls.
+/// Production systems install a dispatch hook via [`set_dispatch_hook`]
+/// that forwards syscalls to [`Kernel::dispatch`], which has access to
+/// the partition table and can route event, IPC, and IRQ syscalls to
+/// their real implementations. When a hook is installed, `dispatch_svc`
+/// simply delegates to it and returns.
+///
+/// The built-in fallback (no hook installed) only handles `Yield`;
+/// all other recognised syscall IDs return
+/// [`SvcError::InvalidSyscall`]. This fallback exists so that unit
+/// tests and early boot can exercise the SVC entry path without
+/// a fully configured kernel.
 ///
 /// # Safety
 ///
@@ -837,17 +844,13 @@ pub unsafe extern "C" fn dispatch_svc(frame: &mut ExceptionFrame) {
     }
     frame.r0 = match SyscallId::from_u32(frame.r0) {
         Some(SyscallId::Yield) => handle_yield(),
-        Some(SyscallId::EventWait | SyscallId::EventSet | SyscallId::EventClear) => {
-            // TODO: wire dispatch_svc to call dispatch_syscall with the global
-            // partition table and a kernel-trusted caller index.
-            1
-        }
-        Some(_) => 1,
+        Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
     };
 }
 
-/// Core syscall dispatch that routes event syscalls to the events module.
+/// Core syscall dispatch that routes event and IRQ syscalls to their
+/// respective modules.
 ///
 /// `caller` is the kernel-trusted partition index of the calling partition,
 /// used by syscalls that operate on the caller's own partition (e.g.
@@ -857,6 +860,14 @@ pub unsafe extern "C" fn dispatch_svc(frame: &mut ExceptionFrame) {
 /// - `r0`: syscall ID (overwritten with return value)
 /// - `r1`: first argument (interpretation varies per syscall)
 /// - `r2`: second argument (event mask)
+///
+/// # ARM target note
+///
+/// On success (`r0 == 0`), `IrqAck` callers must additionally call
+/// `NVIC::unmask` on the acknowledged IRQ number to re-enable it in
+/// hardware. [`Kernel::dispatch`] handles this automatically; direct
+/// callers of `dispatch_syscall` are responsible for doing so
+/// themselves.
 pub fn dispatch_syscall<const N: usize>(
     frame: &mut ExceptionFrame,
     partitions: &mut PartitionTable<N>,
@@ -875,7 +886,7 @@ pub fn dispatch_syscall<const N: usize>(
                 None => SvcError::InvalidResource.to_u32(),
             }
         }
-        Some(_) => 1,
+        Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
     };
 }
@@ -2972,7 +2983,7 @@ mod tests {
     use crate::scheduler::ScheduleEntry;
     use crate::scheduler::ScheduleEvent;
     use crate::semaphore::Semaphore;
-    use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_YIELD};
+    use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_IRQ_ACK, SYS_YIELD};
 
     /// Test kernel configuration with small, fixed pool sizes.
     struct TestConfig;
@@ -4460,6 +4471,19 @@ mod tests {
         unsafe { dispatch_svc(&mut ef) };
         // Without a hook, Yield returns 0.
         assert_eq!(ef.r0, 0);
+
+        // Event and IRQ syscalls must return InvalidSyscall in the fallback path.
+        let expected = SvcError::InvalidSyscall.to_u32();
+        for &sys_id in &[SYS_EVT_WAIT, SYS_EVT_SET, SYS_EVT_CLEAR, SYS_IRQ_ACK] {
+            let mut ef = frame(sys_id, 0, 0);
+            // SAFETY: same as above — valid stack-allocated ExceptionFrame,
+            // no hook installed.
+            unsafe { dispatch_svc(&mut ef) };
+            assert_eq!(
+                ef.r0, expected,
+                "syscall {sys_id} should return InvalidSyscall without hook"
+            );
+        }
     }
 
     // ---- SvcError tests ----
