@@ -317,4 +317,99 @@ mod tests {
         assert_eq!(rb.push_from_isr(4, &[4]), Err(RingBufferFull));
         assert_eq!(rb.overflow_count(), 1);
     }
+
+    // ===== Zero-depth (D=0) edge case =====
+
+    #[test]
+    fn zero_depth_buffer_is_simultaneously_empty_and_full() {
+        let rb = IsrRingBuffer::<0, 8>::new();
+        assert!(rb.is_empty());
+        assert!(rb.is_full());
+        assert_eq!(rb.len(), 0);
+    }
+
+    #[test]
+    fn zero_depth_buffer_push_always_fails() {
+        let mut rb = IsrRingBuffer::<0, 8>::new();
+        assert_eq!(rb.push_from_isr(1, &[0xAA]), Err(RingBufferFull));
+        assert_eq!(rb.push_from_isr(2, &[]), Err(RingBufferFull));
+        assert_eq!(rb.overflow_count(), 2);
+    }
+
+    #[test]
+    fn zero_depth_buffer_pop_returns_false() {
+        let mut rb = IsrRingBuffer::<0, 8>::new();
+        assert!(!rb.pop_with(|_, _| panic!("should not be called")));
+    }
+
+    // ===== Default trait =====
+
+    #[test]
+    fn default_matches_new() {
+        let from_new = IsrRingBuffer::<4, 8>::new();
+        let from_default = IsrRingBuffer::<4, 8>::default();
+        assert_eq!(from_new.len(), from_default.len());
+        assert_eq!(from_new.is_empty(), from_default.is_empty());
+        assert_eq!(from_new.is_full(), from_default.is_full());
+        assert_eq!(from_new.overflow_count(), from_default.overflow_count());
+    }
+
+    // ===== Zero-payload (M=0) edge case =====
+
+    #[test]
+    fn zero_payload_push_truncates_data_to_empty() {
+        let mut rb = IsrRingBuffer::<4, 0>::new();
+        rb.push_from_isr(42, &[1, 2, 3]).unwrap();
+        assert_eq!(rb.len(), 1);
+
+        let mut called = false;
+        rb.pop_with(|tag, data| {
+            assert_eq!(tag, 42);
+            assert!(data.is_empty());
+            called = true;
+        });
+        assert!(called);
+    }
+
+    #[test]
+    fn zero_payload_empty_push_succeeds() {
+        let mut rb = IsrRingBuffer::<4, 0>::new();
+        rb.push_from_isr(7, &[]).unwrap();
+        let mut called = false;
+        rb.pop_with(|tag, data| {
+            assert_eq!(tag, 7);
+            assert!(data.is_empty());
+            called = true;
+        });
+        assert!(called);
+    }
+
+    // ===== Single-byte payload (M=1) edge case =====
+
+    #[test]
+    fn single_byte_payload_truncates_oversized_data() {
+        let mut rb = IsrRingBuffer::<4, 1>::new();
+        rb.push_from_isr(99, &[0xAA, 0xBB, 0xCC]).unwrap();
+
+        let mut called = false;
+        rb.pop_with(|tag, data| {
+            assert_eq!(tag, 99);
+            assert_eq!(data, &[0xAA]);
+            called = true;
+        });
+        assert!(called);
+    }
+
+    #[test]
+    fn single_byte_payload_exact_fit() {
+        let mut rb = IsrRingBuffer::<4, 1>::new();
+        rb.push_from_isr(1, &[0xFF]).unwrap();
+        let mut called = false;
+        rb.pop_with(|tag, data| {
+            assert_eq!(tag, 1);
+            assert_eq!(data, &[0xFF]);
+            called = true;
+        });
+        assert!(called);
+    }
 }
