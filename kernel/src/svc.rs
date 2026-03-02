@@ -878,14 +878,7 @@ pub fn dispatch_syscall<const N: usize>(
         Some(SyscallId::EventWait) => events::event_wait(partitions, caller, frame.r2),
         Some(SyscallId::EventSet) => events::event_set(partitions, frame.r1 as usize, frame.r2),
         Some(SyscallId::EventClear) => events::event_clear(partitions, caller, frame.r2),
-        Some(SyscallId::IrqAck) => {
-            match crate::irq_ack::with_bindings(|b| {
-                crate::irq_ack::irq_ack_inner(b, caller as u8, frame.r1 as u8)
-            }) {
-                Some(result) => result,
-                None => SvcError::InvalidResource.to_u32(),
-            }
-        }
+        Some(SyscallId::IrqAck) => SvcError::InvalidResource.to_u32(),
         Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
     };
@@ -2264,32 +2257,15 @@ where
             Some(SyscallId::IrqAck) => {
                 let irq_num = arg1 as u8;
                 let caller_id = self.current_partition;
-                let bindings_result = if !self.irq_bindings.is_empty() {
-                    Some(crate::irq_ack::irq_ack_inner(
-                        self.irq_bindings,
-                        caller_id,
-                        irq_num,
-                    ))
-                } else {
-                    crate::irq_ack::with_bindings(|b| {
-                        crate::irq_ack::irq_ack_inner(b, caller_id, irq_num)
-                    })
-                };
-                match bindings_result {
-                    None => SvcError::InvalidResource.to_u32(),
-                    Some(result) => {
-                        #[cfg(target_arch = "arm")]
-                        if result == 0 {
-                            // SAFETY: irq_num was validated by irq_ack_inner (binding found).
-                            unsafe {
-                                cortex_m::peripheral::NVIC::unmask(crate::irq_dispatch::IrqNr(
-                                    irq_num,
-                                ));
-                            }
-                        }
-                        result
+                let result = crate::irq_ack::irq_ack_inner(self.irq_bindings, caller_id, irq_num);
+                #[cfg(target_arch = "arm")]
+                if result == 0 {
+                    // SAFETY: irq_num was validated by irq_ack_inner (binding found).
+                    unsafe {
+                        cortex_m::peripheral::NVIC::unmask(crate::irq_dispatch::IrqNr(irq_num));
                     }
                 }
+                result
             }
             #[allow(unreachable_patterns)]
             Some(_) => SvcError::InvalidSyscall.to_u32(),
@@ -3668,8 +3644,8 @@ mod tests {
     }
 
     // ---- dispatch_syscall IrqAck tests ----
-    // Global binding table is never populated; dispatch_syscall always
-    // returns InvalidResource via the None branch.
+    // dispatch_syscall has no binding table; IrqAck always returns
+    // InvalidResource directly.
 
     #[test]
     fn dispatch_syscall_irq_ack_success() {
@@ -11649,7 +11625,6 @@ mod tests {
     // -------------------------------------------------------------------------
 
     /// Static binding table shared by IrqAck dispatch tests.
-    /// `register_bindings` is idempotent — first call wins.
     static IRQ_ACK_TEST_BINDINGS: [crate::irq_dispatch::IrqBinding; 3] = [
         crate::irq_dispatch::IrqBinding::new(5, 0, 0x01), // IRQ 5 → partition 0
         crate::irq_dispatch::IrqBinding::new(10, 1, 0x02), // IRQ 10 → partition 1
@@ -11711,31 +11686,20 @@ mod tests {
     }
 
     #[test]
-    fn irq_ack_no_table_returns_invalid_resource() {
-        // When no binding table is registered, with_bindings returns None,
-        // which the dispatch arm maps to InvalidResource.
-        // We verify this branch via the irq_ack module directly since the
-        // global table is process-wide and may already be registered.
-        let table = crate::irq_ack::BindingTableRef::new();
-        assert!(table.with(|_| ()).is_none());
-        // Confirm the dispatch arm logic: None → InvalidResource.
-        let result: u32 = match table.with(|b| crate::irq_ack::irq_ack_inner(b, 0, 5)) {
-            None => SvcError::InvalidResource.to_u32(),
-            Some(r) => r,
-        };
+    fn irq_ack_empty_bindings_returns_invalid_resource() {
+        use crate::syscall::SYS_IRQ_ACK;
+        // Empty irq_bindings → irq_ack_inner finds no binding → InvalidResource.
+        let mut k = kernel(0, 0, 0);
+        assert!(k.irq_bindings.is_empty());
+        k.current_partition = 0;
+        let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0);
         assert_eq!(result, SvcError::InvalidResource.to_u32());
     }
 
     #[test]
-    fn store_irq_bindings_and_global_fallback() {
-        use crate::syscall::SYS_IRQ_ACK;
-        // Empty irq_bindings falls back to global table.
-        crate::irq_ack::register_bindings(&IRQ_ACK_TEST_BINDINGS);
+    fn store_irq_bindings_sets_field() {
         let mut k = kernel(0, 0, 0);
         assert!(k.irq_bindings.is_empty());
-        k.current_partition = 0;
-        assert_eq!(dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0), 0);
-        // store_irq_bindings sets the field.
         k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
         assert_eq!(k.irq_bindings.len(), 3);
     }
