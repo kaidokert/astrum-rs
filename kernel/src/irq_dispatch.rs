@@ -104,15 +104,32 @@ pub struct IrqBinding {
     pub irq_num: u8,
     pub partition_id: u8,
     pub event_bits: u32,
+    pub clear_model: IrqClearModel,
 }
 
 impl IrqBinding {
-    /// Create a new IRQ binding.
+    /// Create a new IRQ binding (defaults to `IrqClearModel::PartitionAcks`).
     pub const fn new(irq_num: u8, partition_id: u8, event_bits: u32) -> Self {
         Self {
             irq_num,
             partition_id,
             event_bits,
+            clear_model: IrqClearModel::PartitionAcks,
+        }
+    }
+
+    /// Create a new IRQ binding with an explicit clear model.
+    pub const fn with_clear_model(
+        irq_num: u8,
+        partition_id: u8,
+        event_bits: u32,
+        clear_model: IrqClearModel,
+    ) -> Self {
+        Self {
+            irq_num,
+            partition_id,
+            event_bits,
+            clear_model,
         }
     }
 }
@@ -292,6 +309,7 @@ mod tests {
         assert_eq!(b.irq_num, 7);
         assert_eq!(b.partition_id, 2);
         assert_eq!(b.event_bits, 0x0000_0010);
+        assert_eq!(b.clear_model, IrqClearModel::PartitionAcks);
     }
 
     #[test]
@@ -300,10 +318,21 @@ mod tests {
             irq_num: 15,
             partition_id: 0,
             event_bits: 0xDEAD_BEEF,
+            clear_model: IrqClearModel::KernelClears(ClearStrategy::ClearBit {
+                addr: 0x400,
+                bit: 5,
+            }),
         };
         assert_eq!(b.irq_num, 15);
         assert_eq!(b.partition_id, 0);
         assert_eq!(b.event_bits, 0xDEAD_BEEF);
+        assert_eq!(
+            b.clear_model,
+            IrqClearModel::KernelClears(ClearStrategy::ClearBit {
+                addr: 0x400,
+                bit: 5
+            })
+        );
     }
 
     #[test]
@@ -312,6 +341,55 @@ mod tests {
         assert_eq!(BINDING.irq_num, 3);
         assert_eq!(BINDING.partition_id, 1);
         assert_eq!(BINDING.event_bits, 0x01);
+        assert_eq!(BINDING.clear_model, IrqClearModel::PartitionAcks);
+    }
+
+    #[test]
+    fn new_defaults_to_partition_acks() {
+        let b = IrqBinding::new(1, 0, 0x10);
+        assert_eq!(b.clear_model, IrqClearModel::PartitionAcks);
+    }
+
+    #[test]
+    fn with_clear_model_stores_kernel_clears() {
+        let strategy = ClearStrategy::WriteRegister {
+            addr: 0xE000_E280,
+            value: 1 << 7,
+        };
+        let b = IrqBinding::with_clear_model(7, 0, 0x01, IrqClearModel::KernelClears(strategy));
+        assert_eq!(b.irq_num, 7);
+        assert_eq!(b.partition_id, 0);
+        assert_eq!(b.event_bits, 0x01);
+        assert_eq!(b.clear_model, IrqClearModel::KernelClears(strategy));
+    }
+
+    #[test]
+    fn with_clear_model_stores_partition_acks() {
+        let b = IrqBinding::with_clear_model(3, 1, 0x04, IrqClearModel::PartitionAcks);
+        assert_eq!(b.clear_model, IrqClearModel::PartitionAcks);
+    }
+
+    #[test]
+    fn with_clear_model_const_evaluation() {
+        const B: IrqBinding = IrqBinding::with_clear_model(
+            9,
+            2,
+            0x08,
+            IrqClearModel::KernelClears(ClearStrategy::ClearBit {
+                addr: 0x300,
+                bit: 4,
+            }),
+        );
+        assert_eq!(B.irq_num, 9);
+        assert_eq!(B.partition_id, 2);
+        assert_eq!(B.event_bits, 0x08);
+        assert_eq!(
+            B.clear_model,
+            IrqClearModel::KernelClears(ClearStrategy::ClearBit {
+                addr: 0x300,
+                bit: 4,
+            })
+        );
     }
 
     #[test]
