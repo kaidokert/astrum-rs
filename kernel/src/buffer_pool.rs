@@ -475,6 +475,59 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         self.slots.get(slot).map(|s| s.data.as_ptr() as u32)
     }
 
+    /// Revoke all active `lent_to` records for slots owned by `owner`,
+    /// removing each MPU window via `strategy.remove_window`.
+    pub fn revoke_all_shared(&mut self, owner: u8, strategy: &dyn MpuStrategy) {
+        for i in 0..SLOTS {
+            let target = self.slots.get(i).and_then(|s| {
+                let is_owner = matches!(
+                    s.state,
+                    BorrowState::BorrowedRead { owner: o }
+                    | BorrowState::BorrowedWrite { owner: o }
+                    if o == owner
+                );
+                if is_owner {
+                    s.lent_to.map(|lr| lr.target)
+                } else {
+                    None
+                }
+            });
+            if let Some(target) = target {
+                let _ = self.unshare_from_partition(i, owner, target, strategy);
+            }
+        }
+    }
+
+    /// Release all slots owned by `pid`: first revoke all shared (`lent_to`)
+    /// records via [`revoke_all_shared`](Self::revoke_all_shared), then free
+    /// each owned slot, removing its MPU region if present.
+    /// For partition teardown.
+    pub fn release_all_for_partition(&mut self, pid: u8, strategy: &dyn MpuStrategy) {
+        // Revoke all shared records through the verified unshare API.
+        self.revoke_all_shared(pid, strategy);
+        // Free each owned slot.
+        for i in 0..SLOTS {
+            let Some(s) = self.slots.get_mut(i) else {
+                continue;
+            };
+            let is_owner = matches!(
+                s.state,
+                BorrowState::BorrowedRead { owner } | BorrowState::BorrowedWrite { owner }
+                if owner == pid
+            );
+            if !is_owner {
+                continue;
+            }
+            if let Some(region_id) = s.mpu_region {
+                strategy.remove_window(region_id);
+            }
+            s.state = BorrowState::Free;
+            s.mpu_region = None;
+            s.lent_to = None;
+            self.deadlines[i] = None;
+        }
+    }
+
     /// Iterate all slots, revoking any whose deadline has passed
     /// (`deadline <= current_tick`). Each revoked slot has its MPU window
     /// removed via `strategy.remove_window`. Slots without a deadline
@@ -1278,5 +1331,124 @@ mod tests {
         assert_eq!(BufferPoolError::InvalidSlot.to_svc_error(), SvcError::InvalidResource);
         assert_eq!(BufferPoolError::NotBorrowed.to_svc_error(), SvcError::InvalidResource);
         assert_eq!(BufferPoolError::AlreadyBorrowed.to_svc_error(), SvcError::OperationFailed);
+    }
+
+    // ------------------------------------------------------------------
+    // revoke_all_shared / release_all_for_partition tests
+    // ------------------------------------------------------------------
+
+    #[test] fn revoke_all_shared_one_active_share() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let rid = pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        pool.revoke_all_shared(1, &ds);
+        assert_eq!(pool.get(0).unwrap().lent_to(), None);
+        assert!(ds.slot(rid).is_none());
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedWrite { owner: 1 });
+    }
+
+    #[test] fn revoke_all_shared_no_shares_is_noop() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.revoke_all_shared(1, &ds);
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedWrite { owner: 1 });
+        assert_eq!(pool.get(0).unwrap().lent_to(), None);
+        assert_eq!(pool.get(1).unwrap().state(), BorrowState::Free);
+    }
+
+    #[test] fn revoke_all_shared_mixed_ownership() {
+        let mut pool = BufferPool::<3, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.alloc(2, BorrowMode::Write).unwrap();
+        pool.alloc(1, BorrowMode::Read).unwrap();
+        let rid0 = pool.share_with_partition(0, 1, 3, false, &ds).unwrap();
+        let rid1 = pool.share_with_partition(1, 2, 3, true, &ds).unwrap();
+        let rid2 = pool.share_with_partition(2, 1, 3, false, &ds).unwrap();
+        pool.revoke_all_shared(1, &ds);
+        assert_eq!(pool.get(0).unwrap().lent_to(), None);
+        assert!(ds.slot(rid0).is_none());
+        assert_eq!(pool.get(2).unwrap().lent_to(), None);
+        assert!(ds.slot(rid2).is_none());
+        assert!(pool.get(1).unwrap().lent_to().is_some());
+        assert!(ds.slot(rid1).is_some());
+    }
+
+    #[test] fn revoke_all_shared_idempotent() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        pool.revoke_all_shared(1, &ds);
+        pool.revoke_all_shared(1, &ds); // second call is a no-op
+        assert_eq!(pool.get(0).unwrap().lent_to(), None);
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::BorrowedWrite { owner: 1 });
+    }
+
+    #[test] fn release_all_for_partition_with_active_share() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let rid = pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        pool.release_all_for_partition(1, &ds);
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
+        assert_eq!(pool.get(0).unwrap().lent_to(), None);
+        assert_eq!(pool.get(0).unwrap().mpu_region(), None);
+        assert!(ds.slot(rid).is_none());
+    }
+
+    #[test] fn release_all_for_partition_mixed_ownership() {
+        let mut pool = BufferPool::<3, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.alloc(2, BorrowMode::Read).unwrap();
+        pool.alloc(1, BorrowMode::Read).unwrap();
+        pool.release_all_for_partition(1, &ds);
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
+        assert_eq!(pool.get(2).unwrap().state(), BorrowState::Free);
+        assert_eq!(pool.get(1).unwrap().state(), BorrowState::BorrowedRead { owner: 2 });
+    }
+
+    #[test] fn release_all_for_partition_idempotent() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        pool.release_all_for_partition(1, &ds);
+        pool.release_all_for_partition(1, &ds); // second call is a no-op
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
+    }
+
+    #[test] fn release_all_removes_owned_mpu_windows() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+        // lend_to_partition creates BorrowedRead + mpu_region
+        let rid = pool.lend_to_partition(0, 1, false, &ds).unwrap();
+        assert!(ds.slot(rid).is_some());
+        pool.release_all_for_partition(1, &ds);
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
+        assert_eq!(pool.get(0).unwrap().mpu_region(), None);
+        // MPU window must actually be removed from the strategy
+        assert!(ds.slot(rid).is_none());
+    }
+
+    #[test] fn release_all_removes_both_shared_and_owned_mpu_windows() {
+        let mut pool = BufferPool::<2, 32>::new();
+        let ds = DynamicStrategy::new();
+        // Slot 0: alloc'd by pid 1, shared to pid 2
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let share_rid = pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        // Slot 1: lent to pid 1 via lend_to_partition (creates mpu_region)
+        let lend_rid = pool.lend_to_partition(1, 1, true, &ds).unwrap();
+        assert!(ds.slot(share_rid).is_some());
+        assert!(ds.slot(lend_rid).is_some());
+        pool.release_all_for_partition(1, &ds);
+        // Both MPU windows must be removed
+        assert!(ds.slot(share_rid).is_none());
+        assert!(ds.slot(lend_rid).is_none());
+        assert_eq!(pool.get(0).unwrap().state(), BorrowState::Free);
+        assert_eq!(pool.get(1).unwrap().state(), BorrowState::Free);
     }
 }

@@ -3093,6 +3093,29 @@ mod tests {
         unsafe { k.dispatch(ef) }
     }
 
+    /// Dispatch a 3-register SVC and return `r0`.
+    ///
+    /// Builds an [`ExceptionFrame`] from the given register values, dispatches
+    /// it through `dispatch_checked`, and returns the resulting `r0`.
+    fn dispatch_r0(k: &mut Kernel<TestConfig>, r0: u32, r1: u32, r2: u32) -> u32 {
+        let mut ef = frame(r0, r1, r2);
+        dispatch_checked(k, &mut ef);
+        ef.r0
+    }
+
+    /// Register a new partition and transition it to `Running`.
+    ///
+    /// Useful for tests that need additional partitions beyond the default P0/P1
+    /// created by [`kernel()`].
+    fn add_running_partition(k: &mut Kernel<TestConfig>, id: u8) {
+        k.partitions_mut().add(pcb(id)).unwrap();
+        k.partitions_mut()
+            .get_mut(id as usize)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+    }
+
     // -------------------------------------------------------------------------
     // EXC_RETURN guard constant tests
     // -------------------------------------------------------------------------
@@ -4451,34 +4474,101 @@ mod tests {
         let epart = SvcError::InvalidPartition.to_u32();
         let eop = SvcError::OperationFailed.to_u32();
         let mut k = kernel(0, 0, 0);
-        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
-        // consolidate into a shared test helper.
-        macro_rules! svc {
-            ($r0:expr, $r1:expr, $r2:expr) => {{
-                let mut ef = frame($r0, $r1, $r2);
-                // SAFETY: See module-level SAFETY docs for test dispatch.
-                unsafe { k.dispatch(&mut ef) };
-                ef.r0
-            }};
-        }
-        let slot = svc!(SYS_BUF_ALLOC, 1, 0); // writable buffer, partition 0
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0); // writable buffer, partition 0
         assert!(slot < 0x8000_0000, "alloc should succeed");
         // Successful transfer: partition 0 → partition 1
-        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), 0);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 1), 0);
         // Wrong owner: partition 0 no longer owns it → PermissionDenied
-        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), eperm);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 1), eperm);
         // Transfer back via partition 1
         k.current_partition = 1;
-        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 0), 0);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 0), 0);
         k.current_partition = 0;
         // Self-transfer → OperationFailed
-        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 0), eop);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 0), eop);
         // Transfer while lent → OperationFailed (AlreadyLent)
-        let region = svc!(SYS_BUF_LEND, slot, 1);
+        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
         assert!(region < 0x8000_0000, "lend should succeed");
-        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 1), eop);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 1), eop);
         // Invalid partition ID → InvalidPartition
-        assert_eq!(svc!(SYS_BUF_TRANSFER, slot, 99), epart);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 99), epart);
+    }
+
+    /// Verify that an unauthorized third partition (P2) cannot revoke a lend
+    /// it does not own, nor transfer a buffer it does not own.  Also checks
+    /// that the authorized owner (P0) can still revoke after the failed attempt,
+    /// ensuring no state corruption occurred.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_unauthorized_revoke_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE, SYS_BUF_TRANSFER};
+        let eperm = SvcError::PermissionDenied.to_u32();
+        let mut k = kernel(0, 0, 0);
+        add_running_partition(&mut k, 2);
+
+        // P0 allocates a writable buffer
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
+        assert!(!SvcError::is_error(slot), "alloc should succeed");
+        // P0 lends to P1
+        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!(!SvcError::is_error(region), "lend should succeed");
+
+        // P2 tries to revoke P0→P1 lend — must get PermissionDenied
+        k.current_partition = 2;
+        assert_eq!(
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
+            eperm,
+            "P2 revoking P0's lend must fail with PermissionDenied"
+        );
+        // P2 tries to transfer P0's buffer — must get PermissionDenied
+        assert_eq!(
+            dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 1),
+            eperm,
+            "P2 transferring P0's buffer must fail with PermissionDenied"
+        );
+
+        // Authorized owner (P0) can still revoke — no state corruption
+        k.current_partition = 0;
+        assert_eq!(
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
+            0,
+            "P0 should still be able to revoke its own lend"
+        );
+    }
+
+    /// Verify that the lendee (P1) cannot re-lend a buffer it was lent by P0.
+    /// Also checks that the owner (P0) can still revoke after the failed
+    /// re-lend attempt.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lendee_cannot_relend_dispatch() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
+        let eperm = SvcError::PermissionDenied.to_u32();
+        let mut k = kernel(0, 0, 0);
+        add_running_partition(&mut k, 2);
+
+        // P0 allocates a writable buffer
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
+        assert!(!SvcError::is_error(slot), "alloc should succeed");
+        // P0 lends to P1
+        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!(!SvcError::is_error(region), "lend should succeed");
+
+        // P1 tries to re-lend the same slot to P2 — must get PermissionDenied
+        k.current_partition = 1;
+        assert_eq!(
+            dispatch_r0(&mut k, SYS_BUF_LEND, slot, 2),
+            eperm,
+            "lendee P1 re-lending to P2 must fail with PermissionDenied"
+        );
+
+        // Owner (P0) can still revoke — no state corruption from failed re-lend
+        k.current_partition = 0;
+        assert_eq!(
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
+            0,
+            "P0 should still be able to revoke after P1's failed re-lend"
+        );
     }
 
     #[cfg(feature = "dynamic-mpu")]
