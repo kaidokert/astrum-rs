@@ -43,6 +43,7 @@ pub struct IsrRingBuffer<const D: usize, const M: usize> {
     buf: [EventRecord<M>; D],
     head: usize,
     count: usize,
+    overflow_count: usize,
 }
 
 impl<const D: usize, const M: usize> Default for IsrRingBuffer<D, M> {
@@ -58,6 +59,7 @@ impl<const D: usize, const M: usize> IsrRingBuffer<D, M> {
             buf: [const { EventRecord::empty() }; D],
             head: 0,
             count: 0,
+            overflow_count: 0,
         }
     }
 
@@ -65,6 +67,7 @@ impl<const D: usize, const M: usize> IsrRingBuffer<D, M> {
     /// Returns `Err(RingBufferFull)` when no slots are free.
     pub fn push_from_isr(&mut self, tag: u8, data: &[u8]) -> Result<(), RingBufferFull> {
         if self.count >= D {
+            self.overflow_count = self.overflow_count.saturating_add(1);
             return Err(RingBufferFull);
         }
         let tail = (self.head + self.count) % D;
@@ -115,6 +118,18 @@ impl<const D: usize, const M: usize> IsrRingBuffer<D, M> {
     /// Returns `true` if the buffer has no free slots.
     pub fn is_full(&self) -> bool {
         self.count >= D
+    }
+
+    /// Returns the number of events dropped due to a full buffer.
+    pub fn overflow_count(&self) -> usize {
+        self.overflow_count
+    }
+
+    /// Returns the current overflow count and resets it to zero.
+    pub fn reset_overflow_count(&mut self) -> usize {
+        let prev = self.overflow_count;
+        self.overflow_count = 0;
+        prev
     }
 }
 
@@ -280,5 +295,50 @@ mod tests {
         rb.push_from_isr(4, &[4]).unwrap();
         rb.pop_with(|t, _| assert_eq!(t, 3));
         rb.pop_with(|t, _| assert_eq!(t, 4));
+    }
+
+    // ===== Overflow count tests =====
+
+    #[test]
+    fn overflow_count_increments_on_each_rejected_push() {
+        let mut rb = IsrRingBuffer::<2, 4>::new();
+        rb.push_from_isr(1, &[1]).unwrap();
+        rb.push_from_isr(2, &[2]).unwrap();
+        assert_eq!(rb.overflow_count(), 0);
+
+        assert_eq!(rb.push_from_isr(3, &[3]), Err(RingBufferFull));
+        assert_eq!(rb.overflow_count(), 1);
+        assert_eq!(rb.push_from_isr(4, &[4]), Err(RingBufferFull));
+        assert_eq!(rb.overflow_count(), 2);
+        assert_eq!(rb.push_from_isr(5, &[5]), Err(RingBufferFull));
+        assert_eq!(rb.overflow_count(), 3);
+    }
+
+    #[test]
+    fn overflow_count_stays_zero_when_all_pushes_succeed() {
+        let mut rb = IsrRingBuffer::<4, 4>::new();
+        rb.push_from_isr(1, &[1]).unwrap();
+        rb.push_from_isr(2, &[2]).unwrap();
+        rb.push_from_isr(3, &[3]).unwrap();
+        rb.push_from_isr(4, &[4]).unwrap();
+        assert_eq!(rb.overflow_count(), 0);
+    }
+
+    #[test]
+    fn reset_overflow_count_returns_previous_and_resets() {
+        let mut rb = IsrRingBuffer::<1, 4>::new();
+        rb.push_from_isr(1, &[1]).unwrap();
+
+        assert_eq!(rb.push_from_isr(2, &[2]), Err(RingBufferFull));
+        assert_eq!(rb.push_from_isr(3, &[3]), Err(RingBufferFull));
+        assert_eq!(rb.overflow_count(), 2);
+
+        let prev = rb.reset_overflow_count();
+        assert_eq!(prev, 2);
+        assert_eq!(rb.overflow_count(), 0);
+
+        // Accumulate again after reset
+        assert_eq!(rb.push_from_isr(4, &[4]), Err(RingBufferFull));
+        assert_eq!(rb.overflow_count(), 1);
     }
 }
