@@ -50,6 +50,7 @@ pub mod events;
 #[cfg(feature = "dynamic-mpu")]
 pub mod hw_uart;
 pub mod invariants;
+pub mod irq_ack;
 pub mod irq_dispatch;
 pub mod message;
 pub mod mpu;
