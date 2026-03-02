@@ -156,6 +156,10 @@ name = "irq_unbound_test"
 required-features = ["qemu", "log-semihosting", "custom-ivt"]
 
 [[example]]
+name = "irq_custom_handler_test"
+required-features = ["qemu", "log-semihosting", "custom-ivt"]
+
+[[example]]
 name = "smoke_test"
 required-features = ["qemu", "log-semihosting"]
 
