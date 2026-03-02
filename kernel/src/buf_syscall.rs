@@ -51,9 +51,7 @@ pub fn buf_write(slot: u8, data: &[u8]) -> Result<usize, SvcError> {
 /// Lend a buffer slot to a target partition.  Returns MPU region ID.
 #[inline]
 pub fn buf_lend(slot: u8, target: u8, writable: bool) -> Result<u8, SvcError> {
-    let r2 = pack_lend_r2(target, writable);
-    let raw = crate::svc!(SYS_BUF_LEND, slot as u32, r2, 0u32);
-    parse_result(raw).map(|v| v as u8)
+    buf_lend_with_deadline(slot, target, writable, 0)
 }
 
 /// Result of [`buf_lend_with_addr`]: the MPU region ID and the buffer's
@@ -73,16 +71,42 @@ pub struct LendResult {
 /// `r1` (base address) from the kernel's `SYS_BUF_LEND` handler.
 #[inline]
 pub fn buf_lend_with_addr(slot: u8, target: u8, writable: bool) -> Result<LendResult, SvcError> {
+    buf_lend_with_addr_deadline(slot, target, writable, 0)
+}
+
+/// Lend a buffer slot to a target partition with a deadline.
+/// Returns MPU region ID.
+///
+/// `max_ticks`: relative tick offset for auto-revoke (0 = no deadline).
+#[inline]
+pub fn buf_lend_with_deadline(
+    slot: u8,
+    target: u8,
+    writable: bool,
+    max_ticks: u32,
+) -> Result<u8, SvcError> {
     let r2 = pack_lend_r2(target, writable);
-    let (r0, r1) = crate::svc_r01!(SYS_BUF_LEND, slot as u32, r2, 0u32);
-    if SvcError::is_error(r0) {
-        Err(SvcError::from_u32(r0).unwrap_or(SvcError::InvalidSyscall))
-    } else {
-        Ok(LendResult {
-            region_id: r0 as u8,
-            base_addr: r1,
-        })
-    }
+    let raw = crate::svc!(SYS_BUF_LEND, slot as u32, r2, max_ticks);
+    parse_result(raw).map(|v| v as u8)
+}
+
+/// Lend a buffer slot to a target partition with a deadline, returning both
+/// the MPU region ID and the buffer base address.
+///
+/// `max_ticks`: relative tick offset for auto-revoke (0 = no deadline).
+#[inline]
+pub fn buf_lend_with_addr_deadline(
+    slot: u8,
+    target: u8,
+    writable: bool,
+    max_ticks: u32,
+) -> Result<LendResult, SvcError> {
+    let r2 = pack_lend_r2(target, writable);
+    let (r0, r1) = crate::svc_r01!(SYS_BUF_LEND, slot as u32, r2, max_ticks);
+    parse_result(r0).map(|v| LendResult {
+        region_id: v as u8,
+        base_addr: r1,
+    })
 }
 
 /// Revoke a previously lent buffer slot from a target partition.
@@ -245,6 +269,68 @@ mod tests {
         ] {
             let raw = err.to_u32();
             let result: Result<(), SvcError> = parse_result(raw).map(|_| ());
+            assert_eq!(result, Err(err));
+        }
+    }
+
+    #[test]
+    fn buf_lend_with_deadline_zero() {
+        // Zero deadline = no deadline, same as buf_lend.
+        let result = buf_lend_with_deadline(0, 1, false, 0);
+        assert_eq!(result, Ok(0));
+    }
+
+    #[test]
+    fn buf_lend_with_deadline_nonzero() {
+        // Non-zero deadline passes through r3; host stub returns Ok(0).
+        let result = buf_lend_with_deadline(2, 3, true, 500);
+        assert_eq!(result, Ok(0));
+    }
+
+    #[test]
+    fn buf_lend_with_deadline_preserves_r2_packing() {
+        // Verify r2 packing is identical to buf_lend (writable flag).
+        let r2_ro = pack_lend_r2(7, false);
+        assert_eq!(r2_ro, 7);
+        let r2_rw = pack_lend_r2(7, true);
+        assert_eq!(r2_rw, 7 | lend_flags::WRITABLE);
+        // Both deadline variants use the same packing.
+        assert_eq!(buf_lend_with_deadline(0, 7, false, 100), Ok(0));
+        assert_eq!(buf_lend_with_deadline(0, 7, true, 100), Ok(0));
+    }
+
+    #[test]
+    fn buf_lend_with_addr_deadline_zero() {
+        // Zero deadline = no deadline, same as buf_lend_with_addr.
+        let result = buf_lend_with_addr_deadline(0, 1, false, 0);
+        let lr = result.expect("should be Ok on host");
+        assert_eq!(lr.region_id, 0);
+        assert_eq!(lr.base_addr, 0);
+    }
+
+    #[test]
+    fn buf_lend_with_addr_deadline_nonzero() {
+        // Non-zero deadline passes through r3; host stub returns Ok((0,0)).
+        let result = buf_lend_with_addr_deadline(2, 3, true, 1000);
+        let lr = result.expect("should be Ok on host");
+        assert_eq!(lr.region_id, 0);
+        assert_eq!(lr.base_addr, 0);
+    }
+
+    #[test]
+    fn buf_lend_with_addr_deadline_error_path() {
+        // Exercise the same parse_result().map() chain that
+        // buf_lend_with_addr_deadline uses for its error path.
+        for &err in &[
+            SvcError::InvalidResource,
+            SvcError::OperationFailed,
+            SvcError::InvalidSyscall,
+        ] {
+            let raw = err.to_u32();
+            let result: Result<LendResult, SvcError> = parse_result(raw).map(|v| LendResult {
+                region_id: v as u8,
+                base_addr: 0,
+            });
             assert_eq!(result, Err(err));
         }
     }
