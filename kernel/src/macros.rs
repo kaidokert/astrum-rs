@@ -235,6 +235,22 @@ macro_rules! partition_trampoline {
     };
 }
 
+/// Construct an [`IrqBinding`] from either a 2-tuple `(pid, evt)` or a
+/// 3-tuple `(pid, evt, clear_model)`.
+///
+/// This is a `#[doc(hidden)]` helper for [`bind_interrupts!`]; it should not
+/// be invoked directly.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __make_irq_binding {
+    ($irq:expr, ($pid:expr, $evt:expr)) => {
+        $crate::irq_dispatch::IrqBinding::new($irq, $pid, $evt)
+    };
+    ($irq:expr, ($pid:expr, $evt:expr, $clear:expr)) => {
+        $crate::irq_dispatch::IrqBinding::with_clear_model($irq, $pid, $evt, $clear)
+    };
+}
+
 /// Generate a custom interrupt vector table and dispatch handler.
 ///
 /// This macro binds hardware IRQ numbers to (partition, event_bits) pairs and
@@ -244,8 +260,10 @@ macro_rules! partition_trampoline {
 ///
 /// ```ignore
 /// kernel::bind_interrupts!(MyConfig, 70,
-///     5  => (0, 0x01),  // IRQ 5  → partition 0, event 0x01
-///     23 => (1, 0x04),  // IRQ 23 → partition 1, event 0x04
+///     5  => (0, 0x01),                     // 2-tuple: PartitionAcks default
+///     23 => (1, 0x04, IrqClearModel::KernelClears(
+///         ClearStrategy::WriteRegister { addr: 0x100, value: 1 },
+///     )),                                  // 3-tuple: explicit clear model
 /// );
 /// ```
 ///
@@ -260,11 +278,11 @@ macro_rules! partition_trampoline {
 /// | `disable_bound_irqs` | Mask all bound IRQs |
 #[macro_export]
 macro_rules! bind_interrupts {
-    ($Config:ty, $count:expr, $( $irq:expr => ($pid:expr, $evt:expr) ),+ $(,)?) => {
+    ($Config:ty, $count:expr, $( $irq:expr => $args:tt ),+ $(,)?) => {
         // ---- compile-time validation (runs on all targets) ----
         const _: () = {
             const BINDINGS: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = [
-                $( $crate::irq_dispatch::IrqBinding::new($irq, $pid, $evt), )+
+                $( $crate::__make_irq_binding!($irq, $args), )+
             ];
             assert!(
                 !$crate::irq_dispatch::has_duplicate_irqs(&BINDINGS),
@@ -296,7 +314,7 @@ macro_rules! bind_interrupts {
         // TODO: binding list is repeated in validation and here; acceptable for a declarative macro
         #[cfg(all(not(test), target_arch = "arm"))]
         static __IRQ_BINDINGS: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = [
-            $( $crate::irq_dispatch::IrqBinding::new($irq, $pid, $evt), )+
+            $( $crate::__make_irq_binding!($irq, $args), )+
         ];
 
         // ---- dispatch handler (ARM only) ----
@@ -507,6 +525,82 @@ mod tests {
     #[test]
     fn bind_interrupts_single_binding_accepted() {
         // Single binding: IRQ 9 < 10, no duplicates — const assertion passes.
+    }
+
+    // Verify 3-tuple syntax with explicit clear model compiles.
+    bind_interrupts!(DefaultConfig, 70,
+        7 => (0, 0x02, crate::irq_dispatch::IrqClearModel::KernelClears(
+            crate::irq_dispatch::ClearStrategy::WriteRegister { addr: 0x100, value: 1 },
+        )),
+    );
+
+    #[test]
+    fn bind_interrupts_3tuple_accepted() {
+        // If we reach here, the const assertion block accepted a 3-tuple binding.
+    }
+
+    // Verify mixed 2-tuple and 3-tuple bindings compile in a single invocation.
+    bind_interrupts!(DefaultConfig, 80,
+        10 => (0, 0x01),
+        20 => (1, 0x08, crate::irq_dispatch::IrqClearModel::KernelClears(
+            crate::irq_dispatch::ClearStrategy::ClearBit { addr: 0x200, bit: 3 },
+        )),
+        30 => (0, 0x10),
+    );
+
+    #[test]
+    fn bind_interrupts_mixed_tuples_accepted() {
+        // Mixed 2-tuple and 3-tuple bindings in a single invocation compile.
+    }
+
+    // ---- __make_irq_binding! unit tests ----
+
+    #[test]
+    fn make_irq_binding_2tuple_defaults_to_partition_acks() {
+        let b = __make_irq_binding!(5, (0, 0x01));
+        assert_eq!(b.irq_num, 5);
+        assert_eq!(b.partition_id, 0);
+        assert_eq!(b.event_bits, 0x01);
+        assert_eq!(
+            b.clear_model,
+            crate::irq_dispatch::IrqClearModel::PartitionAcks
+        );
+    }
+
+    #[test]
+    fn make_irq_binding_3tuple_uses_explicit_clear_model() {
+        let clear = crate::irq_dispatch::IrqClearModel::KernelClears(
+            crate::irq_dispatch::ClearStrategy::WriteRegister {
+                addr: 0x4000_0000,
+                value: 0xFF,
+            },
+        );
+        let b = __make_irq_binding!(12, (1, 0x04, clear));
+        assert_eq!(b.irq_num, 12);
+        assert_eq!(b.partition_id, 1);
+        assert_eq!(b.event_bits, 0x04);
+        assert_eq!(b.clear_model, clear);
+    }
+
+    #[test]
+    fn make_irq_binding_3tuple_clear_bit() {
+        let clear = crate::irq_dispatch::IrqClearModel::KernelClears(
+            crate::irq_dispatch::ClearStrategy::ClearBit {
+                addr: 0x200,
+                bit: 7,
+            },
+        );
+        let b = __make_irq_binding!(42, (0, 0x80, clear));
+        assert_eq!(b.irq_num, 42);
+        assert_eq!(b.event_bits, 0x80);
+        assert_eq!(b.clear_model, clear);
+    }
+
+    #[test]
+    fn make_irq_binding_2tuple_matches_irq_binding_new() {
+        let from_macro = __make_irq_binding!(99, (3, 0xDEAD));
+        let direct = crate::irq_dispatch::IrqBinding::new(99, 3, 0xDEAD);
+        assert_eq!(from_macro, direct);
     }
 
     // enable_bound_irqs / disable_bound_irqs are emitted behind
