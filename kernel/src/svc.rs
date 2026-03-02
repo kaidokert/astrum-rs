@@ -4571,6 +4571,187 @@ mod tests {
         );
     }
 
+    /// Verify one-level lend depth enforcement via the `svc!` dispatch macro:
+    /// the lendee (P1) cannot re-lend a borrowed buffer back to P0 or forward
+    /// to a third partition (P2).
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn target_cannot_relend_shared_buffer() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
+        let eperm = SvcError::PermissionDenied.to_u32();
+        let eres = SvcError::InvalidResource.to_u32();
+        let epart = SvcError::InvalidPartition.to_u32();
+        let mut k = kernel(0, 0, 0);
+        add_running_partition(&mut k, 2);
+        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
+        // consolidate into a shared test helper.
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr) => {{
+                let mut ef = frame($r0, $r1, $r2);
+                // SAFETY: See module-level SAFETY docs for test dispatch.
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+        }
+
+        // P0 allocates and lends to P1
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        let region = svc!(SYS_BUF_LEND, slot, 1);
+        assert!(region < 0x8000_0000, "lend should succeed");
+
+        // Switch to lendee P1
+        k.current_partition = 1;
+        // Sanity: invalid slot → InvalidResource (not PermissionDenied)
+        assert_eq!(
+            svc!(SYS_BUF_LEND, 99, 0),
+            eres,
+            "invalid slot must return InvalidResource"
+        );
+        // Sanity: out-of-bounds partition → InvalidPartition
+        assert_eq!(
+            svc!(SYS_BUF_LEND, slot, 99),
+            epart,
+            "out-of-bounds partition must return InvalidPartition"
+        );
+
+        // P1 tries to re-lend back to P0 — must fail with ownership check
+        assert_eq!(
+            svc!(SYS_BUF_LEND, slot, 0),
+            eperm,
+            "lendee P1 re-lending back to owner P0 must fail with PermissionDenied"
+        );
+
+        // P1 tries to re-lend to a third partition P2 — must also fail
+        assert_eq!(
+            svc!(SYS_BUF_LEND, slot, 2),
+            eperm,
+            "lendee P1 re-lending to P2 must fail with PermissionDenied"
+        );
+
+        // Owner can still revoke — no state corruption
+        k.current_partition = 0;
+        assert_eq!(
+            svc!(SYS_BUF_REVOKE, slot, 1),
+            0,
+            "P0 must still revoke after P1's failed re-lend attempts"
+        );
+    }
+
+    /// Verify that the lendee (P1) cannot revoke a buffer it was lent by P0.
+    /// Only the owner may revoke a lend.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn target_cannot_revoke_shared_buffer() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
+        let eperm = SvcError::PermissionDenied.to_u32();
+        let eres = SvcError::InvalidResource.to_u32();
+        let epart = SvcError::InvalidPartition.to_u32();
+        let mut k = kernel(0, 0, 0);
+        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
+        // consolidate into a shared test helper.
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr) => {{
+                let mut ef = frame($r0, $r1, $r2);
+                // SAFETY: See module-level SAFETY docs for test dispatch.
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+        }
+
+        // P0 allocates and lends to P1
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        let region = svc!(SYS_BUF_LEND, slot, 1);
+        assert!(region < 0x8000_0000, "lend should succeed");
+
+        // Switch to lendee P1
+        k.current_partition = 1;
+        // Sanity: invalid slot → InvalidResource (not PermissionDenied)
+        assert_eq!(
+            svc!(SYS_BUF_REVOKE, 99, 1),
+            eres,
+            "invalid slot must return InvalidResource"
+        );
+        // Sanity: out-of-bounds partition → InvalidPartition
+        assert_eq!(
+            svc!(SYS_BUF_REVOKE, slot, 99),
+            epart,
+            "out-of-bounds partition must return InvalidPartition"
+        );
+
+        // P1 tries to revoke — must fail with ownership check
+        assert_eq!(
+            svc!(SYS_BUF_REVOKE, slot, 1),
+            eperm,
+            "lendee P1 revoking P0's lend must fail with PermissionDenied"
+        );
+
+        // Owner can still revoke — lend state intact
+        k.current_partition = 0;
+        assert_eq!(
+            svc!(SYS_BUF_REVOKE, slot, 1),
+            0,
+            "P0 must still revoke after P1's failed revoke attempt"
+        );
+    }
+
+    /// Verify that the lendee (P1) cannot release a buffer owned by P0.
+    /// Only the owner may release, and only when the buffer is not lent.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn target_cannot_release_shared_buffer() {
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_RELEASE, SYS_BUF_REVOKE};
+        let eperm = SvcError::PermissionDenied.to_u32();
+        let eres = SvcError::InvalidResource.to_u32();
+        let mut k = kernel(0, 0, 0);
+        // TODO: DRY — this svc! macro duplicates the one in buf_lend_revoke_dispatch;
+        // consolidate into a shared test helper.
+        macro_rules! svc {
+            ($r0:expr, $r1:expr, $r2:expr) => {{
+                let mut ef = frame($r0, $r1, $r2);
+                // SAFETY: See module-level SAFETY docs for test dispatch.
+                unsafe { k.dispatch(&mut ef) };
+                ef.r0
+            }};
+        }
+
+        // P0 allocates and lends to P1
+        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        assert!(slot < 0x8000_0000, "alloc should succeed");
+        let region = svc!(SYS_BUF_LEND, slot, 1);
+        assert!(region < 0x8000_0000, "lend should succeed");
+
+        // Switch to lendee P1
+        k.current_partition = 1;
+        // Sanity: invalid slot → InvalidResource (not PermissionDenied)
+        assert_eq!(
+            svc!(SYS_BUF_RELEASE, 99, 0),
+            eres,
+            "invalid slot must return InvalidResource"
+        );
+
+        // P1 tries to release — must fail (not owner)
+        assert_eq!(
+            svc!(SYS_BUF_RELEASE, slot, 0),
+            eperm,
+            "lendee P1 releasing P0's buffer must fail with PermissionDenied"
+        );
+
+        // Owner can revoke and then release — no state corruption
+        k.current_partition = 0;
+        assert_eq!(
+            svc!(SYS_BUF_REVOKE, slot, 1),
+            0,
+            "P0 must still revoke after P1's failed release"
+        );
+        assert_eq!(
+            svc!(SYS_BUF_RELEASE, slot, 0),
+            0,
+            "P0 must release after revoking"
+        );
+    }
+
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_dispatch() {
