@@ -196,6 +196,9 @@ handler. This is the recommended pattern for driver ISRs that need to
 perform device-specific work (e.g. reading a FIFO) before signalling
 the partition.
 
+**Syntax** — the `handler:` keyword replaces the clear-model position
+in the 3-tuple form:
+
 ```rust
 // SAFETY: This function is only called by the NVIC as an interrupt handler.
 // It runs in Handler mode with access to kernel statics and must complete
@@ -209,33 +212,89 @@ kernel::bind_interrupts!(AppConfig, 90,
 );
 ```
 
-The `handler:` form still creates an `IrqBinding` entry (for
-`SYS_IRQ_ACK` ownership validation) but places the custom function
-pointer in the IVT slot instead of `__irq_dispatch`. The custom ISR
-is responsible for its own clear/mask logic and for calling
-`signal_partition_from_isr` if needed.
+Standard and `handler:` bindings can be mixed in a single invocation:
+
+```rust
+kernel::bind_interrupts!(AppConfig, 100,
+    15 => (0, 0x01),                          // default dispatch
+    25 => (1, 0x04, handler: uart_rx_isr),    // custom ISR
+    35 => (0, 0x10),                          // default dispatch
+);
+```
+
+**Semantics:**
+
+- `__make_irq_binding!` still creates an `IrqBinding::new(irq, pid, evt)`
+  entry (defaults to `PartitionAcks`) so `SYS_IRQ_ACK` ownership
+  validation works for the custom handler's IRQ.
+- `__make_irq_handler!` places the custom function pointer in the IVT
+  slot instead of `__irq_dispatch`.
+- The custom ISR is responsible for its own clear/mask logic and for
+  calling `signal_partition_from_isr` if it needs to wake a partition.
 
 ### 10.2 Overflow Counter Observability
 
 `IsrRingBuffer` tracks dropped pushes via a saturating counter
 (`kernel/src/split_isr.rs`):
 
+- **`push_from_isr(&mut self, tag: u8, data: &[u8]) -> Result<(), RingBufferFull>`** —
+  on failure, increments the internal overflow counter (saturating)
+  and returns `Err(RingBufferFull)`.
 - **`overflow_count(&self) -> usize`** — returns total drops since
   last reset.
 - **`reset_overflow_count(&mut self) -> usize`** — returns the current
-  count and atomically resets it to zero.
+  count and resets it to zero.
 
-Partitions can poll this after draining the ring to detect back-pressure
-or log diagnostics without additional IPC.
+**Synchronization — primary trade-off:** All mutating methods take
+`&mut self`; the buffer is *not* lock-free.  In practice this means
+**every `pop` / `reset_overflow_count` call must disable interrupts**
+(or mask the specific IRQ) to prevent the ISR from calling
+`push_from_isr` concurrently.  On single-core Cortex-M the two options
+are:
+
+1. **Global critical section** — `cortex_m::interrupt::free(|| …)`.
+   Simple but blocks *all* interrupts for the duration of the drain
+   loop, increasing worst-case interrupt latency.
+2. **Per-IRQ masking** — `NVIC::mask(irq)` before draining, unmask
+   after.  Narrower blast radius but requires the caller to know
+   which IRQ feeds the buffer.
+
+Usage pattern for partition-side diagnostics:
+
+```rust
+// Drain all pending events.
+while ring.pop_with(|tag, data| { /* process */ }) {}
+
+// Check for back-pressure since last drain.
+let dropped = ring.reset_overflow_count();
+if dropped > 0 {
+    log_overflow(dropped);
+}
+```
 
 ### 10.3 Compile-Time Validation
 
-Two additional `const` assertions fire at build time inside
-`bind_interrupts!` (defined in `kernel/src/macros.rs`, line 308):
+Five `const` assertions fire at build time inside the `bind_interrupts!`
+macro (`kernel/src/macros.rs`, line 308). All run on every target
+(including host `cargo check`), not just ARM:
 
 1. **Max IRQ count** — `count ≤ 240`, matching the Cortex-M3 maximum
    external interrupt count.
    Error: `"bind_interrupts!: count exceeds Cortex-M3 maximum (240)"`
-2. **Non-zero event_bits** — rejects any binding where `event_bits == 0`,
-   which would be a silent no-op at dispatch time.
+2. **No duplicate IRQ numbers** — O(n²) pairwise comparison via
+   `irq_dispatch::has_duplicate_irqs`.
+   Error: `"bind_interrupts!: duplicate IRQ number"`
+3. **Partition ID in range** — each `partition_id < KernelConfig::N`
+   via `irq_dispatch::has_invalid_partition_id`.
+   Error: `"bind_interrupts!: partition_id out of range"`
+4. **Non-zero event bits** — rejects any binding where `event_bits == 0`,
+   which would be a silent no-op at dispatch time, via
+   `irq_dispatch::has_zero_event_bits`.
    Error: `"bind_interrupts!: event_bits == 0 is a no-op"`
+5. **IRQ number within table bounds** — per-binding `irq < count`.
+   Error: `"bind_interrupts!: IRQ number >= count"`
+
+Additionally, a `compile_error!` fires on ARM (non-test) builds when
+the `custom-ivt` Cargo feature is not enabled, since `bind_interrupts!`
+emits a `#[link_section = ".vector_table.interrupts"]` static that
+conflicts with `cortex-m-rt`'s default IVT.
