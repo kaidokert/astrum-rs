@@ -322,6 +322,17 @@ where
         }
         // Reject sentinel partitions when MPU enforcement is active.
         check_sentinel_mpu_enforce(k.partitions().as_slice(), C::MPU_ENFORCE)?;
+        // Pre-compute cached MPU register pairs now that all fixups are applied.
+        for i in 0..partitions.len() {
+            if let Some(pcb) = k.partitions_mut().get_mut(i) {
+                crate::mpu::precompute_mpu_cache(pcb);
+                debug_assert!(
+                    pcb.cached_base_regions()[0] != (0, 0),
+                    "partition {} cached_base_regions[0] is all-zeros after precompute",
+                    i
+                );
+            }
+        }
         // Verify PCB stack_base addresses were patched into the live storage range;
         // catches stale pre-move addresses left over from static init.
         #[cfg(debug_assertions)]
@@ -805,6 +816,100 @@ mod tests {
         assert_ne!(
             err,
             BootError::SentinelMpuWithEnforce { partition_index: 7 }
+        );
+    }
+
+    #[test]
+    fn precompute_cache_populates_non_sentinel_partition() {
+        use crate::mpu::precompute_mpu_cache;
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+
+        // Non-sentinel partition with valid MPU-compatible regions.
+        let mut pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,        // entry_point (code region)
+            0x2000_0000,        // stack_base (1024-byte aligned)
+            0x2000_0000 + 1024, // stack_pointer
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+        );
+        // Verify cache starts as all-zeros.
+        assert_eq!(*pcb.cached_base_regions(), [(0, 0); 4]);
+
+        precompute_mpu_cache(&mut pcb);
+
+        // After precompute, cached_base_regions[0] must be non-zero
+        // (region 0 is the background deny-all region).
+        assert_ne!(
+            pcb.cached_base_regions()[0],
+            (0, 0),
+            "cached_base_regions[0] must be non-zero after precompute"
+        );
+        // Verify all four base regions were populated (deny-all always fills all 4).
+        for (i, &(rbar, rasr)) in pcb.cached_base_regions().iter().enumerate() {
+            assert!(
+                rbar != 0 || rasr != 0,
+                "base region R{} should not be all-zeros",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn precompute_cache_populates_sentinel_after_fixup() {
+        use crate::mpu::precompute_mpu_cache;
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+
+        // Sentinel partition (mpu_region size==0) — simulates pre-fixup state.
+        let mut pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0000 + 1024,
+            MpuRegion::new(0, 0, 0),
+        );
+        // Apply the same fixup boot() would: set base to stack_base.
+        fix_mpu_data_region_if_sentinel(&mut pcb, 0x2000_0000);
+
+        precompute_mpu_cache(&mut pcb);
+
+        // Even for a sentinel (deny-all), region 0 must be non-zero.
+        assert_ne!(
+            pcb.cached_base_regions()[0],
+            (0, 0),
+            "sentinel cached_base_regions[0] must be non-zero after precompute"
+        );
+    }
+
+    #[test]
+    fn precompute_cache_matches_on_the_fly_computation() {
+        use crate::mpu::{
+            partition_mpu_regions_or_deny_all, peripheral_mpu_regions_or_disabled,
+            precompute_mpu_cache,
+        };
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+
+        let mut pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0000 + 1024,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+        );
+        // Compute expected values before caching.
+        let expected_base = partition_mpu_regions_or_deny_all(&pcb);
+        let expected_periph = peripheral_mpu_regions_or_disabled(&pcb);
+
+        precompute_mpu_cache(&mut pcb);
+
+        assert_eq!(
+            *pcb.cached_base_regions(),
+            expected_base,
+            "cached base regions must match on-the-fly computation"
+        );
+        assert_eq!(
+            *pcb.cached_periph_regions(),
+            expected_periph,
+            "cached periph regions must match on-the-fly computation"
         );
     }
 }
