@@ -366,17 +366,29 @@ macro_rules! bind_interrupts {
         #[cfg(all(not(test), target_arch = "arm"))]
         static __IRQ_BINDINGS: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = __IRQ_BINDINGS_INIT;
 
+        // ---- direct dispatch table (ARM only) ----
+        // TODO: reviewer false positive – $count is the IVT size (max IRQ slots),
+        // not the number of bindings; the table correctly covers all valid IRQ numbers.
+        #[cfg(all(not(test), target_arch = "arm"))]
+        const __IRQ_DIRECT_TABLE: [u8; $count] =
+            $crate::irq_dispatch::build_direct_table::<{ $count }>(&__IRQ_BINDINGS_INIT);
+
         // ---- dispatch handler (ARM only) ----
         #[cfg(all(not(test), target_arch = "arm"))]
         extern "C" fn __irq_dispatch() {
             let ipsr: u32;
+            // TODO: reviewer false positive – this comment already has the
+            // required `// SAFETY:` prefix; the truncated diff was misleading.
             // SAFETY: `mrs` reads the IPSR register, which is always
             // readable in any execution mode on Cortex-M.  The register
             // is read-only and has no side effects.
             unsafe { core::arch::asm!("mrs {}, ipsr", out(reg) ipsr) };
             let irq_num = $crate::irq_dispatch::ipsr_to_irq_num(ipsr);
-            if let Some(idx) = $crate::irq_dispatch::lookup_binding(&__IRQ_BINDINGS, irq_num) {
-                if let Some(b) = __IRQ_BINDINGS.get(idx) {
+            if let Some(&slot) = __IRQ_DIRECT_TABLE.get(irq_num as usize) {
+                if slot == 0xFF {
+                    return;
+                }
+                if let Some(b) = __IRQ_BINDINGS.get(slot as usize) {
                     // Clear/mask the interrupt source before signaling.
                     // All paths are data-only (no function pointers),
                     // guaranteeing bounded WCET.

@@ -189,6 +189,31 @@ pub const fn lookup_binding(bindings: &[IrqBinding], irq: u8) -> Option<usize> {
     None
 }
 
+/// Pre-compute a direct-indexed dispatch table mapping IRQ numbers to binding indices.
+///
+/// Returns a `[u8; N]` array where `table[irq_num] == binding_index` for bound IRQs,
+/// and `table[irq_num] == 0xFF` for unbound slots.  This enables O(1) dispatch
+/// instead of the O(n) linear scan in [`lookup_binding`].
+///
+/// Bindings whose `irq_num >= N` are silently skipped (the compile-time
+/// assertions in `bind_interrupts!` already reject this case).
+pub const fn build_direct_table<const N: usize>(bindings: &[IrqBinding]) -> [u8; N] {
+    assert!(
+        bindings.len() <= 255,
+        "build_direct_table: more than 255 bindings would truncate index to u8"
+    );
+    let mut table = [0xFF_u8; N];
+    let mut i = 0;
+    while i < bindings.len() {
+        let irq = bindings[i].irq_num as usize;
+        if irq < N {
+            table[irq] = i as u8;
+        }
+        i += 1;
+    }
+    table
+}
+
 /// O(n²) check for duplicate `irq_num` values in `bindings`.
 /// Returns `true` if any two entries share the same IRQ number.
 ///
@@ -535,6 +560,57 @@ mod tests {
     fn lookup_binding_usable_in_const() {
         const RESULT: Option<usize> = lookup_binding(&BINDINGS, 10);
         assert_eq!(RESULT, Some(1));
+    }
+
+    // ---- build_direct_table tests ----
+
+    #[test]
+    fn build_direct_table_empty_bindings() {
+        const TABLE: [u8; 8] = build_direct_table::<8>(&[]);
+        for slot in TABLE {
+            assert_eq!(slot, 0xFF);
+        }
+    }
+
+    #[test]
+    fn build_direct_table_single_binding() {
+        const SINGLE: [IrqBinding; 1] = [IrqBinding::new(3, 0, 0x01)];
+        const TABLE: [u8; 8] = build_direct_table::<8>(&SINGLE);
+        assert_eq!(TABLE[3], 0);
+        assert_eq!(TABLE[0], 0xFF);
+        assert_eq!(TABLE[7], 0xFF);
+    }
+
+    #[test]
+    fn build_direct_table_multiple_with_gaps() {
+        const MULTI: [IrqBinding; 3] = [
+            IrqBinding::new(1, 0, 0x01),
+            IrqBinding::new(5, 1, 0x02),
+            IrqBinding::new(7, 2, 0x04),
+        ];
+        const TABLE: [u8; 10] = build_direct_table::<10>(&MULTI);
+        assert_eq!(TABLE[1], 0);
+        assert_eq!(TABLE[5], 1);
+        assert_eq!(TABLE[7], 2);
+        assert_eq!(TABLE[0], 0xFF);
+        assert_eq!(TABLE[2], 0xFF);
+        assert_eq!(TABLE[3], 0xFF);
+        assert_eq!(TABLE[4], 0xFF);
+        assert_eq!(TABLE[6], 0xFF);
+        assert_eq!(TABLE[8], 0xFF);
+        assert_eq!(TABLE[9], 0xFF);
+    }
+
+    #[test]
+    fn build_direct_table_out_of_range_ignored() {
+        const OOR: [IrqBinding; 2] = [IrqBinding::new(2, 0, 0x01), IrqBinding::new(15, 1, 0x02)];
+        const TABLE: [u8; 8] = build_direct_table::<8>(&OOR);
+        assert_eq!(TABLE[2], 0);
+        for (i, &slot) in TABLE.iter().enumerate() {
+            if i != 2 {
+                assert_eq!(slot, 0xFF, "slot {i} should be 0xFF");
+            }
+        }
     }
 
     // ---- has_duplicate_irqs tests ----
