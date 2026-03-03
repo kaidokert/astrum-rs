@@ -33,6 +33,11 @@ CUSTOM_IVT_EXAMPLES=(
     irq_mixed_model_test
     irq_unbound_test
     irq_custom_handler_test
+    irq_ring_buffer_test
+    irq_ring_overflow_test
+    irq_repend_stress_test
+    irq_disable_test
+    uart_irq_demo
 )
 
 # Dynamic-MPU examples require MPU region configuration that works with
