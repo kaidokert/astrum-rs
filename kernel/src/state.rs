@@ -64,12 +64,15 @@
 //! model provides additional protection:
 //!
 //! - **SVCall** runs at priority 0x00 (highest configurable)
-//! - **SysTick** runs at priority 0xFE
+//! - **SysTick** runs at priority 0x10
+//! - **App IRQs** run at priority >= 0x20
 //! - **PendSV** runs at priority 0xFF (lowest)
 //!
-//! This priority ordering ensures that lower-priority handlers cannot preempt
-//! higher-priority ones, and the critical section prevents any preemption
-//! during kernel state access.
+//! This three-tier priority model ensures that SVCall (synchronous syscalls)
+//! has the highest priority, SysTick (tick processing) preempts application
+//! IRQs but not SVCall, and PendSV (context switch) runs at the lowest
+//! priority. The critical section prevents any preemption during kernel
+//! state access.
 //!
 //! ## Stable Rust Constraints
 //!
@@ -426,11 +429,11 @@ where
 ///    via `interrupt::free()` masks all configurable interrupts, preventing
 ///    concurrent access from exception handlers.
 ///
-/// 3. **Exception priority prevents reentrancy**: The ARM exception model
-///    ensures that lower-priority exceptions cannot preempt higher-priority
-///    ones. SVC runs at priority 0 (highest), PendSV at 0xFF (lowest), and
-///    SysTick at 0xFE. This priority ordering prevents reentrancy within
-///    kernel code paths.
+/// 3. **Exception priority prevents reentrancy**: The three-tier priority
+///    model ensures that lower-priority exceptions cannot preempt higher-priority
+///    ones. SVCall runs at priority 0x00 (highest), SysTick at 0x10,
+///    app IRQs at >= 0x20, and PendSV at 0xFF (lowest). This priority
+///    ordering prevents reentrancy within kernel code paths.
 ///
 /// # Returns
 ///
@@ -492,11 +495,11 @@ where
 ///    via `interrupt::free()` masks all configurable interrupts, preventing
 ///    concurrent access from exception handlers.
 ///
-/// 3. **Exception priority prevents reentrancy**: The ARM exception model
-///    ensures that lower-priority exceptions cannot preempt higher-priority
-///    ones. SVC runs at priority 0 (highest), PendSV at 0xFF (lowest), and
-///    SysTick at 0xFE. This priority ordering prevents reentrancy within
-///    kernel code paths.
+/// 3. **Exception priority prevents reentrancy**: The three-tier priority
+///    model ensures that lower-priority exceptions cannot preempt higher-priority
+///    ones. SVCall runs at priority 0x00 (highest), SysTick at 0x10,
+///    app IRQs at >= 0x20, and PendSV at 0xFF (lowest). This priority
+///    ordering prevents reentrancy within kernel code paths.
 ///
 /// # Returns
 ///
