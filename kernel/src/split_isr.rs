@@ -26,6 +26,95 @@ impl<const M: usize> EventRecord<M> {
     }
 }
 
+/// `Sync` wrapper around [`IsrRingBuffer`] for `static` placement.
+///
+/// # Safety invariant (`Sync`)
+/// Single-core Cortex-M only. ISR masks its IRQ before returning;
+/// partition masks IRQ before draining — no concurrent access.
+pub struct StaticIsrRing<const D: usize, const M: usize> {
+    inner: core::cell::UnsafeCell<IsrRingBuffer<D, M>>,
+}
+
+// SAFETY: On single-core Cortex-M the ISR/partition mutual-exclusion
+// protocol (see struct-level doc) prevents concurrent access.
+// TODO: add #[cfg] guard (e.g. target_has_atomic or a crate feature) to
+// prevent use on multi-core targets where IRQ-masking is insufficient.
+unsafe impl<const D: usize, const M: usize> Sync for StaticIsrRing<D, M> {}
+
+impl<const D: usize, const M: usize> Default for StaticIsrRing<D, M> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const D: usize, const M: usize> StaticIsrRing<D, M> {
+    /// Create an empty ring, usable in `static` items.
+    pub const fn new() -> Self {
+        Self {
+            inner: core::cell::UnsafeCell::new(IsrRingBuffer::new()),
+        }
+    }
+
+    /// Push an event from ISR context.
+    /// # Safety
+    /// Caller must guarantee no concurrent access.
+    pub unsafe fn push_from_isr(&self, tag: u8, data: &[u8]) -> Result<(), RingBufferFull> {
+        // SAFETY: caller guarantees single-core mutual exclusion.
+        unsafe { &mut *self.inner.get() }.push_from_isr(tag, data)
+    }
+
+    /// Pop oldest record, passing `(tag, payload)` to `f`.
+    /// # Safety
+    /// Caller must guarantee no concurrent access.
+    pub unsafe fn pop_with<F>(&self, f: F) -> bool
+    where
+        F: FnOnce(u8, &[u8]),
+    {
+        // SAFETY: caller guarantees single-core mutual exclusion.
+        unsafe { &mut *self.inner.get() }.pop_with(f)
+    }
+
+    /// Number of events dropped due to a full buffer.
+    /// # Safety
+    /// Caller must guarantee no concurrent access (e.g. mask the bound IRQ).
+    pub unsafe fn overflow_count(&self) -> usize {
+        // SAFETY: caller guarantees single-core mutual exclusion.
+        unsafe { &*self.inner.get() }.overflow_count()
+    }
+
+    /// Reset overflow count to zero, returning previous value.
+    /// # Safety
+    /// Caller must guarantee no concurrent access.
+    pub unsafe fn reset_overflow_count(&self) -> usize {
+        // SAFETY: caller guarantees single-core mutual exclusion.
+        unsafe { &mut *self.inner.get() }.reset_overflow_count()
+    }
+
+    /// Number of pending event records.
+    /// # Safety
+    /// Caller must guarantee no concurrent access (e.g. mask the bound IRQ).
+    pub unsafe fn len(&self) -> usize {
+        // SAFETY: caller guarantees single-core mutual exclusion.
+        unsafe { &*self.inner.get() }.len()
+    }
+
+    /// `true` if no event records are pending.
+    /// # Safety
+    /// Caller must guarantee no concurrent access (e.g. mask the bound IRQ).
+    pub unsafe fn is_empty(&self) -> bool {
+        // SAFETY: caller guarantees single-core mutual exclusion.
+        unsafe { &*self.inner.get() }.is_empty()
+    }
+
+    /// `true` if the buffer has no free slots.
+    /// # Safety
+    /// Caller must guarantee no concurrent access (e.g. mask the bound IRQ).
+    pub unsafe fn is_full(&self) -> bool {
+        // SAFETY: caller guarantees single-core mutual exclusion.
+        unsafe { &*self.inner.get() }.is_full()
+    }
+}
+
 /// Fixed-depth ring buffer for ISR top-half to bottom-half communication.
 ///
 /// `D` — max pending records. `M` — max payload bytes per record.
@@ -411,5 +500,64 @@ mod tests {
             called = true;
         });
         assert!(called);
+    }
+
+    // ===== StaticIsrRing tests =====
+
+    #[test]
+    fn static_ring_construction_is_empty() {
+        let ring = StaticIsrRing::<4, 8>::new();
+        // SAFETY: test is single-threaded; no concurrent access.
+        unsafe {
+            assert!(ring.is_empty());
+            assert!(!ring.is_full());
+            assert_eq!(ring.len(), 0);
+            assert_eq!(ring.overflow_count(), 0);
+        }
+    }
+
+    #[test]
+    fn static_ring_push_pop_round_trip() {
+        let ring = StaticIsrRing::<4, 8>::new();
+        // SAFETY: test is single-threaded; no concurrent access.
+        unsafe {
+            ring.push_from_isr(42, &[0xDE, 0xAD]).unwrap();
+            assert_eq!(ring.len(), 1);
+        };
+        let mut got = (0u8, [0u8; 2]);
+        // SAFETY: test is single-threaded.
+        let popped = unsafe {
+            ring.pop_with(|tag, data| {
+                got.0 = tag;
+                got.1[..data.len()].copy_from_slice(data);
+            })
+        };
+        assert!(popped);
+        assert_eq!(got, (42, [0xDE, 0xAD]));
+        // SAFETY: test is single-threaded.
+        assert!(unsafe { ring.is_empty() });
+    }
+
+    #[test]
+    fn static_ring_overflow_count_and_reset() {
+        let ring = StaticIsrRing::<1, 4>::new();
+        // SAFETY: test is single-threaded; no concurrent access.
+        unsafe {
+            ring.push_from_isr(1, &[1]).unwrap();
+            assert!(ring.is_full());
+            assert_eq!(ring.push_from_isr(2, &[2]), Err(RingBufferFull));
+            assert_eq!(ring.push_from_isr(3, &[3]), Err(RingBufferFull));
+            assert_eq!(ring.overflow_count(), 2);
+            let prev = ring.reset_overflow_count();
+            assert_eq!(prev, 2);
+            assert_eq!(ring.overflow_count(), 0);
+        }
+    }
+
+    #[test]
+    fn static_ring_is_sync() {
+        static RING: StaticIsrRing<4, 8> = StaticIsrRing::new();
+        // SAFETY: test is single-threaded; no concurrent access.
+        assert!(unsafe { RING.is_empty() });
     }
 }
