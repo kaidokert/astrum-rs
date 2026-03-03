@@ -3088,4 +3088,18 @@ mod tests {
     fn assert_priority_order_panics_svcall_equals_systick() {
         assert_priority_order::<SvcallEqualsSystick>();
     }
+
+    /// IRQ_DEFAULT == PENDSV violates strict inequality requirement.
+    struct IrqEqualsPendsv;
+    impl KernelConfig for IrqEqualsPendsv {
+        const N: usize = 2;
+        const IRQ_DEFAULT_PRIORITY: u8 = 0xFF; // equal to PENDSV_PRIORITY (0xFF)
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "IRQ default priority must be strictly higher")]
+    fn assert_priority_order_panics_irq_equals_pendsv() {
+        assert_priority_order::<IrqEqualsPendsv>();
+    }
 }
