@@ -13,6 +13,17 @@ use crate::virtual_device::{DeviceError, VirtualDevice};
 /// UART1 interrupt number on the LM3S6965 (NVIC IRQ 6).
 pub const UART1_IRQ: u8 = 6;
 
+/// Fixed NVIC priority for the UART1 demo/test IRQ.
+///
+/// This sits in Tier 2 (application IRQs) of the three-tier priority model:
+///   Tier 0: SVCall (0x00)  — synchronous syscalls
+///   Tier 1: SysTick (0x10) — time-slice preemption
+///   Tier 2: App IRQs (>= MIN_APP_IRQ_PRIORITY 0x20) — device handlers
+///
+/// 0x40 is well above the Tier-2 floor (0x20), giving headroom for
+/// higher-priority application IRQs if needed.
+pub const UART1_IRQ_PRIORITY: u8 = 0x40;
+
 /// IOCTL command: drain all bytes from the TX ring buffer.
 pub const IOCTL_FLUSH: u32 = 0x01;
 /// IOCTL command: return number of bytes available in the RX ring buffer.
@@ -251,7 +262,11 @@ unsafe impl cortex_m::interrupt::InterruptNumber for Uart1Irq {
     }
 }
 
-/// Enable UART1 interrupt in the NVIC.
+/// Enable UART1 interrupt in the NVIC at [`UART1_IRQ_PRIORITY`] (0x40).
+///
+/// This is a demo/test helper that uses a fixed Tier-2 priority.
+/// The priority must be >= `MIN_APP_IRQ_PRIORITY` (0x20) to satisfy
+/// the three-tier enforcement policy.
 ///
 /// # Safety
 ///
@@ -259,10 +274,16 @@ unsafe impl cortex_m::interrupt::InterruptNumber for Uart1Irq {
 /// configured and the NVIC peripheral is valid.
 #[cfg(not(test))]
 pub fn enable_uart1_irq(nvic: &mut cortex_m::peripheral::NVIC) {
+    const {
+        assert!(
+            UART1_IRQ_PRIORITY >= crate::DefaultConfig::MIN_APP_IRQ_PRIORITY,
+            "UART1_IRQ_PRIORITY must be >= MIN_APP_IRQ_PRIORITY",
+        );
+    }
     // SAFETY: UART1 IRQ number is correct for LM3S6965 and the caller
     // provides a valid NVIC reference.
     unsafe {
-        nvic.set_priority(Uart1Irq, 0x40);
+        nvic.set_priority(Uart1Irq, UART1_IRQ_PRIORITY);
         cortex_m::peripheral::NVIC::unmask(Uart1Irq);
     }
 }
@@ -678,6 +699,33 @@ mod tests {
     #[test]
     fn uart1_irq_is_six() {
         assert_eq!(UART1_IRQ, 6);
+    }
+
+    #[test]
+    fn uart1_irq_priority_is_tier2() {
+        assert_eq!(UART1_IRQ_PRIORITY, 0x40);
+    }
+
+    #[test]
+    fn uart1_irq_priority_above_min_app_floor() {
+        let floor = crate::DefaultConfig::MIN_APP_IRQ_PRIORITY;
+        assert!(
+            UART1_IRQ_PRIORITY >= floor,
+            "UART1_IRQ_PRIORITY ({:#04X}) must be >= MIN_APP_IRQ_PRIORITY ({:#04X})",
+            UART1_IRQ_PRIORITY,
+            floor,
+        );
+    }
+
+    #[test]
+    fn uart1_irq_priority_below_pendsv() {
+        let pendsv = crate::DefaultConfig::PENDSV_PRIORITY;
+        assert!(
+            UART1_IRQ_PRIORITY < pendsv,
+            "UART1_IRQ_PRIORITY ({:#04X}) must be < PENDSV_PRIORITY ({:#04X})",
+            UART1_IRQ_PRIORITY,
+            pendsv,
+        );
     }
 
     // ---- uart1_isr_top_half tests ----
