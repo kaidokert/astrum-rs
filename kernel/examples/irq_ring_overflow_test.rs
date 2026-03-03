@@ -1,6 +1,6 @@
 //! QEMU integration test: ring buffer overflow and recovery.
 //!
-//! ISR pushes 4 records into a D=2 buffer (2 succeed, 2 overflow).
+//! ISR pushes 6 records into a D=4 buffer (4 succeed, 2 overflow).
 //! Partition verifies overflow_count > 0, drains survivors in FIFO order,
 //! calls reset_overflow_count (expects 2), then verifies a subsequent
 //! push succeeds after draining.
@@ -40,7 +40,7 @@ static DBG_VOL: AtomicU32 = AtomicU32::new(0xBEEF);
 
 #[allow(dead_code)]
 unsafe extern "C" fn overflow_isr() {
-    let phase = ISR_PHASE.load(Ordering::Relaxed);
+    let phase = ISR_PHASE.load(Ordering::Acquire);
     if phase == 0 {
         // Burst: push 6 records into 4 slots. Tags 1-4 succeed; 5-6 overflow.
         let mut errs = 0u32;
@@ -70,23 +70,24 @@ unsafe extern "C" fn overflow_isr() {
     }
     #[cfg(target_arch = "arm")]
     kernel::irq_dispatch::signal_partition_from_isr::<Cfg>(0, 0x01);
+    // TODO: abstract direct NVIC calls behind a kernel helper (out of scope).
     #[cfg(target_arch = "arm")]
-    cortex_m::peripheral::NVIC::mask(kernel::irq_dispatch::IrqNr(0));
+    cortex_m::peripheral::NVIC::mask(kernel::irq_dispatch::IrqNr(60));
 }
 
-kernel::bind_interrupts!(Cfg, 70, 0 => (0, 0x01, handler: overflow_isr));
+kernel::bind_interrupts!(Cfg, 70, 60 => (0, 0x01, handler: overflow_isr));
 
 kernel::define_unified_harness!(Cfg, |tick, _k| {
     if tick == 2 {
-        ISR_PHASE.store(0, Ordering::Relaxed);
+        ISR_PHASE.store(0, Ordering::Release);
         #[cfg(target_arch = "arm")]
-        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));
+        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(60));
         hprintln!("ovf_test: pended IRQ (burst)");
     }
     if tick == 8 {
-        ISR_PHASE.store(1, Ordering::Relaxed);
+        ISR_PHASE.store(1, Ordering::Release);
         #[cfg(target_arch = "arm")]
-        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));
+        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(60));
         hprintln!("ovf_test: pended IRQ (recovery)");
     }
     let fl = FAIL_LINE.load(Ordering::Acquire);
@@ -124,13 +125,22 @@ extern "C" fn p0_body(_r0: u32) -> ! {
             fail(1);
             continue;
         }
-        let phase = ISR_PHASE.load(Ordering::Relaxed);
+        // NOTE: SYS_EVT_WAIT returns 0 when the partition was scheduled in
+        // Waiting state but no matching event bits are set yet (i.e. the ISR
+        // has not fired).  Re-issue the wait so we only proceed once the ISR
+        // has signalled.
+        // TODO: verify this rc==0 behaviour is specified in the kernel syscall
+        // contract, not just observed (out of scope for this test).
+        if rc == 0 {
+            continue;
+        }
+        let phase = ISR_PHASE.load(Ordering::Acquire);
         if phase == 0 {
             p0_phase0();
         } else {
             p0_phase1();
         }
-        let rc = kernel::svc!(SYS_IRQ_ACK, 0u32, 0u32, 0u32);
+        let rc = kernel::svc!(SYS_IRQ_ACK, 60u32, 0u32, 0u32);
         if SvcError::is_error(rc) {
             fail(2);
         }
