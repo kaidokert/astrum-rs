@@ -107,6 +107,10 @@ pub struct PartitionControlBlock {
     /// Reference to the partition's debug ring buffer (type-erased via trait object).
     #[cfg(feature = "partition-debug")]
     debug_buffer: DebugBufferRef,
+    /// Pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
+    cached_base_regions: [(u32, u32); 4],
+    /// Pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R5.
+    cached_periph_regions: [(u32, u32); 2],
 }
 
 impl PartitionControlBlock {
@@ -131,6 +135,8 @@ impl PartitionControlBlock {
             debug_pending: false,
             #[cfg(feature = "partition-debug")]
             debug_buffer: DebugBufferRef::none(),
+            cached_base_regions: [(0, 0); 4],
+            cached_periph_regions: [(0, 0); 2],
         }
     }
 
@@ -318,6 +324,26 @@ impl PartitionControlBlock {
     /// Clears the debug pending flag after kernel drains the debug ring buffer.
     pub fn clear_debug_pending(&mut self) {
         self.debug_pending = false;
+    }
+
+    /// Returns the pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
+    pub fn cached_base_regions(&self) -> &[(u32, u32); 4] {
+        &self.cached_base_regions
+    }
+
+    /// Sets the pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
+    pub fn set_cached_base_regions(&mut self, regions: [(u32, u32); 4]) {
+        self.cached_base_regions = regions;
+    }
+
+    /// Returns the pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R5.
+    pub fn cached_periph_regions(&self) -> &[(u32, u32); 2] {
+        &self.cached_periph_regions
+    }
+
+    /// Sets the pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R5.
+    pub fn set_cached_periph_regions(&mut self, regions: [(u32, u32); 2]) {
+        self.cached_periph_regions = regions;
     }
 
     /// Returns a reference to this partition's debug ring buffer, if set.
@@ -626,6 +652,7 @@ impl<const N: usize> PartitionTable<N> {
         }
     }
 
+    #[allow(clippy::result_large_err)] // heapless::Vec::push returns the item on failure; boxing is not an option in no-alloc
     pub fn add(&mut self, pcb: PartitionControlBlock) -> Result<(), PartitionControlBlock> {
         self.partitions.push(pcb)
     }
@@ -2137,5 +2164,37 @@ mod tests {
             assert_ne!(e1, e3);
             assert_ne!(e1, e4);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // cached MPU region fields
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn new_pcb_has_zero_initialized_cached_regions() {
+        let pcb = make_pcb();
+        assert_eq!(*pcb.cached_base_regions(), [(0, 0); 4]);
+        assert_eq!(*pcb.cached_periph_regions(), [(0, 0); 2]);
+    }
+
+    #[test]
+    fn set_get_cached_base_regions_roundtrip() {
+        let mut pcb = make_pcb();
+        let regions = [
+            (0x2000_0010, 0x0000_1305),
+            (0x2000_1010, 0x0000_1307),
+            (0x2000_2010, 0x0000_1309),
+            (0x2000_3010, 0x0000_130B),
+        ];
+        pcb.set_cached_base_regions(regions);
+        assert_eq!(*pcb.cached_base_regions(), regions);
+    }
+
+    #[test]
+    fn set_get_cached_periph_regions_roundtrip() {
+        let mut pcb = make_pcb();
+        let regions = [(0x4000_0014, 0x0000_1315), (0x4000_1014, 0x0000_1317)];
+        pcb.set_cached_periph_regions(regions);
+        assert_eq!(*pcb.cached_periph_regions(), regions);
     }
 }
