@@ -376,6 +376,16 @@ pub fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) -> [(u32,
     peripheral_mpu_regions(pcb).unwrap_or([DISABLED_R4, DISABLED_R5])
 }
 
+/// Pre-compute and cache both base (R0–R3) and peripheral (R4–R5) MPU
+/// register pairs into the PCB.
+///
+/// Calls [`partition_mpu_regions_or_deny_all`] for base regions and
+/// [`peripheral_mpu_regions_or_disabled`] for peripheral regions.
+pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) {
+    pcb.set_cached_base_regions(partition_mpu_regions_or_deny_all(pcb));
+    pcb.set_cached_periph_regions(peripheral_mpu_regions_or_disabled(pcb));
+}
+
 /// Index of the first dynamic region within the array returned by
 /// [`partition_mpu_regions`].  Regions before this index (background,
 /// code, stack guard) are static; the region at this index (data RW)
@@ -1580,6 +1590,34 @@ mod tests {
             "R2 size must match stack_size"
         );
         assert_eq!(decode_rbar_base(regions[2].0), 0x2000_0000);
+    }
+
+    // ------------------------------------------------------------------
+    // precompute_mpu_cache
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn precompute_cache_base_regions_match_on_the_fly() {
+        let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        let expected = partition_mpu_regions_or_deny_all(&pcb);
+        precompute_mpu_cache(&mut pcb);
+        assert_eq!(*pcb.cached_base_regions(), expected);
+    }
+
+    #[test]
+    fn precompute_cache_periph_regions_with_peripherals() {
+        let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
+        let expected = peripheral_mpu_regions(&pcb).unwrap();
+        precompute_mpu_cache(&mut pcb);
+        assert_eq!(*pcb.cached_periph_regions(), expected);
+    }
+
+    #[test]
+    fn precompute_cache_periph_disabled_when_no_peripherals() {
+        let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        precompute_mpu_cache(&mut pcb);
+        assert_eq!(*pcb.cached_periph_regions(), [DISABLED_R4, DISABLED_R5],);
     }
 
     /// Prove `peripheral_region_pair` ignores `MpuRegion.permissions`:
