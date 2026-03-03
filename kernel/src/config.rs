@@ -3074,6 +3074,56 @@ mod tests {
         assert!(validate_irq_priority(0xFF, 0x20).is_ok());
     }
 
+    // ============ enable_bound_irqs priority-enforcement integration tests ====
+
+    /// DefaultConfig's IRQ_DEFAULT_PRIORITY must pass its own floor.
+    #[test]
+    fn enable_bound_irqs_default_config_priority_valid() {
+        // Simulates the validate_irq_priority call that enable_bound_irqs
+        // makes: priority = IRQ_DEFAULT_PRIORITY, floor = MIN_APP_IRQ_PRIORITY.
+        let priority = <DefaultConfig as KernelConfig>::IRQ_DEFAULT_PRIORITY;
+        let floor = <DefaultConfig as KernelConfig>::MIN_APP_IRQ_PRIORITY;
+        assert_eq!(priority, 0xC0);
+        assert_eq!(floor, 0x20);
+        assert!(validate_irq_priority(priority, floor).is_ok());
+    }
+
+    /// DefaultConfig's floor must reject a priority that sneaks into Tier 1.
+    #[test]
+    fn enable_bound_irqs_default_config_rejects_kernel_tier() {
+        let floor = <DefaultConfig as KernelConfig>::MIN_APP_IRQ_PRIORITY;
+        // SYSTICK_PRIORITY lives in Tier 1 — must be rejected.
+        let kernel_prio = <DefaultConfig as KernelConfig>::SYSTICK_PRIORITY;
+        assert!(kernel_prio < floor);
+        let err = validate_irq_priority(kernel_prio, floor).unwrap_err();
+        assert!(err.contains("MIN_APP_IRQ_PRIORITY"));
+    }
+
+    /// Custom config where IRQ_DEFAULT sits exactly at the floor.
+    struct IrqAtFloor;
+    impl KernelConfig for IrqAtFloor {
+        const N: usize = 2;
+        const IRQ_DEFAULT_PRIORITY: u8 = 0x20; // exactly MIN_APP_IRQ_PRIORITY
+        kernel_config_types!();
+    }
+
+    #[test]
+    fn enable_bound_irqs_irq_at_floor_valid() {
+        let priority = <IrqAtFloor as KernelConfig>::IRQ_DEFAULT_PRIORITY;
+        let floor = <IrqAtFloor as KernelConfig>::MIN_APP_IRQ_PRIORITY;
+        assert_eq!(priority, floor);
+        assert!(validate_irq_priority(priority, floor).is_ok());
+    }
+
+    #[test]
+    fn enable_bound_irqs_irq_at_floor_rejects_one_below() {
+        let floor = <IrqAtFloor as KernelConfig>::MIN_APP_IRQ_PRIORITY;
+        // One notch into kernel territory — must fail.
+        let bad_prio = floor - 1;
+        let err = validate_irq_priority(bad_prio, floor).unwrap_err();
+        assert!(err.contains("MIN_APP_IRQ_PRIORITY"));
+    }
+
     /// SVCALL == SYSTICK violates strict inequality requirement.
     struct SvcallEqualsSystick;
     impl KernelConfig for SvcallEqualsSystick {
