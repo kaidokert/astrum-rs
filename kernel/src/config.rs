@@ -1564,6 +1564,22 @@ mod tests {
         assert_eq!(RELOAD, 999);
     }
 
+    #[test]
+    fn compute_systick_reload_min_one_cycle() {
+        // Boundary: minimum valid configuration — exactly 1 cycle, reload = 0
+        // 1 MHz clock, 1 us period → (1_000_000 * 1) / 1_000_000 = 1 cycle
+        const RELOAD: u32 = compute_systick_reload(1_000_000, 1);
+        assert_eq!(RELOAD, 0);
+    }
+
+    #[test]
+    fn compute_systick_reload_high_frequency_clock() {
+        // 480 MHz clock (Cortex-M7 high-performance), 1 ms tick
+        // cycles = 480_000_000 * 1000 / 1_000_000 = 480_000, reload = 479_999
+        const RELOAD: u32 = compute_systick_reload(480_000_000, 1000);
+        assert_eq!(RELOAD, 479_999);
+    }
+
     // Compile-time assertion tests for compute_systick_reload
     const _: u32 = compute_systick_reload(12_000_000, 1000);
     const _: u32 = compute_systick_reload(120_000_000, 1000);
