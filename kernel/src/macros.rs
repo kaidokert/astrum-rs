@@ -367,8 +367,8 @@ macro_rules! bind_interrupts {
         static __IRQ_BINDINGS: [$crate::irq_dispatch::IrqBinding; 0 $( + { let _ = $irq; 1 } )+] = __IRQ_BINDINGS_INIT;
 
         // ---- direct dispatch table (ARM only) ----
-        // TODO: reviewer false positive – $count is the IVT size (max IRQ slots),
-        // not the number of bindings; the table correctly covers all valid IRQ numbers.
+        // $count is the IVT size (max IRQ slots), not the number of bindings;
+        // the table covers all valid IRQ numbers.
         #[cfg(all(not(test), target_arch = "arm"))]
         const __IRQ_DIRECT_TABLE: [u8; $count] =
             $crate::irq_dispatch::build_direct_table::<{ $count }>(&__IRQ_BINDINGS_INIT);
@@ -377,8 +377,6 @@ macro_rules! bind_interrupts {
         #[cfg(all(not(test), target_arch = "arm"))]
         extern "C" fn __irq_dispatch() {
             let ipsr: u32;
-            // TODO: reviewer false positive – this comment already has the
-            // required `// SAFETY:` prefix; the truncated diff was misleading.
             // SAFETY: `mrs` reads the IPSR register, which is always
             // readable in any execution mode on Cortex-M.  The register
             // is read-only and has no side effects.
@@ -469,9 +467,6 @@ macro_rules! bind_interrupts {
         pub fn enable_bound_irqs<T>(_nvic: &mut T, _priority: u8) {}
 
         /// Mask (disable) each IRQ bound by this macro.
-        // TODO: reviewer false positive – NVIC::mask is a safe function in
-        // cortex-m 0.7 (only unmask is unsafe), so no unsafe block or
-        // SAFETY comment is required here.
         #[cfg(all(not(test), target_arch = "arm"))]
         pub fn disable_bound_irqs() {
             $(

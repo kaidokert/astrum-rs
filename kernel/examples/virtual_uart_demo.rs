@@ -75,9 +75,6 @@ extern "C" fn p1_main() -> ! {
     // TODO: SYS_DEV_READ_TIMED currently reads one byte per call (kernel
     // hardcodes len=1). Replace this loop with a single multi-byte blocking
     // read once the kernel supports a length parameter.
-    // TODO: reviewer false positive — SYS_DEV_READ_TIMED ABI is
-    // (device_id, timeout, buf_ptr) with no len arg; the kernel validates
-    // exactly 1 byte at buf_ptr.
     let mut buf = [0u8; 8];
     let mut received = 0usize;
     while received < MSG_REPLY.len() {

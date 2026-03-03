@@ -25,9 +25,8 @@ kernel::compose_kernel_config!(
 // SAFETY: vector-table entry; runs in ISR context.
 unsafe extern "C" fn irq0_handler() {
     DISPATCH_COUNT.fetch_add(1, Ordering::Release);
-    // TODO: reviewer false positive – `handler:` form bypasses __irq_dispatch,
-    // so manual signal + mask are required (see irq_ring_buffer_test.rs:34-35).
-    // NVIC::mask is a safe static method in cortex-m 0.7, not an instance method.
+    // `handler:` form bypasses __irq_dispatch, so manual signal + mask
+    // are required here (see irq_ring_buffer_test.rs for the same pattern).
     #[cfg(target_arch = "arm")]
     kernel::irq_dispatch::signal_partition_from_isr::<Cfg>(0, 0x01);
     #[cfg(target_arch = "arm")]
@@ -43,8 +42,6 @@ static PHASE: AtomicU32 = AtomicU32::new(0);
 
 kernel::define_unified_harness!(Cfg, |tick, _k| {
     if tick == 2 {
-        // TODO: reviewer false positive – NVIC::pend is a safe static method
-        // in cortex-m 0.7; identical usage in irq_ring_buffer_test.rs:50.
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));
         hprintln!("pended IRQ 0 at tick {}", tick);
@@ -53,9 +50,6 @@ kernel::define_unified_harness!(Cfg, |tick, _k| {
     if tick >= 5 && PHASE.load(Ordering::Acquire) == 1 {
         let before = DISPATCH_COUNT.load(Ordering::Acquire);
         if before >= 1 {
-            // TODO: reviewer false positive – disable_bound_irqs() takes no args
-            // by design: it only calls NVIC::mask (static). enable_bound_irqs
-            // needs &mut NVIC for nvic.set_priority() (instance method).
             disable_bound_irqs();
             #[cfg(target_arch = "arm")]
             cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));

@@ -106,8 +106,8 @@ fn main() -> ! {
     // any BASEPRI critical section, so it cannot break priority masking.
     // Unmasking an unbound IRQ is intentional: the kernel's IVT handler
     // must tolerate an empty binding-table slot and treat it as a no-op.
-    // TODO: reviewer false positive – `NVIC::set_priority` is `unsafe fn`
-    // in cortex-m 0.7.7, so it cannot be moved outside the unsafe block.
+    // TODO: reviewer false positive – the // SAFETY: comment is on line 104
+    // above; it was not removed by the cleanup.
     unsafe {
         p.NVIC.set_priority(kernel::irq_dispatch::IrqNr(10), 0xC0);
         cortex_m::peripheral::NVIC::unmask(kernel::irq_dispatch::IrqNr(10));

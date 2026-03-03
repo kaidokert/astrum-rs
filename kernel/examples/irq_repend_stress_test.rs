@@ -44,8 +44,6 @@ static ACK_COUNT: AtomicU32 = AtomicU32::new(0);
 kernel::define_unified_harness!(StressConfig, |tick, _k| {
     // Pend IRQ 0 on every tick from tick 2 onward (continuous pressure).
     if tick >= 2 {
-        // TODO: reviewer false positive — IrqNr implements InterruptNumber
-        // (see kernel/src/irq_dispatch.rs, cfg'd on target_arch = "arm").
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));
     }
@@ -70,8 +68,6 @@ kernel::define_unified_harness!(StressConfig, |tick, _k| {
     }
 });
 
-// TODO: reviewer false positive — hprintln is only on error paths, not the hot
-// path. The happy-path loop (svc! → svc! → fetch_add) has no semihosting calls.
 // TODO: consider moving error reporting to the harness to reduce partition noise.
 extern "C" fn p0_main_body(_r0: u32) -> ! {
     loop {
@@ -108,8 +104,6 @@ fn main() -> ! {
     let k =
         Kernel::<StressConfig>::create(sched, &cfgs).expect("irq_repend_stress: Kernel::create");
 
-    // TODO: reviewer false positive — store_kernel, enable_bound_irqs, and boot
-    // are macro-generated (define_unified_harness!, bind_interrupts!), not imported.
     store_kernel(k);
 
     // Unmask IRQ 0 so the software-triggered pend fires.
