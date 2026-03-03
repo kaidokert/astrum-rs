@@ -41,7 +41,10 @@ bounded WCET.
 ## 4. `bind_interrupts!` Macro
 
 Defined in `kernel/src/macros.rs:280`. Generates: `__IRQ_BINDINGS`
-(static array), `__irq_dispatch` (handler), `__INTERRUPTS` (IVT in
+(static array), `__IRQ_DIRECT_TABLE` (const `[u8; count]` mapping
+each IRQ number to its `__IRQ_BINDINGS` index, or `0xFF` for unbound
+slots — built at compile time by `build_direct_table`),
+`__irq_dispatch` (handler), `__INTERRUPTS` (IVT in
 `.vector_table.interrupts`), `enable_bound_irqs`, `disable_bound_irqs`.
 
 **2-tuple form** (defaults to `PartitionAcks`):
@@ -73,8 +76,9 @@ Generated at `kernel/src/macros.rs:322`:
 
 1. `mrs {}, ipsr` → extract exception number.
 2. `irq_num = (ipsr & 0x1FF) - 16` (external IRQs start at 16).
-3. `lookup_binding(&__IRQ_BINDINGS, irq_num)` — const-friendly O(n)
-   linear scan (`kernel/src/irq_dispatch.rs:159`).
+3. `__IRQ_DIRECT_TABLE.get(irq_num)` — O(1) direct-indexed lookup
+   into the compile-time table. Returns the `__IRQ_BINDINGS` index
+   for bound IRQs, or `0xFF` for unbound slots (early return).
 4. Match `clear_model`:
    - `PartitionAcks` → `NVIC::mask(IrqNr(irq_num))`.
    - `KernelClears` → `write_volatile` to the specified MMIO address.
@@ -121,9 +125,9 @@ targets get no-op stubs for `cargo check` compatibility.
   using `PartitionAcks` call `SYS_IRQ_ACK` to re-enable their masked
   IRQ after acknowledging the hardware source. The syscall validates
   ownership and clear-model before calling `NVIC::unmask`.
-- Binding lookup is O(n) linear scan; sufficient for typical binding
-  counts (<10) but could be replaced with a direct-indexed array if
-  the IRQ space is dense.
+- `lookup_binding` (O(n) linear scan) is retained only for the cold
+  `SYS_IRQ_ACK` validation path in `irq_ack.rs`; the hot dispatch
+  path uses the O(1) `__IRQ_DIRECT_TABLE`.
 - `IsrRingBuffer` is single-producer/single-consumer on single-core
   only; no atomic fencing for multi-core.
 
