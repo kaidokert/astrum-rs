@@ -3,6 +3,72 @@
 //! `IsrRingBuffer<D, M>` is a fixed-depth ring of fixed-size event records.
 //! `D` is the max pending record count; `M` is payload bytes per record.
 //! All storage is inline (no heap). Single-core Cortex-M only.
+//!
+//! # Single-producer / single-consumer protocol
+//!
+//! The ring buffer follows an SPSC (single-producer, single-consumer)
+//! discipline:
+//!
+//! - **Producer (ISR):** The hardware interrupt handler calls
+//!   [`StaticIsrRing::push_from_isr`] to enqueue an event record.
+//! - **Consumer (partition):** The partition's bottom-half calls
+//!   [`StaticIsrRing::pop_with`] to dequeue and process records.
+//!
+//! Because both sides share mutable state (`head`, `count`) without
+//! atomics, access must be **mutually exclusive**.
+//!
+//! # IRQ masking requirement
+//!
+//! On single-core Cortex-M the only way a partition can race with the
+//! ISR is if the bound IRQ fires while the partition is mid-operation.
+//! The partition **must mask the bound IRQ** before calling any reader
+//! method ([`pop_with`](StaticIsrRing::pop_with),
+//! [`reset_overflow_count`](StaticIsrRing::reset_overflow_count),
+//! [`len`](StaticIsrRing::len), [`is_empty`](StaticIsrRing::is_empty),
+//! [`is_full`](StaticIsrRing::is_full)). Failure to mask allows the
+//! ISR to preempt mid-read, corrupting the head/count state.
+//!
+//! # Drain-then-ack pattern
+//!
+//! The typical partition-side loop looks like this:
+//!
+//! ```rust,ignore
+//! loop {
+//!     // Block until the kernel signals that the ISR fired.
+//!     plib::sys_event_wait(EVT_IRQ);
+//!
+//!     // The IRQ is already masked by the dispatch handler (PartitionAcks
+//!     // model), so it is safe to drain without explicit masking.
+//!     loop {
+//!         // SAFETY: sole consumer; IRQ is masked (ack not yet called).
+//!         let popped = unsafe { RING.pop_with(|tag, payload| {
+//!             handle_event(tag, payload);
+//!         })};
+//!         if !popped { break; }
+//!     }
+//!
+//!     // Check for overflow (events dropped while the ring was full).
+//!     // SAFETY: IRQ still masked.
+//!     let dropped = unsafe { RING.reset_overflow_count() };
+//!     if dropped > 0 {
+//!         report_overflow(dropped);
+//!     }
+//!
+//!     // Unmask the IRQ so the ISR can fire again.
+//!     plib::sys_irq_ack(IRQ_NUM);
+//! }
+//! ```
+//!
+//! # `PartitionAcks` and implicit masking
+//!
+//! When an IRQ binding uses the default [`PartitionAcks`] clear model,
+//! the kernel's dispatch handler masks the IRQ line in the NVIC before
+//! signalling the partition.  The line stays masked until the partition
+//! calls `SYS_IRQ_ACK`.  This means the partition does **not** need to
+//! mask the IRQ explicitly — the entire window between `event_wait`
+//! returning and `sys_irq_ack` completing is implicitly protected.
+//!
+//! [`PartitionAcks`]: crate::irq_dispatch::IrqClearModel::PartitionAcks
 
 /// Error returned when the ring buffer is full.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
