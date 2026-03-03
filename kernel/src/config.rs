@@ -555,6 +555,9 @@ pub trait KernelConfig {
     /// Default NVIC priority for device IRQs in the four-tier model:
     /// `SVCALL < IRQ_DEFAULT < SYSTICK < PENDSV` (numerically).
     const IRQ_DEFAULT_PRIORITY: u8 = 0xC0;
+    /// Minimum (numerically largest allowed) priority for application IRQs.
+    /// This is the floor of Tier 2 in the three-tier priority model.
+    const MIN_APP_IRQ_PRIORITY: u8 = 0x20;
 
     /// Core clock frequency in Hz.
     ///
@@ -820,6 +823,8 @@ macro_rules! _kernel_config_inherent_consts {
                 <$name as $crate::config::KernelConfig>::SYSTICK_PRIORITY;
             $vis const IRQ_DEFAULT_PRIORITY: u8 =
                 <$name as $crate::config::KernelConfig>::IRQ_DEFAULT_PRIORITY;
+            $vis const MIN_APP_IRQ_PRIORITY: u8 =
+                <$name as $crate::config::KernelConfig>::MIN_APP_IRQ_PRIORITY;
             $vis const CORE_CLOCK_HZ: u32 = <$name as $crate::config::KernelConfig>::CORE_CLOCK_HZ;
             $vis const TICK_PERIOD_US: u32 = <$name as $crate::config::KernelConfig>::TICK_PERIOD_US;
             $vis const SYSTICK_CYCLES: u32 = <$name as $crate::config::KernelConfig>::SYSTICK_CYCLES;
@@ -943,6 +948,9 @@ macro_rules! _kernel_config_field {
     };
     (irq_priority = $v:expr) => {
         const IRQ_DEFAULT_PRIORITY: u8 = $v;
+    };
+    (min_app_irq_priority = $v:expr) => {
+        const MIN_APP_IRQ_PRIORITY: u8 = $v;
     };
     (debug_auto_drain = $v:expr) => {
         const DEBUG_AUTO_DRAIN_BUDGET: usize = $v;
@@ -2149,6 +2157,7 @@ mod tests {
         _kernel_config_field!(pendsv_priority = 0xFF);
         _kernel_config_field!(systick_priority = 0x80);
         _kernel_config_field!(irq_priority = 0x40);
+        _kernel_config_field!(min_app_irq_priority = 0x30);
         _kernel_config_field!(debug_auto_drain = 512);
         kernel_config_types!();
     }
@@ -2180,6 +2189,7 @@ mod tests {
         assert_eq!(FieldMacroConfig::PENDSV_PRIORITY, 0xFF);
         assert_eq!(FieldMacroConfig::SYSTICK_PRIORITY, 0x80);
         assert_eq!(FieldMacroConfig::IRQ_DEFAULT_PRIORITY, 0x40);
+        assert_eq!(FieldMacroConfig::MIN_APP_IRQ_PRIORITY, 0x30);
         assert_eq!(FieldMacroConfig::DEBUG_AUTO_DRAIN_BUDGET, 512);
     }
 
@@ -2906,6 +2916,23 @@ mod tests {
         assert_priority_order::<ComposedIrqOverride>();
     }
 
+    compose_kernel_config!(
+        ComposedMinAppIrqOverride < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            min_app_irq_priority = 0x40;
+        }
+    );
+
+    #[test]
+    fn compose_min_app_irq_priority_override() {
+        assert_eq!(ComposedMinAppIrqOverride::MIN_APP_IRQ_PRIORITY, 0x40);
+        // Default should remain unchanged for other fields.
+        assert_eq!(ComposedMinAppIrqOverride::IRQ_DEFAULT_PRIORITY, 0xC0);
+    }
+
     struct IrqEqualsSystick;
     impl KernelConfig for IrqEqualsSystick {
         const N: usize = 2;
@@ -2956,6 +2983,11 @@ mod tests {
     #[test]
     fn default_config_debug_values() {
         assert_eq!(DefaultConfig::DEBUG_AUTO_DRAIN_BUDGET, 256);
+    }
+
+    #[test]
+    fn default_config_min_app_irq_priority() {
+        assert_eq!(DefaultConfig::MIN_APP_IRQ_PRIORITY, 0x20);
     }
 
     #[test]
