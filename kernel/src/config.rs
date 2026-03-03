@@ -548,12 +548,14 @@ pub trait KernelConfig {
     const SVCALL_PRIORITY: u8 = 0x00;
     /// PendSV exception priority (must be the lowest of the three).
     const PENDSV_PRIORITY: u8 = 0xFF;
-    /// SysTick exception priority (must be lower priority than SVCall,
-    /// higher priority than PendSV; on Cortex-M a *larger* number means
-    /// *lower* priority).
-    const SYSTICK_PRIORITY: u8 = 0xFE;
-    /// Default NVIC priority for device IRQs in the four-tier model:
-    /// `SVCALL < IRQ_DEFAULT < SYSTICK < PENDSV` (numerically).
+    /// SysTick exception priority in the three-tier model:
+    /// `SVCALL < SYSTICK < MIN_APP_IRQ <= IRQ_DEFAULT < PENDSV`
+    /// (numerically, larger = lower urgency).  SysTick sits above all
+    /// device IRQs so the tick is never delayed by application handlers.
+    const SYSTICK_PRIORITY: u8 = 0x10;
+    /// Default NVIC priority for device IRQs in the three-tier model:
+    /// `SVCALL < SYSTICK < MIN_APP_IRQ <= IRQ_DEFAULT < PENDSV`
+    /// (numerically).  Must be >= MIN_APP_IRQ_PRIORITY.
     const IRQ_DEFAULT_PRIORITY: u8 = 0xC0;
     /// Minimum (numerically largest allowed) priority for application IRQs.
     /// This is the floor of Tier 2 in the three-tier priority model.
@@ -704,20 +706,25 @@ pub const fn compute_systick_reload(core_clock_hz: u32, tick_period_us: u32) -> 
     reload as u32
 }
 
-/// Compile-time assertion enforcing the four-tier priority ordering:
-/// SVCall < IRQ_DEFAULT < SysTick < PendSV (numerically, larger = lower urgency).
+/// Compile-time assertion enforcing the three-tier priority ordering:
+/// `SVCALL < SYSTICK < MIN_APP_IRQ <= IRQ_DEFAULT < PENDSV`
+/// (numerically, larger = lower urgency).
 pub const fn assert_priority_order<C: KernelConfig>() {
     assert!(
-        C::SVCALL_PRIORITY < C::IRQ_DEFAULT_PRIORITY,
-        "SVCall priority must be strictly higher (smaller number) than IRQ default priority"
+        C::SVCALL_PRIORITY < C::SYSTICK_PRIORITY,
+        "SVCall priority must be strictly higher (smaller number) than SysTick priority"
     );
     assert!(
-        C::IRQ_DEFAULT_PRIORITY < C::SYSTICK_PRIORITY,
-        "IRQ default priority must be strictly higher (smaller number) than SysTick priority"
+        C::SYSTICK_PRIORITY < C::MIN_APP_IRQ_PRIORITY,
+        "SysTick priority must be strictly higher (smaller number) than MIN_APP_IRQ priority"
     );
     assert!(
-        C::SYSTICK_PRIORITY < C::PENDSV_PRIORITY,
-        "SysTick priority must be strictly higher (smaller number) than PendSV priority"
+        C::MIN_APP_IRQ_PRIORITY <= C::IRQ_DEFAULT_PRIORITY,
+        "MIN_APP_IRQ priority must be <= (numerically) IRQ default priority"
+    );
+    assert!(
+        C::IRQ_DEFAULT_PRIORITY < C::PENDSV_PRIORITY,
+        "IRQ default priority must be strictly higher (smaller number) than PendSV priority"
     );
 }
 
@@ -1578,7 +1585,7 @@ mod tests {
     impl KernelConfig for CustomPriority {
         const N: usize = 2;
         const PENDSV_PRIORITY: u8 = 0xE0;
-        const SYSTICK_PRIORITY: u8 = 0xC0;
+        const SYSTICK_PRIORITY: u8 = 0x10;
         const IRQ_DEFAULT_PRIORITY: u8 = 0x80;
         const CORE_CLOCK_HZ: u32 = 80_000_000; // 10 ms tick at 80 MHz
         const TICK_PERIOD_US: u32 = 10_000;
@@ -1594,7 +1601,7 @@ mod tests {
     fn default_priorities_have_correct_values() {
         assert_eq!(DefaultPriority::SVCALL_PRIORITY, 0x00);
         assert_eq!(DefaultPriority::PENDSV_PRIORITY, 0xFF);
-        assert_eq!(DefaultPriority::SYSTICK_PRIORITY, 0xFE);
+        assert_eq!(DefaultPriority::SYSTICK_PRIORITY, 0x10);
         assert_eq!(DefaultPriority::IRQ_DEFAULT_PRIORITY, 0xC0);
     }
 
@@ -1622,7 +1629,7 @@ mod tests {
     #[test]
     fn custom_priorities_override_defaults() {
         assert_eq!(CustomPriority::PENDSV_PRIORITY, 0xE0);
-        assert_eq!(CustomPriority::SYSTICK_PRIORITY, 0xC0);
+        assert_eq!(CustomPriority::SYSTICK_PRIORITY, 0x10);
         assert_eq!(CustomPriority::IRQ_DEFAULT_PRIORITY, 0x80);
     }
 
@@ -2155,8 +2162,8 @@ mod tests {
         _kernel_config_field!(mpu_enforce = true);
         _kernel_config_field!(svcall_priority = 0x00);
         _kernel_config_field!(pendsv_priority = 0xFF);
-        _kernel_config_field!(systick_priority = 0x80);
-        _kernel_config_field!(irq_priority = 0x40);
+        _kernel_config_field!(systick_priority = 0x10);
+        _kernel_config_field!(irq_priority = 0x80);
         _kernel_config_field!(min_app_irq_priority = 0x30);
         _kernel_config_field!(debug_auto_drain = 512);
         kernel_config_types!();
@@ -2187,8 +2194,8 @@ mod tests {
         assert!(mpu);
         assert_eq!(FieldMacroConfig::SVCALL_PRIORITY, 0x00);
         assert_eq!(FieldMacroConfig::PENDSV_PRIORITY, 0xFF);
-        assert_eq!(FieldMacroConfig::SYSTICK_PRIORITY, 0x80);
-        assert_eq!(FieldMacroConfig::IRQ_DEFAULT_PRIORITY, 0x40);
+        assert_eq!(FieldMacroConfig::SYSTICK_PRIORITY, 0x10);
+        assert_eq!(FieldMacroConfig::IRQ_DEFAULT_PRIORITY, 0x80);
         assert_eq!(FieldMacroConfig::MIN_APP_IRQ_PRIORITY, 0x30);
         assert_eq!(FieldMacroConfig::DEBUG_AUTO_DRAIN_BUDGET, 512);
     }
@@ -2933,17 +2940,32 @@ mod tests {
         assert_eq!(ComposedMinAppIrqOverride::IRQ_DEFAULT_PRIORITY, 0xC0);
     }
 
-    struct IrqEqualsSystick;
-    impl KernelConfig for IrqEqualsSystick {
+    /// SYSTICK >= MIN_APP_IRQ violates three-tier ordering.
+    struct SystickNotAboveMinAppIrq;
+    impl KernelConfig for SystickNotAboveMinAppIrq {
         const N: usize = 2;
-        const IRQ_DEFAULT_PRIORITY: u8 = 0xFE;
+        const SYSTICK_PRIORITY: u8 = 0x20; // equal to MIN_APP_IRQ_PRIORITY
         kernel_config_types!();
     }
 
     #[test]
-    #[should_panic(expected = "IRQ default priority must be strictly higher")]
-    fn assert_priority_order_panics_irq_not_below_systick() {
-        assert_priority_order::<IrqEqualsSystick>();
+    #[should_panic(expected = "SysTick priority must be strictly higher")]
+    fn assert_priority_order_panics_systick_ge_min_app_irq() {
+        assert_priority_order::<SystickNotAboveMinAppIrq>();
+    }
+
+    /// IRQ_DEFAULT < MIN_APP_IRQ violates three-tier ordering.
+    struct IrqBelowMinAppIrq;
+    impl KernelConfig for IrqBelowMinAppIrq {
+        const N: usize = 2;
+        const IRQ_DEFAULT_PRIORITY: u8 = 0x10; // below MIN_APP_IRQ_PRIORITY (0x20)
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "MIN_APP_IRQ priority must be")]
+    fn assert_priority_order_panics_irq_below_min_app_irq() {
+        assert_priority_order::<IrqBelowMinAppIrq>();
     }
 
     // ============ DefaultConfig tests ============
