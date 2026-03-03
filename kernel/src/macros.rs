@@ -439,8 +439,15 @@ macro_rules! bind_interrupts {
         // ---- NVIC helpers ----
 
         /// Set the NVIC priority and unmask each IRQ bound by this macro.
+        ///
+        /// Panics if `priority` is numerically below `MIN_APP_IRQ_PRIORITY`,
+        /// which would break the three-tier priority ordering.
         #[cfg(all(not(test), target_arch = "arm"))]
         pub fn enable_bound_irqs(nvic: &mut cortex_m::peripheral::NVIC, priority: u8) {
+            $crate::config::validate_irq_priority(
+                priority,
+                <$Config as $crate::config::KernelConfig>::MIN_APP_IRQ_PRIORITY,
+            );
             $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 k.store_irq_bindings(&__IRQ_BINDINGS);
             });
