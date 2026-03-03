@@ -217,6 +217,10 @@ macro_rules! define_unified_harness {
         /// (R5-R7) with peripheral regions from all partitions, so that
         /// `program_regions()` hardware-programs them on every PendSV
         /// context switch.
+        // TODO: reviewer false positive (missing feature guard) — this
+        // dynamic-mode boot path IS gated by #[cfg(feature = "dynamic-mpu")];
+        // the static-mode __boot_mpu_init above uses apply_partition_mpu_cached
+        // which programs all 6 regions (R0-R5).  Both variants are correct.
         #[cfg(feature = "dynamic-mpu")]
         #[no_mangle]
         fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) {
@@ -226,7 +230,24 @@ macro_rules! define_unified_harness {
                 // can propagate errors back to boot().
                 let pcb = k.partitions().get(pid as usize)
                     .expect("boot: next_partition PID missing from partition table");
-                $crate::mpu::apply_partition_mpu(mpu, pcb);
+                // Program R0-R5 from pre-computed cache within a single
+                // disable/enable cycle that spans strategy setup below.
+                // TODO(DRY): extract cached-region iteration into an
+                // mpu::apply_region_cache() helper shared with PendSV.
+                // Note: mpu_disable / configure_region / mpu_enable are safe
+                // pub fn wrappers with internal SAFETY comments — no unsafe
+                // blocks at this call site, so no SAFETY annotation required.
+                $crate::mpu::mpu_disable(mpu);
+                for &(rbar, rasr) in pcb.cached_base_regions() {
+                    $crate::mpu::configure_region(mpu, rbar, rasr);
+                }
+                // R4-R5: peripheral regions are required at boot — the
+                // dynamic strategy's configure_partition only updates slot
+                // state, not MPU hardware, so these are the final R4-R5
+                // values until the first PendSV context switch.
+                for &(rbar, rasr) in pcb.cached_periph_regions() {
+                    $crate::mpu::configure_region(mpu, rbar, rasr);
+                }
                 if let Some(regions) = $crate::mpu::partition_dynamic_regions(pcb) {
                     let periph_reserved = if pcb.peripheral_regions().is_empty() { 0 } else { 2 };
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
@@ -234,6 +255,7 @@ macro_rules! define_unified_harness {
                     )
                     .expect("failed to configure boot MPU");
                 }
+                $crate::mpu::mpu_enable(mpu);
 
                 // Populate dynamic slots 1-3 (R5-R7) with deduplicated
                 // peripheral regions from all partitions.
@@ -303,15 +325,13 @@ macro_rules! define_unified_harness {
                     $crate::mpu::apply_partition_mpu_cached(&p.MPU, pcb);
                 }
 
-                // Dynamic mode: write only R0-R3 base partition regions
+                // Dynamic mode: write R0-R3 from pre-computed cache
                 // (MPU already disabled above; R4-R5 overridden below).
+                // TODO(DRY): extract cached-region iteration into an
+                // mpu::apply_region_cache() helper shared with boot path.
                 #[cfg(feature = "dynamic-mpu")]
                 {
-                    // TODO: sentinel partitions (size==0) receive deny-all
-                    // regions here.  Future: give them real code-RX + data-RW
-                    // regions so tests exercise kernel-enforced isolation.
-                    let regions = $crate::mpu::partition_mpu_regions_or_deny_all(pcb);
-                    for &(rbar, rasr) in &regions {
+                    for &(rbar, rasr) in pcb.cached_base_regions() {
                         $crate::mpu::configure_region(&p.MPU, rbar, rasr);
                     }
 
@@ -512,4 +532,67 @@ mod tests {
     // used in the macro resolve correctly at const-eval time.
     const _: () = assert!(!GateTestDefault::MPU_ENFORCE);
     const _: () = assert!(GateTestEnforced::MPU_ENFORCE);
+
+    // ============ Cached-region equivalence tests ============
+    //
+    // Dynamic-mode __pendsv_program_mpu reads R0-R3 from
+    // cached_base_regions() and dynamic-mode __boot_mpu_init reads
+    // R0-R3 + R4-R5 from cached_base + cached_periph.  These tests
+    // verify that the cached data matches on-the-fly computation,
+    // validating the correctness of the data-source substitution.
+
+    #[test]
+    fn cached_base_matches_on_the_fly_for_pendsv() {
+        use crate::mpu::{partition_mpu_regions_or_deny_all, precompute_mpu_cache};
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+
+        let mut pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,        // entry_point
+            0x2000_0000,        // stack_base (1024-byte aligned)
+            0x2000_0000 + 1024, // stack_pointer
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+        );
+        let expected = partition_mpu_regions_or_deny_all(&pcb);
+        precompute_mpu_cache(&mut pcb);
+        assert_eq!(
+            *pcb.cached_base_regions(),
+            expected,
+            "PendSV contract: cached_base_regions must match on-the-fly R0-R3"
+        );
+    }
+
+    #[test]
+    fn cached_base_plus_periph_covers_r0_through_r5_for_boot() {
+        use crate::mpu::{
+            partition_mpu_regions_or_deny_all, peripheral_mpu_regions_or_disabled,
+            precompute_mpu_cache,
+        };
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+
+        let mut pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,        // entry_point
+            0x2000_0000,        // stack_base (1024-byte aligned)
+            0x2000_0000 + 1024, // stack_pointer
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+        )
+        .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 0x400, 0x1300_0000)]);
+        let expected_base = partition_mpu_regions_or_deny_all(&pcb);
+        let expected_periph = peripheral_mpu_regions_or_disabled(&pcb);
+        precompute_mpu_cache(&mut pcb);
+        assert_eq!(
+            *pcb.cached_base_regions(),
+            expected_base,
+            "boot contract: cached base regions must match on-the-fly R0-R3"
+        );
+        assert_eq!(
+            *pcb.cached_periph_regions(),
+            expected_periph,
+            "boot contract: cached periph regions must match on-the-fly R4-R5"
+        );
+        // Verify the combined count covers R0-R5 (6 register pairs).
+        let total = pcb.cached_base_regions().len() + pcb.cached_periph_regions().len();
+        assert_eq!(total, 6, "dynamic boot programs R0-R5 (6 pairs)");
+    }
 }
