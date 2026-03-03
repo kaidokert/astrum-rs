@@ -1,7 +1,7 @@
 //! QEMU end-to-end demo: LM3S6965 UART0 split-ISR pipeline.
 //!
 //! Custom UART0 RX ISR reads the data register via `read_volatile`, pushes
-//! tagged data into `IsrRingBuffer`, and signals P0.  The partition bottom-half
+//! tagged data into `StaticIsrRing`, and signals P0.  The partition bottom-half
 //! drains the ring buffer, validates received data, and calls `SYS_IRQ_ACK`.
 //! `NVIC::pend()` from the SysTick hook simulates UART RX events.
 #![no_std]
@@ -14,7 +14,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::split_isr::IsrRingBuffer;
+use kernel::split_isr::StaticIsrRing;
 use kernel::svc::{Kernel, SvcError};
 use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -38,16 +38,7 @@ kernel::compose_kernel_config!(
 );
 
 /// Ring buffer: 4 slots, 1 byte payload (one UART data byte each).
-///
-/// ## Static mut usage
-///
-/// `RING` uses `static mut` because `IsrRingBuffer` must reside at a fixed
-/// address shared between the ISR (producer, `uart0_rx_isr`) and the partition
-/// bottom-half (consumer, `p0_body`).  On single-core Cortex-M, the ISR masks
-/// the UART IRQ before returning and the partition unmasks it only after
-/// draining, so concurrent access cannot occur.  All accesses use
-/// `core::ptr::addr_of_mut!` to avoid creating references to the `static mut`.
-static mut RING: IsrRingBuffer<4, 1> = IsrRingBuffer::new();
+static RING: StaticIsrRing<4, 1> = StaticIsrRing::new();
 static POP_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[allow(dead_code)]
@@ -57,11 +48,8 @@ unsafe extern "C" fn uart0_rx_isr() {
     // has no side-effects beyond dequeueing one byte from the RX FIFO.
     let dr_val = unsafe { core::ptr::read_volatile(UART0_DR as *const u32) };
     let byte = (dr_val & 0xFF) as u8;
-    // SAFETY: Single-core Cortex-M — this ISR is the sole producer of RING.
-    // The consumer (p0_body) only drains while the UART IRQ is masked, so no
-    // concurrent access is possible.  `addr_of_mut!` avoids creating a
-    // reference to the `static mut`.
-    let _ = unsafe { (*core::ptr::addr_of_mut!(RING)).push_from_isr(UART0_IRQ, &[byte]) };
+    // SAFETY: single-core Cortex-M ISR — sole producer; see StaticIsrRing docs.
+    let _ = unsafe { RING.push_from_isr(UART0_IRQ, &[byte]) };
     #[cfg(target_arch = "arm")]
     kernel::irq_dispatch::signal_partition_from_isr::<Cfg>(0, 0x01);
     #[cfg(target_arch = "arm")]
@@ -107,11 +95,9 @@ extern "C" fn p0_body(_r0: u32) -> ! {
         // Drain the ring buffer while IRQ is masked.
         loop {
             let mut ok = false;
-            // SAFETY: UART0 IRQ is masked by the ISR after pushing, so the
-            // ISR cannot preempt this consumer path.  `addr_of_mut!` avoids
-            // creating a reference to the `static mut`.
+            // SAFETY: UART0 IRQ is masked — no concurrent access.
             let popped = unsafe {
-                (*core::ptr::addr_of_mut!(RING)).pop_with(|tag, data| {
+                RING.pop_with(|tag, data| {
                     // Validate: tag must be UART0 IRQ number.
                     if tag != UART0_IRQ {
                         hprintln!("uart_demo: FAIL tag={} exp={}", tag, UART0_IRQ);

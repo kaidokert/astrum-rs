@@ -10,7 +10,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::split_isr::IsrRingBuffer;
+use kernel::split_isr::StaticIsrRing;
 use kernel::svc::{Kernel, SvcError};
 use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -19,7 +19,7 @@ kernel::compose_kernel_config!(
     Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
-static mut RING: IsrRingBuffer<4, 4> = IsrRingBuffer::new();
+static RING: StaticIsrRing<4, 4> = StaticIsrRing::new();
 static PAYLOAD_IDX: AtomicU32 = AtomicU32::new(0);
 static POP_COUNT: AtomicU32 = AtomicU32::new(0);
 
@@ -27,10 +27,8 @@ static POP_COUNT: AtomicU32 = AtomicU32::new(0);
 unsafe extern "C" fn ring_buffer_isr() {
     let idx = PAYLOAD_IDX.load(Ordering::Relaxed) as u8;
     let tag = idx.wrapping_add(1);
-    // SAFETY: single-core Cortex-M ISR — no concurrent access.
-    let _ = unsafe {
-        (*core::ptr::addr_of_mut!(RING)).push_from_isr(tag, &[0xA0 | idx, idx, idx, idx])
-    };
+    // SAFETY: single-core Cortex-M ISR — sole producer; see StaticIsrRing docs.
+    let _ = unsafe { RING.push_from_isr(tag, &[0xA0 | idx, idx, idx, idx]) };
     // handler: form bypasses __irq_dispatch, so manual signal + mask are
     // required (not redundant).
     #[cfg(target_arch = "arm")]
@@ -83,10 +81,9 @@ extern "C" fn p0_body(_r0: u32) -> ! {
             let exp = [0xA0 | exp_idx, exp_idx, exp_idx, exp_idx];
             let exp_tag = next_tag;
             let mut ok = false;
-            // SAFETY: sole consumer; ISR is masked (IRQ_ACK not yet called),
-            // so no concurrent push_from_isr can occur.
+            // SAFETY: sole consumer; ISR is masked (IRQ_ACK not yet called).
             let popped = unsafe {
-                (*core::ptr::addr_of_mut!(RING)).pop_with(|tag, data| {
+                RING.pop_with(|tag, data| {
                     if tag != exp_tag || data != exp {
                         hprintln!("rb_test: FAIL tag={} exp={}", tag, exp_tag);
                         debug::exit(debug::EXIT_FAILURE);
