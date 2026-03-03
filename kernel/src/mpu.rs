@@ -384,6 +384,8 @@ pub fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) -> [(u32,
 pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) {
     pcb.set_cached_base_regions(partition_mpu_regions_or_deny_all(pcb));
     pcb.set_cached_periph_regions(peripheral_mpu_regions_or_disabled(pcb));
+    #[cfg(debug_assertions)]
+    pcb.seal_cache();
 }
 
 /// Index of the first dynamic region within the array returned by
