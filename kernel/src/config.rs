@@ -3139,6 +3139,35 @@ mod tests {
         assert_priority_order::<SvcallEqualsSystick>();
     }
 
+    /// SYSTICK == SVCALL == 0x00 violates strict inequality requirement.
+    struct SystickEqualsSvcallZero;
+    impl KernelConfig for SystickEqualsSvcallZero {
+        const N: usize = 2;
+        const SVCALL_PRIORITY: u8 = 0x00;
+        const SYSTICK_PRIORITY: u8 = 0x00;
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "SVCall priority must be strictly higher")]
+    fn assert_priority_order_panics_systick_equals_svcall_zero() {
+        assert_priority_order::<SystickEqualsSvcallZero>();
+    }
+
+    /// MIN_APP_IRQ == SYSTICK violates strict inequality requirement.
+    struct MinAppIrqEqualsSystick;
+    impl KernelConfig for MinAppIrqEqualsSystick {
+        const N: usize = 2;
+        const MIN_APP_IRQ_PRIORITY: u8 = 0x10; // equal to SYSTICK_PRIORITY (0x10)
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "SysTick priority must be strictly higher")]
+    fn assert_priority_order_panics_min_app_irq_equals_systick() {
+        assert_priority_order::<MinAppIrqEqualsSystick>();
+    }
+
     /// IRQ_DEFAULT == PENDSV violates strict inequality requirement.
     struct IrqEqualsPendsv;
     impl KernelConfig for IrqEqualsPendsv {
