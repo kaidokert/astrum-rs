@@ -168,6 +168,10 @@ name = "irq_ring_buffer_test"
 required-features = ["qemu", "log-semihosting", "custom-ivt"]
 
 [[example]]
+name = "irq_ring_overflow_test"
+required-features = ["qemu", "log-semihosting", "custom-ivt"]
+
+[[example]]
 name = "irq_disable_test"
 required-features = ["qemu", "log-semihosting", "custom-ivt"]
 
