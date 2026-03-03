@@ -17,6 +17,7 @@ EXAMPLES=(
     priv_drop_test
     # MPU enforcement test
     mpu_enforce_test
+    mpu_cached_test
     callee_save_check
 )
 

@@ -92,6 +92,10 @@ name = "mpu_enforce_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "mpu_cached_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "priv_fault_test"
 required-features = ["qemu", "log-semihosting"]
 
