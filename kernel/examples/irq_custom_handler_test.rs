@@ -122,7 +122,7 @@ fn main() -> ! {
     let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
     let k = Kernel::<CustomHandlerConfig>::create(sched, &cfgs).expect("custom_handler: create");
     store_kernel(k);
-    enable_bound_irqs(&mut p.NVIC, CustomHandlerConfig::IRQ_DEFAULT_PRIORITY);
+    enable_bound_irqs(&mut p.NVIC, CustomHandlerConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
     match boot(&parts, &mut p).expect("custom_handler: boot") {}
 }

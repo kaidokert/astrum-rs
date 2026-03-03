@@ -100,7 +100,7 @@ fn main() -> ! {
     store_kernel(k);
 
     // Unmask IRQ 0 so the software-triggered pend fires.
-    enable_bound_irqs(&mut p.NVIC, IrqTestConfig::IRQ_DEFAULT_PRIORITY);
+    enable_bound_irqs(&mut p.NVIC, IrqTestConfig::IRQ_DEFAULT_PRIORITY).unwrap();
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0)];
     match boot(&parts, &mut p).expect("irq_dispatch_test: boot") {}

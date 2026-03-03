@@ -115,7 +115,7 @@ fn main() -> ! {
     let cfgs = PartitionConfig::sentinel_array::<1>(Cfg::STACK_WORDS);
     let k = Kernel::<Cfg>::create(sched, &cfgs).expect("kernel");
     store_kernel(k);
-    enable_bound_irqs(&mut p.NVIC, Cfg::IRQ_DEFAULT_PRIORITY);
+    enable_bound_irqs(&mut p.NVIC, Cfg::IRQ_DEFAULT_PRIORITY).unwrap();
     let parts: [(extern "C" fn() -> !, u32); 1] = [(p0_main, 0)];
     match boot(&parts, &mut p).expect("boot") {}
 }

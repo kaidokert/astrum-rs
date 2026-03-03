@@ -97,7 +97,7 @@ fn main() -> ! {
     store_kernel(k);
 
     // Unmask bound IRQs (IRQ 5).
-    enable_bound_irqs(&mut p.NVIC, UnboundConfig::IRQ_DEFAULT_PRIORITY);
+    enable_bound_irqs(&mut p.NVIC, UnboundConfig::IRQ_DEFAULT_PRIORITY).unwrap();
 
     // Unmask unbound IRQ 10 so its IVT handler fires (lookup_binding → None).
     #[cfg(target_arch = "arm")]

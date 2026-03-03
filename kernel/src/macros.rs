@@ -440,14 +440,15 @@ macro_rules! bind_interrupts {
 
         /// Set the NVIC priority and unmask each IRQ bound by this macro.
         ///
-        /// Panics if `priority` is numerically below `MIN_APP_IRQ_PRIORITY`,
-        /// which would break the three-tier priority ordering.
+        /// Returns `Err` if `priority` is numerically below
+        /// `MIN_APP_IRQ_PRIORITY`, which would break the four-tier priority
+        /// ordering.
         #[cfg(all(not(test), target_arch = "arm"))]
-        pub fn enable_bound_irqs(nvic: &mut cortex_m::peripheral::NVIC, priority: u8) {
+        pub fn enable_bound_irqs(nvic: &mut cortex_m::peripheral::NVIC, priority: u8) -> Result<(), &'static str> {
             $crate::config::validate_irq_priority(
                 priority,
                 <$Config as $crate::config::KernelConfig>::MIN_APP_IRQ_PRIORITY,
-            );
+            )?;
             $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 k.store_irq_bindings(&__IRQ_BINDINGS);
             });
@@ -465,13 +466,14 @@ macro_rules! bind_interrupts {
                     cortex_m::peripheral::NVIC::unmask($crate::irq_dispatch::IrqNr($irq));
                 }
             )+
+            Ok(())
         }
 
         /// No-op on non-ARM hosts so examples compile with `cargo check`.
         /// The `nvic` parameter is generic to avoid referencing the
         /// architecture-specific `cortex_m::peripheral::NVIC` type.
         #[cfg(all(not(test), not(target_arch = "arm")))]
-        pub fn enable_bound_irqs<T>(_nvic: &mut T, _priority: u8) {}
+        pub fn enable_bound_irqs<T>(_nvic: &mut T, _priority: u8) -> Result<(), &'static str> { Ok(()) }
 
         /// Mask (disable) each IRQ bound by this macro.
         #[cfg(all(not(test), target_arch = "arm"))]

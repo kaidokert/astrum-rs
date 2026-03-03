@@ -101,7 +101,7 @@ fn main() -> ! {
     let k =
         Kernel::<AckMultiConfig>::create(sched, &cfgs).expect("irq_ack_multi_test: Kernel::create");
     store_kernel(k);
-    enable_bound_irqs(&mut p.NVIC, AckMultiConfig::IRQ_DEFAULT_PRIORITY);
+    enable_bound_irqs(&mut p.NVIC, AckMultiConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
     match boot(&parts, &mut p).expect("irq_ack_multi_test: boot") {}
 }
