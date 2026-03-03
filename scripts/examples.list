@@ -38,6 +38,7 @@ CUSTOM_IVT_EXAMPLES=(
     irq_ring_overflow_test
     irq_repend_stress_test
     irq_disable_test
+    systick_preempt_test
     uart_irq_demo
 )
 
