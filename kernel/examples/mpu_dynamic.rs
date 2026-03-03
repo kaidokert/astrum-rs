@@ -186,9 +186,20 @@ fn main() -> ! {
             .expect("init_stack_frame");
             PARTITION_SP[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
         }
-        cp.SCB.set_priority(SystemHandler::SVCall, 0x00);
-        cp.SCB.set_priority(SystemHandler::PendSV, 0xFF);
-        cp.SCB.set_priority(SystemHandler::SysTick, 0xFE);
+        // Set exception priorities per the three-tier model:
+        //   Tier 1 (highest): SVCall  – synchronous syscall entry
+        //   Tier 2 (middle):  SysTick – time-slice preemption
+        //   Tier 3 (lowest):  PendSV  – deferred context switch
+        //
+        // SAFETY: set_priority is unsafe because changing priority levels can
+        // break priority-based critical sections. Interrupts are not yet enabled
+        // so no preemption or race conditions can occur during configuration.
+        cp.SCB
+            .set_priority(SystemHandler::SVCall, TestConfig::SVCALL_PRIORITY);
+        cp.SCB
+            .set_priority(SystemHandler::PendSV, TestConfig::PENDSV_PRIORITY);
+        cp.SCB
+            .set_priority(SystemHandler::SysTick, TestConfig::SYSTICK_PRIORITY);
     }
 
     // SAFETY: Interrupts are not yet enabled (SysTick counter is stopped),

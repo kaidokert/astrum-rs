@@ -208,11 +208,21 @@ fn main() -> ! {
         }
     }
 
-    // Set exception priorities
+    // Set exception priorities per the three-tier model:
+    //   Tier 1 (highest): SVCall  – synchronous syscall entry
+    //   Tier 2 (middle):  SysTick – time-slice preemption
+    //   Tier 3 (lowest):  PendSV  – deferred context switch
+    //
+    // SAFETY: set_priority is unsafe because changing priority levels can
+    // break priority-based critical sections. Interrupts are not yet enabled
+    // so no preemption or race conditions can occur during configuration.
     unsafe {
-        p.SCB.set_priority(SystemHandler::SVCall, 0x00);
-        p.SCB.set_priority(SystemHandler::PendSV, 0xFF);
-        p.SCB.set_priority(SystemHandler::SysTick, 0xFE);
+        p.SCB
+            .set_priority(SystemHandler::SVCall, TestConfig::SVCALL_PRIORITY);
+        p.SCB
+            .set_priority(SystemHandler::PendSV, TestConfig::PENDSV_PRIORITY);
+        p.SCB
+            .set_priority(SystemHandler::SysTick, TestConfig::SYSTICK_PRIORITY);
     }
     hprintln!("debug_boot: priorities set");
 
