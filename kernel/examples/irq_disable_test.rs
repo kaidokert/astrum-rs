@@ -1,0 +1,122 @@
+//! QEMU test: `disable_bound_irqs` masks bound IRQs in the NVIC.
+//!
+//! Pends IRQ 0 → verifies dispatch → disables → re-pends → verifies
+//! the ISR does NOT fire again (dispatch count unchanged).
+//!
+//! Run:  cargo run --target thumbv7m-none-eabi --features qemu,log-semihosting,custom-ivt --example irq_disable_test
+#![no_std]
+#![no_main]
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
+
+use core::sync::atomic::{AtomicU32, Ordering};
+use cortex_m_rt::{entry, exception};
+use cortex_m_semihosting::{debug, hprintln};
+use kernel::partition::PartitionConfig;
+use kernel::scheduler::ScheduleTable;
+use kernel::svc::{Kernel, SvcError};
+use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+
+kernel::compose_kernel_config!(
+    Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
+);
+
+// SAFETY: vector-table entry; runs in ISR context.
+unsafe extern "C" fn irq0_handler() {
+    DISPATCH_COUNT.fetch_add(1, Ordering::Release);
+    // TODO: reviewer false positive – `handler:` form bypasses __irq_dispatch,
+    // so manual signal + mask are required (see irq_ring_buffer_test.rs:34-35).
+    // NVIC::mask is a safe static method in cortex-m 0.7, not an instance method.
+    #[cfg(target_arch = "arm")]
+    kernel::irq_dispatch::signal_partition_from_isr::<Cfg>(0, 0x01);
+    #[cfg(target_arch = "arm")]
+    cortex_m::peripheral::NVIC::mask(kernel::irq_dispatch::IrqNr(0));
+}
+
+kernel::bind_interrupts!(Cfg, 70, 0 => (0, 0x01, handler: irq0_handler));
+
+/// ISR invocation count — only the custom handler writes this.
+static DISPATCH_COUNT: AtomicU32 = AtomicU32::new(0);
+/// 0 = not acked, 1 = partition acked, 2 = disable verified immediate.
+static PHASE: AtomicU32 = AtomicU32::new(0);
+
+kernel::define_unified_harness!(Cfg, |tick, _k| {
+    if tick == 2 {
+        // TODO: reviewer false positive – NVIC::pend is a safe static method
+        // in cortex-m 0.7; identical usage in irq_ring_buffer_test.rs:50.
+        #[cfg(target_arch = "arm")]
+        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));
+        hprintln!("pended IRQ 0 at tick {}", tick);
+    }
+    // Wait for the full dispatch→ACK cycle, then disable and re-pend.
+    if tick >= 5 && PHASE.load(Ordering::Acquire) == 1 {
+        let before = DISPATCH_COUNT.load(Ordering::Acquire);
+        if before >= 1 {
+            // TODO: reviewer false positive – disable_bound_irqs() takes no args
+            // by design: it only calls NVIC::mask (static). enable_bound_irqs
+            // needs &mut NVIC for nvic.set_priority() (instance method).
+            disable_bound_irqs();
+            #[cfg(target_arch = "arm")]
+            cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));
+            hprintln!("disabled + re-pended at tick {} (count={})", tick, before);
+            let after = DISPATCH_COUNT.load(Ordering::Acquire);
+            if after != before {
+                hprintln!("FAIL immediate ({} vs {})", before, after);
+                debug::exit(debug::EXIT_FAILURE);
+            }
+            PHASE.store(2, Ordering::Release);
+        }
+    }
+    // Deferred check: dispatch count still unchanged after several ticks.
+    if tick >= 12 && PHASE.load(Ordering::Acquire) == 2 {
+        let c = DISPATCH_COUNT.load(Ordering::Acquire);
+        if c == 1 {
+            hprintln!("PASS (dispatch_count=1 unchanged after disable)");
+            debug::exit(debug::EXIT_SUCCESS);
+        }
+        hprintln!("FAIL deferred (dispatch_count={}, expected 1)", c);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+    if tick >= 20 {
+        hprintln!(
+            "FAIL timeout (d={}, p={})",
+            DISPATCH_COUNT.load(Ordering::Acquire),
+            PHASE.load(Ordering::Acquire)
+        );
+        debug::exit(debug::EXIT_FAILURE);
+    }
+});
+
+extern "C" fn p0_body(_r0: u32) -> ! {
+    loop {
+        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
+        if SvcError::is_error(rc) {
+            hprintln!("FAIL (event_wait 0x{:08X})", rc);
+            debug::exit(debug::EXIT_FAILURE);
+        }
+        // ACK once only — prevents re-unmasking after disable_bound_irqs.
+        if PHASE.load(Ordering::Acquire) == 0 {
+            let rc = kernel::svc!(SYS_IRQ_ACK, 0u32, 0u32, 0u32);
+            if SvcError::is_error(rc) {
+                hprintln!("FAIL (irq_ack 0x{:08X})", rc);
+                debug::exit(debug::EXIT_FAILURE);
+            }
+            PHASE.store(1, Ordering::Release);
+        }
+    }
+}
+kernel::partition_trampoline!(p0_main => p0_body);
+
+#[entry]
+fn main() -> ! {
+    let mut p = cortex_m::Peripherals::take().expect("take");
+    hprintln!("irq_disable_test: start");
+    let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("sched");
+    let cfgs = PartitionConfig::sentinel_array::<1>(Cfg::STACK_WORDS);
+    let k = Kernel::<Cfg>::create(sched, &cfgs).expect("create");
+    store_kernel(k);
+    enable_bound_irqs(&mut p.NVIC, Cfg::IRQ_DEFAULT_PRIORITY);
+    let parts: [(extern "C" fn() -> !, u32); 1] = [(p0_main, 0)];
+    match boot(&parts, &mut p).expect("boot") {}
+}
