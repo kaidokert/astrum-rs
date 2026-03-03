@@ -1,5 +1,6 @@
 //! QEMU test: `handler:` binding variant.
-//! IRQ 5 → P0 custom handler (0x01), IRQ 6 → P1 standard dispatch (0x02).
+//! IRQ 60 → P0 custom handler (0x01), IRQ 61 → P1 standard dispatch (0x02).
+//! Uses IRQ 60/61 (unconnected in QEMU) to avoid level-sensitive re-fire.
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
@@ -18,20 +19,22 @@ kernel::compose_kernel_config!(
     CustomHandlerConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
-// SAFETY: This function is placed in the Cortex-M vector table by
-// bind_interrupts! and is only called by hardware as an exception entry point.
-// It runs in ISR context with interrupts of equal/lower priority masked.
-unsafe extern "C" fn custom_irq5_handler() {
+/// # Safety
+///
+/// This function is placed in the Cortex-M vector table by `bind_interrupts!`
+/// and is only called by hardware as an exception entry point.
+/// It runs in ISR context with interrupts of equal/lower priority masked.
+unsafe extern "C" fn custom_irq60_handler() {
     ISR_COUNTER.fetch_add(1, Ordering::Relaxed);
     #[cfg(target_arch = "arm")]
     kernel::irq_dispatch::signal_partition_from_isr::<CustomHandlerConfig>(0, 0x01);
     #[cfg(target_arch = "arm")]
-    cortex_m::peripheral::NVIC::mask(kernel::irq_dispatch::IrqNr(5));
+    cortex_m::peripheral::NVIC::mask(kernel::irq_dispatch::IrqNr(60));
 }
 
 kernel::bind_interrupts!(CustomHandlerConfig, 70,
-    5 => (0, 0x01, handler: custom_irq5_handler),
-    6 => (1, 0x02),
+    60 => (0, 0x01, handler: custom_irq60_handler),
+    61 => (1, 0x02),
 );
 
 const NUM_PARTITIONS: usize = 2;
@@ -44,13 +47,13 @@ static P1_COUNT: AtomicU32 = AtomicU32::new(0);
 kernel::define_unified_harness!(CustomHandlerConfig, |tick, _k| {
     if tick == 2 {
         #[cfg(target_arch = "arm")]
-        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(5));
-        hprintln!("custom_handler: pended IRQ 5 at tick {}", tick);
+        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(60));
+        hprintln!("custom_handler: pended IRQ 60 at tick {}", tick);
     }
     if tick == 3 {
         #[cfg(target_arch = "arm")]
-        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(6));
-        hprintln!("custom_handler: pended IRQ 6 at tick {}", tick);
+        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(61));
+        hprintln!("custom_handler: pended IRQ 61 at tick {}", tick);
     }
     if tick == 8 {
         let isr = ISR_COUNTER.load(Ordering::Relaxed);
@@ -77,7 +80,11 @@ extern "C" fn p0_main() -> ! {
             hprintln!("custom_handler: p0 evt_wait FAIL 0x{:08X}", rc);
             debug::exit(debug::EXIT_FAILURE);
         }
-        let rc = kernel::svc!(SYS_IRQ_ACK, 5u32, 0u32, 0u32);
+        // event_wait returns 0 when entering Waiting state; skip that.
+        if rc == 0 {
+            continue;
+        }
+        let rc = kernel::svc!(SYS_IRQ_ACK, 60u32, 0u32, 0u32);
         if SvcError::is_error(rc) {
             hprintln!("custom_handler: p0 irq_ack FAIL 0x{:08X}", rc);
             debug::exit(debug::EXIT_FAILURE);
@@ -93,7 +100,11 @@ extern "C" fn p1_main() -> ! {
             hprintln!("custom_handler: p1 evt_wait FAIL 0x{:08X}", rc);
             debug::exit(debug::EXIT_FAILURE);
         }
-        let rc = kernel::svc!(SYS_IRQ_ACK, 6u32, 0u32, 0u32);
+        // event_wait returns 0 when entering Waiting state; skip that.
+        if rc == 0 {
+            continue;
+        }
+        let rc = kernel::svc!(SYS_IRQ_ACK, 61u32, 0u32, 0u32);
         if SvcError::is_error(rc) {
             hprintln!("custom_handler: p1 irq_ack FAIL 0x{:08X}", rc);
             debug::exit(debug::EXIT_FAILURE);

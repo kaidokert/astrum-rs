@@ -2,13 +2,16 @@
 //!
 //! Validates the KernelClears(WriteRegister) dispatch arm end-to-end:
 //!
-//! 1. `bind_interrupts!` maps IRQ 5 → partition 0 with event bit 0x01
+//! 1. `bind_interrupts!` maps IRQ 60 → partition 0 with event bit 0x01
 //!    using the 3-tuple form with `KernelClears(WriteRegister)`.
-//!    The target register is UART0 ICR (0x4000_C044) on lm3s6965evb,
-//!    which is safe to write in QEMU.
+//!    IRQ 60 is unconnected in QEMU — we software-pend it so it fires
+//!    exactly once with no level-sensitive re-assertion from hardware.
+//!    The `WriteRegister` target is UART0 ICR (0x4000_C044), used only as
+//!    a safe MMIO side-effect destination (it has no relationship to
+//!    IRQ 60; we just need a harmless register the kernel can write).
 //! 2. Partition 0 loops on `event_wait(0x01)` — no SYS_IRQ_ACK needed
 //!    because the kernel clears the interrupt source directly.
-//! 3. The SysTick harness software-pends IRQ 5 at tick 2.
+//! 3. The SysTick harness software-pends IRQ 60 at tick 2.
 //! 4. At tick 6 the counter must be exactly 1, proving the kernel executed
 //!    the write_volatile, signalled the partition, and cleared the IRQ
 //!    (so it did not re-fire).
@@ -34,10 +37,11 @@ kernel::compose_kernel_config!(
     KClearsConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
-// Bind IRQ 5 → partition 0, event bit 0x01, KernelClears(WriteRegister).
-// UART0 ICR at 0x4000_C044 on lm3s6965evb — safe to write in QEMU.
+// Bind IRQ 60 (unconnected in QEMU, software-pend only) → partition 0,
+// event bit 0x01, KernelClears(WriteRegister).  UART0 ICR (0x4000_C044)
+// is used as a harmless MMIO side-effect target — not related to IRQ 60.
 kernel::bind_interrupts!(KClearsConfig, 70,
-    5 => (0, 0x01, IrqClearModel::KernelClears(
+    60 => (0, 0x01, IrqClearModel::KernelClears(
         ClearStrategy::WriteRegister { addr: 0x4000_C044, value: 0x7F0 },
     )),
 );
@@ -52,8 +56,8 @@ kernel::define_unified_harness!(KClearsConfig, |tick, _k| {
     if tick == 2 {
         // NVIC::pend is a static method (no self receiver needed).
         #[cfg(target_arch = "arm")]
-        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(5));
-        hprintln!("irq_kernel_clears_test: pended IRQ 5 at tick {}", tick);
+        cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(60));
+        hprintln!("irq_kernel_clears_test: pended IRQ 60 at tick {}", tick);
     }
     if tick == 6 {
         let count = WAIT_COUNT.load(Ordering::Acquire);
@@ -81,8 +85,12 @@ extern "C" fn p0_main_body(_r0: u32) -> ! {
             debug::exit(debug::EXIT_FAILURE);
         }
 
-        // No SYS_IRQ_ACK needed — kernel already cleared the source.
-        WAIT_COUNT.fetch_add(1, Ordering::Release);
+        // event_wait returns 0 when entering Waiting state, matched bits
+        // (non-zero) on immediate match. Only count real deliveries.
+        if rc != 0 {
+            // No SYS_IRQ_ACK needed — kernel already cleared the source.
+            WAIT_COUNT.fetch_add(1, Ordering::Release);
+        }
     }
 }
 kernel::partition_trampoline!(p0_main => p0_main_body);
@@ -103,7 +111,7 @@ fn main() -> ! {
     // store_kernel, enable_bound_irqs, and boot are macro-generated.
     store_kernel(k);
 
-    // Unmask IRQ 5 so the software-triggered pend fires.
+    // Unmask IRQ 60 so the software-triggered pend fires.
     enable_bound_irqs(&mut p.NVIC, KClearsConfig::IRQ_DEFAULT_PRIORITY);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0)];
