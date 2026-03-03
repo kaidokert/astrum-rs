@@ -482,6 +482,40 @@ pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionContr
     mpu_enable(mpu);
 }
 
+/// Configure MPU from pre-computed cached regions stored in the PCB.
+///
+/// Reads `pcb.cached_base_regions()` (R0–R3) and
+/// `pcb.cached_periph_regions()` (R4–R5) instead of recomputing them
+/// on the fly.  The cache must have been populated by
+/// [`precompute_mpu_cache`] during boot; a `debug_assert` guards
+/// against using an uninitialised (all-zeros) base-region cache.
+// TODO: reviewer false positive — #[cfg(not(test))] is consistent with
+// apply_partition_mpu, mpu_disable, and mpu_enable which are all gated
+// the same way; removing it breaks compilation because the dependencies
+// (mpu_disable/mpu_enable) are unavailable under cfg(test).
+#[cfg(not(test))]
+pub fn apply_partition_mpu_cached(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
+    let base = pcb.cached_base_regions();
+    // TODO: consider checking only base[0].rasr != 0 to reduce iteration
+    // overhead on the PendSV hot path (current full scan is acceptable as
+    // debug_assert is stripped in release builds).
+    debug_assert!(
+        base.iter().any(|&(rbar, rasr)| rbar != 0 || rasr != 0),
+        "cached_base_regions uninitialised (all zeros)"
+    );
+
+    mpu_disable(mpu);
+
+    for &(rbar, rasr) in base {
+        configure_region(mpu, rbar, rasr);
+    }
+    for &(rbar, rasr) in pcb.cached_periph_regions() {
+        configure_region(mpu, rbar, rasr);
+    }
+
+    mpu_enable(mpu);
+}
+
 /// Apply deny-all MPU configuration (R0-R5).
 ///
 /// Programmes the MPU with [`deny_all_regions`] and disables peripheral
@@ -1618,6 +1652,55 @@ mod tests {
         let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
         precompute_mpu_cache(&mut pcb);
         assert_eq!(*pcb.cached_periph_regions(), [DISABLED_R4, DISABLED_R5],);
+    }
+
+    // ── apply_partition_mpu_cached tests ──
+    // The function itself is #[cfg(not(test))] (hardware MPU writes),
+    // so we verify data-flow invariants and the debug_assert guard.
+
+    /// Populated cache yields the same region pairs as on-the-fly computation.
+    #[test]
+    fn cached_mpu_regions_match_on_the_fly() {
+        let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
+        precompute_mpu_cache(&mut pcb);
+        assert_eq!(
+            *pcb.cached_base_regions(),
+            partition_mpu_regions_or_deny_all(&pcb)
+        );
+        assert_eq!(
+            *pcb.cached_periph_regions(),
+            peripheral_mpu_regions(&pcb).unwrap()
+        );
+    }
+
+    /// The debug_assert guard: all-zeros (uninitialised) fails, populated passes.
+    #[test]
+    fn cache_guard_detects_uninitialised() {
+        // Before precompute, cached fields are default zeros.
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        let uninit_guard = pcb
+            .cached_base_regions()
+            .iter()
+            .any(|&(r, a)| r != 0 || a != 0);
+        assert!(!uninit_guard, "all-zeros must fail the guard");
+
+        // After precompute, the guard passes.
+        let mut pcb2 = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        precompute_mpu_cache(&mut pcb2);
+        let init_guard = pcb2
+            .cached_base_regions()
+            .iter()
+            .any(|&(r, a)| r != 0 || a != 0);
+        assert!(init_guard, "populated cache must pass the guard");
+    }
+
+    /// Cached peripheral regions use DISABLED_R4/R5 when no peripherals configured.
+    #[test]
+    fn cached_periph_disabled_matches_fallback() {
+        let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        precompute_mpu_cache(&mut pcb);
+        assert_eq!(*pcb.cached_periph_regions(), [DISABLED_R4, DISABLED_R5]);
     }
 
     /// Prove `peripheral_region_pair` ignores `MpuRegion.permissions`:

@@ -206,7 +206,7 @@ macro_rules! define_unified_harness {
                 let pid = k.next_partition();
                 let pcb = k.partitions().get(pid as usize)
                     .expect("boot: next_partition PID missing from partition table");
-                $crate::mpu::apply_partition_mpu(mpu, pcb);
+                $crate::mpu::apply_partition_mpu_cached(mpu, pcb);
             });
         }
 
@@ -264,7 +264,7 @@ macro_rules! define_unified_harness {
         /// incoming partition on every context switch.
         ///
         /// - Static mode: R0-R3 (base) + R4-R5 (peripheral) via
-        ///   `apply_partition_mpu` (self-contained disable/enable cycle).
+        ///   `apply_partition_mpu_cached` (self-contained disable/enable cycle).
         /// - Dynamic mode: single disable/enable cycle writing R0-R3
         ///   (base partition) then R4-R7 (dynamic strategy), avoiding
         ///   redundant MPU state transitions and overlapping writes.
@@ -296,11 +296,11 @@ macro_rules! define_unified_harness {
                     }
                 };
 
-                // Static mode: apply_partition_mpu handles R0-R5 with
-                // its own disable/enable cycle.
+                // Static mode: apply_partition_mpu_cached handles R0-R5
+                // from pre-computed PCB cache (no on-the-fly recomputation).
                 #[cfg(not(feature = "dynamic-mpu"))]
                 if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
-                    $crate::mpu::apply_partition_mpu(&p.MPU, pcb);
+                    $crate::mpu::apply_partition_mpu_cached(&p.MPU, pcb);
                 }
 
                 // Dynamic mode: write only R0-R3 base partition regions
