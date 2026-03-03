@@ -482,6 +482,34 @@ pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionContr
     mpu_enable(mpu);
 }
 
+/// Write pre-computed base regions (R0–R3) from the PCB cache to the MPU.
+///
+/// The caller must disable the MPU before calling this function and
+/// re-enable it afterwards.  A `debug_assert` guards against using an
+/// uninitialised (all-zeros) cache.
+#[cfg(not(test))]
+pub fn write_cached_base_regions(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
+    let base = pcb.cached_base_regions();
+    debug_assert!(
+        base[0].0 != 0 || base[0].1 != 0,
+        "cached_base_regions uninitialised (all zeros)"
+    );
+    for &(rbar, rasr) in base {
+        configure_region(mpu, rbar, rasr);
+    }
+}
+
+/// Write pre-computed peripheral regions (R4–R5) from the PCB cache to the MPU.
+///
+/// The caller must disable the MPU before calling this function and
+/// re-enable it afterwards.
+#[cfg(not(test))]
+pub fn write_cached_periph_regions(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
+    for &(rbar, rasr) in pcb.cached_periph_regions() {
+        configure_region(mpu, rbar, rasr);
+    }
+}
+
 /// Configure MPU from pre-computed cached regions stored in the PCB.
 ///
 /// Reads `pcb.cached_base_regions()` (R0–R3) and
@@ -489,30 +517,11 @@ pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionContr
 /// on the fly.  The cache must have been populated by
 /// [`precompute_mpu_cache`] during boot; a `debug_assert` guards
 /// against using an uninitialised (all-zeros) base-region cache.
-// TODO: reviewer false positive — #[cfg(not(test))] is consistent with
-// apply_partition_mpu, mpu_disable, and mpu_enable which are all gated
-// the same way; removing it breaks compilation because the dependencies
-// (mpu_disable/mpu_enable) are unavailable under cfg(test).
 #[cfg(not(test))]
 pub fn apply_partition_mpu_cached(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
-    let base = pcb.cached_base_regions();
-    // TODO: consider checking only base[0].rasr != 0 to reduce iteration
-    // overhead on the PendSV hot path (current full scan is acceptable as
-    // debug_assert is stripped in release builds).
-    debug_assert!(
-        base.iter().any(|&(rbar, rasr)| rbar != 0 || rasr != 0),
-        "cached_base_regions uninitialised (all zeros)"
-    );
-
     mpu_disable(mpu);
-
-    for &(rbar, rasr) in base {
-        configure_region(mpu, rbar, rasr);
-    }
-    for &(rbar, rasr) in pcb.cached_periph_regions() {
-        configure_region(mpu, rbar, rasr);
-    }
-
+    write_cached_base_regions(mpu, pcb);
+    write_cached_periph_regions(mpu, pcb);
     mpu_enable(mpu);
 }
 

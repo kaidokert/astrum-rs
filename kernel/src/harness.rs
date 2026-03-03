@@ -232,22 +232,9 @@ macro_rules! define_unified_harness {
                     .expect("boot: next_partition PID missing from partition table");
                 // Program R0-R5 from pre-computed cache within a single
                 // disable/enable cycle that spans strategy setup below.
-                // TODO(DRY): extract cached-region iteration into an
-                // mpu::apply_region_cache() helper shared with PendSV.
-                // Note: mpu_disable / configure_region / mpu_enable are safe
-                // pub fn wrappers with internal SAFETY comments — no unsafe
-                // blocks at this call site, so no SAFETY annotation required.
                 $crate::mpu::mpu_disable(mpu);
-                for &(rbar, rasr) in pcb.cached_base_regions() {
-                    $crate::mpu::configure_region(mpu, rbar, rasr);
-                }
-                // R4-R5: peripheral regions are required at boot — the
-                // dynamic strategy's configure_partition only updates slot
-                // state, not MPU hardware, so these are the final R4-R5
-                // values until the first PendSV context switch.
-                for &(rbar, rasr) in pcb.cached_periph_regions() {
-                    $crate::mpu::configure_region(mpu, rbar, rasr);
-                }
+                $crate::mpu::write_cached_base_regions(mpu, pcb);
+                $crate::mpu::write_cached_periph_regions(mpu, pcb);
                 if let Some(regions) = $crate::mpu::partition_dynamic_regions(pcb) {
                     let periph_reserved = if pcb.peripheral_regions().is_empty() { 0 } else { 2 };
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
@@ -327,13 +314,9 @@ macro_rules! define_unified_harness {
 
                 // Dynamic mode: write R0-R3 from pre-computed cache
                 // (MPU already disabled above; R4-R5 overridden below).
-                // TODO(DRY): extract cached-region iteration into an
-                // mpu::apply_region_cache() helper shared with boot path.
                 #[cfg(feature = "dynamic-mpu")]
                 {
-                    for &(rbar, rasr) in pcb.cached_base_regions() {
-                        $crate::mpu::configure_region(&p.MPU, rbar, rasr);
-                    }
+                    $crate::mpu::write_cached_base_regions(&p.MPU, pcb);
 
                     // Update dynamic strategy: reconfigure the partition's
                     // private-RAM slot and peripheral reservation count.
