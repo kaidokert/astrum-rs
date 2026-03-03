@@ -14,6 +14,7 @@ use crate::partition::{PartitionState, PartitionTable};
 /// This is the testable inner logic used by ISR dispatch handlers.
 /// Returns `false` for invalid partition indices or when the target
 /// does not transition to `Ready`.
+#[must_use = "callers must check whether the partition was woken"]
 pub fn signal_partition_inner<const N: usize>(
     t: &mut PartitionTable<N>,
     target: usize,
@@ -101,9 +102,13 @@ unsafe impl cortex_m::interrupt::InterruptNumber for IrqNr {
 /// A const-friendly mapping from an IRQ number to a (partition, event_bits) pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IrqBinding {
+    /// Hardware IRQ number this binding maps.
     pub irq_num: u8,
+    /// Target partition to signal when the IRQ fires.
     pub partition_id: u8,
+    /// Event-flag bits OR'd into the target partition's event word.
     pub event_bits: u32,
+    /// How the interrupt source is acknowledged after dispatch.
     pub clear_model: IrqClearModel,
 }
 
@@ -170,6 +175,7 @@ pub const fn ipsr_to_irq_num(ipsr: u32) -> u8 {
 /// Returns `Some(index)` on hit, `None` on miss or empty slice.
 ///
 /// Uses a `while` loop (not iterators) so the function is `const`-compatible.
+#[must_use = "binding index must be used or explicitly handled"]
 pub const fn lookup_binding(bindings: &[IrqBinding], irq: u8) -> Option<usize> {
     let mut i = 0;
     while i < bindings.len() {
@@ -883,6 +889,42 @@ mod tests {
         assert_eq!(ipsr_to_irq_num(0x200 | 21), 5);
         // 0xFFFF_FF10 → masked to 0x110 = 272 → 272 & 0x1FF = 16 → IRQ 0
         assert_eq!(ipsr_to_irq_num(0xFFFF_FF10), 0);
+    }
+
+    // ---- #[must_use] return-value contract tests ----
+
+    #[test]
+    fn signal_partition_inner_return_drives_context_switch_decision() {
+        // The bool return tells the ISR whether to pend a context switch.
+        // Callers MUST branch on it — dropping it silently skips wakeups.
+        let mut t = tbl();
+        // Running → not woken → false: caller must NOT pend PendSV.
+        let woken = signal_partition_inner(&mut t, 0, 0b0001);
+        assert!(!woken, "running partition must not report woken");
+
+        // Transition partition 1 to Waiting, then signal it.
+        events::event_wait(&mut t, 1, 0b0010);
+        let woken = signal_partition_inner(&mut t, 1, 0b0010);
+        assert!(
+            woken,
+            "waiting partition signaled with matching bits must report woken"
+        );
+    }
+
+    #[test]
+    fn lookup_binding_none_must_be_handled_before_indexing() {
+        // lookup_binding returns Option<usize>; callers MUST match on None
+        // before using the index — otherwise they would index out of bounds.
+        let found = lookup_binding(&BINDINGS, 5);
+        assert!(found.is_some());
+        let idx = found.unwrap();
+        assert_eq!(BINDINGS[idx].irq_num, 5);
+
+        let missing = lookup_binding(&BINDINGS, 99);
+        assert!(
+            missing.is_none(),
+            "missing IRQ must yield None, not a stale index"
+        );
     }
 
     #[test]

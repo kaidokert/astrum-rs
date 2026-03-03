@@ -12,6 +12,7 @@ use rtos_traits::syscall::SvcError;
 /// - No binding exists for `irq_num` → [`SvcError::InvalidResource`]
 /// - `caller` does not own the binding → [`SvcError::PermissionDenied`]
 /// - The binding uses [`IrqClearModel::KernelClears`] → [`SvcError::OperationFailed`]
+#[must_use = "error code must be forwarded to the caller"]
 pub fn irq_ack_inner(bindings: &[IrqBinding], caller: u8, irq_num: u8) -> u32 {
     let idx = match lookup_binding(bindings, irq_num) {
         Some(i) => i,
@@ -113,6 +114,29 @@ mod tests {
             irq_ack_inner(&table, 0, 255),
             SvcError::PermissionDenied.to_u32(),
         );
+    }
+
+    // ---- #[must_use] return-value contract tests ----
+
+    #[test]
+    fn irq_ack_inner_return_must_distinguish_success_from_each_error() {
+        // irq_ack_inner returns a u32 status code. Callers MUST forward it
+        // to the syscall return register — dropping it silently hides errors.
+        let success = irq_ack_inner(&BINDINGS, 0, 5);
+        let not_found = irq_ack_inner(&BINDINGS, 0, 99);
+        let wrong_owner = irq_ack_inner(&BINDINGS, 1, 5);
+        let kernel_clears = irq_ack_inner(&BINDINGS, 2, 20);
+
+        // Success is zero.
+        assert_eq!(success, 0);
+        // Each error is non-zero.
+        assert_ne!(not_found, 0);
+        assert_ne!(wrong_owner, 0);
+        assert_ne!(kernel_clears, 0);
+        // Each error class is distinguishable.
+        assert_ne!(not_found, wrong_owner);
+        assert_ne!(not_found, kernel_clears);
+        assert_ne!(wrong_owner, kernel_clears);
     }
 
     #[test]
