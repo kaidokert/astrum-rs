@@ -728,7 +728,7 @@ pub const fn assert_priority_order<C: KernelConfig>() {
     );
 }
 
-/// Runtime guard ensuring an IRQ priority does not violate the four-tier
+/// Runtime guard ensuring an IRQ priority does not violate the three-tier
 /// model floor.  Returns `Err` if `priority` is numerically below (higher
 /// urgency than) `min_app_irq_priority`.
 ///

@@ -441,7 +441,7 @@ macro_rules! bind_interrupts {
         /// Set the NVIC priority and unmask each IRQ bound by this macro.
         ///
         /// Returns `Err` if `priority` is numerically below
-        /// `MIN_APP_IRQ_PRIORITY`, which would break the four-tier priority
+        /// `MIN_APP_IRQ_PRIORITY`, which would break the three-tier priority
         /// ordering.
         #[cfg(all(not(test), target_arch = "arm"))]
         pub fn enable_bound_irqs(nvic: &mut cortex_m::peripheral::NVIC, priority: u8) -> Result<(), &'static str> {
