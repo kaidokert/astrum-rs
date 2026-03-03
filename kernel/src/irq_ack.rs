@@ -140,6 +140,25 @@ mod tests {
     }
 
     #[test]
+    fn write_register_model_also_rejected() {
+        // KernelClears with WriteRegister strategy is still rejected,
+        // not just ClearBit.
+        let bindings = [IrqBinding::with_clear_model(
+            7,
+            0,
+            0x01,
+            IrqClearModel::KernelClears(ClearStrategy::WriteRegister {
+                addr: 0x4000_1000,
+                value: 1,
+            }),
+        )];
+        assert_eq!(
+            irq_ack_inner(&bindings, 0, 7),
+            SvcError::OperationFailed.to_u32(),
+        );
+    }
+
+    #[test]
     fn kernel_clears_wrong_caller_returns_permission_denied() {
         // Permission check takes priority over clear-model check.
         assert_eq!(

@@ -347,6 +347,46 @@ mod tests {
     }
 
     #[test]
+    fn signal_ready_partition_returns_false() {
+        // Ready is neither Running nor Waiting; the partition should
+        // receive the event bits but not report a wakeup transition.
+        let mut t: PartitionTable<4> = PartitionTable::new();
+        t.add(pcb(0)).unwrap();
+        // Partition starts in Ready after add(); leave it there.
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+
+        let woke = signal_partition_inner(&mut t, 0, 0b1010);
+        assert!(!woke, "Ready partition must not report woken");
+        assert_eq!(t.get(0).unwrap().event_flags(), 0b1010);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn signal_partition_boundary_last_valid_index() {
+        // Target at index N-1 (the last valid slot) should work.
+        let mut t: PartitionTable<4> = PartitionTable::new();
+        t.add(pcb(0)).unwrap();
+        t.add(pcb(1)).unwrap();
+        t.add(pcb(2)).unwrap();
+        t.add(pcb(3)).unwrap();
+        // Put partition 3 (last slot) into Running → Waiting.
+        t.get_mut(3)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        events::event_wait(&mut t, 3, 0b0001);
+        assert_eq!(t.get(3).unwrap().state(), PartitionState::Waiting);
+
+        let woke = signal_partition_inner(&mut t, 3, 0b0001);
+        assert!(woke, "last valid index should wake the partition");
+        assert_eq!(t.get(3).unwrap().state(), PartitionState::Ready);
+
+        // Index N (== 4) is one past the end — must return false.
+        let no_woke = signal_partition_inner(&mut t, 4, 0b0001);
+        assert!(!no_woke, "out-of-bounds index must return false");
+    }
+
+    #[test]
     fn multiple_signals_accumulate_flags() {
         let mut t = tbl();
         // Put partition 0 into Waiting on bits 0 and 1.
@@ -1001,6 +1041,24 @@ mod tests {
             missing.is_none(),
             "missing IRQ must yield None, not a stale index"
         );
+    }
+
+    #[test]
+    fn build_direct_table_runtime_with_gaps_and_out_of_range() {
+        // Exercise build_direct_table at runtime (not const) so that
+        // llvm-cov instruments the function body.
+        let bindings = [
+            IrqBinding::new(0, 0, 0x01),
+            IrqBinding::new(3, 1, 0x02),
+            IrqBinding::new(9, 2, 0x04), // out of range for N=8
+        ];
+        let table: [u8; 8] = build_direct_table::<8>(&bindings);
+        assert_eq!(table[0], 0, "IRQ 0 should map to binding index 0");
+        assert_eq!(table[3], 1, "IRQ 3 should map to binding index 1");
+        // IRQ 9 is out of range for N=8, should be skipped.
+        for i in [1, 2, 4, 5, 6, 7] {
+            assert_eq!(table[i], 0xFF, "unbound slot {i} must be 0xFF");
+        }
     }
 
     #[test]

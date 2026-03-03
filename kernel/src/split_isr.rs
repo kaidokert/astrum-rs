@@ -742,6 +742,122 @@ mod tests {
         assert_eq!(IsrRingBuffer::<0, 8>::new().capacity(), 0);
     }
     #[test]
+    fn push_truncation_preserves_first_m_bytes() {
+        // Verify that when data.len() > M, only the first M bytes are
+        // stored and returned — no silent corruption or panic.
+        let mut rb = IsrRingBuffer::<2, 4>::new();
+        let oversized = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+        rb.push_from_isr(7, &oversized).unwrap();
+        let mut got_tag = 0u8;
+        let mut got_payload = Vec::new();
+        assert!(rb.pop_with(|t, p| {
+            got_tag = t;
+            got_payload.extend_from_slice(p);
+        }));
+        assert_eq!(got_tag, 7);
+        assert_eq!(got_payload, &[0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    fn pop_with_corrupted_slot_len_exceeds_payload_returns_false() {
+        // Defensive edge case: if slot.len somehow exceeds M,
+        // pop_with must return false (payload.get(..slot.len) → None).
+        let mut rb = IsrRingBuffer::<2, 4>::new();
+        rb.push_from_isr(1, &[0xAA, 0xBB]).unwrap();
+        // Corrupt the stored len to exceed M.
+        rb.buf[0].len = 5; // M=4, so 5 > M
+        rb.count = 1;
+        let mut called = false;
+        let popped = rb.pop_with(|_, _| called = true);
+        assert!(!popped, "pop_with must return false when slot.len > M");
+        assert!(!called, "closure must not be called on corrupted slot");
+    }
+
+    #[test]
+    fn pop_with_corrupted_head_out_of_bounds_returns_false() {
+        // Defensive edge case: if head >= D, buf.get(head) → None.
+        let mut rb = IsrRingBuffer::<2, 4>::new();
+        rb.push_from_isr(1, &[0xAA]).unwrap();
+        // Corrupt head to point past the buffer.
+        rb.head = 5; // D=2, so 5 >= D
+        rb.count = 1;
+        let mut called = false;
+        let popped = rb.pop_with(|_, _| called = true);
+        assert!(!popped, "pop_with must return false when head >= D");
+        assert!(!called, "closure must not be called on invalid head");
+    }
+
+    #[test]
+    fn drain_all_with_wrap_around() {
+        // Advance head past the start, then fill and drain to exercise
+        // the wrap-around path inside drain_all.
+        let mut rb = IsrRingBuffer::<3, 4>::new();
+        rb.push_from_isr(1, &[10]).unwrap();
+        rb.push_from_isr(2, &[20]).unwrap();
+        rb.pop_with(|_, _| {});
+        rb.pop_with(|_, _| {});
+        // head=2, count=0; push 3 items that wrap around the buffer.
+        rb.push_from_isr(3, &[30]).unwrap();
+        rb.push_from_isr(4, &[40]).unwrap();
+        rb.push_from_isr(5, &[50]).unwrap();
+        assert!(rb.is_full());
+
+        let mut out = Vec::new();
+        assert_eq!(rb.drain_all(|t, d| out.push((t, d[0]))), 3);
+        assert_eq!(out, vec![(3, 30), (4, 40), (5, 50)]);
+        assert!(rb.is_empty());
+    }
+
+    #[test]
+    fn drain_all_zero_depth_buffer() {
+        let mut rb = IsrRingBuffer::<0, 8>::new();
+        assert_eq!(rb.drain_all(|_, _| panic!("not called")), 0);
+    }
+
+    #[test]
+    fn drain_all_depth_one_buffer() {
+        let mut rb = IsrRingBuffer::<1, 4>::new();
+        rb.push_from_isr(42, &[0xFF]).unwrap();
+        let mut out = Vec::new();
+        assert_eq!(rb.drain_all(|t, d| out.push((t, d[0]))), 1);
+        assert_eq!(out, vec![(42, 0xFF)]);
+        assert!(rb.is_empty());
+    }
+
+    #[test]
+    fn clear_zero_depth_buffer() {
+        let mut rb = IsrRingBuffer::<0, 8>::new();
+        rb.clear(); // should not panic
+        assert!(rb.is_empty());
+        assert_eq!(rb.len(), 0);
+    }
+
+    #[test]
+    fn clear_full_buffer_resets_head_and_allows_reuse() {
+        let mut rb = IsrRingBuffer::<3, 4>::new();
+        // Advance head to 2.
+        rb.push_from_isr(1, &[10]).unwrap();
+        rb.push_from_isr(2, &[20]).unwrap();
+        rb.pop_with(|_, _| {});
+        rb.pop_with(|_, _| {});
+        // Fill the buffer.
+        rb.push_from_isr(3, &[30]).unwrap();
+        rb.push_from_isr(4, &[40]).unwrap();
+        rb.push_from_isr(5, &[50]).unwrap();
+        assert!(rb.is_full());
+
+        rb.clear();
+        assert!(rb.is_empty());
+        // After clear, head is reset to 0. Push and verify FIFO.
+        rb.push_from_isr(6, &[60]).unwrap();
+        rb.push_from_isr(7, &[70]).unwrap();
+        let mut out = Vec::new();
+        rb.pop_with(|t, d| out.push((t, d[0])));
+        rb.pop_with(|t, d| out.push((t, d[0])));
+        assert_eq!(out, vec![(6, 60), (7, 70)]);
+    }
+
+    #[test]
     fn static_ring_drain_all_clear_capacity() {
         let ring = StaticIsrRing::<4, 8>::new();
         assert_eq!(ring.capacity(), 4);
