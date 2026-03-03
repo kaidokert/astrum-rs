@@ -1074,6 +1074,7 @@ where
             configs,
             #[cfg(feature = "dynamic-mpu")]
             registry,
+            &[],
         )
     }
 
@@ -1096,6 +1097,30 @@ where
         )
     }
 
+    /// Create a `Kernel` with a pre-configured IRQ binding table.
+    ///
+    /// Identical to [`new`](Self::new) but also accepts an
+    /// `&'static [IrqBinding]` slice that is stored directly in the kernel,
+    /// removing the need for a separate [`store_irq_bindings`](Self::store_irq_bindings)
+    /// call after construction.
+    pub fn with_irq_bindings(
+        schedule: ScheduleTable<{ C::SCHED }>,
+        configs: &[PartitionConfig],
+        bindings: &'static [crate::irq_dispatch::IrqBinding],
+        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
+            'static,
+            { C::DR },
+        >,
+    ) -> Result<Self, ConfigError> {
+        Self::with_config(
+            schedule,
+            configs,
+            #[cfg(feature = "dynamic-mpu")]
+            registry,
+            bindings,
+        )
+    }
+
     /// Primary constructor for custom kernel configurations.
     ///
     /// Validates that: schedule is non-empty, all schedule entries reference
@@ -1108,6 +1133,7 @@ where
             'static,
             { C::DR },
         >,
+        irq_bindings: &'static [crate::irq_dispatch::IrqBinding],
     ) -> Result<Self, ConfigError> {
         use crate::partition::PartitionControlBlock;
         if schedule.is_empty() {
@@ -1232,7 +1258,7 @@ where
             sync: C::Sync::default(),
             msg: C::Msg::default(),
             ports: C::Ports::default(),
-            irq_bindings: &[],
+            irq_bindings,
         })
     }
 
@@ -11702,6 +11728,62 @@ mod tests {
         assert!(k.irq_bindings.is_empty());
         k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
         assert_eq!(k.irq_bindings.len(), 3);
+    }
+
+    #[test]
+    fn with_irq_bindings_stores_bindings() {
+        let mut s: ScheduleTable<4> = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 50)).unwrap();
+        s.add(ScheduleEntry::new(1, 50)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        s.add_system_window(1).unwrap();
+        let cfgs = [
+            PartitionConfig::sentinel(0, 1024),
+            PartitionConfig::sentinel(1, 1024),
+        ];
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let k = Kernel::<TestConfig>::with_irq_bindings(s, &cfgs, &IRQ_ACK_TEST_BINDINGS).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        let k = Kernel::<TestConfig>::with_irq_bindings(
+            s,
+            &cfgs,
+            &IRQ_ACK_TEST_BINDINGS,
+            crate::virtual_device::DeviceRegistry::new(),
+        )
+        .unwrap();
+        assert_eq!(k.irq_bindings.len(), 3);
+        assert_eq!(k.irq_bindings[0].irq_num, 5);
+        assert_eq!(k.irq_bindings[1].irq_num, 10);
+        assert_eq!(k.irq_bindings[2].irq_num, 20);
+    }
+
+    #[test]
+    fn with_irq_bindings_irq_ack_dispatch_succeeds() {
+        use crate::syscall::SYS_IRQ_ACK;
+        let mut s: ScheduleTable<4> = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 50)).unwrap();
+        s.add(ScheduleEntry::new(1, 50)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        s.add_system_window(1).unwrap();
+        let cfgs = [
+            PartitionConfig::sentinel(0, 1024),
+            PartitionConfig::sentinel(1, 1024),
+        ];
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let mut k =
+            Kernel::<TestConfig>::with_irq_bindings(s, &cfgs, &IRQ_ACK_TEST_BINDINGS).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        let mut k = Kernel::<TestConfig>::with_irq_bindings(
+            s,
+            &cfgs,
+            &IRQ_ACK_TEST_BINDINGS,
+            crate::virtual_device::DeviceRegistry::new(),
+        )
+        .unwrap();
+        // No store_irq_bindings call needed — bindings set at construction.
+        k.current_partition = 0;
+        let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0);
+        assert_eq!(result, 0, "IrqAck should succeed for partition 0, IRQ 5");
     }
 
     /// Test module for `define_unified_kernel!` macro.
