@@ -325,3 +325,8 @@ log-semihosting = ["dep:cortex-m-semihosting", "dep:panic-semihosting"]
 log-rtt = ["dep:rtt-target", "dep:panic-rtt-target"]
 log-swo = []
 log-defmt = ["dep:defmt"]
+
+# Multi-core: removes StaticIsrRing Sync impl (IRQ-masking insufficient on SMP).
+# Use `single-core` as an explicit override when both are enabled (--all-features).
+multi-core = []
+single-core = []

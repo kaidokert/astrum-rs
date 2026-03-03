@@ -37,9 +37,19 @@ pub struct StaticIsrRing<const D: usize, const M: usize> {
 
 // SAFETY: On single-core Cortex-M the ISR/partition mutual-exclusion
 // protocol (see struct-level doc) prevents concurrent access.
-// TODO: add #[cfg] guard (e.g. target_has_atomic or a crate feature) to
-// prevent use on multi-core targets where IRQ-masking is insufficient.
+// Gated via feature flags: the Sync impl is only sound when a single core
+// guarantees that IRQ-masking prevents concurrency.  When `multi-core` is
+// enabled (without `single-core`) the impl is absent, so any attempt to
+// place a StaticIsrRing in a `static` will fail with a missing-Sync error.
+// `single-core` exists as an explicit override for `--all-features` builds.
+#[cfg(any(feature = "single-core", not(feature = "multi-core")))]
 unsafe impl<const D: usize, const M: usize> Sync for StaticIsrRing<D, M> {}
+
+#[cfg(all(feature = "multi-core", not(feature = "single-core")))]
+compile_error!(
+    "StaticIsrRing requires external synchronization on multi-core targets. \
+     Either remove the `multi-core` feature or add `single-core` to override."
+);
 
 impl<const D: usize, const M: usize> Default for StaticIsrRing<D, M> {
     fn default() -> Self {
@@ -555,9 +565,9 @@ mod tests {
     }
 
     #[test]
-    fn static_ring_is_sync() {
-        static RING: StaticIsrRing<4, 8> = StaticIsrRing::new();
-        // SAFETY: test is single-threaded; no concurrent access.
-        assert!(unsafe { RING.is_empty() });
+    #[cfg(not(feature = "multi-core"))]
+    fn static_ring_implements_sync() {
+        fn requires_sync<T: Sync>() {}
+        requires_sync::<StaticIsrRing<4, 4>>();
     }
 }
