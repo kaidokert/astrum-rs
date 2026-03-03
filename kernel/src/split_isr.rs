@@ -189,6 +189,30 @@ impl<const D: usize, const M: usize> StaticIsrRing<D, M> {
         // SAFETY: caller guarantees single-core mutual exclusion.
         unsafe { &*self.inner.get() }.is_full()
     }
+
+    /// Drain all pending records via callback. Returns count processed.
+    /// # Safety
+    /// Caller must guarantee no concurrent access.
+    pub unsafe fn drain_all<F>(&self, f: F) -> usize
+    where
+        F: FnMut(u8, &[u8]),
+    {
+        // SAFETY: caller guarantees single-core mutual exclusion.
+        unsafe { &mut *self.inner.get() }.drain_all(f)
+    }
+
+    /// Discard all pending records. Does not affect overflow_count.
+    /// # Safety
+    /// Caller must guarantee no concurrent access.
+    pub unsafe fn clear(&self) {
+        // SAFETY: caller guarantees single-core mutual exclusion.
+        unsafe { &mut *self.inner.get() }.clear()
+    }
+
+    /// Returns the maximum number of pending records (`D`).
+    pub fn capacity(&self) -> usize {
+        D
+    }
 }
 
 /// Fixed-depth ring buffer for ISR top-half to bottom-half communication.
@@ -287,6 +311,29 @@ impl<const D: usize, const M: usize> IsrRingBuffer<D, M> {
         let prev = self.overflow_count;
         self.overflow_count = 0;
         prev
+    }
+
+    /// Pops all pending records via callback in FIFO order. Returns count.
+    pub fn drain_all<F>(&mut self, mut f: F) -> usize
+    where
+        F: FnMut(u8, &[u8]),
+    {
+        let mut n = 0;
+        while self.pop_with(&mut f) {
+            n += 1;
+        }
+        n
+    }
+
+    /// Discards all pending records. Does not affect `overflow_count`.
+    pub fn clear(&mut self) {
+        self.head = 0;
+        self.count = 0;
+    }
+
+    /// Returns the maximum number of pending records (`D`).
+    pub const fn capacity(&self) -> usize {
+        D
     }
 }
 
@@ -635,5 +682,85 @@ mod tests {
     fn static_ring_implements_sync() {
         fn requires_sync<T: Sync>() {}
         requires_sync::<StaticIsrRing<4, 4>>();
+    }
+
+    #[test]
+    fn drain_all_empty_and_partial() {
+        let mut rb = IsrRingBuffer::<4, 8>::new();
+        assert_eq!(rb.drain_all(|_, _| panic!("not called")), 0);
+        rb.push_from_isr(1, &[10]).unwrap();
+        rb.push_from_isr(2, &[20]).unwrap();
+        let mut out = Vec::new();
+        assert_eq!(rb.drain_all(|t, d| out.push((t, d[0]))), 2);
+        assert_eq!(out, vec![(1, 10), (2, 20)]);
+        assert!(rb.is_empty());
+    }
+
+    #[test]
+    fn drain_all_full_and_post_overflow() {
+        let mut rb = IsrRingBuffer::<2, 4>::new();
+        rb.push_from_isr(1, &[10]).unwrap();
+        rb.push_from_isr(2, &[20]).unwrap();
+        assert!(rb.is_full());
+        let _ = rb.push_from_isr(3, &[30]); // overflow
+        assert_eq!(rb.overflow_count(), 1);
+        let mut out = Vec::new();
+        assert_eq!(rb.drain_all(|t, d| out.push((t, d[0]))), 2);
+        assert_eq!(out, vec![(1, 10), (2, 20)]);
+        assert_eq!(rb.overflow_count(), 1); // preserved
+    }
+    #[test]
+    fn clear_empty_and_partial() {
+        let mut rb = IsrRingBuffer::<4, 8>::new();
+        rb.clear();
+        assert!(rb.is_empty());
+        rb.push_from_isr(1, &[10]).unwrap();
+        rb.push_from_isr(2, &[20]).unwrap();
+        rb.clear();
+        assert_eq!(rb.len(), 0);
+        assert!(!rb.pop_with(|_, _| panic!("not called")));
+    }
+
+    #[test]
+    fn clear_preserves_overflow_and_allows_reuse() {
+        let mut rb = IsrRingBuffer::<2, 4>::new();
+        rb.push_from_isr(1, &[10]).unwrap();
+        rb.push_from_isr(2, &[20]).unwrap();
+        let _ = rb.push_from_isr(3, &[30]);
+        rb.clear();
+        assert!(rb.is_empty());
+        assert_eq!(rb.overflow_count(), 1);
+        rb.push_from_isr(4, &[40]).unwrap();
+        let mut tag = 0;
+        assert!(rb.pop_with(|t, _| tag = t));
+        assert_eq!(tag, 4);
+    }
+    #[test]
+    fn capacity_returns_d() {
+        assert_eq!(IsrRingBuffer::<4, 8>::new().capacity(), 4);
+        assert_eq!(IsrRingBuffer::<1, 0>::new().capacity(), 1);
+        assert_eq!(IsrRingBuffer::<0, 8>::new().capacity(), 0);
+    }
+    #[test]
+    fn static_ring_drain_all_clear_capacity() {
+        let ring = StaticIsrRing::<4, 8>::new();
+        assert_eq!(ring.capacity(), 4);
+        // SAFETY: test is single-threaded; no concurrent access.
+        unsafe {
+            ring.push_from_isr(1, &[10]).unwrap();
+            ring.push_from_isr(2, &[20]).unwrap();
+        }
+        let mut out = Vec::new();
+        // SAFETY: test is single-threaded; no concurrent access.
+        let n = unsafe { ring.drain_all(|t, d| out.push((t, d[0]))) };
+        assert_eq!(n, 2);
+        assert_eq!(out, vec![(1, 10), (2, 20)]);
+        // SAFETY: test is single-threaded; no concurrent access.
+        unsafe {
+            assert!(ring.is_empty());
+            ring.push_from_isr(3, &[30]).unwrap();
+            ring.clear();
+            assert!(ring.is_empty());
+        }
     }
 }
