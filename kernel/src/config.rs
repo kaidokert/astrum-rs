@@ -3197,4 +3197,20 @@ mod tests {
     fn assert_priority_order_panics_irq_equals_pendsv() {
         assert_priority_order::<IrqEqualsPendsv>();
     }
+
+    /// PENDSV numerically below IRQ_DEFAULT means PendSV is more urgent
+    /// than application IRQs — violates the three-tier model.
+    struct PendsvBelowDefault;
+    impl KernelConfig for PendsvBelowDefault {
+        const N: usize = 2;
+        const PENDSV_PRIORITY: u8 = 0x80;
+        const IRQ_DEFAULT_PRIORITY: u8 = 0xC0;
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "IRQ default priority must be strictly higher")]
+    fn assert_priority_order_panics_pendsv_below_irq_default() {
+        assert_priority_order::<PendsvBelowDefault>();
+    }
 }
