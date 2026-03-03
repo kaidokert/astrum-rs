@@ -1,14 +1,13 @@
-# SysTick Priority Policy: Four-Tier Exception Model
+# SysTick Priority Policy: Three-Tier Exception Model
 
-The kernel enforces a four-tier Cortex-M exception priority ordering.
+The kernel enforces a three-tier Cortex-M exception priority ordering.
 Lower numeric value = higher urgency (preempts more).
 
-| Tier | Exception   | Default | Purpose                         |
-|------|-------------|---------|---------------------------------|
-| 1    | SVCall      | `0x00`  | Syscall entry — never preempted |
-| 2    | SysTick     | `0x10`  | Partition time-slot tick        |
-| 3    | App IRQs    | `0xC0`  | Split-ISR top-half handlers     |
-| 4    | PendSV      | `0xFF`  | Deferred context switch         |
+| Tier | Exception(s)     | Default(s)     | Purpose                              |
+|------|------------------|----------------|--------------------------------------|
+| 1    | SVCall, SysTick  | `0x00`, `0x10` | Kernel syscalls and scheduler tick   |
+| 2    | App IRQs         | `0xC0`         | Split-ISR top-half handlers          |
+| 3    | PendSV           | `0xFF`         | Deferred context switch              |
 
 App IRQ priorities must be >= `MIN_APP_IRQ_PRIORITY` (`0x20`).  The default
 `IRQ_DEFAULT_PRIORITY` is `0xC0`.
@@ -41,20 +40,20 @@ IRQ's NVIC priority to `Config::IRQ_DEFAULT_PRIORITY`, and unmasks it.
 
 ## Design Rationale
 
-**SVCall highest (0x00):** No exception may preempt a syscall or it could
-corrupt kernel state.
+**Tier 1 — Kernel (SVCall 0x00, SysTick 0x10):** SVCall and SysTick form
+the kernel tier.  No application exception may preempt either.  SVCall is
+the syscall entry point; preempting it could corrupt kernel state.  SysTick
+is the scheduler tick; if a device ISR top-half were allowed to preempt it,
+a long-running or frequently-firing peripheral handler could defer the tick
+indefinitely, breaking time-slice guarantees that hard-realtime tasks depend
+on.  Within the tier, SVCall is strictly higher than SysTick so that a
+syscall in progress is never interrupted by the tick.
 
-**SysTick above device IRQs (0x10):** The scheduler tick must never be
-delayed by application interrupt handlers.  If a device ISR top-half were
-allowed to preempt SysTick, a long-running or frequently-firing peripheral
-handler could defer the tick indefinitely, breaking time-slice guarantees
-that hard-realtime tasks depend on.
+**Tier 2 — Application (App IRQs >= 0x20, default 0xC0):** Split-ISR
+top-halves drain hardware FIFOs into `IsrRingBuffer`.  They tolerate brief
+preemption by Tier 1 because each producer-side ring-buffer write is bounded
+and atomic with respect to the consumer (task) side — kernel preemption
+cannot corrupt a partially-written entry.
 
-**App IRQs below SysTick (>= 0x20, default 0xC0):** Split-ISR top-halves
-drain hardware FIFOs into `IsrRingBuffer`.  They tolerate brief preemption
-by SysTick because each producer-side ring-buffer write is bounded and
-atomic with respect to the consumer (task) side — SysTick preemption cannot
-corrupt a partially-written entry.
-
-**PendSV lowest (0xFF):** Deferred context switch runs only after all
+**Tier 3 — Deferred (PendSV 0xFF):** Context switch runs only after all
 higher-priority work completes — standard ARM Cortex-M pattern.

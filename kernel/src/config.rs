@@ -3047,4 +3047,45 @@ mod tests {
         let err = validate_irq_priority(0x10, 0x20).unwrap_err();
         assert!(err.contains("MIN_APP_IRQ_PRIORITY"));
     }
+
+    #[test]
+    fn validate_irq_priority_exact_boundary_ok() {
+        // priority == min_app_irq_priority is the lowest allowed value.
+        assert!(validate_irq_priority(0x20, 0x20).is_ok());
+    }
+
+    #[test]
+    fn validate_irq_priority_one_below_boundary_err() {
+        // priority == min_app_irq_priority - 1 must be rejected.
+        let err = validate_irq_priority(0x1F, 0x20).unwrap_err();
+        assert!(err.contains("MIN_APP_IRQ_PRIORITY"));
+    }
+
+    #[test]
+    fn validate_irq_priority_zero_with_nonzero_floor_err() {
+        // Priority 0 (highest urgency) with floor 0x20 must be rejected.
+        let err = validate_irq_priority(0x00, 0x20).unwrap_err();
+        assert!(err.contains("MIN_APP_IRQ_PRIORITY"));
+    }
+
+    #[test]
+    fn validate_irq_priority_max_priority_ok() {
+        // Priority 0xFF (lowest urgency) is always above any reasonable floor.
+        assert!(validate_irq_priority(0xFF, 0x20).is_ok());
+    }
+
+    /// SVCALL == SYSTICK violates strict inequality requirement.
+    struct SvcallEqualsSystick;
+    impl KernelConfig for SvcallEqualsSystick {
+        const N: usize = 2;
+        const SVCALL_PRIORITY: u8 = 0x10;
+        const SYSTICK_PRIORITY: u8 = 0x10;
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "SVCall priority must be strictly higher")]
+    fn assert_priority_order_panics_svcall_equals_systick() {
+        assert_priority_order::<SvcallEqualsSystick>();
+    }
 }
