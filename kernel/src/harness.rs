@@ -483,7 +483,7 @@ mod tests {
 
     /// Mirrors the PendSV gating pattern:
     /// `if <Config>::MPU_ENFORCE { apply... }` — returns true when
-    /// apply_partition_mpu would be called, false when skipped.
+    /// apply_partition_mpu_cached would be called, false when skipped.
     fn pendsv_would_apply_mpu<C: KernelConfig>() -> bool {
         if C::MPU_ENFORCE {
             return true;

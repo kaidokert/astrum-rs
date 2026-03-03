@@ -553,7 +553,7 @@ impl MpuStrategy for DynamicStrategy {
 ///
 /// This strategy applies exactly 4 pre-computed (RBAR, RASR) region pairs
 /// (background, code, data, stack guard) using the same disable-program-enable
-/// sequence as [`mpu::apply_partition_mpu`].
+/// sequence as [`mpu::apply_partition_mpu_cached`].
 pub struct StaticStrategy;
 
 /// The number of MPU regions the static layout requires.
@@ -593,7 +593,7 @@ impl MpuStrategy for StaticStrategy {
 /// Program the given (RBAR, RASR) region triples into the MPU hardware.
 ///
 /// Disables the MPU, writes all regions, re-enables with PRIVDEFENA,
-/// and issues DSB/ISB barriers — mirroring [`mpu::apply_partition_mpu`].
+/// and issues DSB/ISB barriers — mirroring [`mpu::apply_partition_mpu_cached`].
 #[cfg(not(test))]
 fn apply_regions(regions: &[(u32, u32); STATIC_REGION_COUNT]) {
     // SAFETY: All unsafe operations in this block are MMIO writes to the

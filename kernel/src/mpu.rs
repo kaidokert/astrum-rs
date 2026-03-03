@@ -149,7 +149,7 @@ pub fn configure_region(mpu: &cortex_m::peripheral::MPU, rbar: u32, rasr: u32) {
     //
     // 3. MMIO soundness: The cortex-m crate's `write()` method performs a
     //    volatile write, ensuring the compiler does not reorder or elide
-    //    the store.  The caller (`apply_partition_mpu`) disables the MPU
+    //    the store.  The caller (`apply_partition_mpu_cached`) disables the MPU
     //    before calling this function and issues DSB/ISB barriers after
     //    all region writes, satisfying the ARMv7-M barrier requirements.
     unsafe {
@@ -247,7 +247,7 @@ pub fn deny_all_regions() -> [(u32, u32); 4] {
 /// Return partition MPU regions, falling back to a deny-all configuration
 /// if the partition's MPU parameters are invalid.
 ///
-/// This is the testable counterpart of `apply_partition_mpu`.  When
+/// This is the testable counterpart of `apply_partition_mpu_cached`.  When
 /// `partition_mpu_regions` returns `None` (e.g. non-power-of-2 region size),
 /// the deny-all fallback ensures the partition gets zero memory access
 /// rather than causing a panic — critical for handler-mode safety where
@@ -446,40 +446,6 @@ pub fn mpu_enable(mpu: &cortex_m::peripheral::MPU) {
     unsafe { mpu.ctrl.write(MPU_CTRL_ENABLE_PRIVDEFENA) };
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
-}
-
-/// Configure MPU regions for a partition: disable MPU, program four
-/// regions (background no-access, code RX, data RW/XN, stack guard),
-/// re-enable with PRIVDEFENA, and execute DSB/ISB barriers.
-///
-/// If the partition's MPU configuration is invalid, a deny-all fallback
-/// is applied instead of panicking.  This is necessary because this
-/// function is called from the SysTick handler (handler mode), where a
-/// panic is unrecoverable — there is no unwinding, and a panic in an
-/// ISR typically results in a HardFault double-fault lockup.
-///
-/// PRIVDEFENA safety depends on partitions executing unprivileged
-/// (CONTROL.nPRIV=1).  This is enforced by the PendSV handler
-/// (`define_pendsv!` / `define_pendsv_dynamic!` in pendsv.rs), which
-/// writes CONTROL.nPRIV=1 before `bx lr` to the partition.
-#[cfg(not(test))]
-pub fn apply_partition_mpu(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
-    let regions = partition_mpu_regions_or_deny_all(pcb);
-
-    mpu_disable(mpu);
-
-    for &(rbar, rasr) in &regions {
-        configure_region(mpu, rbar, rasr);
-    }
-    // Program peripheral regions R4-R5 (disabled if not configured).
-    // Fallback uses compile-time constants with the VALID bit so disabled
-    // slots target the correct region index.
-    let periph = peripheral_mpu_regions(pcb).unwrap_or([DISABLED_R4, DISABLED_R5]);
-    for &(rbar, rasr) in &periph {
-        configure_region(mpu, rbar, rasr);
-    }
-
-    mpu_enable(mpu);
 }
 
 /// Write pre-computed base regions (R0–R3) from the PCB cache to the MPU.
@@ -1104,8 +1070,8 @@ mod tests {
 
     #[test]
     fn peripheral_regions_differ_across_partitions() {
-        // Validates that apply_partition_mpu (called per context switch in
-        // dynamic mode) programs different R4-R5 peripheral regions for
+        // Validates that apply_partition_mpu_cached (called per context switch
+        // in dynamic mode) programs different R4-R5 peripheral regions for
         // different partitions, ensuring per-switch peripheral isolation.
         let p0 = make_pcb(0x0000_0000, 0x2000_0000, 4096)
             .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
