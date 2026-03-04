@@ -14,8 +14,9 @@ use kernel::api::decode_rc;
 pub use kernel::api::SvcError;
 use kernel::syscall::{
     SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV,
-    SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE,
-    SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
+    SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_SEND,
+    SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
+    SYS_YIELD,
 };
 
 #[cfg(feature = "partition-debug")]
@@ -380,6 +381,49 @@ pub fn sys_msg_send(target_partition: u32, data: &[u8]) -> Result<u32, SvcError>
     ))
 }
 
+/// Send a message to a queuing port.
+///
+/// Copies `data` into the queuing port identified by `port_id`.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_queuing_send(port_id: u32, data: &[u8]) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(
+        SYS_QUEUING_SEND,
+        port_id,
+        data.len() as u32,
+        data.as_ptr() as u32
+    ))
+}
+
+/// Receive a message from a queuing port.
+///
+/// Copies the next queued message from `port_id` into `buf`.
+///
+/// # Returns
+///
+/// `Ok(n)` with the number of bytes received, or `Err(SvcError)` if the
+/// syscall failed.
+pub fn sys_queuing_recv(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(
+        SYS_QUEUING_RECV,
+        port_id,
+        buf.len() as u32,
+        buf.as_mut_ptr() as u32
+    ))
+}
+
+/// Query the status of a queuing port.
+///
+/// # Returns
+///
+/// `Ok(status)` with the port status word, or `Err(SvcError)` if the
+/// syscall failed.
+pub fn sys_queuing_status(port_id: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_QUEUING_STATUS, port_id, 0u32, 0u32))
+}
+
 /// Receive a message from another partition.
 ///
 /// Copies the pending message into `buf`.
@@ -482,6 +526,33 @@ mod tests {
     fn msg_recv_empty_buf_returns_ok_zero_on_host() {
         let mut buf = [0u8; 0];
         assert_eq!(sys_msg_recv(&mut buf), Ok(0));
+    }
+
+    #[test]
+    fn queuing_send_returns_ok_zero_on_host() {
+        assert_eq!(sys_queuing_send(0, &[0xDE, 0xAD]), Ok(0));
+    }
+
+    #[test]
+    fn queuing_send_empty_data_returns_ok_zero_on_host() {
+        assert_eq!(sys_queuing_send(1, &[]), Ok(0));
+    }
+
+    #[test]
+    fn queuing_recv_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 8];
+        assert_eq!(sys_queuing_recv(0, &mut buf), Ok(0));
+    }
+
+    #[test]
+    fn queuing_recv_empty_buf_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 0];
+        assert_eq!(sys_queuing_recv(1, &mut buf), Ok(0));
+    }
+
+    #[test]
+    fn queuing_status_returns_ok_zero_on_host() {
+        assert_eq!(sys_queuing_status(0), Ok(0));
     }
 
     // Parameter-verification tests live in kernel/src/debug.rs per the
