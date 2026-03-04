@@ -1,6 +1,7 @@
 //! SVC call number constants and syscall dispatch types.
 
 // Base (unconditional) syscall numbers — defined in rtos-traits, re-exported here.
+pub use rtos_traits::syscall::SYS_GET_PARTITION_ID;
 pub use rtos_traits::syscall::{
     SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ, SYS_DEBUG_EXIT, SYS_DEBUG_PRINT, SYS_EVT_CLEAR,
     SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK,
@@ -25,6 +26,7 @@ pub use rtos_traits::syscall::{SYS_DEBUG_NOTIFY, SYS_DEBUG_WRITE};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyscallId {
     Yield,
+    GetPartitionId,
     EventWait,
     EventSet,
     EventClear,
@@ -91,6 +93,7 @@ impl SyscallId {
     pub const fn from_u32(n: u32) -> Option<Self> {
         match n {
             SYS_YIELD => Some(Self::Yield),
+            SYS_GET_PARTITION_ID => Some(Self::GetPartitionId),
             SYS_EVT_WAIT => Some(Self::EventWait),
             SYS_EVT_SET => Some(Self::EventSet),
             SYS_EVT_CLEAR => Some(Self::EventClear),
@@ -154,6 +157,7 @@ impl SyscallId {
     pub const fn as_u32(self) -> u32 {
         match self {
             Self::Yield => SYS_YIELD,
+            Self::GetPartitionId => SYS_GET_PARTITION_ID,
             Self::EventWait => SYS_EVT_WAIT,
             Self::EventSet => SYS_EVT_SET,
             Self::EventClear => SYS_EVT_CLEAR,
@@ -220,6 +224,7 @@ mod tests {
     /// All (constant, expected variant) pairs for exhaustive testing.
     const ALL_VARIANTS: &[(u32, SyscallId)] = &[
         (SYS_YIELD, SyscallId::Yield),
+        (SYS_GET_PARTITION_ID, SyscallId::GetPartitionId),
         (SYS_EVT_WAIT, SyscallId::EventWait),
         (SYS_EVT_SET, SyscallId::EventSet),
         (SYS_EVT_CLEAR, SyscallId::EventClear),
@@ -296,8 +301,8 @@ mod tests {
 
     #[test]
     fn from_u32_rejects_invalid() {
-        // Gap at 1 (reserved for SYS_GET_ID, not in this enum).
-        assert_eq!(SyscallId::from_u32(1), None);
+        // 1 is now valid (GetPartitionId).
+        assert_eq!(SyscallId::from_u32(1), Some(SyscallId::GetPartitionId));
         // Just above the defined range depends on features:
         // - Without dynamic-mpu: 39 is invalid (after SYS_IRQ_ACK=38)
         // - With dynamic-mpu: 39 is invalid (after SYS_IRQ_ACK=38)
@@ -310,15 +315,15 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        // Base: 24, +14 for dynamic-mpu, +1 for partition-debug
+        // Base: 25, +14 for dynamic-mpu, +1 for partition-debug
         #[cfg(all(not(feature = "dynamic-mpu"), not(feature = "partition-debug")))]
-        assert_eq!(ALL_VARIANTS.len(), 24);
-        #[cfg(all(feature = "dynamic-mpu", not(feature = "partition-debug")))]
-        assert_eq!(ALL_VARIANTS.len(), 38);
-        #[cfg(all(not(feature = "dynamic-mpu"), feature = "partition-debug"))]
         assert_eq!(ALL_VARIANTS.len(), 25);
-        #[cfg(all(feature = "dynamic-mpu", feature = "partition-debug"))]
+        #[cfg(all(feature = "dynamic-mpu", not(feature = "partition-debug")))]
         assert_eq!(ALL_VARIANTS.len(), 39);
+        #[cfg(all(not(feature = "dynamic-mpu"), feature = "partition-debug"))]
+        assert_eq!(ALL_VARIANTS.len(), 26);
+        #[cfg(all(feature = "dynamic-mpu", feature = "partition-debug"))]
+        assert_eq!(ALL_VARIANTS.len(), 40);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);

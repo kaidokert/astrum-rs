@@ -5,6 +5,7 @@
 
 // ── Base (unconditional) syscall numbers ──────────────────────────────
 pub const SYS_YIELD: u32 = 0;
+pub const SYS_GET_PARTITION_ID: u32 = 1;
 pub const SYS_EVT_WAIT: u32 = 2;
 pub const SYS_EVT_SET: u32 = 3;
 pub const SYS_EVT_CLEAR: u32 = 4;
@@ -186,6 +187,7 @@ mod tests {
     /// All base (unconditional) syscall constants with their expected values.
     const BASE_SYSCALLS: &[(&str, u32, u32)] = &[
         ("SYS_YIELD", SYS_YIELD, 0),
+        ("SYS_GET_PARTITION_ID", SYS_GET_PARTITION_ID, 1),
         ("SYS_EVT_WAIT", SYS_EVT_WAIT, 2),
         ("SYS_EVT_SET", SYS_EVT_SET, 3),
         ("SYS_EVT_CLEAR", SYS_EVT_CLEAR, 4),
@@ -229,7 +231,7 @@ mod tests {
 
     #[test]
     fn base_constant_count() {
-        assert_eq!(BASE_SYSCALLS.len(), 24);
+        assert_eq!(BASE_SYSCALLS.len(), 25);
     }
 
     /// Dynamic-MPU syscall constants: (name, actual, expected).

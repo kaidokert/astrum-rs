@@ -875,6 +875,7 @@ pub fn dispatch_syscall<const N: usize>(
 ) {
     frame.r0 = match SyscallId::from_u32(frame.r0) {
         Some(SyscallId::Yield) => handle_yield(),
+        Some(SyscallId::GetPartitionId) => caller as u32,
         Some(SyscallId::EventWait) => events::event_wait(partitions, caller, frame.r2),
         Some(SyscallId::EventSet) => events::event_set(partitions, frame.r1 as usize, frame.r2),
         Some(SyscallId::EventClear) => events::event_clear(partitions, caller, frame.r2),
@@ -1569,6 +1570,7 @@ where
         };
         frame.r0 = match SyscallId::from_u32(syscall_id) {
             Some(SyscallId::Yield) => self.trigger_deschedule(),
+            Some(SyscallId::GetPartitionId) => caller as u32,
             Some(SyscallId::EventWait) => {
                 let result = events::event_wait(self.partitions_mut(), caller, arg2);
                 if result == 0 {
@@ -2997,6 +2999,7 @@ mod tests {
     use crate::scheduler::ScheduleEntry;
     use crate::scheduler::ScheduleEvent;
     use crate::semaphore::Semaphore;
+    use crate::syscall::SYS_GET_PARTITION_ID;
     use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_IRQ_ACK, SYS_YIELD};
 
     /// Test kernel configuration with small, fixed pool sizes.
@@ -3288,6 +3291,16 @@ mod tests {
         let mut t = tbl();
         dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!((ef.r0, ef.r1, ef.r2, ef.r3), (0, 0xAA, 0xBB, 0xCC));
+    }
+
+    #[test]
+    fn get_partition_id_returns_caller() {
+        let mut t = tbl();
+        for caller in [0usize, 1] {
+            let mut ef = frame(SYS_GET_PARTITION_ID, 0, 0);
+            dispatch_syscall(&mut ef, &mut t, caller);
+            assert_eq!(ef.r0, caller as u32);
+        }
     }
 
     #[test]
