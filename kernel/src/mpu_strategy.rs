@@ -293,11 +293,11 @@ impl DynamicStrategy {
             let mut desc_idx = 0usize;
 
             for region in part.peripheral_regions().iter() {
-                let base = region.base();
-                let size = region.size();
-                if size < 32 || !size.is_power_of_two() {
+                if !region.is_mappable() {
                     continue;
                 }
+                let base = region.base();
+                let size = region.size();
                 let key = (base, size);
                 let already_wired = seen.contains(&key);
                 // Only wire if not already wired by a preceding partition.
@@ -314,9 +314,6 @@ impl DynamicStrategy {
                     // Populate reserved peripheral slots directly; add_window
                     // skips them so they must be written here.
                     if wired < reserved {
-                        if crate::mpu::validate_mpu_region(base, size).is_err() {
-                            continue;
-                        }
                         with_cs(|cs| {
                             self.slots.borrow(cs).borrow_mut()[wired] = Some(WindowDescriptor {
                                 base,
@@ -366,14 +363,10 @@ impl DynamicStrategy {
             #[cfg(debug_assertions)]
             {
                 let cached = self.cached_peripherals(part.id());
-                // TODO: extract a shared `MpuRegion::is_mappable()` predicate so the
-                // main selection loop and this debug check use the same filter;
-                // for now we delegate to `validate_mpu_region` to avoid inlining
-                // the size/power-of-two/alignment rules here.
                 for (ci, region) in part
                     .peripheral_regions()
                     .iter()
-                    .filter(|r| crate::mpu::validate_mpu_region(r.base(), r.size()).is_ok())
+                    .filter(|r| r.is_mappable())
                     .take(cached.len())
                     .enumerate()
                 {

@@ -86,6 +86,12 @@ impl MpuRegion {
     pub fn permissions(&self) -> u32 {
         self.permissions
     }
+
+    /// Returns `true` when the region's base and size satisfy all ARMv7-M
+    /// MPU constraints (minimum 32 bytes, power-of-two size, aligned base).
+    pub fn is_mappable(&self) -> bool {
+        validate_mpu_region(self.base, self.size).is_ok()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2333,5 +2339,32 @@ mod tests {
         let mut sentinel = make_sentinel_pcb();
         sentinel.seal_cache();
         let _ = sentinel.promote_sentinel_mpu(0x2000_0000, 1024, SENTINEL_DATA_PERMISSIONS);
+    }
+
+    // ── is_mappable tests ──
+
+    #[test]
+    fn is_mappable_valid_region() {
+        let r = MpuRegion::new(0x2000_0000, 4096, 0);
+        assert!(r.is_mappable());
+    }
+
+    #[test]
+    fn is_mappable_size_too_small() {
+        let r = MpuRegion::new(0, 16, 0);
+        assert!(!r.is_mappable());
+    }
+
+    #[test]
+    fn is_mappable_non_power_of_two() {
+        let r = MpuRegion::new(0, 48, 0);
+        assert!(!r.is_mappable());
+    }
+
+    #[test]
+    fn is_mappable_misaligned_base() {
+        // base 0x100 is not aligned to size 4096 (0x1000)
+        let r = MpuRegion::new(0x100, 4096, 0);
+        assert!(!r.is_mappable());
     }
 }

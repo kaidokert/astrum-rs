@@ -479,6 +479,20 @@ pub fn write_cached_periph_regions(mpu: &cortex_m::peripheral::MPU, pcb: &Partit
     }
 }
 
+/// Disable the MPU, run the closure, then re-enable and barrier.
+///
+/// Centralises the disable → DSB+ISB → callback → enable → DSB+ISB
+/// sequence so callers cannot forget the trailing barriers.
+#[cfg(not(test))]
+pub fn with_mpu_disabled(
+    mpu: &cortex_m::peripheral::MPU,
+    f: impl FnOnce(&cortex_m::peripheral::MPU),
+) {
+    mpu_disable(mpu);
+    f(mpu);
+    mpu_enable(mpu);
+}
+
 /// Configure MPU from pre-computed cached regions stored in the PCB.
 ///
 /// Reads `pcb.cached_base_regions()` (R0–R3) and
@@ -488,10 +502,10 @@ pub fn write_cached_periph_regions(mpu: &cortex_m::peripheral::MPU, pcb: &Partit
 /// against using an uninitialised (all-zeros) base-region cache.
 #[cfg(not(test))]
 pub fn apply_partition_mpu_cached(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
-    mpu_disable(mpu);
-    write_cached_base_regions(mpu, pcb);
-    write_cached_periph_regions(mpu, pcb);
-    mpu_enable(mpu);
+    with_mpu_disabled(mpu, |mpu| {
+        write_cached_base_regions(mpu, pcb);
+        write_cached_periph_regions(mpu, pcb);
+    });
 }
 
 /// Apply deny-all MPU configuration (R0-R5).
