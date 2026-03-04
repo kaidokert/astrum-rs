@@ -10,25 +10,38 @@
 
 #![no_std]
 
-use kernel::api::decode_rc;
+pub use kernel::api::decode_rc;
 pub use kernel::api::SvcError;
 
 #[cfg(feature = "dynamic-mpu")]
 pub use kernel::buf_syscall;
-use kernel::syscall::{
-    SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV,
-    SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED,
-    SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS, SYS_SAMPLING_READ,
-    SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
-};
 
+// ── Re-exported syscall constants (from rtos-traits) ──────────────────
+
+// Control
+pub use rtos_traits::syscall::{SYS_GET_TIME, SYS_IRQ_ACK, SYS_YIELD};
+// Events
+pub use rtos_traits::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT};
+// Sync
+pub use rtos_traits::syscall::{SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_WAIT};
+// Messaging
+pub use rtos_traits::syscall::{SYS_MSG_RECV, SYS_MSG_SEND};
+// Ports
+pub use rtos_traits::syscall::{
+    SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED,
+    SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE,
+};
+// Blackboard
 #[cfg(feature = "ipc-blackboard")]
-use rtos_traits::syscall::{SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ};
+pub use rtos_traits::syscall::{SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ};
+// Debug – SYS_DEBUG_PRINT/EXIT are semihosting ops (unconditional in rtos-traits);
+// SYS_DEBUG_NOTIFY/WRITE are partition ring-buffer ops (gated on partition-debug).
+pub use rtos_traits::syscall::{SYS_DEBUG_EXIT, SYS_DEBUG_PRINT};
+#[cfg(feature = "partition-debug")]
+pub use rtos_traits::syscall::{SYS_DEBUG_NOTIFY, SYS_DEBUG_WRITE};
 
 #[cfg(feature = "partition-debug")]
 use rtos_traits::debug::{DebugRingBuffer, KIND_TEXT};
-#[cfg(feature = "partition-debug")]
-use rtos_traits::syscall::SYS_DEBUG_NOTIFY;
 
 // Re-export FmtBuffer from shared traits crate for use with dprint! macro
 #[cfg(feature = "partition-debug")]
@@ -787,5 +800,72 @@ mod tests {
     #[test]
     fn bb_clear_max_board_id_returns_ok_zero_on_host() {
         assert_eq!(sys_bb_clear(u32::MAX), Ok(0));
+    }
+
+    // ── Re-export verification tests ──────────────────────────────────
+
+    #[test]
+    fn decode_rc_reexported_success() {
+        assert_eq!(crate::decode_rc(0), Ok(0));
+        assert_eq!(crate::decode_rc(42), Ok(42));
+    }
+
+    #[test]
+    fn decode_rc_reexported_error() {
+        assert_eq!(
+            crate::decode_rc(SvcError::InvalidResource.to_u32()),
+            Err(SvcError::InvalidResource)
+        );
+    }
+
+    /// Verify that plib re-exports map transparently to the rtos-traits
+    /// source of truth (no hardcoded ABI values).
+    #[test]
+    fn syscall_constants_reexported_match_source() {
+        use rtos_traits::syscall as src;
+        // Control
+        assert_eq!(crate::SYS_YIELD, src::SYS_YIELD);
+        assert_eq!(crate::SYS_GET_TIME, src::SYS_GET_TIME);
+        assert_eq!(crate::SYS_IRQ_ACK, src::SYS_IRQ_ACK);
+        // Events
+        assert_eq!(crate::SYS_EVT_WAIT, src::SYS_EVT_WAIT);
+        assert_eq!(crate::SYS_EVT_SET, src::SYS_EVT_SET);
+        assert_eq!(crate::SYS_EVT_CLEAR, src::SYS_EVT_CLEAR);
+        // Sync
+        assert_eq!(crate::SYS_SEM_WAIT, src::SYS_SEM_WAIT);
+        assert_eq!(crate::SYS_SEM_SIGNAL, src::SYS_SEM_SIGNAL);
+        assert_eq!(crate::SYS_MTX_LOCK, src::SYS_MTX_LOCK);
+        assert_eq!(crate::SYS_MTX_UNLOCK, src::SYS_MTX_UNLOCK);
+        // Messaging
+        assert_eq!(crate::SYS_MSG_SEND, src::SYS_MSG_SEND);
+        assert_eq!(crate::SYS_MSG_RECV, src::SYS_MSG_RECV);
+        // Ports
+        assert_eq!(crate::SYS_SAMPLING_WRITE, src::SYS_SAMPLING_WRITE);
+        assert_eq!(crate::SYS_SAMPLING_READ, src::SYS_SAMPLING_READ);
+        assert_eq!(crate::SYS_QUEUING_SEND, src::SYS_QUEUING_SEND);
+        assert_eq!(crate::SYS_QUEUING_RECV, src::SYS_QUEUING_RECV);
+        assert_eq!(crate::SYS_QUEUING_STATUS, src::SYS_QUEUING_STATUS);
+        assert_eq!(crate::SYS_QUEUING_SEND_TIMED, src::SYS_QUEUING_SEND_TIMED);
+        assert_eq!(crate::SYS_QUEUING_RECV_TIMED, src::SYS_QUEUING_RECV_TIMED);
+        // Debug (unconditional)
+        assert_eq!(crate::SYS_DEBUG_PRINT, src::SYS_DEBUG_PRINT);
+        assert_eq!(crate::SYS_DEBUG_EXIT, src::SYS_DEBUG_EXIT);
+    }
+
+    #[cfg(feature = "ipc-blackboard")]
+    #[test]
+    fn syscall_bb_constants_reexported_match_source() {
+        use rtos_traits::syscall as src;
+        assert_eq!(crate::SYS_BB_DISPLAY, src::SYS_BB_DISPLAY);
+        assert_eq!(crate::SYS_BB_READ, src::SYS_BB_READ);
+        assert_eq!(crate::SYS_BB_CLEAR, src::SYS_BB_CLEAR);
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn syscall_debug_gated_constants_reexported_match_source() {
+        use rtos_traits::syscall as src;
+        assert_eq!(crate::SYS_DEBUG_NOTIFY, src::SYS_DEBUG_NOTIFY);
+        assert_eq!(crate::SYS_DEBUG_WRITE, src::SYS_DEBUG_WRITE);
     }
 }
