@@ -13,8 +13,9 @@
 use kernel::api::decode_rc;
 pub use kernel::api::SvcError;
 use kernel::syscall::{
-    SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MTX_LOCK,
-    SYS_MTX_UNLOCK, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
+    SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV,
+    SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE,
+    SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
 };
 
 #[cfg(feature = "partition-debug")]
@@ -363,6 +364,39 @@ pub fn sys_sampling_read(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> 
     ))
 }
 
+/// Send a message to another partition.
+///
+/// Copies `data` into the target partition's message buffer.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_msg_send(target_partition: u32, data: &[u8]) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(
+        SYS_MSG_SEND,
+        target_partition,
+        data.len() as u32,
+        data.as_ptr() as u32
+    ))
+}
+
+/// Receive a message from another partition.
+///
+/// Copies the pending message into `buf`.
+///
+/// # Returns
+///
+/// `Ok(n)` with the number of bytes received, or `Err(SvcError)` if the
+/// syscall failed.
+pub fn sys_msg_recv(buf: &mut [u8]) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(
+        SYS_MSG_RECV,
+        0u32,
+        buf.len() as u32,
+        buf.as_mut_ptr() as u32
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +460,28 @@ mod tests {
     fn sampling_read_returns_ok_zero_on_host() {
         let mut buf = [0u8; 8];
         assert_eq!(sys_sampling_read(0, &mut buf), Ok(0));
+    }
+
+    #[test]
+    fn msg_send_returns_ok_zero_on_host() {
+        assert_eq!(sys_msg_send(1, &[0xAA, 0xBB, 0xCC]), Ok(0));
+    }
+
+    #[test]
+    fn msg_send_empty_data_returns_ok_zero_on_host() {
+        assert_eq!(sys_msg_send(0, &[]), Ok(0));
+    }
+
+    #[test]
+    fn msg_recv_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 16];
+        assert_eq!(sys_msg_recv(&mut buf), Ok(0));
+    }
+
+    #[test]
+    fn msg_recv_empty_buf_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 0];
+        assert_eq!(sys_msg_recv(&mut buf), Ok(0));
     }
 
     // Parameter-verification tests live in kernel/src/debug.rs per the
