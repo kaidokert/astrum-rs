@@ -200,14 +200,15 @@ macro_rules! define_unified_harness {
         /// Programs static regions R0-R3 for the first scheduled partition.
         #[cfg(not(feature = "dynamic-mpu"))]
         #[no_mangle]
-        fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) {
-            if !<$Config as $crate::config::KernelConfig>::MPU_ENFORCE { return; }
+        fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) -> Result<(), &'static str> {
+            if !<$Config as $crate::config::KernelConfig>::MPU_ENFORCE { return Ok(()); }
             $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
                 let pcb = k.partitions().get(pid as usize)
-                    .expect("boot: next_partition PID missing from partition table");
+                    .ok_or("boot: next_partition PID missing from partition table")?;
                 $crate::mpu::apply_partition_mpu_cached(mpu, pcb);
-            });
+                Ok(())
+            })
         }
 
         /// Boot-time MPU initialisation hook called from `boot::boot()`
@@ -217,39 +218,41 @@ macro_rules! define_unified_harness {
         /// (R5-R7) with peripheral regions from all partitions, so that
         /// `program_regions()` hardware-programs them on every PendSV
         /// context switch.
-        // TODO: reviewer false positive (missing feature guard) — this
-        // dynamic-mode boot path IS gated by #[cfg(feature = "dynamic-mpu")];
-        // the static-mode __boot_mpu_init above uses apply_partition_mpu_cached
-        // which programs all 6 regions (R0-R5).  Both variants are correct.
         #[cfg(feature = "dynamic-mpu")]
         #[no_mangle]
-        fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) {
+        fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) -> Result<(), &'static str> {
             $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
-                // TODO(panic-free): convert to Result once __boot_mpu_init
-                // can propagate errors back to boot().
                 let pcb = k.partitions().get(pid as usize)
-                    .expect("boot: next_partition PID missing from partition table");
+                    .ok_or("boot: next_partition PID missing from partition table")?;
                 // Program R0-R5 from pre-computed cache within a single
                 // disable/enable cycle that spans strategy setup below.
+                // Re-enable the MPU even on error so hardware is left in a
+                // consistent state (the MPU was enabled before we entered).
                 $crate::mpu::mpu_disable(mpu);
                 $crate::mpu::write_cached_base_regions(mpu, pcb);
                 $crate::mpu::write_cached_periph_regions(mpu, pcb);
-                if let Some(regions) = $crate::mpu::partition_dynamic_regions(pcb) {
+                let strategy_result = if let Some(regions) = $crate::mpu::partition_dynamic_regions(pcb) {
                     let periph_reserved = if pcb.peripheral_regions().is_empty() { 0 } else { 2 };
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
                         &HARNESS_STRATEGY, pid, &regions, periph_reserved,
                     )
-                    .expect("failed to configure boot MPU");
-                }
+                    // TODO: preserves only a static string; consider logging the
+                    // underlying strategy error once we have a boot-time log sink.
+                    .map_err(|_| "failed to configure boot MPU")
+                } else {
+                    Ok(())
+                };
                 $crate::mpu::mpu_enable(mpu);
+                strategy_result?;
 
                 // Populate dynamic slots 1-3 (R5-R7) with deduplicated
                 // peripheral regions from all partitions.
                 HARNESS_STRATEGY.wire_boot_peripherals(
                     k.partitions().as_slice(),
                 );
-            });
+                Ok(())
+            })
         }
 
         $crate::define_unified_kernel!($Config, |k| {
