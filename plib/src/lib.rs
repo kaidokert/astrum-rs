@@ -31,6 +31,12 @@ pub use rtos_traits::syscall::{
     SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED,
     SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE,
 };
+// Device driver & query (dynamic-mpu only, defined in kernel::syscall)
+#[cfg(feature = "dynamic-mpu")]
+pub use kernel::syscall::{
+    SYS_DEV_CLOSE, SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_READ_TIMED, SYS_DEV_WRITE,
+    SYS_QUERY_BOTTOM_HALF,
+};
 // Blackboard
 #[cfg(feature = "ipc-blackboard")]
 pub use rtos_traits::syscall::{SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ};
@@ -867,5 +873,18 @@ mod tests {
         use rtos_traits::syscall as src;
         assert_eq!(crate::SYS_DEBUG_NOTIFY, src::SYS_DEBUG_NOTIFY);
         assert_eq!(crate::SYS_DEBUG_WRITE, src::SYS_DEBUG_WRITE);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn syscall_dev_constants_reexported_match_kernel_source() {
+        use kernel::syscall as src;
+        assert_eq!(crate::SYS_DEV_OPEN, src::SYS_DEV_OPEN);
+        assert_eq!(crate::SYS_DEV_READ, src::SYS_DEV_READ);
+        assert_eq!(crate::SYS_DEV_WRITE, src::SYS_DEV_WRITE);
+        assert_eq!(crate::SYS_DEV_IOCTL, src::SYS_DEV_IOCTL);
+        assert_eq!(crate::SYS_DEV_CLOSE, src::SYS_DEV_CLOSE);
+        assert_eq!(crate::SYS_DEV_READ_TIMED, src::SYS_DEV_READ_TIMED);
+        assert_eq!(crate::SYS_QUERY_BOTTOM_HALF, src::SYS_QUERY_BOTTOM_HALF);
     }
 }
