@@ -537,7 +537,7 @@ mod tests {
             MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
         );
         let expected = partition_mpu_regions_or_deny_all(&pcb);
-        precompute_mpu_cache(&mut pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
         assert_eq!(
             *pcb.cached_base_regions(),
             expected,
@@ -563,7 +563,7 @@ mod tests {
         .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 0x400, 0x1300_0000)]);
         let expected_base = partition_mpu_regions_or_deny_all(&pcb);
         let expected_periph = peripheral_mpu_regions_or_disabled(&pcb);
-        precompute_mpu_cache(&mut pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
         assert_eq!(
             *pcb.cached_base_regions(),
             expected_base,

@@ -1612,7 +1612,7 @@ mod tests {
     fn precompute_cache_base_regions_match_on_the_fly() {
         let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
         let expected = partition_mpu_regions_or_deny_all(&pcb);
-        precompute_mpu_cache(&mut pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
         assert_eq!(*pcb.cached_base_regions(), expected);
     }
 
@@ -1621,14 +1621,14 @@ mod tests {
         let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)
             .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
         let expected = peripheral_mpu_regions(&pcb).unwrap();
-        precompute_mpu_cache(&mut pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
         assert_eq!(*pcb.cached_periph_regions(), expected);
     }
 
     #[test]
     fn precompute_cache_periph_disabled_when_no_peripherals() {
         let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
-        precompute_mpu_cache(&mut pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
         assert_eq!(*pcb.cached_periph_regions(), [DISABLED_R4, DISABLED_R5],);
     }
 
@@ -1641,7 +1641,7 @@ mod tests {
     fn cached_mpu_regions_match_on_the_fly() {
         let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)
             .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
-        precompute_mpu_cache(&mut pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
         assert_eq!(
             *pcb.cached_base_regions(),
             partition_mpu_regions_or_deny_all(&pcb)
@@ -1665,7 +1665,7 @@ mod tests {
 
         // After precompute, the guard passes.
         let mut pcb2 = make_pcb(0x0000_0000, 0x2000_0000, 4096);
-        precompute_mpu_cache(&mut pcb2);
+        precompute_mpu_cache(&mut pcb2).unwrap();
         let init_guard = pcb2
             .cached_base_regions()
             .iter()
@@ -1677,7 +1677,7 @@ mod tests {
     #[test]
     fn cached_periph_disabled_matches_fallback() {
         let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
-        precompute_mpu_cache(&mut pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
         assert_eq!(*pcb.cached_periph_regions(), [DISABLED_R4, DISABLED_R5]);
     }
 
