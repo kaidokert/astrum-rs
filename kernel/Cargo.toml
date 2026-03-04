@@ -346,3 +346,6 @@ log-defmt = ["dep:defmt"]
 # Use `single-core` as an explicit override when both are enabled (--all-features).
 multi-core = []
 single-core = []
+
+[dev-dependencies]
+plib = { path = "../plib" }

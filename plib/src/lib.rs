@@ -472,7 +472,7 @@ pub fn sys_queuing_recv(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
 ///
 /// # Returns
 ///
-/// `Ok(0)` on success, `Err(SvcError::OperationFailed)` if `data` exceeds
+/// `Ok(0)` on success, `Err(SvcError::InvalidParameter)` if `data` exceeds
 /// 65 535 bytes, or `Err(SvcError)` if the syscall failed.
 pub fn sys_queuing_send_timed(
     port_id: u32,
@@ -480,9 +480,6 @@ pub fn sys_queuing_send_timed(
     timeout_ticks: u16,
 ) -> Result<u32, SvcError> {
     if data.len() > u16::MAX as usize {
-        // TODO: SvcError::InvalidParameter would be more idiomatic here (bounds
-        // violation), but the variant does not exist; OperationFailed is the
-        // closest available catch-all.
         return Err(SvcError::InvalidParameter);
     }
     let r2 = ((timeout_ticks as u32) << 16) | (data.len() as u32);
@@ -503,7 +500,7 @@ pub fn sys_queuing_send_timed(
 ///
 /// # Returns
 ///
-/// `Ok(n)` with the number of bytes received, `Err(SvcError::OperationFailed)`
+/// `Ok(n)` with the number of bytes received, `Err(SvcError::InvalidParameter)`
 /// if `buf` exceeds 65 535 bytes, or `Err(SvcError)` if the syscall failed.
 pub fn sys_queuing_recv_timed(
     port_id: u32,
@@ -511,9 +508,6 @@ pub fn sys_queuing_recv_timed(
     timeout_ticks: u16,
 ) -> Result<u32, SvcError> {
     if buf.len() > u16::MAX as usize {
-        // TODO: SvcError::InvalidParameter would be more idiomatic here (bounds
-        // violation), but the variant does not exist; OperationFailed is the
-        // closest available catch-all.
         return Err(SvcError::InvalidParameter);
     }
     let r2 = ((timeout_ticks as u32) << 16) | (buf.len() as u32);
