@@ -25,7 +25,7 @@ pub const SYS_DEBUG_PRINT: u32 = 31;
 pub const SYS_DEBUG_EXIT: u32 = 32;
 /// Timed queuing send: r1=port_id, r2=(timeout_ticks_hi16 << 16 | data_len_lo16), r3=data_ptr
 pub const SYS_QUEUING_SEND_TIMED: u32 = 27;
-/// Timed queuing recv: r1=port_id, r2=timeout_ticks (u32), r3=buf_ptr
+/// Timed queuing recv: r1=port_id, r2=(timeout_ticks_hi16 << 16 | buf_len_lo16), r3=buf_ptr
 pub const SYS_QUEUING_RECV_TIMED: u32 = 28;
 /// IRQ acknowledge: r1=irq_number. Re-enables the masked IRQ after partition handles it.
 pub const SYS_IRQ_ACK: u32 = 38;

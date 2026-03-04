@@ -14,9 +14,9 @@ use kernel::api::decode_rc;
 pub use kernel::api::SvcError;
 use kernel::syscall::{
     SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV,
-    SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_SEND,
-    SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
-    SYS_YIELD,
+    SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED,
+    SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS, SYS_SAMPLING_READ,
+    SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
 };
 
 #[cfg(feature = "partition-debug")]
@@ -414,6 +414,68 @@ pub fn sys_queuing_recv(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
     ))
 }
 
+/// Send a message to a queuing port with a timeout.
+///
+/// ABI: r2 = (timeout_ticks_hi16 << 16 | data_len_lo16), r3 = data_ptr.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, `Err(SvcError::OperationFailed)` if `data` exceeds
+/// 65 535 bytes, or `Err(SvcError)` if the syscall failed.
+pub fn sys_queuing_send_timed(
+    port_id: u32,
+    data: &[u8],
+    timeout_ticks: u16,
+) -> Result<u32, SvcError> {
+    if data.len() > u16::MAX as usize {
+        // TODO: SvcError::InvalidParameter would be more idiomatic here (bounds
+        // violation), but the variant does not exist; OperationFailed is the
+        // closest available catch-all.
+        return Err(SvcError::OperationFailed);
+    }
+    let r2 = ((timeout_ticks as u32) << 16) | (data.len() as u32);
+    // SAFETY: svc! triggers a supervisor call whose handler validates all
+    // arguments.  The data pointer is valid for data.len() bytes and the
+    // packed r2 encodes the length so the kernel can bounds-check it.
+    decode_rc(kernel::svc!(
+        SYS_QUEUING_SEND_TIMED,
+        port_id,
+        r2,
+        data.as_ptr() as u32
+    ))
+}
+
+/// Receive a message from a queuing port with a timeout.
+///
+/// ABI: r2 = (timeout_ticks_hi16 << 16 | buf_len_lo16), r3 = buf_ptr.
+///
+/// # Returns
+///
+/// `Ok(n)` with the number of bytes received, `Err(SvcError::OperationFailed)`
+/// if `buf` exceeds 65 535 bytes, or `Err(SvcError)` if the syscall failed.
+pub fn sys_queuing_recv_timed(
+    port_id: u32,
+    buf: &mut [u8],
+    timeout_ticks: u16,
+) -> Result<u32, SvcError> {
+    if buf.len() > u16::MAX as usize {
+        // TODO: SvcError::InvalidParameter would be more idiomatic here (bounds
+        // violation), but the variant does not exist; OperationFailed is the
+        // closest available catch-all.
+        return Err(SvcError::OperationFailed);
+    }
+    let r2 = ((timeout_ticks as u32) << 16) | (buf.len() as u32);
+    // SAFETY: svc! triggers a supervisor call whose handler validates all
+    // arguments.  The buf pointer is valid for buf.len() bytes and the
+    // packed r2 encodes the length so the kernel can bounds-check it.
+    decode_rc(kernel::svc!(
+        SYS_QUEUING_RECV_TIMED,
+        port_id,
+        r2,
+        buf.as_mut_ptr() as u32
+    ))
+}
+
 /// Query the status of a queuing port.
 ///
 /// # Returns
@@ -443,7 +505,9 @@ pub fn sys_msg_recv(buf: &mut [u8]) -> Result<u32, SvcError> {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn event_wait_returns_ok_zero_on_host() {
@@ -554,6 +618,73 @@ mod tests {
     fn queuing_status_returns_ok_zero_on_host() {
         assert_eq!(sys_queuing_status(0), Ok(0));
     }
+
+    #[test]
+    fn queuing_send_timed_returns_ok_zero_on_host() {
+        assert_eq!(sys_queuing_send_timed(0, &[0xAA, 0xBB], 100), Ok(0));
+    }
+
+    #[test]
+    fn queuing_send_timed_empty_data_returns_ok_zero_on_host() {
+        assert_eq!(sys_queuing_send_timed(1, &[], 50), Ok(0));
+    }
+
+    #[test]
+    fn queuing_send_timed_rejects_oversized_data() {
+        // A slice longer than u16::MAX must be rejected before the syscall.
+        let big = vec![0u8; u16::MAX as usize + 1];
+        assert_eq!(
+            sys_queuing_send_timed(0, &big, 100),
+            Err(SvcError::OperationFailed)
+        );
+    }
+
+    #[test]
+    fn queuing_recv_timed_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 8];
+        assert_eq!(sys_queuing_recv_timed(0, &mut buf, 200), Ok(0));
+    }
+
+    #[test]
+    fn queuing_recv_timed_empty_buf_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 0];
+        assert_eq!(sys_queuing_recv_timed(1, &mut buf, 0), Ok(0));
+    }
+
+    #[test]
+    fn queuing_recv_timed_max_timeout_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 4];
+        assert_eq!(sys_queuing_recv_timed(0, &mut buf, u16::MAX), Ok(0));
+    }
+
+    #[test]
+    fn queuing_recv_timed_rejects_oversized_buf() {
+        // A buffer longer than u16::MAX must be rejected before the syscall.
+        let mut big = vec![0u8; u16::MAX as usize + 1];
+        assert_eq!(
+            sys_queuing_recv_timed(0, &mut big, 100),
+            Err(SvcError::OperationFailed)
+        );
+    }
+
+    #[test]
+    fn queuing_send_timed_packing_boundary() {
+        // Verify the largest valid data length (u16::MAX) is accepted.
+        let data = vec![0u8; u16::MAX as usize];
+        assert_eq!(sys_queuing_send_timed(0, &data, u16::MAX), Ok(0));
+    }
+
+    #[test]
+    fn queuing_recv_timed_packing_boundary() {
+        // Verify the largest valid buffer length (u16::MAX) is accepted.
+        let mut buf = vec![0u8; u16::MAX as usize];
+        assert_eq!(sys_queuing_recv_timed(0, &mut buf, u16::MAX), Ok(0));
+    }
+
+    // TODO: Host stub returns 0 unconditionally so we cannot verify that
+    // the packed r2 value (timeout_hi16 | len_lo16) is correctly formed
+    // from these tests.  Register-level verification requires an on-target
+    // (QEMU) integration test that inspects the actual SVC arguments.
 
     // Parameter-verification tests live in kernel/src/debug.rs per the
     // crate's documented testing policy (see module docs).
