@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod api;
 pub mod debug;
 pub mod device;
 pub mod fmt;

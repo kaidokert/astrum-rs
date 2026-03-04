@@ -10,8 +10,8 @@
 
 #![no_std]
 
-pub use kernel::api::decode_rc;
-pub use kernel::api::SvcError;
+pub use rtos_traits::api::decode_rc;
+pub use rtos_traits::api::SvcError;
 
 #[cfg(feature = "dynamic-mpu")]
 pub use kernel::buf_syscall;
