@@ -1,10 +1,10 @@
 //! User-space convenience wrappers for buffer-pool lending syscalls.
 
-use crate::buffer_pool::lend_flags;
 use crate::syscall::{
     SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_RELEASE, SYS_BUF_REVOKE, SYS_BUF_TRANSFER,
     SYS_BUF_WRITE,
 };
+use rtos_traits::syscall::lend_flags;
 use rtos_traits::syscall::SvcError;
 
 /// Pack target partition ID and writable flag into r2.

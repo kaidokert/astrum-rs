@@ -1915,7 +1915,7 @@ where
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferLend) => {
                 let slot = frame.r1 as usize;
-                use crate::buffer_pool::lend_flags;
+                use rtos_traits::syscall::lend_flags;
                 const RESERVED_MASK: u32 = 0xFE00; // bits 9-15
                 if frame.r2 & RESERVED_MASK != 0 {
                     SvcError::OperationFailed.to_u32()

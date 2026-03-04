@@ -81,6 +81,13 @@ pub const SYS_BUF_TRANSFER: u32 = 36;
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_READ: u32 = 37;
 
+/// Flags for `SYS_BUF_LEND`, packed into upper bits of r2.
+#[cfg(feature = "dynamic-mpu")]
+pub mod lend_flags {
+    /// Grant AP_FULL_ACCESS instead of AP_RO_RO to the target.
+    pub const WRITABLE: u32 = 1 << 8;
+}
+
 /// Typed SVC error codes returned to user-space via r0.
 ///
 /// Each variant maps to a unique `u32` with the high bit set (>= 0x8000_0000),

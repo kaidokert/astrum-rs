@@ -39,7 +39,12 @@ pub use rtos_traits::syscall::{
 };
 // Buffer pool (dynamic-mpu only, defined in rtos-traits)
 #[cfg(feature = "dynamic-mpu")]
-pub use rtos_traits::syscall::{SYS_BUF_ALLOC, SYS_BUF_READ, SYS_BUF_RELEASE, SYS_BUF_WRITE};
+pub use rtos_traits::syscall::lend_flags;
+#[cfg(feature = "dynamic-mpu")]
+pub use rtos_traits::syscall::{
+    SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_RELEASE, SYS_BUF_REVOKE, SYS_BUF_TRANSFER,
+    SYS_BUF_WRITE,
+};
 // Blackboard
 #[cfg(feature = "ipc-blackboard")]
 pub use rtos_traits::syscall::{SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ};
@@ -758,6 +763,62 @@ pub fn sys_buf_write(slot: u8, data: &[u8]) -> Result<u32, SvcError> {
     ))
 }
 
+/// Lend a buffer slot to a target partition.
+///
+/// ABI: r1 = slot, r2 = (writable_bit8 | target), r3 = 0.
+///
+/// # Returns
+///
+/// `Ok(region_id)` with the MPU region assigned to the target, or
+/// `Err(SvcError)` if the syscall failed.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_buf_lend(slot: u8, target: u8, writable: bool) -> Result<u32, SvcError> {
+    let flags: u32 = if writable { lend_flags::WRITABLE } else { 0 };
+    let r2 = (target as u32) | flags;
+    // SAFETY: svc! triggers a supervisor call whose handler validates all
+    // arguments.  The slot and packed r2 contain only small integer values;
+    // no pointers are passed.
+    decode_rc(kernel::svc!(SYS_BUF_LEND, slot as u32, r2, 0u32))
+}
+
+/// Revoke a previously lent buffer slot from a target partition.
+///
+/// ABI: r1 = slot, r2 = target.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_buf_revoke(slot: u8, target: u8) -> Result<u32, SvcError> {
+    // SAFETY: svc! triggers a supervisor call whose handler validates all
+    // arguments.  Only small integer values are passed; no pointers.
+    decode_rc(kernel::svc!(
+        SYS_BUF_REVOKE,
+        slot as u32,
+        target as u32,
+        0u32
+    ))
+}
+
+/// Transfer ownership of a buffer slot to another partition.
+///
+/// ABI: r1 = slot, r2 = new_owner.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_buf_transfer(slot: u8, new_owner: u8) -> Result<u32, SvcError> {
+    // SAFETY: svc! triggers a supervisor call whose handler validates all
+    // arguments.  Only small integer values are passed; no pointers.
+    decode_rc(kernel::svc!(
+        SYS_BUF_TRANSFER,
+        slot as u32,
+        new_owner as u32,
+        0u32
+    ))
+}
+
 /// Print a debug message via semihosting.
 ///
 /// ABI: r1 = ptr, r2 = len.
@@ -1098,6 +1159,9 @@ mod tests {
         assert_eq!(crate::SYS_QUERY_BOTTOM_HALF, src::SYS_QUERY_BOTTOM_HALF);
         assert_eq!(crate::SYS_BUF_READ, src::SYS_BUF_READ);
         assert_eq!(crate::SYS_BUF_WRITE, src::SYS_BUF_WRITE);
+        assert_eq!(crate::SYS_BUF_LEND, src::SYS_BUF_LEND);
+        assert_eq!(crate::SYS_BUF_REVOKE, src::SYS_BUF_REVOKE);
+        assert_eq!(crate::SYS_BUF_TRANSFER, src::SYS_BUF_TRANSFER);
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -1275,6 +1339,72 @@ mod tests {
     fn buf_write_boundary_len_accepted() {
         let data = vec![0u8; u16::MAX as usize];
         assert_eq!(sys_buf_write(0, &data), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn lend_r2_packing_readonly_sets_target_only() {
+        // Verify the inline packing in sys_buf_lend: r2 = target | flags.
+        fn pack(target: u8, writable: bool) -> u32 {
+            let flags: u32 = if writable { lend_flags::WRITABLE } else { 0 };
+            (target as u32) | flags
+        }
+        assert_eq!(pack(0, false), 0);
+        assert_eq!(pack(1, false), 1);
+        assert_eq!(pack(0xFF, false), 0xFF);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn lend_r2_packing_writable_sets_bit8_and_target() {
+        fn pack(target: u8, writable: bool) -> u32 {
+            let flags: u32 = if writable { lend_flags::WRITABLE } else { 0 };
+            (target as u32) | flags
+        }
+        assert_eq!(pack(0, true), lend_flags::WRITABLE);
+        assert_eq!(pack(1, true), 1 | lend_flags::WRITABLE);
+        assert_eq!(pack(0xFF, true), 0xFF | lend_flags::WRITABLE);
+    }
+
+    // TODO: Host stub returns 0 unconditionally so we cannot verify that
+    // sys_buf_lend propagates the kernel's region_id return value, or that
+    // the packed r2 reaches the SVC handler.  Register-level verification
+    // requires an on-target (QEMU) integration test.
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lend_readonly_returns_ok_on_host() {
+        assert_eq!(sys_buf_lend(0, 1, false), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lend_writable_returns_ok_on_host() {
+        assert_eq!(sys_buf_lend(2, 3, true), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_revoke_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_revoke(0, 1), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_revoke_max_slot_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_revoke(u8::MAX, 0), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_transfer_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_transfer(0, 1), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_transfer_max_slot_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_transfer(u8::MAX, u8::MAX), Ok(0));
     }
 
     #[test]

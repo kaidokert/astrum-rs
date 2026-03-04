@@ -87,10 +87,8 @@ pub enum BorrowMode {
 }
 
 /// Flags for SYS_BUF_LEND, packed into upper bits of r2.
-pub mod lend_flags {
-    /// Grant AP_FULL_ACCESS instead of AP_RO_RO to the target.
-    pub const WRITABLE: u32 = 1 << 8;
-}
+/// Re-exported from the canonical ABI definition in `rtos_traits::syscall`.
+pub use rtos_traits::syscall::lend_flags;
 
 /// A single buffer slot containing a fixed-size byte array and metadata.
 ///
