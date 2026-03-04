@@ -37,6 +37,9 @@ pub use rtos_traits::syscall::{
     SYS_DEV_CLOSE, SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_READ_TIMED, SYS_DEV_WRITE,
     SYS_QUERY_BOTTOM_HALF,
 };
+// Buffer pool (dynamic-mpu only, defined in rtos-traits)
+#[cfg(feature = "dynamic-mpu")]
+pub use rtos_traits::syscall::{SYS_BUF_ALLOC, SYS_BUF_RELEASE};
 // Blackboard
 #[cfg(feature = "ipc-blackboard")]
 pub use rtos_traits::syscall::{SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ};
@@ -684,6 +687,35 @@ pub fn sys_query_bottom_half(device_id: u8) -> Result<u32, SvcError> {
     ))
 }
 
+/// Allocate a buffer slot from the shared buffer pool.
+///
+/// `writable`: request a writable (`true`) or read-only (`false`) borrow.
+/// `max_ticks`: deadline in ticks (0 = no deadline).
+///
+/// ABI: r1 = mode (0 read-only, 1 writable), r2 = max_ticks.
+///
+/// # Returns
+///
+/// `Ok(slot)` with the allocated slot index, or `Err(SvcError)` if the
+/// syscall failed.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_buf_alloc(writable: bool, max_ticks: u16) -> Result<u32, SvcError> {
+    let mode = if writable { 1u32 } else { 0u32 };
+    decode_rc(kernel::svc!(SYS_BUF_ALLOC, mode, max_ticks as u32, 0u32))
+}
+
+/// Release a buffer slot back to the shared pool.
+///
+/// ABI: r1 = slot.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_buf_release(slot: u8) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_BUF_RELEASE, slot as u32, 0u32, 0u32))
+}
+
 /// Print a debug message via semihosting.
 ///
 /// ABI: r1 = ptr, r2 = len.
@@ -1115,6 +1147,36 @@ mod tests {
     #[test]
     fn query_bottom_half_max_device_id_returns_ok_zero_on_host() {
         assert_eq!(sys_query_bottom_half(u8::MAX), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_alloc_readonly_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_alloc(false, 0), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_alloc_writable_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_alloc(true, 100), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_alloc_max_ticks_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_alloc(false, u16::MAX), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_release_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_release(0), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_release_max_slot_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_release(u8::MAX), Ok(0));
     }
 
     #[test]
