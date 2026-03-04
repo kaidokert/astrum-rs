@@ -39,7 +39,7 @@ pub use rtos_traits::syscall::{
 };
 // Buffer pool (dynamic-mpu only, defined in rtos-traits)
 #[cfg(feature = "dynamic-mpu")]
-pub use rtos_traits::syscall::{SYS_BUF_ALLOC, SYS_BUF_RELEASE};
+pub use rtos_traits::syscall::{SYS_BUF_ALLOC, SYS_BUF_READ, SYS_BUF_RELEASE, SYS_BUF_WRITE};
 // Blackboard
 #[cfg(feature = "ipc-blackboard")]
 pub use rtos_traits::syscall::{SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ};
@@ -716,6 +716,48 @@ pub fn sys_buf_release(slot: u8) -> Result<u32, SvcError> {
     decode_rc(kernel::svc!(SYS_BUF_RELEASE, slot as u32, 0u32, 0u32))
 }
 
+/// Read data from a buffer slot into `dst`.
+///
+/// ABI: r1 = slot, r2 = dst_len, r3 = dst_ptr.
+///
+/// # Returns
+///
+/// `Ok(n)` with the number of bytes read, `Err(SvcError::OperationFailed)`
+/// if `dst` exceeds 65 535 bytes, or `Err(SvcError)` if the syscall failed.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_buf_read(slot: u8, dst: &mut [u8]) -> Result<u32, SvcError> {
+    if dst.len() > u16::MAX as usize {
+        return Err(SvcError::OperationFailed);
+    }
+    decode_rc(kernel::svc!(
+        SYS_BUF_READ,
+        slot as u32,
+        dst.len() as u32,
+        dst.as_mut_ptr() as u32
+    ))
+}
+
+/// Write data to a buffer slot.
+///
+/// ABI: r1 = slot, r2 = data_len, r3 = data_ptr.
+///
+/// # Returns
+///
+/// `Ok(n)` with the number of bytes written, `Err(SvcError::OperationFailed)`
+/// if `data` exceeds 65 535 bytes, or `Err(SvcError)` if the syscall failed.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_buf_write(slot: u8, data: &[u8]) -> Result<u32, SvcError> {
+    if data.len() > u16::MAX as usize {
+        return Err(SvcError::OperationFailed);
+    }
+    decode_rc(kernel::svc!(
+        SYS_BUF_WRITE,
+        slot as u32,
+        data.len() as u32,
+        data.as_ptr() as u32
+    ))
+}
+
 /// Print a debug message via semihosting.
 ///
 /// ABI: r1 = ptr, r2 = len.
@@ -1054,6 +1096,8 @@ mod tests {
         assert_eq!(crate::SYS_DEV_CLOSE, src::SYS_DEV_CLOSE);
         assert_eq!(crate::SYS_DEV_READ_TIMED, src::SYS_DEV_READ_TIMED);
         assert_eq!(crate::SYS_QUERY_BOTTOM_HALF, src::SYS_QUERY_BOTTOM_HALF);
+        assert_eq!(crate::SYS_BUF_READ, src::SYS_BUF_READ);
+        assert_eq!(crate::SYS_BUF_WRITE, src::SYS_BUF_WRITE);
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -1177,6 +1221,60 @@ mod tests {
     #[test]
     fn buf_release_max_slot_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_release(u8::MAX), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_read_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 16];
+        assert_eq!(sys_buf_read(0, &mut buf), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_read_empty_dst_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 0];
+        assert_eq!(sys_buf_read(1, &mut buf), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_read_rejects_oversized_dst() {
+        let mut big = vec![0u8; u16::MAX as usize + 1];
+        assert_eq!(sys_buf_read(0, &mut big), Err(SvcError::OperationFailed));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_read_boundary_len_accepted() {
+        let mut buf = vec![0u8; u16::MAX as usize];
+        assert_eq!(sys_buf_read(0, &mut buf), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_write_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_write(0, &[0xDE, 0xAD]), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_write_empty_data_returns_ok_zero_on_host() {
+        assert_eq!(sys_buf_write(1, &[]), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_write_rejects_oversized_data() {
+        let big = vec![0u8; u16::MAX as usize + 1];
+        assert_eq!(sys_buf_write(0, &big), Err(SvcError::OperationFailed));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_write_boundary_len_accepted() {
+        let data = vec![0u8; u16::MAX as usize];
+        assert_eq!(sys_buf_write(0, &data), Ok(0));
     }
 
     #[test]
