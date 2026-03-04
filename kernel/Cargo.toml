@@ -251,6 +251,10 @@ name = "uart1_loopback"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
+name = "mpu_precompute_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "plib_abi_test"
 required-features = ["qemu", "log-semihosting"]
 
