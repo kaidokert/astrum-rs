@@ -29,7 +29,6 @@ use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    syscall::SYS_GET_TIME,
     DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal,
 };
 
@@ -76,7 +75,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 /// Partition entry: spin calling SYS_GET_TIME and publish each reading.
 extern "C" fn partition_main() -> ! {
     loop {
-        let t = kernel::svc!(SYS_GET_TIME, 0u32, 0u32, 0u32);
+        let t = plib::sys_get_time().unwrap_or(0);
         TIME_READING.store(t, Ordering::Release);
     }
 }

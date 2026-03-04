@@ -23,7 +23,6 @@ use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
 use kernel::svc::Kernel;
-use kernel::syscall::{SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD};
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(SmokeConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -86,10 +85,10 @@ kernel::define_unified_harness!(SmokeConfig, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     // Signal first so the semaphore count is >0 before P1 runs.
-    let rc = kernel::svc!(SYS_SEM_SIGNAL, 0u32, 0u32, 0u32);
+    let rc = plib::sys_sem_signal(0).unwrap_or(u32::MAX);
     SIG_RC.store(rc, Ordering::Release);
     // Yield voluntarily — exercises SYS_YIELD and triggers context switch.
-    let rc = kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    let rc = plib::sys_yield().unwrap_or(u32::MAX);
     YIELD_RC.store(rc, Ordering::Release);
     loop {
         cortex_m::asm::nop();
@@ -97,7 +96,7 @@ extern "C" fn p0_main() -> ! {
 }
 
 extern "C" fn p1_main() -> ! {
-    let rc = kernel::svc!(SYS_SEM_WAIT, 0u32, 0u32, 0u32);
+    let rc = plib::sys_sem_wait(0).unwrap_or(u32::MAX);
     WAIT_RC.store(rc, Ordering::Release);
     loop {
         cortex_m::asm::nop();
