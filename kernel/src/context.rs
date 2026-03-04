@@ -34,7 +34,7 @@ pub const SAVED_CONTEXT_WORDS: usize = 8;
 /// Total words in a SavedContext + ExceptionFrame pair (8 + 8).
 pub const CONTEXT_FRAME_WORDS: usize = 16;
 
-const XPSR_THUMB: u32 = 1 << 24; // Thumb bit — required on all Cortex-M
+pub const XPSR_THUMB: u32 = 1 << 24; // Thumb bit — required on all Cortex-M
 
 /// EXC_RETURN value: return to Thread mode using PSP.
 ///

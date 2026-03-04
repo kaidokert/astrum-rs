@@ -24,6 +24,8 @@ extern "C" {
     fn DefaultHandler();
 }
 
+pub mod api;
+
 pub mod klog;
 pub mod kpanic;
 pub mod macros;
