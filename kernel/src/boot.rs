@@ -332,7 +332,7 @@ where
         // Pre-compute cached MPU register pairs now that all fixups are applied.
         for i in 0..partitions.len() {
             if let Some(pcb) = k.partitions_mut().get_mut(i) {
-                crate::mpu::precompute_mpu_cache(pcb);
+                crate::mpu::precompute_mpu_cache(pcb).expect("precompute_mpu_cache failed");
                 debug_assert!(
                     pcb.cached_base_regions()[0] != (0, 0),
                     "partition {} cached_base_regions[0] is all-zeros after precompute",

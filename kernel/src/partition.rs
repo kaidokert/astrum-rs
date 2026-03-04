@@ -353,14 +353,16 @@ impl PartitionControlBlock {
     }
 
     /// Sets the pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
-    // TODO(panic-free): convert to Result
-    pub fn set_cached_base_regions(&mut self, regions: [(u32, u32); 4]) {
+    pub fn set_cached_base_regions(
+        &mut self,
+        regions: [(u32, u32); 4],
+    ) -> Result<(), &'static str> {
         #[cfg(debug_assertions)]
-        assert!(
-            !self.cache_sealed,
-            "set_cached_base_regions called after MPU cache sealed"
-        );
+        if self.cache_sealed {
+            return Err("set_cached_base_regions called after MPU cache sealed");
+        }
         self.cached_base_regions = regions;
+        Ok(())
     }
 
     /// Returns the pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R5.
@@ -369,14 +371,16 @@ impl PartitionControlBlock {
     }
 
     /// Sets the pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R5.
-    // TODO(panic-free): convert to Result
-    pub fn set_cached_periph_regions(&mut self, regions: [(u32, u32); 2]) {
+    pub fn set_cached_periph_regions(
+        &mut self,
+        regions: [(u32, u32); 2],
+    ) -> Result<(), &'static str> {
         #[cfg(debug_assertions)]
-        assert!(
-            !self.cache_sealed,
-            "set_cached_periph_regions called after MPU cache sealed"
-        );
+        if self.cache_sealed {
+            return Err("set_cached_periph_regions called after MPU cache sealed");
+        }
         self.cached_periph_regions = regions;
+        Ok(())
     }
 
     /// Mark the MPU cache as sealed. Called by [`precompute_mpu_cache`] after
@@ -2233,7 +2237,7 @@ mod tests {
             (0x2000_2010, 0x0000_1309),
             (0x2000_3010, 0x0000_130B),
         ];
-        pcb.set_cached_base_regions(regions);
+        pcb.set_cached_base_regions(regions).unwrap();
         assert_eq!(*pcb.cached_base_regions(), regions);
     }
 
@@ -2241,7 +2245,7 @@ mod tests {
     fn set_get_cached_periph_regions_roundtrip() {
         let mut pcb = make_pcb();
         let regions = [(0x4000_0014, 0x0000_1315), (0x4000_1014, 0x0000_1317)];
-        pcb.set_cached_periph_regions(regions);
+        pcb.set_cached_periph_regions(regions).unwrap();
         assert_eq!(*pcb.cached_periph_regions(), regions);
     }
 
@@ -2273,8 +2277,8 @@ mod tests {
         // All mutators should succeed before the cache is sealed.
         assert!(pcb.fix_stack_region(0x2000_0000, 2048).is_ok());
         pcb.fix_mpu_data_region(0x2000_0000);
-        pcb.set_cached_base_regions([(1, 2); 4]);
-        pcb.set_cached_periph_regions([(3, 4); 2]);
+        pcb.set_cached_base_regions([(1, 2); 4]).unwrap();
+        pcb.set_cached_periph_regions([(3, 4); 2]).unwrap();
         // promote_sentinel_mpu requires size==0; use a sentinel PCB.
         let mut sentinel = make_sentinel_pcb();
         assert!(sentinel
@@ -2302,20 +2306,24 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "set_cached_base_regions called after MPU cache sealed")]
-    fn set_cached_base_regions_panics_after_seal() {
+    fn set_cached_base_regions_err_after_seal() {
         let mut pcb = make_pcb();
         pcb.seal_cache();
-        pcb.set_cached_base_regions([(1, 2); 4]);
+        assert_eq!(
+            pcb.set_cached_base_regions([(1, 2); 4]),
+            Err("set_cached_base_regions called after MPU cache sealed")
+        );
     }
 
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "set_cached_periph_regions called after MPU cache sealed")]
-    fn set_cached_periph_regions_panics_after_seal() {
+    fn set_cached_periph_regions_err_after_seal() {
         let mut pcb = make_pcb();
         pcb.seal_cache();
-        pcb.set_cached_periph_regions([(3, 4); 2]);
+        assert_eq!(
+            pcb.set_cached_periph_regions([(3, 4); 2]),
+            Err("set_cached_periph_regions called after MPU cache sealed")
+        );
     }
 
     #[cfg(debug_assertions)]
