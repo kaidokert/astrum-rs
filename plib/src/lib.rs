@@ -22,6 +22,9 @@ use kernel::syscall::{
     SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
 };
 
+#[cfg(feature = "ipc-blackboard")]
+use rtos_traits::syscall::{SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ};
+
 #[cfg(feature = "partition-debug")]
 use rtos_traits::debug::{DebugRingBuffer, KIND_TEXT};
 #[cfg(feature = "partition-debug")]
@@ -506,6 +509,53 @@ pub fn sys_msg_recv(buf: &mut [u8]) -> Result<u32, SvcError> {
     ))
 }
 
+/// Display (write) data to a blackboard.
+///
+/// Copies `data` into the blackboard identified by `board_id`, replacing
+/// any previously displayed value and waking all blocked readers.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+#[cfg(feature = "ipc-blackboard")]
+pub fn sys_bb_display(board_id: u32, data: &[u8]) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(
+        SYS_BB_DISPLAY,
+        board_id,
+        data.len() as u32,
+        data.as_ptr() as u32
+    ))
+}
+
+/// Read the current value from a blackboard.
+///
+/// Copies the blackboard contents into `buf`.  This is a non-blocking
+/// read; if the blackboard is empty, the kernel returns an error.
+///
+/// # Returns
+///
+/// `Ok(n)` with the number of bytes read, or `Err(SvcError)` if the
+/// syscall failed.
+#[cfg(feature = "ipc-blackboard")]
+pub fn sys_bb_read(board_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(
+        SYS_BB_READ,
+        board_id,
+        buf.len() as u32,
+        buf.as_mut_ptr() as u32
+    ))
+}
+
+/// Clear a blackboard, removing any displayed data.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+#[cfg(feature = "ipc-blackboard")]
+pub fn sys_bb_clear(board_id: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_BB_CLEAR, board_id, 0u32, 0u32))
+}
+
 #[cfg(test)]
 mod tests {
     extern crate alloc;
@@ -699,5 +749,43 @@ mod tests {
     fn buf_syscall_reexport_buf_alloc_returns_ok() {
         let result = crate::buf_syscall::buf_alloc(false, 0);
         assert_eq!(result, Ok(0));
+    }
+
+    #[cfg(feature = "ipc-blackboard")]
+    #[test]
+    fn bb_display_returns_ok_zero_on_host() {
+        assert_eq!(sys_bb_display(0, &[0xCA, 0xFE]), Ok(0));
+    }
+
+    #[cfg(feature = "ipc-blackboard")]
+    #[test]
+    fn bb_display_empty_data_returns_ok_zero_on_host() {
+        assert_eq!(sys_bb_display(0, &[]), Ok(0));
+    }
+
+    #[cfg(feature = "ipc-blackboard")]
+    #[test]
+    fn bb_read_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 16];
+        assert_eq!(sys_bb_read(0, &mut buf), Ok(0));
+    }
+
+    #[cfg(feature = "ipc-blackboard")]
+    #[test]
+    fn bb_read_empty_buf_returns_ok_zero_on_host() {
+        let mut buf = [0u8; 0];
+        assert_eq!(sys_bb_read(0, &mut buf), Ok(0));
+    }
+
+    #[cfg(feature = "ipc-blackboard")]
+    #[test]
+    fn bb_clear_returns_ok_zero_on_host() {
+        assert_eq!(sys_bb_clear(0), Ok(0));
+    }
+
+    #[cfg(feature = "ipc-blackboard")]
+    #[test]
+    fn bb_clear_max_board_id_returns_ok_zero_on_host() {
+        assert_eq!(sys_bb_clear(u32::MAX), Ok(0));
     }
 }
