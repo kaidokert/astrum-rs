@@ -384,7 +384,6 @@ pub(crate) fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) ->
 pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) -> Result<(), &'static str> {
     pcb.set_cached_base_regions(partition_mpu_regions_or_deny_all(pcb))?;
     pcb.set_cached_periph_regions(peripheral_mpu_regions_or_disabled(pcb))?;
-    #[cfg(debug_assertions)]
     pcb.seal_cache();
     Ok(())
 }
@@ -1697,7 +1696,6 @@ mod tests {
 
     /// Calling `precompute_mpu_cache` twice on the same PCB must fail on the
     /// second call because the cache is sealed after the first.
-    #[cfg(debug_assertions)]
     #[test]
     fn precompute_cache_double_call_returns_err() {
         let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);

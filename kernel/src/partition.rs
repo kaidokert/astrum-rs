@@ -119,7 +119,6 @@ pub struct PartitionControlBlock {
     cached_periph_regions: [(u32, u32); 2],
     /// Guard: set true after [`precompute_mpu_cache`] to catch post-boot
     /// mutations that would silently invalidate the cached MPU registers.
-    #[cfg(debug_assertions)]
     cache_sealed: bool,
 }
 
@@ -147,7 +146,6 @@ impl PartitionControlBlock {
             debug_buffer: DebugBufferRef::none(),
             cached_base_regions: [(0, 0); 4],
             cached_periph_regions: [(0, 0); 2],
-            #[cfg(debug_assertions)]
             cache_sealed: false,
         }
     }
@@ -259,7 +257,6 @@ impl PartitionControlBlock {
     /// - `BaseNotAligned`: base is not aligned to size
     /// - `AddressOverflow`: base + size overflows u32
     pub fn fix_stack_region(&mut self, base: u32, size: u32) -> Result<(), MpuError> {
-        #[cfg(debug_assertions)]
         assert!(
             !self.cache_sealed,
             "fix_stack_region called after MPU cache sealed"
@@ -281,7 +278,6 @@ impl PartitionControlBlock {
     /// `PartitionCore`. This method patches the base to the real runtime
     /// address, preserving the original size and permissions.
     pub fn fix_mpu_data_region(&mut self, base: u32) {
-        #[cfg(debug_assertions)]
         assert!(
             !self.cache_sealed,
             "fix_mpu_data_region called after MPU cache sealed"
@@ -304,7 +300,6 @@ impl PartitionControlBlock {
         size: u32,
         permissions: u32,
     ) -> Result<(), MpuError> {
-        #[cfg(debug_assertions)]
         assert!(
             !self.cache_sealed,
             "promote_sentinel_mpu called after MPU cache sealed"
@@ -363,7 +358,6 @@ impl PartitionControlBlock {
         &mut self,
         regions: [(u32, u32); 4],
     ) -> Result<(), &'static str> {
-        #[cfg(debug_assertions)]
         if self.cache_sealed {
             return Err("set_cached_base_regions called after MPU cache sealed");
         }
@@ -381,7 +375,6 @@ impl PartitionControlBlock {
         &mut self,
         regions: [(u32, u32); 2],
     ) -> Result<(), &'static str> {
-        #[cfg(debug_assertions)]
         if self.cache_sealed {
             return Err("set_cached_periph_regions called after MPU cache sealed");
         }
@@ -392,13 +385,11 @@ impl PartitionControlBlock {
     /// Mark the MPU cache as sealed. Called by [`precompute_mpu_cache`] after
     /// boot-time fixups are complete. Any subsequent mutation of MPU-affecting
     /// fields will trip a debug assertion.
-    #[cfg(debug_assertions)]
     pub fn seal_cache(&mut self) {
         self.cache_sealed = true;
     }
 
     /// Returns whether the MPU cache has been sealed (debug-only).
-    #[cfg(debug_assertions)]
     pub fn cache_sealed(&self) -> bool {
         self.cache_sealed
     }
@@ -2257,7 +2248,6 @@ mod tests {
 
     // ── cache_sealed guard tests ────────────────────────────────────
 
-    #[cfg(debug_assertions)]
     #[test]
     fn cache_sealed_default_false_then_seal() {
         let mut pcb = make_pcb();
@@ -2266,7 +2256,6 @@ mod tests {
         assert!(pcb.cache_sealed());
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     fn seal_cache_is_idempotent() {
         let mut pcb = make_pcb();
@@ -2292,7 +2281,6 @@ mod tests {
             .is_ok());
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "fix_stack_region called after MPU cache sealed")]
     fn fix_stack_region_panics_after_seal() {
@@ -2301,7 +2289,6 @@ mod tests {
         let _ = pcb.fix_stack_region(0x2000_0000, 2048);
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "fix_mpu_data_region called after MPU cache sealed")]
     fn fix_mpu_data_region_panics_after_seal() {
@@ -2310,7 +2297,6 @@ mod tests {
         pcb.fix_mpu_data_region(0x2000_0000);
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     fn set_cached_base_regions_err_after_seal() {
         let mut pcb = make_pcb();
@@ -2321,7 +2307,6 @@ mod tests {
         );
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     fn set_cached_periph_regions_err_after_seal() {
         let mut pcb = make_pcb();
@@ -2332,7 +2317,6 @@ mod tests {
         );
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "promote_sentinel_mpu called after MPU cache sealed")]
     fn promote_sentinel_mpu_panics_after_seal() {
