@@ -483,7 +483,7 @@ pub fn sys_queuing_send_timed(
         // TODO: SvcError::InvalidParameter would be more idiomatic here (bounds
         // violation), but the variant does not exist; OperationFailed is the
         // closest available catch-all.
-        return Err(SvcError::OperationFailed);
+        return Err(SvcError::InvalidParameter);
     }
     let r2 = ((timeout_ticks as u32) << 16) | (data.len() as u32);
     // SAFETY: svc! triggers a supervisor call whose handler validates all
@@ -514,7 +514,7 @@ pub fn sys_queuing_recv_timed(
         // TODO: SvcError::InvalidParameter would be more idiomatic here (bounds
         // violation), but the variant does not exist; OperationFailed is the
         // closest available catch-all.
-        return Err(SvcError::OperationFailed);
+        return Err(SvcError::InvalidParameter);
     }
     let r2 = ((timeout_ticks as u32) << 16) | (buf.len() as u32);
     // SAFETY: svc! triggers a supervisor call whose handler validates all
@@ -694,7 +694,7 @@ pub fn sys_dev_read_timed(
     timeout_ticks: u16,
 ) -> Result<u32, SvcError> {
     if buf.len() > u16::MAX as usize {
-        return Err(SvcError::OperationFailed);
+        return Err(SvcError::InvalidParameter);
     }
     let r2 = ((timeout_ticks as u32) << 16) | (buf.len() as u32);
     // SAFETY: svc! triggers a supervisor call whose handler validates all
@@ -766,7 +766,7 @@ pub fn sys_buf_release(slot: u8) -> Result<u32, SvcError> {
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_read(slot: u8, dst: &mut [u8]) -> Result<u32, SvcError> {
     if dst.len() > u16::MAX as usize {
-        return Err(SvcError::OperationFailed);
+        return Err(SvcError::InvalidParameter);
     }
     decode_rc(rtos_traits::svc!(
         SYS_BUF_READ,
@@ -787,7 +787,7 @@ pub fn sys_buf_read(slot: u8, dst: &mut [u8]) -> Result<u32, SvcError> {
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_write(slot: u8, data: &[u8]) -> Result<u32, SvcError> {
     if data.len() > u16::MAX as usize {
-        return Err(SvcError::OperationFailed);
+        return Err(SvcError::InvalidParameter);
     }
     decode_rc(rtos_traits::svc!(
         SYS_BUF_WRITE,
@@ -1017,7 +1017,7 @@ mod tests {
         let big = vec![0u8; u16::MAX as usize + 1];
         assert_eq!(
             sys_queuing_send_timed(0, &big, 100),
-            Err(SvcError::OperationFailed)
+            Err(SvcError::InvalidParameter)
         );
     }
 
@@ -1045,7 +1045,7 @@ mod tests {
         let mut big = vec![0u8; u16::MAX as usize + 1];
         assert_eq!(
             sys_queuing_recv_timed(0, &mut big, 100),
-            Err(SvcError::OperationFailed)
+            Err(SvcError::InvalidParameter)
         );
     }
 
@@ -1301,7 +1301,7 @@ mod tests {
         let mut big = vec![0u8; u16::MAX as usize + 1];
         assert_eq!(
             sys_dev_read_timed(0, &mut big, 100),
-            Err(SvcError::OperationFailed)
+            Err(SvcError::InvalidParameter)
         );
     }
 
@@ -1372,7 +1372,7 @@ mod tests {
     #[test]
     fn buf_read_rejects_oversized_dst() {
         let mut big = vec![0u8; u16::MAX as usize + 1];
-        assert_eq!(sys_buf_read(0, &mut big), Err(SvcError::OperationFailed));
+        assert_eq!(sys_buf_read(0, &mut big), Err(SvcError::InvalidParameter));
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -1398,7 +1398,7 @@ mod tests {
     #[test]
     fn buf_write_rejects_oversized_data() {
         let big = vec![0u8; u16::MAX as usize + 1];
-        assert_eq!(sys_buf_write(0, &big), Err(SvcError::OperationFailed));
+        assert_eq!(sys_buf_write(0, &big), Err(SvcError::InvalidParameter));
     }
 
     #[cfg(feature = "dynamic-mpu")]

@@ -39,6 +39,7 @@ pub enum SvcError {
     NotSupported,
     /// The caller lacks the required ownership or permission.
     PermissionDenied,
+    InvalidParameter,
 }
 
 impl SvcError {
@@ -70,6 +71,7 @@ impl SvcError {
             0xFFFF_FFF7 => Some(Self::BufferFull),
             0xFFFF_FFF6 => Some(Self::NotSupported),
             0xFFFF_FFF5 => Some(Self::PermissionDenied),
+            0xFFFF_FFF4 => Some(Self::InvalidParameter),
             _ => None,
         }
     }
@@ -91,6 +93,7 @@ impl SvcError {
             Self::BufferFull => 0xFFFF_FFF7,
             Self::NotSupported => 0xFFFF_FFF6,
             Self::PermissionDenied => 0xFFFF_FFF5,
+            Self::InvalidParameter => 0xFFFF_FFF4,
         }
     }
 }
@@ -117,7 +120,7 @@ mod tests {
     /// This function uses a wildcard-free match so the compiler will emit
     /// an error when a new variant is added, forcing the test suite to be
     /// updated.
-    const fn all_variants() -> [SvcError; 11] {
+    const fn all_variants() -> [SvcError; 12] {
         use SvcError::*;
         [
             InvalidSyscall,
@@ -131,6 +134,7 @@ mod tests {
             BufferFull,
             NotSupported,
             PermissionDenied,
+            InvalidParameter,
         ]
     }
 
@@ -205,7 +209,8 @@ mod tests {
                 | SvcError::NotImplemented
                 | SvcError::BufferFull
                 | SvcError::NotSupported
-                | SvcError::PermissionDenied => {}
+                | SvcError::PermissionDenied
+                | SvcError::InvalidParameter => {}
             }
         }
         // If a variant is added to the enum but not to all_variants(),
