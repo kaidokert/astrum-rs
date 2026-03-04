@@ -1695,6 +1695,22 @@ mod tests {
         assert_eq!(*pcb.cached_periph_regions(), [DISABLED_R4, DISABLED_R5]);
     }
 
+    /// Calling `precompute_mpu_cache` twice on the same PCB must fail on the
+    /// second call because the cache is sealed after the first.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn precompute_cache_double_call_returns_err() {
+        let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        assert!(
+            precompute_mpu_cache(&mut pcb).is_ok(),
+            "first precompute must succeed"
+        );
+        assert!(
+            precompute_mpu_cache(&mut pcb).is_err(),
+            "second precompute must fail (cache sealed)"
+        );
+    }
+
     /// Prove `peripheral_region_pair` ignores `MpuRegion.permissions`:
     /// three values (0, 0xFF, 0xDEAD_BEEF) produce identical (RBAR, RASR)
     /// and the RASR encodes AP=0b011, XN=1, TEX=0, S=1, C=0, B=1.
