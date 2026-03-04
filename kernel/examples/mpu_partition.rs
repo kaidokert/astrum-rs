@@ -55,8 +55,10 @@ fn main() -> ! {
     let mut pcbs = [make_pcb(0, 0x2000_0000), make_pcb(1, 0x2000_8000)];
 
     // Precompute and cache MPU regions for each partition at boot.
-    precompute_mpu_cache(pcbs.get_mut(0).expect("pcb[0]"));
-    precompute_mpu_cache(pcbs.get_mut(1).expect("pcb[1]"));
+    precompute_mpu_cache(pcbs.get_mut(0).expect("pcb[0]"))
+        .expect("precompute_mpu_cache failed for partition 0");
+    precompute_mpu_cache(pcbs.get_mut(1).expect("pcb[1]"))
+        .expect("precompute_mpu_cache failed for partition 1");
 
     // Verify cached peripheral regions are populated (disabled — no peripherals).
     let p0 = pcbs.first().expect("pcb[0]").cached_periph_regions();

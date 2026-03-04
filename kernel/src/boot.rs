@@ -58,6 +58,8 @@ pub enum BootError {
     SentinelMpuWithEnforce { partition_index: usize },
     /// Sentinel MPU promotion failed for a partition.
     SentinelPromotionFailed { partition_index: usize },
+    /// MPU cache population failed during boot precompute.
+    MpuCachePopulationFailed { partition_index: usize },
 }
 
 impl core::fmt::Display for BootError {
@@ -121,6 +123,12 @@ impl core::fmt::Display for BootError {
                 write!(
                     f,
                     "sentinel MPU promotion failed for partition {partition_index}"
+                )
+            }
+            Self::MpuCachePopulationFailed { partition_index } => {
+                write!(
+                    f,
+                    "MPU cache population failed for partition {partition_index}"
                 )
             }
         }
@@ -332,7 +340,8 @@ where
         // Pre-compute cached MPU register pairs now that all fixups are applied.
         for i in 0..partitions.len() {
             if let Some(pcb) = k.partitions_mut().get_mut(i) {
-                crate::mpu::precompute_mpu_cache(pcb).expect("precompute_mpu_cache failed");
+                crate::mpu::precompute_mpu_cache(pcb)
+                    .map_err(|_| BootError::MpuCachePopulationFailed { partition_index: i })?;
                 debug_assert!(
                     pcb.cached_base_regions()[0] != (0, 0),
                     "partition {} cached_base_regions[0] is all-zeros after precompute",
@@ -848,6 +857,26 @@ mod tests {
     }
 
     #[test]
+    fn mpu_cache_population_failed_display() {
+        let err = BootError::MpuCachePopulationFailed { partition_index: 2 };
+        assert_eq!(
+            std::format!("{err}"),
+            "MPU cache population failed for partition 2"
+        );
+        // Verify variant identity and index discrimination.
+        assert_eq!(
+            err,
+            BootError::MpuCachePopulationFailed { partition_index: 2 }
+        );
+        assert_ne!(
+            err,
+            BootError::MpuCachePopulationFailed { partition_index: 0 }
+        );
+        // Distinct from other partition-indexed variants with the same index.
+        assert_ne!(err, BootError::StackInitFailed { partition_index: 2 });
+    }
+
+    #[test]
     fn precompute_cache_populates_non_sentinel_partition() {
         use crate::mpu::precompute_mpu_cache;
         use crate::partition::{MpuRegion, PartitionControlBlock};
@@ -863,7 +892,7 @@ mod tests {
         // Verify cache starts as all-zeros.
         assert_eq!(*pcb.cached_base_regions(), [(0, 0); 4]);
 
-        precompute_mpu_cache(&mut pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
 
         // After precompute, cached_base_regions[0] must be non-zero
         // (region 0 is the background deny-all region).
@@ -898,7 +927,7 @@ mod tests {
         // Apply the same fixup boot() would: set base to stack_base.
         fix_mpu_data_region_if_sentinel(&mut pcb, 0x2000_0000);
 
-        precompute_mpu_cache(&mut pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
 
         // Even for a sentinel (deny-all), region 0 must be non-zero.
         assert_ne!(
@@ -927,7 +956,7 @@ mod tests {
         let expected_base = partition_mpu_regions_or_deny_all(&pcb);
         let expected_periph = peripheral_mpu_regions_or_disabled(&pcb);
 
-        precompute_mpu_cache(&mut pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
 
         assert_eq!(
             *pcb.cached_base_regions(),
