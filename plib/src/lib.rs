@@ -31,9 +31,9 @@ pub use rtos_traits::syscall::{
     SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED,
     SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE,
 };
-// Device driver & query (dynamic-mpu only, defined in kernel::syscall)
+// Device driver & query (dynamic-mpu only, defined in rtos-traits)
 #[cfg(feature = "dynamic-mpu")]
-pub use kernel::syscall::{
+pub use rtos_traits::syscall::{
     SYS_DEV_CLOSE, SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_READ_TIMED, SYS_DEV_WRITE,
     SYS_QUERY_BOTTOM_HALF,
 };
@@ -575,6 +575,43 @@ pub fn sys_bb_clear(board_id: u32) -> Result<u32, SvcError> {
     decode_rc(kernel::svc!(SYS_BB_CLEAR, board_id, 0u32, 0u32))
 }
 
+/// Open a device by its ID.
+///
+/// ABI: r0 = SYS_DEV_OPEN, r1 = device_id.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_dev_open(device_id: u8) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_DEV_OPEN, device_id as u32, 0u32, 0u32))
+}
+
+/// Close a previously opened device.
+///
+/// ABI: r0 = SYS_DEV_CLOSE, r1 = device_id.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_dev_close(device_id: u8) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_DEV_CLOSE, device_id as u32, 0u32, 0u32))
+}
+
+/// Send an I/O control command to a device.
+///
+/// ABI: r0 = SYS_DEV_IOCTL, r1 = device_id, r2 = cmd, r3 = arg.
+///
+/// # Returns
+///
+/// `Ok(value)` with a device-specific result, or `Err(SvcError)` if the
+/// syscall failed.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_dev_ioctl(device_id: u8, cmd: u32, arg: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_DEV_IOCTL, device_id as u32, cmd, arg))
+}
+
 #[cfg(test)]
 mod tests {
     extern crate alloc;
@@ -886,5 +923,23 @@ mod tests {
         assert_eq!(crate::SYS_DEV_CLOSE, src::SYS_DEV_CLOSE);
         assert_eq!(crate::SYS_DEV_READ_TIMED, src::SYS_DEV_READ_TIMED);
         assert_eq!(crate::SYS_QUERY_BOTTOM_HALF, src::SYS_QUERY_BOTTOM_HALF);
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_open_returns_ok_zero_on_host() {
+        assert_eq!(sys_dev_open(0), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_close_returns_ok_zero_on_host() {
+        assert_eq!(sys_dev_close(0), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_ioctl_returns_ok_zero_on_host() {
+        assert_eq!(sys_dev_ioctl(0, 1, 2), Ok(0));
     }
 }
