@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod macros;
+
 pub mod api;
 #[cfg(feature = "dynamic-mpu")]
 pub mod buf_syscall;

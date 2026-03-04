@@ -13,11 +13,8 @@
 pub use rtos_traits::api::decode_rc;
 pub use rtos_traits::api::SvcError;
 
-// TODO: buf_syscall wrappers (buf_alloc, buf_lend, …) still live in the kernel
-// crate because they depend on the kernel's svc!() macro.  Properly decoupling
-// them into rtos-traits (or a dedicated plib-syscall crate) is future work.
 #[cfg(feature = "dynamic-mpu")]
-pub use kernel::buf_syscall;
+pub use rtos_traits::buf_syscall;
 
 // ── Re-exported syscall constants (from rtos-traits) ──────────────────
 
@@ -247,7 +244,7 @@ pub fn debug_write<const N: usize>(
     let write_ok = buffer.write_record(level, KIND_TEXT, msg);
 
     // Notify kernel even on overflow to drain any buffered data
-    let syscall_result = kernel::svc!(SYS_DEBUG_NOTIFY, 0u32, 0u32, 0u32);
+    let syscall_result = rtos_traits::svc!(SYS_DEBUG_NOTIFY, 0u32, 0u32, 0u32);
 
     // Check syscall return value per mandate
     if SvcError::is_error(syscall_result) {
@@ -270,7 +267,7 @@ pub fn debug_write<const N: usize>(
 /// `Ok(bits)` with the bitmask of events that were pending, or
 /// `Err(SvcError)` if the syscall failed.
 pub fn sys_event_wait(mask: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_EVT_WAIT, mask, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_EVT_WAIT, mask, 0u32, 0u32))
 }
 
 /// Set event bits on another partition.
@@ -282,7 +279,7 @@ pub fn sys_event_wait(mask: u32) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_event_set(target_partition: u32, mask: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_EVT_SET, target_partition, mask, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_EVT_SET, target_partition, mask, 0u32))
 }
 
 /// Clear event bits in the calling partition's pending-event word.
@@ -294,7 +291,7 @@ pub fn sys_event_set(target_partition: u32, mask: u32) -> Result<u32, SvcError> 
 /// `Ok(prev)` with the previous pending-event word value, or
 /// `Err(SvcError)` if the syscall failed.
 pub fn sys_event_clear(mask: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_EVT_CLEAR, mask, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_EVT_CLEAR, mask, 0u32, 0u32))
 }
 
 /// Acknowledge a hardware IRQ after the partition has handled it.
@@ -306,7 +303,7 @@ pub fn sys_event_clear(mask: u32) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_irq_ack(irq_num: u8) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_IRQ_ACK, irq_num as u32, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_IRQ_ACK, irq_num as u32, 0u32, 0u32))
 }
 
 /// Yield the calling partition's remaining time slice.
@@ -315,7 +312,7 @@ pub fn sys_irq_ack(irq_num: u8) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_yield() -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_YIELD, 0u32, 0u32, 0u32))
 }
 
 /// Get the partition ID of the calling partition.
@@ -325,7 +322,7 @@ pub fn sys_yield() -> Result<u32, SvcError> {
 /// `Ok(id)` with the caller's partition index, or `Err(SvcError)` if the
 /// syscall failed.
 pub fn sys_get_partition_id() -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_GET_PARTITION_ID, 0u32, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_GET_PARTITION_ID, 0u32, 0u32, 0u32))
 }
 
 /// Get the current kernel tick count.
@@ -335,7 +332,7 @@ pub fn sys_get_partition_id() -> Result<u32, SvcError> {
 /// `Ok(ticks)` with the current tick count, or `Err(SvcError)` if the
 /// syscall failed.
 pub fn sys_get_time() -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_GET_TIME, 0u32, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_GET_TIME, 0u32, 0u32, 0u32))
 }
 
 /// Wait (decrement) on a semaphore.
@@ -348,7 +345,7 @@ pub fn sys_get_time() -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_sem_wait(sem_id: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_SEM_WAIT, sem_id, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_SEM_WAIT, sem_id, 0u32, 0u32))
 }
 
 /// Signal (increment) a semaphore.
@@ -359,7 +356,7 @@ pub fn sys_sem_wait(sem_id: u32) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_sem_signal(sem_id: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_SEM_SIGNAL, sem_id, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_SEM_SIGNAL, sem_id, 0u32, 0u32))
 }
 
 /// Lock a mutex.
@@ -371,7 +368,7 @@ pub fn sys_sem_signal(sem_id: u32) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_mtx_lock(mtx_id: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_MTX_LOCK, mtx_id, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_MTX_LOCK, mtx_id, 0u32, 0u32))
 }
 
 /// Unlock a mutex.
@@ -383,7 +380,7 @@ pub fn sys_mtx_lock(mtx_id: u32) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_mtx_unlock(mtx_id: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_MTX_UNLOCK, mtx_id, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_MTX_UNLOCK, mtx_id, 0u32, 0u32))
 }
 
 /// Write data to a sampling port.
@@ -394,7 +391,7 @@ pub fn sys_mtx_unlock(mtx_id: u32) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_sampling_write(port_id: u32, data: &[u8]) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_SAMPLING_WRITE,
         port_id,
         data.len() as u32,
@@ -412,7 +409,7 @@ pub fn sys_sampling_write(port_id: u32, data: &[u8]) -> Result<u32, SvcError> {
 /// `Ok(n)` with the number of bytes read, or `Err(SvcError)` if the
 /// syscall failed.
 pub fn sys_sampling_read(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_SAMPLING_READ,
         port_id,
         buf.len() as u32,
@@ -428,7 +425,7 @@ pub fn sys_sampling_read(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> 
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_msg_send(target_partition: u32, data: &[u8]) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_MSG_SEND,
         target_partition,
         data.len() as u32,
@@ -444,7 +441,7 @@ pub fn sys_msg_send(target_partition: u32, data: &[u8]) -> Result<u32, SvcError>
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_queuing_send(port_id: u32, data: &[u8]) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_QUEUING_SEND,
         port_id,
         data.len() as u32,
@@ -461,7 +458,7 @@ pub fn sys_queuing_send(port_id: u32, data: &[u8]) -> Result<u32, SvcError> {
 /// `Ok(n)` with the number of bytes received, or `Err(SvcError)` if the
 /// syscall failed.
 pub fn sys_queuing_recv(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_QUEUING_RECV,
         port_id,
         buf.len() as u32,
@@ -492,7 +489,7 @@ pub fn sys_queuing_send_timed(
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The data pointer is valid for data.len() bytes and the
     // packed r2 encodes the length so the kernel can bounds-check it.
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_QUEUING_SEND_TIMED,
         port_id,
         r2,
@@ -523,7 +520,7 @@ pub fn sys_queuing_recv_timed(
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The buf pointer is valid for buf.len() bytes and the
     // packed r2 encodes the length so the kernel can bounds-check it.
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_QUEUING_RECV_TIMED,
         port_id,
         r2,
@@ -538,7 +535,7 @@ pub fn sys_queuing_recv_timed(
 /// `Ok(status)` with the port status word, or `Err(SvcError)` if the
 /// syscall failed.
 pub fn sys_queuing_status(port_id: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_QUEUING_STATUS, port_id, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_QUEUING_STATUS, port_id, 0u32, 0u32))
 }
 
 /// Receive a message from another partition.
@@ -550,7 +547,7 @@ pub fn sys_queuing_status(port_id: u32) -> Result<u32, SvcError> {
 /// `Ok(n)` with the number of bytes received, or `Err(SvcError)` if the
 /// syscall failed.
 pub fn sys_msg_recv(buf: &mut [u8]) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_MSG_RECV,
         0u32,
         buf.len() as u32,
@@ -568,7 +565,7 @@ pub fn sys_msg_recv(buf: &mut [u8]) -> Result<u32, SvcError> {
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "ipc-blackboard")]
 pub fn sys_bb_display(board_id: u32, data: &[u8]) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_BB_DISPLAY,
         board_id,
         data.len() as u32,
@@ -587,7 +584,7 @@ pub fn sys_bb_display(board_id: u32, data: &[u8]) -> Result<u32, SvcError> {
 /// syscall failed.
 #[cfg(feature = "ipc-blackboard")]
 pub fn sys_bb_read(board_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_BB_READ,
         board_id,
         buf.len() as u32,
@@ -602,7 +599,7 @@ pub fn sys_bb_read(board_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "ipc-blackboard")]
 pub fn sys_bb_clear(board_id: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_BB_CLEAR, board_id, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_BB_CLEAR, board_id, 0u32, 0u32))
 }
 
 /// Open a device by its ID.
@@ -614,7 +611,12 @@ pub fn sys_bb_clear(board_id: u32) -> Result<u32, SvcError> {
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_open(device_id: u8) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_DEV_OPEN, device_id as u32, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(
+        SYS_DEV_OPEN,
+        device_id as u32,
+        0u32,
+        0u32
+    ))
 }
 
 /// Close a previously opened device.
@@ -626,7 +628,12 @@ pub fn sys_dev_open(device_id: u8) -> Result<u32, SvcError> {
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_close(device_id: u8) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_DEV_CLOSE, device_id as u32, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(
+        SYS_DEV_CLOSE,
+        device_id as u32,
+        0u32,
+        0u32
+    ))
 }
 
 /// Send an I/O control command to a device.
@@ -639,7 +646,7 @@ pub fn sys_dev_close(device_id: u8) -> Result<u32, SvcError> {
 /// syscall failed.
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_ioctl(device_id: u8, cmd: u32, arg: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_DEV_IOCTL, device_id as u32, cmd, arg))
+    decode_rc(rtos_traits::svc!(SYS_DEV_IOCTL, device_id as u32, cmd, arg))
 }
 
 /// Read data from a device into `buf`.
@@ -651,7 +658,7 @@ pub fn sys_dev_read(device_id: u8, buf: &mut [u8]) -> Result<u32, SvcError> {
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The buf pointer is valid for buf.len() bytes and the
     // kernel uses the length to bounds-check the write into user memory.
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_DEV_READ,
         device_id as u32,
         buf.len() as u32,
@@ -668,7 +675,7 @@ pub fn sys_dev_write(device_id: u8, data: &[u8]) -> Result<u32, SvcError> {
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The data pointer is valid for data.len() bytes and the
     // kernel uses the length to bounds-check the read from user memory.
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_DEV_WRITE,
         device_id as u32,
         data.len() as u32,
@@ -693,7 +700,7 @@ pub fn sys_dev_read_timed(
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The buf pointer is valid for buf.len() bytes and the
     // packed r2 encodes the length so the kernel can bounds-check it.
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_DEV_READ_TIMED,
         device_id as u32,
         r2,
@@ -706,7 +713,7 @@ pub fn sys_dev_read_timed(
 /// ABI: r1 = device_id. Returns `Ok(status)` or `Err(SvcError)`.
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_query_bottom_half(device_id: u8) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_QUERY_BOTTOM_HALF,
         device_id as u32,
         0u32,
@@ -728,7 +735,12 @@ pub fn sys_query_bottom_half(device_id: u8) -> Result<u32, SvcError> {
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_alloc(writable: bool, max_ticks: u16) -> Result<u32, SvcError> {
     let mode = if writable { 1u32 } else { 0u32 };
-    decode_rc(kernel::svc!(SYS_BUF_ALLOC, mode, max_ticks as u32, 0u32))
+    decode_rc(rtos_traits::svc!(
+        SYS_BUF_ALLOC,
+        mode,
+        max_ticks as u32,
+        0u32
+    ))
 }
 
 /// Release a buffer slot back to the shared pool.
@@ -740,7 +752,7 @@ pub fn sys_buf_alloc(writable: bool, max_ticks: u16) -> Result<u32, SvcError> {
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_release(slot: u8) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_BUF_RELEASE, slot as u32, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_BUF_RELEASE, slot as u32, 0u32, 0u32))
 }
 
 /// Read data from a buffer slot into `dst`.
@@ -756,7 +768,7 @@ pub fn sys_buf_read(slot: u8, dst: &mut [u8]) -> Result<u32, SvcError> {
     if dst.len() > u16::MAX as usize {
         return Err(SvcError::OperationFailed);
     }
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_BUF_READ,
         slot as u32,
         dst.len() as u32,
@@ -777,7 +789,7 @@ pub fn sys_buf_write(slot: u8, data: &[u8]) -> Result<u32, SvcError> {
     if data.len() > u16::MAX as usize {
         return Err(SvcError::OperationFailed);
     }
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_BUF_WRITE,
         slot as u32,
         data.len() as u32,
@@ -800,7 +812,7 @@ pub fn sys_buf_lend(slot: u8, target: u8, writable: bool) -> Result<u32, SvcErro
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The slot and packed r2 contain only small integer values;
     // no pointers are passed.
-    decode_rc(kernel::svc!(SYS_BUF_LEND, slot as u32, r2, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_BUF_LEND, slot as u32, r2, 0u32))
 }
 
 /// Revoke a previously lent buffer slot from a target partition.
@@ -814,7 +826,7 @@ pub fn sys_buf_lend(slot: u8, target: u8, writable: bool) -> Result<u32, SvcErro
 pub fn sys_buf_revoke(slot: u8, target: u8) -> Result<u32, SvcError> {
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  Only small integer values are passed; no pointers.
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_BUF_REVOKE,
         slot as u32,
         target as u32,
@@ -833,7 +845,7 @@ pub fn sys_buf_revoke(slot: u8, target: u8) -> Result<u32, SvcError> {
 pub fn sys_buf_transfer(slot: u8, new_owner: u8) -> Result<u32, SvcError> {
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  Only small integer values are passed; no pointers.
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_BUF_TRANSFER,
         slot as u32,
         new_owner as u32,
@@ -849,7 +861,7 @@ pub fn sys_buf_transfer(slot: u8, new_owner: u8) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_debug_print(msg: &[u8]) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(
+    decode_rc(rtos_traits::svc!(
         SYS_DEBUG_PRINT,
         msg.as_ptr() as u32,
         msg.len() as u32,
@@ -865,7 +877,7 @@ pub fn sys_debug_print(msg: &[u8]) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_debug_exit(code: u32) -> Result<u32, SvcError> {
-    decode_rc(kernel::svc!(SYS_DEBUG_EXIT, code, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_DEBUG_EXIT, code, 0u32, 0u32))
 }
 
 #[cfg(test)]
@@ -1059,13 +1071,12 @@ mod tests {
     // Parameter-verification tests live in kernel/src/debug.rs per the
     // crate's documented testing policy (see module docs).
 
-    /// Verify the buf_syscall re-export is accessible and buf_alloc returns Ok
-    /// on the host stub.
+    /// Verify the buf_syscall re-export is accessible (ABI helpers).
     #[cfg(feature = "dynamic-mpu")]
     #[test]
-    fn buf_syscall_reexport_buf_alloc_returns_ok() {
-        let result = crate::buf_syscall::buf_alloc(false, 0);
-        assert_eq!(result, Ok(0));
+    fn buf_syscall_reexport_abi_helpers_accessible() {
+        assert_eq!(crate::buf_syscall::pack_lend_r2(1, false), 1);
+        assert_eq!(crate::buf_syscall::parse_result(0), Ok(0));
     }
 
     #[cfg(feature = "ipc-blackboard")]
@@ -1176,8 +1187,8 @@ mod tests {
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
-    fn syscall_dev_constants_reexported_match_kernel_source() {
-        use kernel::syscall as src;
+    fn syscall_dev_constants_reexported_match_traits_source() {
+        use rtos_traits::syscall as src;
         assert_eq!(crate::SYS_DEV_OPEN, src::SYS_DEV_OPEN);
         assert_eq!(crate::SYS_DEV_READ, src::SYS_DEV_READ);
         assert_eq!(crate::SYS_DEV_WRITE, src::SYS_DEV_WRITE);

@@ -5,13 +5,13 @@ edition = "2021"
 description = "Partition library: user-space helpers for partitions"
 
 [dependencies]
-kernel = { path = "../kernel", default-features = false }
 rtos-traits = { path = "../rtos-traits" }
 
 [features]
 default = []
-# Note: kernel dependency is only needed for the svc! macro (syscall interface).
-# DebugRingBuffer and other shared types come from rtos-traits.
 partition-debug = ["rtos-traits/partition-debug"]
-dynamic-mpu = ["kernel/dynamic-mpu"]
-ipc-blackboard = ["kernel/ipc-blackboard"]
+dynamic-mpu = ["rtos-traits/dynamic-mpu"]
+# TODO: rtos-traits defines blackboard syscall constants unconditionally, so
+# there is nothing to propagate today.  If rtos-traits gains an ipc-blackboard
+# feature gate, propagate it here: ipc-blackboard = ["rtos-traits/ipc-blackboard"]
+ipc-blackboard = []
