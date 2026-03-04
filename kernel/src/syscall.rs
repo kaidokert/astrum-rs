@@ -9,39 +9,13 @@ pub use rtos_traits::syscall::{
     SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
 };
 
+// Dynamic-MPU syscall numbers — defined in rtos-traits, re-exported here.
 #[cfg(feature = "dynamic-mpu")]
-pub const SYS_BUF_ALLOC: u32 = 20;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_BUF_RELEASE: u32 = 21;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_DEV_OPEN: u32 = 22;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_DEV_READ: u32 = 23;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_DEV_WRITE: u32 = 24;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_DEV_IOCTL: u32 = 25;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_BUF_WRITE: u32 = 26;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_DEV_CLOSE: u32 = 29;
-/// Timed device read: r1=device_id, r2=timeout_ticks (0=non-blocking), r3=buf_ptr
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_DEV_READ_TIMED: u32 = 30;
-/// Query bottom-half status: returns ticks_since_bottom_half in r0, stale flag in r1.
-// TODO: Currently gated behind dynamic-mpu because the underlying ticks_since_bottom_half
-// and is_bottom_half_stale mechanisms are feature-gated. A future refactor should make
-// bottom-half health monitoring unconditional as it's a core architectural concern.
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_QUERY_BOTTOM_HALF: u32 = 33;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_BUF_LEND: u32 = 34;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_BUF_REVOKE: u32 = 35;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_BUF_TRANSFER: u32 = 36;
-#[cfg(feature = "dynamic-mpu")]
-pub const SYS_BUF_READ: u32 = 37;
+pub use rtos_traits::syscall::{
+    SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_RELEASE, SYS_BUF_REVOKE, SYS_BUF_TRANSFER,
+    SYS_BUF_WRITE, SYS_DEV_CLOSE, SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_READ_TIMED,
+    SYS_DEV_WRITE, SYS_QUERY_BOTTOM_HALF,
+};
 
 // Re-export SYS_DEBUG_NOTIFY and SYS_DEBUG_WRITE from shared traits crate for ABI isolation
 #[cfg(feature = "partition-debug")]

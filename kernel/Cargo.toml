@@ -334,7 +334,7 @@ arinc-compat = ["ipc-sampling", "ipc-queuing", "ipc-blackboard", "ipc-message"]
 # custom one (e.g. from bind_interrupts!) can be linked instead.
 custom-ivt = []
 qemu = []
-dynamic-mpu = []
+dynamic-mpu = ["rtos-traits/dynamic-mpu"]
 partition-debug = ["rtos-traits/partition-debug"]
 panic-halt = ["dep:panic-halt"]
 log-semihosting = ["dep:cortex-m-semihosting", "dep:panic-semihosting"]
