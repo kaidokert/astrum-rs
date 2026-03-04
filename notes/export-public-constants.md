@@ -12,14 +12,14 @@ flags, pack timed-variant fields, and decode `u32` → `Result<u32, SvcError>`.
 **Single source of truth.** Syscall numbers live in `rtos-traits`; `plib`
 re-exports them. Partitions should never import `rtos-traits` directly.
 
-## API Inventory (39 functions + 4 macros)
+## API Inventory (40 functions + 4 macros)
 
-### Always available (21 functions)
+### Always available (22 functions)
 
 | Function | Syscall | # | r1 | r2 | r3 | Return |
 |---|---|---|---|---|---|---|
 | `sys_yield()` | YIELD | 0 | 0 | 0 | 0 | `Ok(0)` |
-| *(reserved)* | GET_ID | 1 | — | — | — | *not implemented* |
+| `sys_get_partition_id()` | GET_PARTITION_ID | 1 | 0 | 0 | 0 | `Ok(id)` |
 | `sys_get_time()` | GET_TIME | 11 | 0 | 0 | 0 | `Ok(ticks)` |
 | `sys_irq_ack(irq: u8)` | IRQ_ACK | 38 | irq | 0 | 0 | `Ok(0)` |
 | `sys_event_wait(mask: u32)` | EVT_WAIT | 2 | mask | 0 | 0 | `Ok(bits)` |

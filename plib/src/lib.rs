@@ -19,7 +19,7 @@ pub use kernel::buf_syscall;
 // ── Re-exported syscall constants (from rtos-traits) ──────────────────
 
 // Control
-pub use rtos_traits::syscall::{SYS_GET_TIME, SYS_IRQ_ACK, SYS_YIELD};
+pub use rtos_traits::syscall::{SYS_GET_PARTITION_ID, SYS_GET_TIME, SYS_IRQ_ACK, SYS_YIELD};
 // Events
 pub use rtos_traits::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT};
 // Sync
@@ -313,6 +313,16 @@ pub fn sys_irq_ack(irq_num: u8) -> Result<u32, SvcError> {
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_yield() -> Result<u32, SvcError> {
     decode_rc(kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32))
+}
+
+/// Get the partition ID of the calling partition.
+///
+/// # Returns
+///
+/// `Ok(id)` with the caller's partition index, or `Err(SvcError)` if the
+/// syscall failed.
+pub fn sys_get_partition_id() -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_GET_PARTITION_ID, 0u32, 0u32, 0u32))
 }
 
 /// Get the current kernel tick count.
@@ -887,6 +897,11 @@ mod tests {
     }
 
     #[test]
+    fn get_partition_id_returns_ok_zero_on_host() {
+        assert_eq!(sys_get_partition_id(), Ok(0));
+    }
+
+    #[test]
     fn get_time_returns_ok_zero_on_host() {
         assert_eq!(sys_get_time(), Ok(0));
     }
@@ -1111,6 +1126,7 @@ mod tests {
         use rtos_traits::syscall as src;
         // Control
         assert_eq!(crate::SYS_YIELD, src::SYS_YIELD);
+        assert_eq!(crate::SYS_GET_PARTITION_ID, src::SYS_GET_PARTITION_ID);
         assert_eq!(crate::SYS_GET_TIME, src::SYS_GET_TIME);
         assert_eq!(crate::SYS_IRQ_ACK, src::SYS_IRQ_ACK);
         // Events
