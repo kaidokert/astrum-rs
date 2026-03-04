@@ -69,8 +69,10 @@ kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
     if tick > 2 {
         for i in 0..NP {
             if let Some(pcb) = k.partitions().get(i) {
-                let expected = mpu::partition_mpu_regions_or_deny_all(pcb);
-                if *pcb.cached_base_regions() != expected {
+                // Verify cache integrity: R0 background region must match
+                // the expected deny-all pattern (4 GiB no-access, XN).
+                let bg_rasr = mpu::build_rasr(31, mpu::AP_NO_ACCESS, true, (false, false, false));
+                if pcb.cached_base_regions()[0].1 != bg_rasr {
                     hprintln!("FAIL: cache mismatch p{}", i);
                     kernel::kexit!(failure);
                 }

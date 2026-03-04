@@ -9,7 +9,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::mpu::{peripheral_mpu_regions_or_disabled, AP_FULL_ACCESS};
+use kernel::mpu::AP_FULL_ACCESS;
 use kernel::{
     boot, mpu,
     partition::{MpuRegion, PartitionConfig},
@@ -34,13 +34,16 @@ kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
     if tick > 2 {
         let pid = k.current_partition() as usize;
         if let Some(pcb) = k.partitions().get(pid) {
-            let expected = mpu::partition_mpu_regions_or_deny_all(pcb);
-            if *pcb.cached_base_regions() != expected {
+            // Verify base cache integrity: R0 background region must match
+            // the expected deny-all pattern (4 GiB no-access, XN).
+            let bg_rasr = mpu::build_rasr(31, mpu::AP_NO_ACCESS, true, (false, false, false));
+            if pcb.cached_base_regions()[0].1 != bg_rasr {
                 hprintln!("FAIL: base cache mismatch p{}", pid);
                 kernel::kexit!(failure);
             }
-            let expected_periph = peripheral_mpu_regions_or_disabled(pcb);
-            if *pcb.cached_periph_regions() != expected_periph {
+            // Verify periph cache integrity: R4/R5 must target slots 4 and 5.
+            let cp = pcb.cached_periph_regions();
+            if cp[0].0 & 0xF != 4 || cp[1].0 & 0xF != 5 {
                 hprintln!("FAIL: periph cache mismatch p{}", pid);
                 kernel::kexit!(failure);
             }

@@ -186,7 +186,7 @@ pub const MPU_CTRL_ENABLE_PRIVDEFENA: u32 = (1 << 2) | 1;
 /// Region 2 = data RW/XN,
 /// Region 3 = 32-byte no-access stack guard at stack_base.
 /// Higher region number wins on overlap.
-pub fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
+pub(crate) fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
     let region_size = pcb.mpu_region().size();
 
     // Sentinel partitions (size==0, from bug01 fix) intentionally fail
@@ -252,7 +252,7 @@ pub fn deny_all_regions() -> [(u32, u32); 4] {
 /// the deny-all fallback ensures the partition gets zero memory access
 /// rather than causing a panic — critical for handler-mode safety where
 /// panics are unrecoverable.
-pub fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> [(u32, u32); 4] {
+pub(crate) fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> [(u32, u32); 4] {
     partition_mpu_regions(pcb).unwrap_or_else(deny_all_regions)
 }
 
@@ -342,7 +342,7 @@ fn peripheral_region_pair(region: &MpuRegion, slot: u32) -> Option<(u32, u32)> {
 /// "dynamic-mpu"))]`).  In dynamic mode the PendSV handler calls
 /// [`DynamicStrategy::cached_peripheral_regions`] instead, which
 /// restores pre-computed (RBAR, RASR) pairs from the boot-time cache.
-pub fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 2]> {
+pub(crate) fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 2]> {
     let periph = pcb.peripheral_regions();
     let r4 = match periph.first() {
         Some(r) => peripheral_region_pair(r, 4)?,
@@ -372,7 +372,7 @@ pub fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32)
 /// counterpart (see `harness.rs` PendSV handler).  The equivalence
 /// between the two paths is verified by
 /// `cache_vs_pcb_peripheral_rbar_rasr_equivalence`.
-pub fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) -> [(u32, u32); 2] {
+pub(crate) fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) -> [(u32, u32); 2] {
     peripheral_mpu_regions(pcb).unwrap_or([DISABLED_R4, DISABLED_R5])
 }
 

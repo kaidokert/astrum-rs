@@ -36,7 +36,9 @@ extern "C" fn p1_main() -> ! {
 kernel::define_unified_harness!(no_boot, IntegrationConfig, |tick, k| {
     if k.partitions()
         .get(0)
-        .and_then(mpu::partition_mpu_regions)
+        .filter(|pcb| {
+            mpu::validate_mpu_region(pcb.mpu_region().base(), pcb.mpu_region().size()).is_ok()
+        })
         .is_some()
     {
         hprintln!(
