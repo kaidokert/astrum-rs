@@ -12,6 +12,9 @@
 
 use kernel::api::decode_rc;
 pub use kernel::api::SvcError;
+
+#[cfg(feature = "dynamic-mpu")]
+pub use kernel::buf_syscall;
 use kernel::syscall::{
     SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV,
     SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED,
@@ -688,4 +691,13 @@ mod tests {
 
     // Parameter-verification tests live in kernel/src/debug.rs per the
     // crate's documented testing policy (see module docs).
+
+    /// Verify the buf_syscall re-export is accessible and buf_alloc returns Ok
+    /// on the host stub.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_syscall_reexport_buf_alloc_returns_ok() {
+        let result = crate::buf_syscall::buf_alloc(false, 0);
+        assert_eq!(result, Ok(0));
+    }
 }
