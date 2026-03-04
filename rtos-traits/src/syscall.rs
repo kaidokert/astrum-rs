@@ -3,6 +3,39 @@
 //! These types define the ABI for syscall invocations and are used by both
 //! the kernel (callee) and partitions (callers).
 
+// ── Base (unconditional) syscall numbers ──────────────────────────────
+pub const SYS_YIELD: u32 = 0;
+pub const SYS_EVT_WAIT: u32 = 2;
+pub const SYS_EVT_SET: u32 = 3;
+pub const SYS_EVT_CLEAR: u32 = 4;
+pub const SYS_SEM_WAIT: u32 = 5;
+pub const SYS_SEM_SIGNAL: u32 = 6;
+pub const SYS_MTX_LOCK: u32 = 7;
+pub const SYS_MTX_UNLOCK: u32 = 8;
+pub const SYS_MSG_SEND: u32 = 9;
+pub const SYS_MSG_RECV: u32 = 10;
+pub const SYS_GET_TIME: u32 = 11;
+pub const SYS_SAMPLING_WRITE: u32 = 12;
+pub const SYS_SAMPLING_READ: u32 = 13;
+pub const SYS_QUEUING_SEND: u32 = 14;
+pub const SYS_QUEUING_RECV: u32 = 15;
+pub const SYS_QUEUING_STATUS: u32 = 16;
+pub const SYS_BB_DISPLAY: u32 = 17;
+pub const SYS_BB_READ: u32 = 18;
+pub const SYS_BB_CLEAR: u32 = 19;
+/// Timed queuing send: r1=port_id, r2=(timeout_ticks_hi16 << 16 | data_len_lo16), r3=data_ptr
+pub const SYS_QUEUING_SEND_TIMED: u32 = 27;
+/// Timed queuing recv: r1=port_id, r2=(timeout_ticks_hi16 << 16 | buf_len_lo16), r3=buf_ptr
+pub const SYS_QUEUING_RECV_TIMED: u32 = 28;
+/// Debug print: r1=string_ptr, r2=string_len. Outputs via semihosting (privileged).
+pub const SYS_DEBUG_PRINT: u32 = 31;
+/// Debug exit: r1=exit_code (0=success, nonzero=failure). Exits via semihosting.
+pub const SYS_DEBUG_EXIT: u32 = 32;
+/// IRQ acknowledge: r1=irq_number. Re-enables the masked IRQ after partition handles it.
+pub const SYS_IRQ_ACK: u32 = 38;
+
+// ── Feature-gated syscall numbers ─────────────────────────────────────
+
 /// Debug notify syscall number: sets a per-partition 'debug pending' flag.
 #[cfg(feature = "partition-debug")]
 pub const SYS_DEBUG_NOTIFY: u32 = 0x40;
@@ -100,5 +133,59 @@ impl SvcError {
             Self::NotSupported => 0xFFFF_FFF6,
             Self::PermissionDenied => 0xFFFF_FFF5,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// All base (unconditional) syscall constants with their expected values.
+    const BASE_SYSCALLS: &[(&str, u32, u32)] = &[
+        ("SYS_YIELD", SYS_YIELD, 0),
+        ("SYS_EVT_WAIT", SYS_EVT_WAIT, 2),
+        ("SYS_EVT_SET", SYS_EVT_SET, 3),
+        ("SYS_EVT_CLEAR", SYS_EVT_CLEAR, 4),
+        ("SYS_SEM_WAIT", SYS_SEM_WAIT, 5),
+        ("SYS_SEM_SIGNAL", SYS_SEM_SIGNAL, 6),
+        ("SYS_MTX_LOCK", SYS_MTX_LOCK, 7),
+        ("SYS_MTX_UNLOCK", SYS_MTX_UNLOCK, 8),
+        ("SYS_MSG_SEND", SYS_MSG_SEND, 9),
+        ("SYS_MSG_RECV", SYS_MSG_RECV, 10),
+        ("SYS_GET_TIME", SYS_GET_TIME, 11),
+        ("SYS_SAMPLING_WRITE", SYS_SAMPLING_WRITE, 12),
+        ("SYS_SAMPLING_READ", SYS_SAMPLING_READ, 13),
+        ("SYS_QUEUING_SEND", SYS_QUEUING_SEND, 14),
+        ("SYS_QUEUING_RECV", SYS_QUEUING_RECV, 15),
+        ("SYS_QUEUING_STATUS", SYS_QUEUING_STATUS, 16),
+        ("SYS_BB_DISPLAY", SYS_BB_DISPLAY, 17),
+        ("SYS_BB_READ", SYS_BB_READ, 18),
+        ("SYS_BB_CLEAR", SYS_BB_CLEAR, 19),
+        ("SYS_QUEUING_SEND_TIMED", SYS_QUEUING_SEND_TIMED, 27),
+        ("SYS_QUEUING_RECV_TIMED", SYS_QUEUING_RECV_TIMED, 28),
+        ("SYS_DEBUG_PRINT", SYS_DEBUG_PRINT, 31),
+        ("SYS_DEBUG_EXIT", SYS_DEBUG_EXIT, 32),
+        ("SYS_IRQ_ACK", SYS_IRQ_ACK, 38),
+    ];
+
+    #[test]
+    fn base_constants_have_correct_values() {
+        for &(name, actual, expected) in BASE_SYSCALLS {
+            assert_eq!(actual, expected, "{name} should be {expected}");
+        }
+    }
+
+    #[test]
+    fn base_constants_are_unique() {
+        for (i, &(name_a, val_a, _)) in BASE_SYSCALLS.iter().enumerate() {
+            for &(name_b, val_b, _) in &BASE_SYSCALLS[i + 1..] {
+                assert_ne!(val_a, val_b, "{name_a} and {name_b} must differ");
+            }
+        }
+    }
+
+    #[test]
+    fn base_constant_count() {
+        assert_eq!(BASE_SYSCALLS.len(), 24);
     }
 }

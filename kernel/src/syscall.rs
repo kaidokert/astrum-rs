@@ -1,34 +1,13 @@
 //! SVC call number constants and syscall dispatch types.
 
-pub const SYS_YIELD: u32 = 0;
-pub const SYS_EVT_WAIT: u32 = 2;
-pub const SYS_EVT_SET: u32 = 3;
-pub const SYS_EVT_CLEAR: u32 = 4;
-pub const SYS_SEM_WAIT: u32 = 5;
-pub const SYS_SEM_SIGNAL: u32 = 6;
-pub const SYS_MTX_LOCK: u32 = 7;
-pub const SYS_MTX_UNLOCK: u32 = 8;
-pub const SYS_MSG_SEND: u32 = 9;
-pub const SYS_MSG_RECV: u32 = 10;
-pub const SYS_GET_TIME: u32 = 11;
-pub const SYS_SAMPLING_WRITE: u32 = 12;
-pub const SYS_SAMPLING_READ: u32 = 13;
-pub const SYS_QUEUING_SEND: u32 = 14;
-pub const SYS_QUEUING_RECV: u32 = 15;
-pub const SYS_QUEUING_STATUS: u32 = 16;
-pub const SYS_BB_DISPLAY: u32 = 17;
-pub const SYS_BB_READ: u32 = 18;
-pub const SYS_BB_CLEAR: u32 = 19;
-/// Debug print: r1=string_ptr, r2=string_len. Outputs via semihosting (privileged).
-pub const SYS_DEBUG_PRINT: u32 = 31;
-/// Debug exit: r1=exit_code (0=success, nonzero=failure). Exits via semihosting.
-pub const SYS_DEBUG_EXIT: u32 = 32;
-/// Timed queuing send: r1=port_id, r2=(timeout_ticks_hi16 << 16 | data_len_lo16), r3=data_ptr
-pub const SYS_QUEUING_SEND_TIMED: u32 = 27;
-/// Timed queuing recv: r1=port_id, r2=(timeout_ticks_hi16 << 16 | buf_len_lo16), r3=buf_ptr
-pub const SYS_QUEUING_RECV_TIMED: u32 = 28;
-/// IRQ acknowledge: r1=irq_number. Re-enables the masked IRQ after partition handles it.
-pub const SYS_IRQ_ACK: u32 = 38;
+// Base (unconditional) syscall numbers — defined in rtos-traits, re-exported here.
+pub use rtos_traits::syscall::{
+    SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ, SYS_DEBUG_EXIT, SYS_DEBUG_PRINT, SYS_EVT_CLEAR,
+    SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK,
+    SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND,
+    SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE,
+    SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
+};
 
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_ALLOC: u32 = 20;
