@@ -355,7 +355,8 @@ impl PartitionControlBlock {
     /// Sets the pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
     // TODO(panic-free): convert to Result
     pub fn set_cached_base_regions(&mut self, regions: [(u32, u32); 4]) {
-        debug_assert!(
+        #[cfg(debug_assertions)]
+        assert!(
             !self.cache_sealed,
             "set_cached_base_regions called after MPU cache sealed"
         );
@@ -370,7 +371,8 @@ impl PartitionControlBlock {
     /// Sets the pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R5.
     // TODO(panic-free): convert to Result
     pub fn set_cached_periph_regions(&mut self, regions: [(u32, u32); 2]) {
-        debug_assert!(
+        #[cfg(debug_assertions)]
+        assert!(
             !self.cache_sealed,
             "set_cached_periph_regions called after MPU cache sealed"
         );
@@ -2245,10 +2247,22 @@ mod tests {
 
     // ── cache_sealed guard tests ────────────────────────────────────
 
+    #[cfg(debug_assertions)]
     #[test]
     fn cache_sealed_default_false_then_seal() {
         let mut pcb = make_pcb();
         assert!(!pcb.cache_sealed());
+        pcb.seal_cache();
+        assert!(pcb.cache_sealed());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn seal_cache_is_idempotent() {
+        let mut pcb = make_pcb();
+        pcb.seal_cache();
+        assert!(pcb.cache_sealed());
+        // Second call must not panic.
         pcb.seal_cache();
         assert!(pcb.cache_sealed());
     }
@@ -2268,6 +2282,7 @@ mod tests {
             .is_ok());
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "fix_stack_region called after MPU cache sealed")]
     fn fix_stack_region_panics_after_seal() {
@@ -2276,6 +2291,7 @@ mod tests {
         let _ = pcb.fix_stack_region(0x2000_0000, 2048);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "fix_mpu_data_region called after MPU cache sealed")]
     fn fix_mpu_data_region_panics_after_seal() {
@@ -2302,6 +2318,7 @@ mod tests {
         pcb.set_cached_periph_regions([(3, 4); 2]);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "promote_sentinel_mpu called after MPU cache sealed")]
     fn promote_sentinel_mpu_panics_after_seal() {
