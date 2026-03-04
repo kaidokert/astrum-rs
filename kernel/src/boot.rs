@@ -16,6 +16,13 @@ use crate::{
 /// Minimum MPU region size (32 bytes for ARMv7-M and ARMv8-M).
 pub const MPU_MIN_REGION_SIZE: u32 = 32;
 
+/// AIRCR register VECTKEY: must be written as 0x05FA for the write to take effect.
+pub const AIRCR_VECTKEY: u32 = 0x05FA << 16;
+
+/// PRIGROUP field value: 0 means all priority bits are preemption priority
+/// (no sub-priority grouping). Occupies bits \[10:8\] of the AIRCR register.
+pub const AIRCR_PRIGROUP_0: u32 = 0 << 8;
+
 /// Boot initialization errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootError {
@@ -350,6 +357,27 @@ where
 
     const { crate::config::assert_priority_order::<C>() }
     const { crate::config::assert_systick_reload::<C>() }
+
+    // Set PRIGROUP=0 so all priority bits are preemption priority (no
+    // sub-priority grouping).  This is the power-on default on most
+    // Cortex-M devices but we set it explicitly because the three-tier
+    // model depends on it.
+    //
+    // On 3-bit priority hardware (LM3S6965, nRF52840) SVCall (0x00) and
+    // SysTick (0x10) both truncate to the same effective group priority
+    // 0x00.  The Cortex-M architecture breaks ties by exception number:
+    // SVCall #11 wins over SysTick #15, preserving the intended ordering
+    // (SVCall > SysTick > application IRQs > PendSV).
+    //
+    // SAFETY: Called once before scheduler starts; single-core exclusive
+    // access to SCB.  AIRCR write requires VECTKEY = 0x05FA.
+    unsafe {
+        peripherals
+            .SCB
+            .aircr
+            .write(AIRCR_VECTKEY | AIRCR_PRIGROUP_0);
+    }
+
     // SAFETY: Called once before scheduler starts; single-core exclusive access to SCB.
     unsafe {
         peripherals
@@ -911,5 +939,30 @@ mod tests {
             expected_periph,
             "cached periph regions must match on-the-fly computation"
         );
+    }
+
+    #[test]
+    fn aircr_vectkey_encoding() {
+        // VECTKEY must occupy bits [31:16] with value 0x05FA.
+        assert_eq!(AIRCR_VECTKEY, 0x05FA_0000);
+        assert_eq!(AIRCR_VECTKEY >> 16, 0x05FA);
+        // Bits [15:0] must be zero (no other fields set by the constant).
+        assert_eq!(AIRCR_VECTKEY & 0xFFFF, 0);
+    }
+
+    #[test]
+    fn aircr_prigroup_0_encoding() {
+        // PRIGROUP occupies bits [10:8]. PRIGROUP=0 means all bits are
+        // preemption priority with no sub-priority grouping.
+        assert_eq!(AIRCR_PRIGROUP_0, 0);
+        // Verify the combined AIRCR write value: VECTKEY | PRIGROUP=0.
+        let aircr_value = AIRCR_VECTKEY | AIRCR_PRIGROUP_0;
+        assert_eq!(aircr_value, 0x05FA_0000);
+        // Extract PRIGROUP field (bits [10:8]) from the combined value.
+        let prigroup = (aircr_value >> 8) & 0x7;
+        assert_eq!(prigroup, 0, "PRIGROUP field must be 0");
+        // Verify VECTKEY field (bits [31:16]) from the combined value.
+        let vectkey = (aircr_value >> 16) & 0xFFFF;
+        assert_eq!(vectkey, 0x05FA, "VECTKEY must be 0x05FA");
     }
 }
