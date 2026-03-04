@@ -54,6 +54,15 @@ pub use rtos_traits::syscall::{SYS_DEBUG_EXIT, SYS_DEBUG_PRINT};
 #[cfg(feature = "partition-debug")]
 pub use rtos_traits::syscall::{SYS_DEBUG_NOTIFY, SYS_DEBUG_WRITE};
 
+// ── Re-exported resource ID newtypes (from rtos-traits) ─────────────
+#[cfg(feature = "ipc-blackboard")]
+pub use rtos_traits::ids::BlackboardId;
+#[cfg(feature = "dynamic-mpu")]
+pub use rtos_traits::ids::DeviceId;
+pub use rtos_traits::ids::{
+    EventMask, MutexId, PartitionId, QueuingPortId, SamplingPortId, SemaphoreId,
+};
+
 #[cfg(feature = "partition-debug")]
 use rtos_traits::debug::{DebugRingBuffer, KIND_TEXT};
 
@@ -1162,6 +1171,34 @@ mod tests {
         assert_eq!(crate::SYS_BUF_LEND, src::SYS_BUF_LEND);
         assert_eq!(crate::SYS_BUF_REVOKE, src::SYS_BUF_REVOKE);
         assert_eq!(crate::SYS_BUF_TRANSFER, src::SYS_BUF_TRANSFER);
+    }
+
+    /// Verify that plib re-exports of resource ID newtypes resolve to the
+    /// same types as `rtos_traits::ids` (construct via both paths, compare).
+    #[test]
+    fn resource_id_newtypes_reexported_match_source() {
+        use rtos_traits::ids as src;
+        // Unconditional re-exports
+        assert_eq!(crate::SemaphoreId::new(1), src::SemaphoreId::new(1));
+        assert_eq!(crate::MutexId::new(2), src::MutexId::new(2));
+        assert_eq!(crate::SamplingPortId::new(3), src::SamplingPortId::new(3));
+        assert_eq!(crate::QueuingPortId::new(4), src::QueuingPortId::new(4));
+        assert_eq!(crate::PartitionId::new(5), src::PartitionId::new(5));
+        assert_eq!(crate::EventMask::new(0xFF), src::EventMask::new(0xFF));
+    }
+
+    #[cfg(feature = "ipc-blackboard")]
+    #[test]
+    fn blackboard_id_reexported_matches_source() {
+        use rtos_traits::ids as src;
+        assert_eq!(crate::BlackboardId::new(6), src::BlackboardId::new(6));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn device_id_reexported_matches_source() {
+        use rtos_traits::ids as src;
+        assert_eq!(crate::DeviceId::new(7), src::DeviceId::new(7));
     }
 
     #[cfg(feature = "dynamic-mpu")]
