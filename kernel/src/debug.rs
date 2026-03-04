@@ -158,4 +158,82 @@ mod tests {
     // Note: Full macro integration tests (dprint!, debug_warn!, debug_error!)
     // require the syscall path. On non-ARM hosts, svc! returns 0 (success).
     // End-to-end tests run in QEMU integration test examples.
+
+    // ── plib syscall wrapper tests ──────────────────────────────────────
+    //
+    // Per the plib crate's documented testing policy (plib/src/lib.rs module
+    // docs), tests that require kernel infrastructure live here to avoid
+    // panic-handler conflicts.  These verify that the plib wrapper functions
+    // wire the correct syscall ID into r0 and pass their resource-id
+    // argument via r1, exercising the full dispatch path.
+
+    use crate::syscall::{SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_WAIT};
+    use crate::test_harness::KernelTestHarness;
+
+    /// sys_sem_wait: r0 = SYS_SEM_WAIT, r1 = sem_id.
+    /// Dispatching with r1=1 must decrement semaphore 1 and leave semaphore 0
+    /// untouched, proving the wrapper passes sem_id in the correct register.
+    #[test]
+    fn plib_sem_wait_passes_sem_id_via_r1() {
+        let mut h = KernelTestHarness::with_semaphores(&[1, 1]).unwrap();
+        // Wait on semaphore 1 (index 1).
+        let ef = h.dispatch(SYS_SEM_WAIT, 1, 0, 0);
+        assert_eq!(ef.r0, 1, "SemWait must return 1 (acquired)");
+        // Semaphore 1 count should be decremented from 1 → 0.
+        assert_eq!(h.kernel().semaphores().get(1).unwrap().count(), 0);
+        // Semaphore 0 must remain at count 1 (untouched).
+        assert_eq!(h.kernel().semaphores().get(0).unwrap().count(), 1);
+    }
+
+    /// sys_sem_signal: r0 = SYS_SEM_SIGNAL, r1 = sem_id.
+    /// After draining semaphore 0, signalling with r1=0 must increment
+    /// semaphore 0 and leave semaphore 1 unchanged.
+    #[test]
+    fn plib_sem_signal_passes_sem_id_via_r1() {
+        let mut h = KernelTestHarness::with_semaphores(&[1, 1]).unwrap();
+        // Drain semaphore 0 so its count goes from 1 → 0.
+        let ef = h.dispatch(SYS_SEM_WAIT, 0, 0, 0);
+        assert_eq!(ef.r0, 1);
+        assert_eq!(h.kernel().semaphores().get(0).unwrap().count(), 0);
+        // Signal semaphore 0 — count should go from 0 → 1.
+        let ef = h.dispatch(SYS_SEM_SIGNAL, 0, 0, 0);
+        assert_eq!(ef.r0, 0, "SemSignal must return 0 (success)");
+        assert_eq!(h.kernel().semaphores().get(0).unwrap().count(), 1);
+        // Semaphore 1 must still be at count 1 (untouched).
+        assert_eq!(h.kernel().semaphores().get(1).unwrap().count(), 1);
+    }
+
+    /// sys_mtx_lock: r0 = SYS_MTX_LOCK, r1 = mtx_id.
+    /// Locking with r1=0 must set the owner of mutex 0 to the calling
+    /// partition, proving mtx_id is passed correctly.
+    #[test]
+    fn plib_mtx_lock_passes_mtx_id_via_r1() {
+        let mut h = KernelTestHarness::with_mutexes(1).unwrap();
+        let ef = h.dispatch(SYS_MTX_LOCK, 0, 0, 0);
+        assert_eq!(ef.r0, 1, "MtxLock must return 1 (acquired)");
+        assert_eq!(
+            h.kernel().mutexes().owner(0),
+            Ok(Some(0)),
+            "mutex 0 must be owned by partition 0"
+        );
+    }
+
+    /// sys_mtx_unlock: r0 = SYS_MTX_UNLOCK, r1 = mtx_id.
+    /// After locking mutex 0, unlocking with r1=0 must release it.
+    #[test]
+    fn plib_mtx_unlock_passes_mtx_id_via_r1() {
+        let mut h = KernelTestHarness::with_mutexes(1).unwrap();
+        // Lock mutex 0 first.
+        let ef = h.dispatch(SYS_MTX_LOCK, 0, 0, 0);
+        assert_eq!(ef.r0, 1);
+        assert_eq!(h.kernel().mutexes().owner(0), Ok(Some(0)));
+        // Unlock mutex 0.
+        let ef = h.dispatch(SYS_MTX_UNLOCK, 0, 0, 0);
+        assert_eq!(ef.r0, 0, "MtxUnlock must return 0 (success)");
+        assert_eq!(
+            h.kernel().mutexes().owner(0),
+            Ok(None),
+            "mutex 0 must be released"
+        );
+    }
 }

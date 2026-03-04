@@ -13,7 +13,8 @@
 use kernel::api::decode_rc;
 pub use kernel::api::SvcError;
 use kernel::syscall::{
-    SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_YIELD,
+    SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MTX_LOCK,
+    SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
 };
 
 #[cfg(feature = "partition-debug")]
@@ -280,6 +281,54 @@ pub fn sys_get_time() -> Result<u32, SvcError> {
     decode_rc(kernel::svc!(SYS_GET_TIME, 0u32, 0u32, 0u32))
 }
 
+/// Wait (decrement) on a semaphore.
+///
+/// If the semaphore count is greater than zero it is decremented and the
+/// call returns immediately.  Otherwise the calling partition blocks until
+/// another partition signals the semaphore.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_sem_wait(sem_id: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_SEM_WAIT, sem_id, 0u32, 0u32))
+}
+
+/// Signal (increment) a semaphore.
+///
+/// Increments the semaphore count and wakes one waiting partition, if any.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_sem_signal(sem_id: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_SEM_SIGNAL, sem_id, 0u32, 0u32))
+}
+
+/// Lock a mutex.
+///
+/// If the mutex is free it is acquired by the calling partition.  If it is
+/// already held by another partition the caller blocks until it is released.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_mtx_lock(mtx_id: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_MTX_LOCK, mtx_id, 0u32, 0u32))
+}
+
+/// Unlock a mutex.
+///
+/// Releases the mutex and wakes one waiting partition, if any.  Only the
+/// partition that holds the mutex may unlock it.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_mtx_unlock(mtx_id: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_MTX_UNLOCK, mtx_id, 0u32, 0u32))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,4 +362,27 @@ mod tests {
     fn get_time_returns_ok_zero_on_host() {
         assert_eq!(sys_get_time(), Ok(0));
     }
+
+    #[test]
+    fn sem_wait_returns_ok_zero_on_host() {
+        assert_eq!(sys_sem_wait(0), Ok(0));
+    }
+
+    #[test]
+    fn sem_signal_returns_ok_zero_on_host() {
+        assert_eq!(sys_sem_signal(0), Ok(0));
+    }
+
+    #[test]
+    fn mtx_lock_returns_ok_zero_on_host() {
+        assert_eq!(sys_mtx_lock(0), Ok(0));
+    }
+
+    #[test]
+    fn mtx_unlock_returns_ok_zero_on_host() {
+        assert_eq!(sys_mtx_unlock(0), Ok(0));
+    }
+
+    // Parameter-verification tests live in kernel/src/debug.rs per the
+    // crate's documented testing policy (see module docs).
 }
