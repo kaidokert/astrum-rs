@@ -9,6 +9,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
+use kernel::mpu::{peripheral_mpu_regions_or_disabled, AP_FULL_ACCESS};
 use kernel::{
     boot, mpu,
     partition::{MpuRegion, PartitionConfig},
@@ -35,7 +36,12 @@ kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
         if let Some(pcb) = k.partitions().get(pid) {
             let expected = mpu::partition_mpu_regions_or_deny_all(pcb);
             if *pcb.cached_base_regions() != expected {
-                hprintln!("FAIL: cache mismatch p{}", pid);
+                hprintln!("FAIL: base cache mismatch p{}", pid);
+                kernel::kexit!(failure);
+            }
+            let expected_periph = peripheral_mpu_regions_or_disabled(pcb);
+            if *pcb.cached_periph_regions() != expected_periph {
+                hprintln!("FAIL: periph cache mismatch p{}", pid);
                 kernel::kexit!(failure);
             }
         }
@@ -100,6 +106,16 @@ fn main() -> ! {
         // boot::boot() receives the actual function pointer via the `parts` array.
         // TODO: reviewer false positive — same pattern as mpu_enforce_test.rs
         let code_region_base = (entry_fns[i] as *const () as usize as u32) & !(REGION_SZ - 1);
+        let mut peripheral_regions: heapless::Vec<MpuRegion, 2> = heapless::Vec::new();
+        if i == 0 {
+            // UART0 peripheral region for p0: exercises the non-trivial peripheral cache path.
+            // TODO: reviewer requested AP_FULL_ACCESS_XN but that constant does not exist;
+            // peripheral_region_pair() hardcodes XN=true and ignores the permissions field,
+            // so the AP value here is advisory only.
+            peripheral_regions
+                .push(MpuRegion::new(0x4000_C000, 4096, AP_FULL_ACCESS))
+                .expect("periph push");
+        }
         PartitionConfig {
             id: i as u8,
             entry_point: code_region_base,
@@ -108,7 +124,7 @@ fn main() -> ! {
             stack_base: [0x2000_0000u32, 0x2000_8000][i],
             stack_size: (TestConfig::STACK_WORDS * 4) as u32,
             mpu_region: MpuRegion::new(0, 0, 0),
-            peripheral_regions: heapless::Vec::new(),
+            peripheral_regions,
         }
     });
     let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("kernel");
