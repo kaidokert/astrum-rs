@@ -684,6 +684,33 @@ pub fn sys_query_bottom_half(device_id: u8) -> Result<u32, SvcError> {
     ))
 }
 
+/// Print a debug message via semihosting.
+///
+/// ABI: r1 = ptr, r2 = len.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_debug_print(msg: &[u8]) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(
+        SYS_DEBUG_PRINT,
+        msg.as_ptr() as u32,
+        msg.len() as u32,
+        0u32
+    ))
+}
+
+/// Terminate the partition/system via semihosting with an exit code.
+///
+/// ABI: r1 = exit_code.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_debug_exit(code: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_DEBUG_EXIT, code, 0u32, 0u32))
+}
+
 #[cfg(test)]
 mod tests {
     extern crate alloc;
@@ -1088,5 +1115,25 @@ mod tests {
     #[test]
     fn query_bottom_half_max_device_id_returns_ok_zero_on_host() {
         assert_eq!(sys_query_bottom_half(u8::MAX), Ok(0));
+    }
+
+    #[test]
+    fn debug_print_empty_msg_returns_ok_zero_on_host() {
+        assert_eq!(sys_debug_print(&[]), Ok(0));
+    }
+
+    #[test]
+    fn debug_print_nonempty_msg_returns_ok_zero_on_host() {
+        assert_eq!(sys_debug_print(b"hello"), Ok(0));
+    }
+
+    #[test]
+    fn debug_exit_zero_code_returns_ok_zero_on_host() {
+        assert_eq!(sys_debug_exit(0), Ok(0));
+    }
+
+    #[test]
+    fn debug_exit_nonzero_code_returns_ok_zero_on_host() {
+        assert_eq!(sys_debug_exit(1), Ok(0));
     }
 }
