@@ -10,12 +10,16 @@
 
 #![no_std]
 
-use kernel::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::api::decode_rc;
+pub use kernel::api::SvcError;
+use kernel::syscall::{
+    SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_YIELD,
+};
 
 #[cfg(feature = "partition-debug")]
 use rtos_traits::debug::{DebugRingBuffer, KIND_TEXT};
 #[cfg(feature = "partition-debug")]
-use rtos_traits::syscall::{SvcError, SYS_DEBUG_NOTIFY};
+use rtos_traits::syscall::SYS_DEBUG_NOTIFY;
 
 // Re-export FmtBuffer from shared traits crate for use with dprint! macro
 #[cfg(feature = "partition-debug")]
@@ -215,10 +219,10 @@ pub fn debug_write<const N: usize>(
 ///
 /// # Returns
 ///
-/// The bitmask of events that were pending (a subset of `mask`), or an
-/// error code if the syscall failed.
-pub fn sys_event_wait(mask: u32) -> u32 {
-    kernel::svc!(SYS_EVT_WAIT, mask, 0u32, 0u32)
+/// `Ok(bits)` with the bitmask of events that were pending, or
+/// `Err(SvcError)` if the syscall failed.
+pub fn sys_event_wait(mask: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_EVT_WAIT, mask, 0u32, 0u32))
 }
 
 /// Set event bits on another partition.
@@ -228,9 +232,9 @@ pub fn sys_event_wait(mask: u32) -> u32 {
 ///
 /// # Returns
 ///
-/// `0` on success, or an error code if the syscall failed.
-pub fn sys_event_set(target_partition: u32, mask: u32) -> u32 {
-    kernel::svc!(SYS_EVT_SET, target_partition, mask, 0u32)
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_event_set(target_partition: u32, mask: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_EVT_SET, target_partition, mask, 0u32))
 }
 
 /// Clear event bits in the calling partition's pending-event word.
@@ -239,10 +243,10 @@ pub fn sys_event_set(target_partition: u32, mask: u32) -> u32 {
 ///
 /// # Returns
 ///
-/// The previous value of the pending-event word before clearing, or an
-/// error code if the syscall failed.
-pub fn sys_event_clear(mask: u32) -> u32 {
-    kernel::svc!(SYS_EVT_CLEAR, mask, 0u32, 0u32)
+/// `Ok(prev)` with the previous pending-event word value, or
+/// `Err(SvcError)` if the syscall failed.
+pub fn sys_event_clear(mask: u32) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_EVT_CLEAR, mask, 0u32, 0u32))
 }
 
 /// Acknowledge a hardware IRQ after the partition has handled it.
@@ -252,9 +256,28 @@ pub fn sys_event_clear(mask: u32) -> u32 {
 ///
 /// # Returns
 ///
-/// `0` on success, or an error code if the syscall failed.
-pub fn sys_irq_ack(irq_num: u8) -> u32 {
-    kernel::svc!(SYS_IRQ_ACK, irq_num as u32, 0u32, 0u32)
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_irq_ack(irq_num: u8) -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_IRQ_ACK, irq_num as u32, 0u32, 0u32))
+}
+
+/// Yield the calling partition's remaining time slice.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_yield() -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32))
+}
+
+/// Get the current kernel tick count.
+///
+/// # Returns
+///
+/// `Ok(ticks)` with the current tick count, or `Err(SvcError)` if the
+/// syscall failed.
+pub fn sys_get_time() -> Result<u32, SvcError> {
+    decode_rc(kernel::svc!(SYS_GET_TIME, 0u32, 0u32, 0u32))
 }
 
 #[cfg(test)]
@@ -262,26 +285,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn event_wait_returns_zero_on_host() {
-        let r = sys_event_wait(0x01);
-        assert_eq!(r, 0, "svc! stub must return 0 on non-ARM");
+    fn event_wait_returns_ok_zero_on_host() {
+        assert_eq!(sys_event_wait(0x01), Ok(0));
     }
 
     #[test]
-    fn event_set_returns_zero_on_host() {
-        let r = sys_event_set(1, 0xFF);
-        assert_eq!(r, 0, "svc! stub must return 0 on non-ARM");
+    fn event_set_returns_ok_zero_on_host() {
+        assert_eq!(sys_event_set(1, 0xFF), Ok(0));
     }
 
     #[test]
-    fn event_clear_returns_zero_on_host() {
-        let r = sys_event_clear(0x03);
-        assert_eq!(r, 0, "svc! stub must return 0 on non-ARM");
+    fn event_clear_returns_ok_zero_on_host() {
+        assert_eq!(sys_event_clear(0x03), Ok(0));
     }
 
     #[test]
-    fn irq_ack_returns_zero_on_host() {
-        let r = sys_irq_ack(5);
-        assert_eq!(r, 0, "svc! stub must return 0 on non-ARM");
+    fn irq_ack_returns_ok_zero_on_host() {
+        assert_eq!(sys_irq_ack(5), Ok(0));
+    }
+
+    #[test]
+    fn yield_returns_ok_zero_on_host() {
+        assert_eq!(sys_yield(), Ok(0));
+    }
+
+    #[test]
+    fn get_time_returns_ok_zero_on_host() {
+        assert_eq!(sys_get_time(), Ok(0));
     }
 }
