@@ -13,6 +13,9 @@
 pub use rtos_traits::api::decode_rc;
 pub use rtos_traits::api::SvcError;
 
+// TODO: buf_syscall wrappers (buf_alloc, buf_lend, …) still live in the kernel
+// crate because they depend on the kernel's svc!() macro.  Properly decoupling
+// them into rtos-traits (or a dedicated plib-syscall crate) is future work.
 #[cfg(feature = "dynamic-mpu")]
 pub use kernel::buf_syscall;
 

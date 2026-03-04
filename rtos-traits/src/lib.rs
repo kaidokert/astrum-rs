@@ -1,6 +1,8 @@
 #![no_std]
 
 pub mod api;
+#[cfg(feature = "dynamic-mpu")]
+pub mod buf_syscall;
 pub mod debug;
 pub mod device;
 pub mod fmt;

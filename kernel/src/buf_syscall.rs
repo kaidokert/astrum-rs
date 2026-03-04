@@ -4,26 +4,15 @@ use crate::syscall::{
     SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_RELEASE, SYS_BUF_REVOKE, SYS_BUF_TRANSFER,
     SYS_BUF_WRITE,
 };
+// ABI helpers re-exported from rtos-traits.
+// TODO: reviewer false positive – this module is already behind
+// #[cfg(feature = "dynamic-mpu")] in kernel/src/lib.rs, and kernel's
+// dynamic-mpu feature enables rtos-traits/dynamic-mpu, so the re-export
+// is correctly gated.
+pub use rtos_traits::buf_syscall::{pack_lend_r2, parse_result, LendResult};
+#[cfg(test)]
 use rtos_traits::syscall::lend_flags;
 use rtos_traits::syscall::SvcError;
-
-/// Pack target partition ID and writable flag into r2.
-/// Layout: bits\[7:0\] = target, bit\[8\] = WRITABLE.
-#[inline]
-pub const fn pack_lend_r2(target: u8, writable: bool) -> u32 {
-    let flags = if writable { lend_flags::WRITABLE } else { 0 };
-    (target as u32) | flags
-}
-
-/// Convert a raw SVC return value to `Result<u32, SvcError>`.
-#[inline]
-fn parse_result(raw: u32) -> Result<u32, SvcError> {
-    if SvcError::is_error(raw) {
-        Err(SvcError::from_u32(raw).unwrap_or(SvcError::InvalidSyscall))
-    } else {
-        Ok(raw)
-    }
-}
 
 /// Allocate a buffer slot.  Returns the slot index on success.
 ///
@@ -52,16 +41,6 @@ pub fn buf_write(slot: u8, data: &[u8]) -> Result<usize, SvcError> {
 #[inline]
 pub fn buf_lend(slot: u8, target: u8, writable: bool) -> Result<u8, SvcError> {
     buf_lend_with_deadline(slot, target, writable, 0)
-}
-
-/// Result of [`buf_lend_with_addr`]: the MPU region ID and the buffer's
-/// base address in the target partition's address space.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LendResult {
-    /// MPU region ID assigned to the lent buffer.
-    pub region_id: u8,
-    /// Base address of the buffer in the target's memory map.
-    pub base_addr: u32,
 }
 
 /// Lend a buffer slot to a target partition, returning both the MPU region
