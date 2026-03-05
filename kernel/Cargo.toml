@@ -287,6 +287,10 @@ name = "plib_sampling_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "plib_queuing_status_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "plib_bb_test"
 required-features = ["qemu", "log-semihosting", "ipc-blackboard"]
 

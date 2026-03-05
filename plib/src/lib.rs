@@ -13,6 +13,19 @@
 pub use rtos_traits::api::decode_rc;
 pub use rtos_traits::api::SvcError;
 
+/// Status information for a queuing port, returned by [`sys_queuing_status`].
+///
+/// Layout must match the kernel's `QueuingPortStatus` (both are `#[repr(C)]`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueuingPortStatus {
+    pub nb_messages: u32,
+    pub max_nb_messages: u32,
+    pub max_message_size: u32,
+    /// 0 = Source, 1 = Destination.
+    pub direction: u32,
+}
+
 #[cfg(feature = "dynamic-mpu")]
 pub use rtos_traits::buf_syscall;
 
@@ -524,12 +537,27 @@ pub fn sys_queuing_recv_timed(
 
 /// Query the status of a queuing port.
 ///
+/// The kernel writes the full [`QueuingPortStatus`] struct to a caller-provided
+/// buffer via the `r2` pointer register.
+///
 /// # Returns
 ///
-/// `Ok(status)` with the port status word, or `Err(SvcError)` if the
+/// `Ok(status)` with the full port status, or `Err(SvcError)` if the
 /// syscall failed.
-pub fn sys_queuing_status(port_id: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_QUEUING_STATUS, port_id, 0u32, 0u32))
+pub fn sys_queuing_status(port_id: u32) -> Result<QueuingPortStatus, SvcError> {
+    let mut status = core::mem::MaybeUninit::<QueuingPortStatus>::zeroed();
+    // SAFETY: svc! triggers a supervisor call whose handler validates all
+    // arguments.  The pointer is valid for writes of size_of::<QueuingPortStatus>()
+    // and the kernel writes the full struct before returning 0.
+    let rc = rtos_traits::svc!(
+        SYS_QUEUING_STATUS,
+        port_id,
+        status.as_mut_ptr() as u32,
+        0u32
+    );
+    decode_rc(rc)?;
+    // SAFETY: On success (rc == 0) the kernel has fully initialised the struct.
+    Ok(unsafe { status.assume_init() })
 }
 
 /// Receive a message from another partition.
@@ -996,8 +1024,14 @@ mod tests {
     }
 
     #[test]
-    fn queuing_status_returns_ok_zero_on_host() {
-        assert_eq!(sys_queuing_status(0), Ok(0));
+    fn queuing_status_returns_ok_zeroed_on_host() {
+        let expected = QueuingPortStatus {
+            nb_messages: 0,
+            max_nb_messages: 0,
+            max_message_size: 0,
+            direction: 0,
+        };
+        assert_eq!(sys_queuing_status(0), Ok(expected));
     }
 
     #[test]

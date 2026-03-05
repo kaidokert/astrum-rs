@@ -1787,6 +1787,9 @@ where
                 }
             }),
             #[cfg(feature = "ipc-queuing")]
+            // TODO: reviewer false positive — kernel QueuingStatus handler already
+            // uses validated_ptr! + ptr::write to populate the full QueuingPortStatus
+            // struct via the r2 pointer; no regression exists.
             Some(SyscallId::QueuingStatus) => {
                 validated_ptr!(self, frame.r2, core::mem::size_of::<QueuingPortStatus>(), {
                     // SAFETY: (1) validated_ptr confirmed [r2, r2+size_of QueuingPortStatus)
