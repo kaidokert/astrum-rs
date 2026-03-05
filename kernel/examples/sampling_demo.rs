@@ -22,9 +22,7 @@ use kernel::{
     partition::PartitionConfig,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc,
     svc::Kernel,
-    syscall::{SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_YIELD},
 };
 
 // Actual partition count (3) differs from DemoConfig::N (4, from Partitions4 capacity).
@@ -97,9 +95,10 @@ extern "C" fn sensor_main_body(r0: u32) -> ! {
     let (src, mut v) = (r0 >> 16, 0u8);
     loop {
         v = v.wrapping_add(1);
-        SENSOR_VALUE.store(v as u32, Ordering::Release);
-        svc!(SYS_SAMPLING_WRITE, src, 1u32, [v].as_ptr() as u32);
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        if plib::sys_sampling_write(src, &[v]).is_ok() {
+            SENSOR_VALUE.store(v as u32, Ordering::Release);
+        }
+        let _ = plib::sys_yield();
     }
 }
 kernel::partition_trampoline!(sensor_main => sensor_main_body);
@@ -108,18 +107,16 @@ extern "C" fn control_main_body(r0: u32) -> ! {
     let (src, dst) = (packed >> 16, packed & 0xFFFF);
     loop {
         let mut buf = [0u8; 1];
-        let sz = svc!(
-            SYS_SAMPLING_READ,
-            dst,
-            buf.len() as u32,
-            buf.as_mut_ptr() as u32
-        );
-        let v = if sz > 0 && sz != u32::MAX { buf[0] } else { 0 };
+        let v = match plib::sys_sampling_read(dst, &mut buf) {
+            Ok(sz) if sz > 0 => buf[0],
+            _ => 0,
+        };
         let status = u8::from(v > 2); // 1 = alert, 0 = normal
-        CONTROL_READ.store(v as u32, Ordering::Release);
-        CONTROL_STATUS.store(status as u32, Ordering::Release);
-        svc!(SYS_SAMPLING_WRITE, src, 1u32, [status].as_ptr() as u32);
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        if plib::sys_sampling_write(src, &[status]).is_ok() {
+            CONTROL_READ.store(v as u32, Ordering::Release);
+            CONTROL_STATUS.store(status as u32, Ordering::Release);
+        }
+        let _ = plib::sys_yield();
     }
 }
 kernel::partition_trampoline!(control_main => control_main_body);
@@ -128,20 +125,19 @@ extern "C" fn display_main_body(r0: u32) -> ! {
     let mut cyc: u32 = 0;
     loop {
         let mut buf = [0u8; 1];
-        let _sz = svc!(
-            SYS_SAMPLING_READ,
-            dst,
-            buf.len() as u32,
-            buf.as_mut_ptr() as u32
-        );
-        // Verify data: control writes u8::from(v > 2), so status must be 0 or 1
-        if _sz > 0 && _sz != u32::MAX && buf[0] > 1 {
-            DATA_ERRORS.fetch_add(1, Ordering::Release);
+        match plib::sys_sampling_read(dst, &mut buf) {
+            Ok(sz) if sz > 0 && buf[0] > 1 => {
+                DATA_ERRORS.fetch_add(1, Ordering::Release);
+            }
+            Err(_) => {
+                DATA_ERRORS.fetch_add(1, Ordering::Release);
+            }
+            _ => {}
         }
         // Track cycle count; SysTick handler checks this for completion
         cyc += 1;
+        let _ = plib::sys_yield();
         DISPLAY_CYCLES.store(cyc, Ordering::Release);
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
     }
 }
 kernel::partition_trampoline!(display_main => display_main_body);

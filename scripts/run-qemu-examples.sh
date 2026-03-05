@@ -29,7 +29,7 @@ run_examples() {
 }
 
 echo "=== Static-mode examples ==="
-run_examples "qemu,log-semihosting" "${EXAMPLES[@]}"
+run_examples "qemu,log-semihosting,ipc-blackboard" "${EXAMPLES[@]}"
 
 echo ""
 echo "=== Custom-IVT examples ==="

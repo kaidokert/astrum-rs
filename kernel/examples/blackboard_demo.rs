@@ -26,12 +26,7 @@ use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     semaphore::Semaphore,
-    svc,
     svc::Kernel,
-    syscall::{
-        SYS_BB_DISPLAY, SYS_BB_READ, SYS_EVT_SET, SYS_EVT_WAIT, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
-        SYS_YIELD,
-    },
 };
 
 // ---------------------------------------------------------------------------
@@ -134,23 +129,26 @@ extern "C" fn config_main_body(r0: u32) -> ! {
     let bb = packed & 0xFFFF;
 
     for round in 0..2u8 {
-        CONFIG_ROUND.store(round as u32, Ordering::Release);
         let cfg = [round + 1, 10 + round];
-        svc!(SYS_BB_DISPLAY, bb, 2u32, cfg.as_ptr() as u32);
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        if plib::sys_bb_display(bb, &cfg).is_ok() {
+            CONFIG_ROUND.store(round as u32, Ordering::Release);
+        }
+        let _ = plib::sys_yield();
 
         let mask = 0x03u32;
-        let mut got = svc!(SYS_EVT_WAIT, 0u32, mask, 0u32);
-        while got & mask != mask {
-            svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-            got = svc!(SYS_EVT_WAIT, 0u32, mask, 0u32);
+        let mut got = plib::sys_event_wait(mask);
+        while matches!(got, Ok(v) if v & mask != mask) {
+            let _ = plib::sys_yield();
+            got = plib::sys_event_wait(mask);
         }
-        CONFIG_EVENTS.store(got, Ordering::Release);
-        CONFIG_DONE.fetch_add(1, Ordering::Release);
+        if let Ok(v) = got {
+            CONFIG_EVENTS.store(v, Ordering::Release);
+            CONFIG_DONE.fetch_add(1, Ordering::Release);
+        }
     }
 
     loop {
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        let _ = plib::sys_yield();
     }
 }
 kernel::partition_trampoline!(config_main => config_main_body);
@@ -158,30 +156,29 @@ kernel::partition_trampoline!(config_main => config_main_body);
 // ---------------------------------------------------------------------------
 // Worker: reads config from blackboard, acquires semaphore, signals event
 // ---------------------------------------------------------------------------
-fn worker(
-    read_counter: &AtomicU32,
-    sem_counter: &AtomicU32,
-    bb: u32,
-    sem: u32,
-    partition_id: u32,
-    evt: u32,
-) -> ! {
+fn worker(read_counter: &AtomicU32, sem_counter: &AtomicU32, bb: u32, sem: u32, evt: u32) -> ! {
     loop {
         let mut buf = [0u8; 4];
-        let sz = svc!(SYS_BB_READ, bb, 0u32, buf.as_mut_ptr() as u32);
-        if sz > 0 && sz != u32::MAX {
-            // Verify blackboard data: config writes [round+1, 10+round],
-            // so buf[1] must equal buf[0]+9 when both bytes are present.
-            if sz >= 2 && buf[1] != buf[0].wrapping_add(9) {
-                DATA_ERRORS.fetch_add(1, Ordering::Release);
+        if let Ok(sz) = plib::sys_bb_read(bb, &mut buf) {
+            if sz > 0 {
+                // Verify blackboard data: config writes [round+1, 10+round],
+                // so buf[1] must equal buf[0]+9 when both bytes are present.
+                if sz >= 2 && buf[1] != buf[0].wrapping_add(9) {
+                    DATA_ERRORS.fetch_add(1, Ordering::Release);
+                }
+                read_counter.fetch_add(1, Ordering::Release);
+                if plib::sys_sem_wait(sem).is_ok() {
+                    sem_counter.fetch_add(1, Ordering::Release);
+                    if plib::sys_sem_signal(sem).is_err() {
+                        DATA_ERRORS.fetch_add(1, Ordering::Release);
+                    }
+                    if plib::sys_event_set(0, evt).is_err() {
+                        DATA_ERRORS.fetch_add(1, Ordering::Release);
+                    }
+                }
             }
-            read_counter.fetch_add(1, Ordering::Release);
-            svc!(SYS_SEM_WAIT, sem, partition_id, 0u32);
-            sem_counter.fetch_add(1, Ordering::Release);
-            svc!(SYS_SEM_SIGNAL, sem, 0u32, 0u32);
-            svc!(SYS_EVT_SET, 0u32, evt, 0u32);
         }
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        let _ = plib::sys_yield();
     }
 }
 
@@ -192,7 +189,6 @@ extern "C" fn worker_a_body(r0: u32) -> ! {
         &WORKER_A_SEM,
         p & 0xFFFF,
         (p >> 16) & 0xFF,
-        p >> 24,
         0x01,
     )
 }
@@ -205,7 +201,6 @@ extern "C" fn worker_b_body(r0: u32) -> ! {
         &WORKER_B_SEM,
         p & 0xFFFF,
         (p >> 16) & 0xFF,
-        p >> 24,
         0x02,
     )
 }

@@ -81,7 +81,7 @@ required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "blackboard_demo"
-required-features = ["qemu", "log-semihosting"]
+required-features = ["qemu", "log-semihosting", "ipc-blackboard"]
 
 [[example]]
 name = "priv_drop_test"
@@ -336,7 +336,7 @@ default = ["arinc-compat"]
 # IPC primitives (optional, enabled via arinc-compat by default)
 ipc-sampling = []
 ipc-queuing = []
-ipc-blackboard = []
+ipc-blackboard = ["plib/ipc-blackboard"]
 ipc-message = []
 
 # ARINC 653 compatibility: enables all optional IPC primitives
