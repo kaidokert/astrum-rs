@@ -21,9 +21,10 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::SYS_EVT_WAIT;
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 kernel::compose_kernel_config!(IrqTestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
@@ -71,15 +72,15 @@ kernel::define_unified_harness!(IrqTestConfig, |tick, _k| {
 extern "C" fn p0_main_body(_r0: u32) -> ! {
     loop {
         // Block until event 0x01 is signalled by the IRQ dispatch handler.
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        // event_wait returns 0 when entering Waiting state, the matched
-        // bitmask (non-zero) on immediate match, or an error with the high
-        // bit set.  Only the last case is a failure.
-        if SvcError::is_error(rc) {
-            hprintln!("irq_dispatch_test: FAIL (event_wait rc=0x{:08X})", rc);
-            debug::exit(debug::EXIT_FAILURE);
+        match plib::sys_event_wait(0x01) {
+            Ok(_) => {
+                WAIT_COUNT.fetch_add(1, Ordering::Release);
+            }
+            Err(e) => {
+                hprintln!("irq_dispatch_test: FAIL (event_wait err={:?})", e);
+                debug::exit(debug::EXIT_FAILURE);
+            }
         }
-        WAIT_COUNT.fetch_add(1, Ordering::Release);
     }
 }
 kernel::partition_trampoline!(p0_main => p0_main_body);

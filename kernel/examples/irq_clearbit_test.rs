@@ -28,9 +28,10 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::irq_dispatch::{ClearStrategy, IrqClearModel};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::SYS_EVT_WAIT;
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 kernel::compose_kernel_config!(
     ClearBitConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -78,16 +79,16 @@ kernel::define_unified_harness!(ClearBitConfig, |tick, _k| {
 extern "C" fn p0_main_body(_r0: u32) -> ! {
     loop {
         // Block until event 0x01 is signalled by the IRQ dispatch handler.
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_clearbit_test: FAIL (event_wait rc=0x{:08X})", rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
-
-        // event_wait returns 0 when entering Waiting state, matched bits
-        // (non-zero) on immediate match. Only count real deliveries.
-        if rc != 0 {
-            WAIT_COUNT.fetch_add(1, Ordering::Release);
+        // No SYS_IRQ_ACK needed — kernel already cleared the source.
+        match plib::sys_event_wait(0x01) {
+            Ok(bits) if bits != 0 => {
+                WAIT_COUNT.fetch_add(1, Ordering::Release);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                hprintln!("irq_clearbit_test: FAIL (event_wait err={:?})", e);
+                debug::exit(debug::EXIT_FAILURE);
+            }
         }
     }
 }
