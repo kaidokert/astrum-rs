@@ -11,7 +11,6 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
-use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
@@ -28,9 +27,6 @@ use kernel::{
 const NP: usize = 2;
 const REGION_SZ: u32 = 1024;
 
-static P0_COUNTER: AtomicU32 = AtomicU32::new(0);
-static P1_COUNTER: AtomicU32 = AtomicU32::new(0);
-
 kernel::compose_kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
@@ -41,19 +37,22 @@ kernel::compose_kernel_config!(
     }
 );
 
-macro_rules! partition_entry {
-    ($name:ident, $counter:expr) => {
-        extern "C" fn $name() -> ! {
-            loop {
-                $counter.fetch_add(1, Ordering::Release);
-                let rc = kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-                assert!(rc == 0, "SYS_YIELD returned non-zero");
-            }
-        }
-    };
+// Shared partition body: yield in a loop, asserting success each time.
+// No memory access beyond the stack (covered by the MPU data region)
+// and registers (SVC ABI).
+fn partition_loop() -> ! {
+    loop {
+        let rc = kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        assert!(rc == 0, "SYS_YIELD returned non-zero");
+    }
 }
-partition_entry!(p0_entry, P0_COUNTER);
-partition_entry!(p1_entry, P1_COUNTER);
+
+extern "C" fn p0_entry() -> ! {
+    partition_loop()
+}
+extern "C" fn p1_entry() -> ! {
+    partition_loop()
+}
 
 /// Read the (RBAR, RASR) pair for MPU region `n` from hardware.
 ///
@@ -71,11 +70,20 @@ unsafe fn read_mpu_region(mpu: &cortex_m::peripheral::MPU, n: u32) -> (u32, u32)
 }
 
 kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
+    // Track which partitions have been observed running (privileged context).
+    static SEEN: [core::sync::atomic::AtomicBool; 2] = [
+        core::sync::atomic::AtomicBool::new(false),
+        core::sync::atomic::AtomicBool::new(false),
+    ];
+
     // Verify that PendSV programmed the correct MPU registers for the
     // currently-active partition.  SysTick preempts PendSV, so the MPU
     // hardware state here reflects the last completed context switch.
     if tick > 2 {
         let pid = k.current_partition as usize;
+        if pid < 2 {
+            SEEN[pid].store(true, core::sync::atomic::Ordering::Release);
+        }
         if let Some(pcb) = k.partitions().get(pid) {
             let base = pcb.cached_base_regions();
             let periph = pcb.cached_periph_regions();
@@ -92,21 +100,19 @@ kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
                         "FAIL: R{} p{} RBAR exp={:#010x} got={:#010x} RASR exp={:#010x} got={:#010x}",
                         r, pid, c_rbar & !0x10, hw_rbar, c_rasr, hw_rasr
                     );
-                    // TODO: reviewer false positive — kexit!(failure) was already present
-                    // before this diff; the staged context just didn't show it.
                     kernel::kexit!(failure);
                 }
             }
         }
     }
-    let p0 = P0_COUNTER.load(Ordering::Acquire);
-    let p1 = P1_COUNTER.load(Ordering::Acquire);
-    if tick >= 32 && p0 >= 4 && p1 >= 4 {
-        hprintln!("mpu_precompute_test: PASS R0-R5 (p0={}, p1={})", p0, p1);
+    let both = SEEN[0].load(core::sync::atomic::Ordering::Acquire)
+        && SEEN[1].load(core::sync::atomic::Ordering::Acquire);
+    if tick >= 32 && both {
+        hprintln!("mpu_precompute_test: PASS R0-R5");
         kernel::kexit!(success);
     }
     if tick >= 100 {
-        hprintln!("FAIL: timeout (p0={}, p1={})", p0, p1);
+        hprintln!("FAIL: timeout (both_seen={})", both);
         kernel::kexit!(failure);
     }
 });
