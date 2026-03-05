@@ -896,8 +896,13 @@ mod tests {
     }
 
     #[test]
-    fn irq_ack_returns_ok_zero_on_host() {
-        assert_eq!(sys_irq_ack(5), Ok(0));
+    fn irq_ack_min_returns_ok_zero_on_host() {
+        assert_eq!(sys_irq_ack(0), Ok(0));
+    }
+
+    #[test]
+    fn irq_ack_max_returns_ok_zero_on_host() {
+        assert_eq!(sys_irq_ack(255), Ok(0));
     }
 
     #[test]
@@ -1508,12 +1513,12 @@ mod tests {
 
     #[test]
     fn debug_print_empty_msg_returns_ok_zero_on_host() {
-        assert_eq!(sys_debug_print(&[]), Ok(0));
+        assert_eq!(sys_debug_print(b""), Ok(0));
     }
 
     #[test]
     fn debug_print_nonempty_msg_returns_ok_zero_on_host() {
-        assert_eq!(sys_debug_print(b"hello"), Ok(0));
+        assert_eq!(sys_debug_print(b"hello world"), Ok(0));
     }
 
     #[test]
