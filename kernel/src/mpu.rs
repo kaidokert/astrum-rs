@@ -1762,4 +1762,67 @@ mod tests {
         );
         assert_eq!((rasr >> 28) & 1, 1, "XN must be set");
     }
+
+    // ------------------------------------------------------------------
+    // precompute_mpu_cache parameterized consistency
+    // ------------------------------------------------------------------
+
+    /// Build a PCB, precompute its cache, and assert the cached values
+    /// match the on-the-fly computations for both base and peripheral
+    /// regions.
+    fn assert_cache_matches(mut pcb: PartitionControlBlock, label: &str) {
+        let expected_base = partition_mpu_regions_or_deny_all(&pcb);
+        let expected_periph = peripheral_mpu_regions_or_disabled(&pcb);
+
+        precompute_mpu_cache(&mut pcb).expect(label);
+
+        assert_eq!(
+            *pcb.cached_base_regions(),
+            expected_base,
+            "{label}: cached_base_regions mismatch",
+        );
+        assert_eq!(
+            *pcb.cached_periph_regions(),
+            expected_periph,
+            "{label}: cached_periph_regions mismatch",
+        );
+    }
+
+    #[test]
+    fn precompute_cache_consistency_diverse_configs() {
+        // (1) No peripherals, 4 KB region
+        assert_cache_matches(make_pcb(0x0000_0000, 0x2000_0000, 4096), "no-periph-4KB");
+
+        // (2) 1 peripheral, 1 KB region
+        assert_cache_matches(
+            make_pcb(0x0000_0000, 0x2000_0000, 1024).with_peripheral_regions(&[MpuRegion::new(
+                0x4000_0000,
+                256,
+                0,
+            )]),
+            "1-periph-1KB",
+        );
+
+        // (3) 2 peripherals, 2 KB region
+        assert_cache_matches(
+            make_pcb(0x0000_0000, 0x2000_0000, 2048).with_peripheral_regions(&[
+                MpuRegion::new(0x4000_0000, 4096, 0),
+                MpuRegion::new(0x4000_1000, 256, 0),
+            ]),
+            "2-periph-2KB",
+        );
+
+        // (4) 3 peripherals, 4 KB region
+        assert_cache_matches(
+            make_pcb(0x0000_0000, 0x2000_0000, 4096).with_peripheral_regions(&[
+                MpuRegion::new(0x4000_0000, 1024, 0),
+                MpuRegion::new(0x4000_1000, 512, 0),
+                MpuRegion::new(0x4000_2000, 256, 0),
+            ]),
+            "3-periph-4KB",
+        );
+
+        // (5) Sentinel partition (mpu_region size == 0)
+        assert_cache_matches(make_sentinel_pcb(0x2000_0000, 1024), "sentinel");
+    }
 }
