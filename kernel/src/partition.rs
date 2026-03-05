@@ -115,8 +115,8 @@ pub struct PartitionControlBlock {
     debug_buffer: DebugBufferRef,
     /// Pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
     cached_base_regions: [(u32, u32); 4],
-    /// Pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R5.
-    cached_periph_regions: [(u32, u32); 2],
+    /// Pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R6.
+    cached_periph_regions: [(u32, u32); 3],
     /// Guard: set true after [`precompute_mpu_cache`] to catch post-boot
     /// mutations that would silently invalidate the cached MPU registers.
     cache_sealed: bool,
@@ -145,7 +145,7 @@ impl PartitionControlBlock {
             #[cfg(feature = "partition-debug")]
             debug_buffer: DebugBufferRef::none(),
             cached_base_regions: [(0, 0); 4],
-            cached_periph_regions: [(0, 0); 2],
+            cached_periph_regions: [(0, 0); 3],
             cache_sealed: false,
         }
     }
@@ -369,15 +369,15 @@ impl PartitionControlBlock {
         Ok(())
     }
 
-    /// Returns the pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R5.
-    pub fn cached_periph_regions(&self) -> &[(u32, u32); 2] {
+    /// Returns the pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R6.
+    pub fn cached_periph_regions(&self) -> &[(u32, u32); 3] {
         &self.cached_periph_regions
     }
 
-    /// Sets the pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R5.
+    /// Sets the pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R6.
     pub fn set_cached_periph_regions(
         &mut self,
-        regions: [(u32, u32); 2],
+        regions: [(u32, u32); 3],
     ) -> Result<(), &'static str> {
         if self.cache_sealed {
             return Err("set_cached_periph_regions called after MPU cache sealed");

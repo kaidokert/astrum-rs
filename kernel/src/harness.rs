@@ -575,10 +575,10 @@ mod tests {
         assert_eq!(
             *pcb.cached_periph_regions(),
             expected_periph,
-            "boot contract: cached periph regions must match on-the-fly R4-R5"
+            "boot contract: cached periph regions must match on-the-fly R4-R6"
         );
-        // Verify the combined count covers R0-R5 (6 register pairs).
+        // Verify the combined count covers R0-R6 (7 register pairs).
         let total = pcb.cached_base_regions().len() + pcb.cached_periph_regions().len();
-        assert_eq!(total, 6, "dynamic boot programs R0-R5 (6 pairs)");
+        assert_eq!(total, 7, "dynamic boot programs R0-R6 (7 pairs)");
     }
 }

@@ -312,6 +312,15 @@ const DISABLED_R5: (u32, u32) = (
     0,
 );
 
+/// (RBAR, RASR) pair for a disabled MPU region targeting slot 6.
+const DISABLED_R6: (u32, u32) = (
+    match build_rbar(0, 6) {
+        Some(v) => v,
+        None => panic!("invariant: base=0 aligned, region=6 in range"),
+    },
+    0,
+);
+
 /// Build an (RBAR, RASR) pair for an active peripheral MPU region.
 ///
 /// Peripheral attributes: AP = full access, XN = execute never,
@@ -342,7 +351,7 @@ fn peripheral_region_pair(region: &MpuRegion, slot: u32) -> Option<(u32, u32)> {
 /// "dynamic-mpu"))]`).  In dynamic mode the PendSV handler calls
 /// [`DynamicStrategy::cached_peripheral_regions`] instead, which
 /// restores pre-computed (RBAR, RASR) pairs from the boot-time cache.
-pub(crate) fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 2]> {
+pub(crate) fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 3]> {
     let periph = pcb.peripheral_regions();
     let r4 = match periph.first() {
         Some(r) => peripheral_region_pair(r, 4)?,
@@ -352,16 +361,20 @@ pub(crate) fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u3
         Some(r) => peripheral_region_pair(r, 5)?,
         None => DISABLED_R5,
     };
-    Some([r4, r5])
+    let r6 = match periph.get(2) {
+        Some(r) => peripheral_region_pair(r, 6)?,
+        None => DISABLED_R6,
+    };
+    Some([r4, r5, r6])
 }
 
-/// Return peripheral (RBAR, RASR) pairs for R4-R5, falling back to
+/// Return peripheral (RBAR, RASR) pairs for R4-R6, falling back to
 /// disabled regions if the partition's peripheral MPU parameters are
 /// invalid.
 ///
 /// This is the infallible counterpart of [`peripheral_mpu_regions`].
 /// When `peripheral_mpu_regions` returns `None` (e.g. non-power-of-2
-/// peripheral size), the disabled fallback ensures R4-R5 are explicitly
+/// peripheral size), the disabled fallback ensures R4-R6 are explicitly
 /// cleared rather than retaining stale grants from a previous partition.
 ///
 /// # Mode usage
@@ -372,11 +385,11 @@ pub(crate) fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u3
 /// counterpart (see `harness.rs` PendSV handler).  The equivalence
 /// between the two paths is verified by
 /// `cache_vs_pcb_peripheral_rbar_rasr_equivalence`.
-pub(crate) fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) -> [(u32, u32); 2] {
-    peripheral_mpu_regions(pcb).unwrap_or([DISABLED_R4, DISABLED_R5])
+pub(crate) fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) -> [(u32, u32); 3] {
+    peripheral_mpu_regions(pcb).unwrap_or([DISABLED_R4, DISABLED_R5, DISABLED_R6])
 }
 
-/// Pre-compute and cache both base (R0–R3) and peripheral (R4–R5) MPU
+/// Pre-compute and cache both base (R0–R3) and peripheral (R4–R6) MPU
 /// register pairs into the PCB.
 ///
 /// Calls [`partition_mpu_regions_or_deny_all`] for base regions and
@@ -519,9 +532,10 @@ pub fn apply_deny_all_mpu(mpu: &cortex_m::peripheral::MPU) {
     for &(rbar, rasr) in &regions {
         configure_region(mpu, rbar, rasr);
     }
-    // Disable peripheral region slots R4-R5.
+    // Disable peripheral region slots R4-R6.
     configure_region(mpu, DISABLED_R4.0, DISABLED_R4.1);
     configure_region(mpu, DISABLED_R5.0, DISABLED_R5.1);
+    configure_region(mpu, DISABLED_R6.0, DISABLED_R6.1);
     mpu_enable(mpu);
 }
 
