@@ -1127,6 +1127,44 @@ mod tests {
         );
     }
 
+    /// Every [`SvcError`] variant round-trips through `to_u32()` → `decode_rc()`.
+    ///
+    /// The wildcard-free match ensures a compile error when a new variant is
+    /// added without updating this list.
+    #[test]
+    fn svc_error_round_trip_exhaustive() {
+        use SvcError::*;
+        let variants: [SvcError; 12] = [
+            InvalidSyscall,
+            InvalidResource,
+            WaitQueueFull,
+            TransitionFailed,
+            InvalidPartition,
+            OperationFailed,
+            InvalidPointer,
+            NotImplemented,
+            BufferFull,
+            NotSupported,
+            PermissionDenied,
+            InvalidParameter,
+        ];
+        for v in variants {
+            // Compile-time exhaustiveness guard (no wildcard).
+            match v {
+                InvalidSyscall | InvalidResource | WaitQueueFull | TransitionFailed
+                | InvalidPartition | OperationFailed | InvalidPointer | NotImplemented
+                | BufferFull | NotSupported | PermissionDenied | InvalidParameter => {}
+            }
+            let code = v.to_u32();
+            assert!(SvcError::is_error(code), "{v:?} must have error bit set");
+            assert_eq!(decode_rc(code), Err(v), "{v:?} round-trip failed");
+        }
+        // Non-error values decode to Ok(value).
+        for ok_val in [0u32, 1, 42, 0x7FFF_FFFF] {
+            assert_eq!(decode_rc(ok_val), Ok(ok_val));
+        }
+    }
+
     /// Verify that plib re-exports map transparently to the rtos-traits
     /// source of truth (no hardcoded ABI values).
     #[test]
