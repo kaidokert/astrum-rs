@@ -22,10 +22,9 @@ use kernel::{
     partition::PartitionConfig,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc,
     svc::Kernel,
-    syscall::{SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_YIELD},
 };
+use plib::SvcError;
 
 // ---------------------------------------------------------------------------
 // Kernel sizing constants and config
@@ -55,12 +54,6 @@ const RSP_STOP_ACK: u8 = 0x30;
 const RSP_EXTRA_1_ACK: u8 = 0x40;
 const RSP_TIMED_ACK: u8 = 0x60; // Phase 3: timed receive response
 const RSP_UNKNOWN: u8 = 0xFF;
-
-/// The syscall returns an error code with the high bit set on failure
-/// (queue empty, queue full, invalid port).  All `SvcError` variants live
-/// in the range 0xFFFF_FFFA ..= 0xFFFF_FFFF, so testing the MSB is the
-/// portable way to detect any kernel error.
-const SVC_ERROR_BIT: u32 = 0x8000_0000;
 
 /// Total commands we attempt to send, including those that should overflow.
 const TOTAL_CMDS: usize = 5;
@@ -168,31 +161,38 @@ extern "C" fn commander_main_body(r0: u32) -> ! {
     // QUEUE_DEPTH is 4, so the 5th send must fail with a kernel error.
     let mut delivered: u32 = 0;
     for &cmd in &CMDS {
-        let rc = svc!(SYS_QUEUING_SEND, cmd_port, 1u32, [cmd].as_ptr() as u32);
-        if rc & SVC_ERROR_BIT != 0 {
-            QUEUE_FULL_SEEN.store(1, Ordering::Release);
-        } else {
-            delivered += 1;
-            CMD_DELIVERED.store(delivered, Ordering::Release);
+        match plib::sys_queuing_send(cmd_port, &[cmd]) {
+            Ok(_) => {
+                delivered += 1;
+                CMD_DELIVERED.store(delivered, Ordering::Release);
+            }
+            Err(SvcError::OperationFailed) => {
+                QUEUE_FULL_SEEN.store(1, Ordering::Release);
+            }
+            Err(e) => {
+                RSP_MISMATCH.store(0x300 | e.to_u32(), Ordering::Release);
+            }
         }
     }
 
     // Yield to let the worker drain and respond.
-    svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    plib::sys_yield().expect("yield after send phase");
 
     // Phase 2: Collect responses for the commands that were successfully delivered.
     let mut n: usize = 0;
     while n < delivered as usize && n < EXPECTED_RSPS.len() {
         let mut buf = [0u8; QUEUE_MSG_SIZE];
-        let sz = svc!(
-            SYS_QUEUING_RECV,
-            rsp_port,
-            QUEUE_MSG_SIZE as u32,
-            buf.as_mut_ptr() as u32
-        );
-        if sz & SVC_ERROR_BIT != 0 {
-            svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-            continue;
+        match plib::sys_queuing_recv(rsp_port, &mut buf) {
+            Err(SvcError::OperationFailed) => {
+                // Queue empty — yield and retry.
+                plib::sys_yield().expect("yield on empty recv");
+                continue;
+            }
+            Err(e) => {
+                RSP_MISMATCH.store(0x400 | e.to_u32(), Ordering::Release);
+                break;
+            }
+            Ok(_) => {}
         }
         let (got, exp) = (buf[0], EXPECTED_RSPS[n]);
         if got != exp {
@@ -200,36 +200,41 @@ extern "C" fn commander_main_body(r0: u32) -> ! {
         }
         n += 1;
         RSP_RECEIVED.store(n as u32, Ordering::Release);
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        plib::sys_yield().expect("yield after recv");
     }
 
     // Phase 3: Timed receive test.
     // Yield first so the worker enters the timed-recv wait.
-    svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-    svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    plib::sys_yield().expect("yield before timed phase");
+    plib::sys_yield().expect("yield before timed phase 2");
 
     // Send a late command – this wakes the blocked worker.
-    let cmd = [CMD_TIMED];
-    let rc = svc!(SYS_QUEUING_SEND, cmd_port, 1u32, cmd.as_ptr() as u32);
-    if rc & SVC_ERROR_BIT == 0 {
-        TIMED_CMD_SENT.store(1, Ordering::Release);
+    match plib::sys_queuing_send(cmd_port, &[CMD_TIMED]) {
+        Ok(_) => {
+            TIMED_CMD_SENT.store(1, Ordering::Release);
+        }
+        Err(e) => {
+            RSP_MISMATCH.store(0x500 | e.to_u32(), Ordering::Release);
+        }
     }
 
     // Yield to let the worker process and respond.
-    svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    plib::sys_yield().expect("yield after timed send");
 
     // Collect the timed response.
     loop {
         let mut buf = [0u8; QUEUE_MSG_SIZE];
-        let sz = svc!(
-            SYS_QUEUING_RECV,
-            rsp_port,
-            QUEUE_MSG_SIZE as u32,
-            buf.as_mut_ptr() as u32
-        );
-        if sz & SVC_ERROR_BIT != 0 {
-            svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-            continue;
+        match plib::sys_queuing_recv(rsp_port, &mut buf) {
+            Err(SvcError::OperationFailed) => {
+                // Queue empty — yield and retry.
+                plib::sys_yield().expect("yield on empty timed recv");
+                continue;
+            }
+            Err(e) => {
+                RSP_MISMATCH.store(0x600 | e.to_u32(), Ordering::Release);
+                break;
+            }
+            Ok(_) => {}
         }
         if buf[0] == RSP_TIMED_ACK {
             TIMED_RSP_OK.store(1, Ordering::Release);
@@ -242,7 +247,7 @@ extern "C" fn commander_main_body(r0: u32) -> ! {
     // Done – keep yielding forever.
     #[allow(clippy::empty_loop)]
     loop {
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        plib::sys_yield().expect("yield in idle loop");
     }
 }
 kernel::partition_trampoline!(commander_main => commander_main_body);
@@ -259,15 +264,17 @@ extern "C" fn worker_main_body(r0: u32) -> ! {
     let mut processed: u32 = 0;
     while processed < QUEUE_DEPTH as u32 {
         let mut buf = [0u8; QUEUE_MSG_SIZE];
-        let sz = svc!(
-            SYS_QUEUING_RECV,
-            cmd_port,
-            QUEUE_MSG_SIZE as u32,
-            buf.as_mut_ptr() as u32
-        );
-        if sz & SVC_ERROR_BIT != 0 {
-            svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-            continue;
+        match plib::sys_queuing_recv(cmd_port, &mut buf) {
+            Err(SvcError::OperationFailed) => {
+                // Queue empty — yield and retry.
+                plib::sys_yield().expect("yield on empty worker recv");
+                continue;
+            }
+            Err(_) => {
+                plib::sys_yield().expect("yield on worker recv error");
+                continue;
+            }
+            Ok(_) => {}
         }
         let rsp = match buf[0] {
             CMD_START => RSP_START_ACK,
@@ -276,10 +283,16 @@ extern "C" fn worker_main_body(r0: u32) -> ! {
             CMD_EXTRA_1 => RSP_EXTRA_1_ACK,
             _ => RSP_UNKNOWN,
         };
-        svc!(SYS_QUEUING_SEND, rsp_port, 1u32, [rsp].as_ptr() as u32);
+        match plib::sys_queuing_send(rsp_port, &[rsp]) {
+            Ok(_) => {}
+            Err(e) => {
+                // Response send failed — report but continue processing.
+                RSP_MISMATCH.store(0x700 | e.to_u32(), Ordering::Release);
+            }
+        }
         processed += 1;
         WORKER_PROCESSED.store(processed, Ordering::Release);
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        plib::sys_yield().expect("yield after worker send");
     }
 
     // Phase 3: Use timed receive to block waiting for the next command.
@@ -287,47 +300,46 @@ extern "C" fn worker_main_body(r0: u32) -> ! {
     let mut buf = [0u8; QUEUE_MSG_SIZE];
 
     // Step 1: register in the receiver wait queue with a timeout.
-    let sz = svc!(
-        SYS_QUEUING_RECV_TIMED,
-        cmd_port,
-        100u32, // timeout: 100 ticks
-        buf.as_mut_ptr() as u32
-    );
-
-    // Step 2: if blocked (sz == 0), yield to let the scheduler switch to
-    // the commander, then poll until the message arrives.
-    let sz = if sz == 0 {
-        loop {
-            svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-            let rc = svc!(
-                SYS_QUEUING_RECV,
-                cmd_port,
-                QUEUE_MSG_SIZE as u32,
-                buf.as_mut_ptr() as u32
-            );
-            if rc & SVC_ERROR_BIT == 0 {
-                break rc;
+    // Step 2: if blocked (sz == 0, i.e. Ok(0)), yield to let the scheduler
+    // switch to the commander, then poll until the message arrives.
+    match plib::sys_queuing_recv_timed(cmd_port, &mut buf, 100) {
+        Ok(0) => {
+            // Blocked — no immediate message. Yield and poll.
+            loop {
+                plib::sys_yield().expect("yield in timed recv poll");
+                match plib::sys_queuing_recv(cmd_port, &mut buf) {
+                    Ok(_sz) => break,
+                    Err(SvcError::OperationFailed) => continue, // still empty
+                    Err(_) => continue,
+                }
             }
         }
-    } else {
-        sz
-    };
-
-    if sz & SVC_ERROR_BIT == 0 {
-        let rsp = match buf[0] {
-            CMD_TIMED => RSP_TIMED_ACK,
-            _ => RSP_UNKNOWN,
-        };
-        svc!(SYS_QUEUING_SEND, rsp_port, 1u32, [rsp].as_ptr() as u32);
-        if buf[0] == CMD_TIMED {
-            WORKER_TIMED_OK.store(1, Ordering::Release);
+        Ok(_sz) => {
+            // Message received immediately — proceed.
         }
+        Err(_) => {
+            // Unexpected error from timed recv — fall through to response.
+        }
+    }
+
+    let rsp = match buf[0] {
+        CMD_TIMED => RSP_TIMED_ACK,
+        _ => RSP_UNKNOWN,
+    };
+    match plib::sys_queuing_send(rsp_port, &[rsp]) {
+        Ok(_) => {}
+        Err(e) => {
+            RSP_MISMATCH.store(0x800 | e.to_u32(), Ordering::Release);
+        }
+    }
+    if buf[0] == CMD_TIMED {
+        WORKER_TIMED_OK.store(1, Ordering::Release);
     }
 
     // Done – keep yielding forever.
     #[allow(clippy::empty_loop)]
     loop {
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        plib::sys_yield().expect("yield in worker idle loop");
     }
 }
 kernel::partition_trampoline!(worker_main => worker_main_body);
