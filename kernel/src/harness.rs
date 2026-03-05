@@ -229,9 +229,14 @@ macro_rules! define_unified_harness {
                 // disable/enable cycle that spans strategy setup below.
                 // Re-enable the MPU even on error so hardware is left in a
                 // consistent state (the MPU was enabled before we entered).
-                $crate::mpu::mpu_disable(mpu);
-                $crate::mpu::write_cached_base_regions(mpu, pcb);
-                $crate::mpu::write_cached_periph_regions(mpu, pcb);
+                // Gate on MPU_ENFORCE: sentinel partitions (QEMU tests) set
+                // MPU_ENFORCE=false so the deny-all R0 background region
+                // doesn't override PRIVDEFENA and block privileged access.
+                if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
+                    $crate::mpu::mpu_disable(mpu);
+                    $crate::mpu::write_cached_base_regions(mpu, pcb);
+                    $crate::mpu::write_cached_periph_regions(mpu, pcb);
+                }
                 let strategy_result = if let Some(regions) = $crate::mpu::partition_dynamic_regions(pcb) {
                     let periph_reserved = if pcb.peripheral_regions().is_empty() { 0 } else { 2 };
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
@@ -243,7 +248,9 @@ macro_rules! define_unified_harness {
                 } else {
                     Ok(())
                 };
-                $crate::mpu::mpu_enable(mpu);
+                if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
+                    $crate::mpu::mpu_enable(mpu);
+                }
                 strategy_result?;
 
                 // Populate dynamic slots 1-3 (R5-R7) with deduplicated
@@ -292,7 +299,9 @@ macro_rules! define_unified_harness {
             // Dynamic mode: disable MPU up front so base-region and
             // dynamic-strategy writes share a single disable/enable cycle.
             #[cfg(feature = "dynamic-mpu")]
-            $crate::mpu::mpu_disable(&p.MPU);
+            if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
+                $crate::mpu::mpu_disable(&p.MPU);
+            }
 
             #[cfg_attr(not(feature = "dynamic-mpu"), allow(unused_variables))]
             let pid = $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
@@ -319,7 +328,9 @@ macro_rules! define_unified_harness {
                 // (MPU already disabled above; R4-R5 overridden below).
                 #[cfg(feature = "dynamic-mpu")]
                 {
-                    $crate::mpu::write_cached_base_regions(&p.MPU, pcb);
+                    if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
+                        $crate::mpu::write_cached_base_regions(&p.MPU, pcb);
+                    }
 
                     // Update dynamic strategy: reconfigure the partition's
                     // private-RAM slot and peripheral reservation count.
@@ -339,7 +350,7 @@ macro_rules! define_unified_harness {
             // Dynamic mode: write R4-R7 strategy regions, then
             // override R4-R5 with cached peripheral regions and re-enable.
             #[cfg(feature = "dynamic-mpu")]
-            {
+            if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
                 let values = HARNESS_STRATEGY.compute_region_values();
                 for &(rbar, rasr) in &values {
                     $crate::mpu::configure_region(&p.MPU, rbar, rasr);
