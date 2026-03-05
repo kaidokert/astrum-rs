@@ -16,8 +16,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::SYS_EVT_WAIT;
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(Config<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -85,12 +84,15 @@ kernel::define_unified_harness!(Config, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("systick_preempt_test: FAIL (event_wait rc=0x{:08X})", rc);
-            debug::exit(debug::EXIT_FAILURE);
+        match plib::sys_event_wait(0x01) {
+            Ok(_) => {
+                WAIT_COUNT.fetch_add(1, Ordering::Release);
+            }
+            Err(_) => {
+                hprintln!("systick_preempt_test: FAIL (event_wait error)");
+                debug::exit(debug::EXIT_FAILURE);
+            }
         }
-        WAIT_COUNT.fetch_add(1, Ordering::Release);
     }
 }
 

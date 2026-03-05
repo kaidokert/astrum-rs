@@ -17,13 +17,10 @@ use kernel::{
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    syscall::{SYS_QUEUING_RECV, SYS_QUEUING_SEND, SYS_YIELD},
     DebugEnabled, MsgSmall, Partitions2, PortsTiny, SyncMinimal,
 };
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-// TODO: replace ERR bitmask with a typed Result abstraction once syscall API supports it
-const ERR: u32 = 0x8000_0000;
 kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
 static P0_SENT: AtomicU32 = AtomicU32::new(0);
 static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);
@@ -43,9 +40,8 @@ kernel::define_unified_harness!(no_boot, Cfg, |tick, k| {
 extern "C" fn p0_main_body(r0: u32) -> ! {
     PARTS_RAN.fetch_or(1, Ordering::Release);
     let (port, msg) = (r0 >> 16, [0xDE_u8, 0xAD, 0xBE, 0xEF]);
-    let rc = kernel::svc!(SYS_QUEUING_SEND, port, 4u32, msg.as_ptr() as u32);
-    if rc & ERR == 0 { P0_SENT.store(1, Ordering::Release); }
-    loop { kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32); }
+    if plib::sys_queuing_send(port, &msg).is_ok() { P0_SENT.store(1, Ordering::Release); }
+    loop { plib::sys_yield().expect("sys_yield"); }
 }
 kernel::partition_trampoline!(p0_main => p0_main_body);
 extern "C" fn p1_main_body(r0: u32) -> ! {
@@ -53,13 +49,12 @@ extern "C" fn p1_main_body(r0: u32) -> ! {
     let port = r0 & 0xFFFF;
     loop {
         let mut buf = [0u8; 4];
-        let sz = kernel::svc!(SYS_QUEUING_RECV, port, 4u32, buf.as_mut_ptr() as u32);
-        if sz & ERR == 0 && buf == [0xDE, 0xAD, 0xBE, 0xEF] {
+        if plib::sys_queuing_recv(port, &mut buf).is_ok() && buf == [0xDE, 0xAD, 0xBE, 0xEF] {
             P1_RECV_OK.store(1, Ordering::Release); break;
         }
-        kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        plib::sys_yield().expect("sys_yield");
     }
-    loop { kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32); }
+    loop { plib::sys_yield().expect("sys_yield"); }
 }
 kernel::partition_trampoline!(p1_main => p1_main_body);
 #[cortex_m_rt::entry]

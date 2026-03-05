@@ -25,7 +25,6 @@ use kernel::{
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{try_transition, Kernel},
-    syscall::{SYS_GET_TIME, SYS_QUEUING_RECV_TIMED, SYS_YIELD},
     DebugEnabled, MsgSmall, Partitions1, PortsTiny, SyncMinimal,
 };
 
@@ -62,26 +61,21 @@ static BLOCKED: AtomicU32 = AtomicU32::new(0);
 extern "C" fn partition_main_body(r0: u32) -> ! {
     let port = r0;
     // Wait for a few ticks
-    while kernel::svc!(SYS_GET_TIME, 0u32, 0u32, 0u32) < 5 {
-        kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    while plib::sys_get_time().expect("sys_get_time") < 5 {
+        plib::sys_yield().expect("sys_yield");
     }
     // Record tick and signal we're about to block
     BLOCK_TICK.store(
-        kernel::svc!(SYS_GET_TIME, 0u32, 0u32, 0u32),
+        plib::sys_get_time().expect("sys_get_time"),
         Ordering::Release,
     );
     BLOCKED.store(1, Ordering::Release);
     // Block on empty queue
     let mut buf = [0u8; 4];
-    kernel::svc!(
-        SYS_QUEUING_RECV_TIMED,
-        port,
-        1000u32,
-        buf.as_mut_ptr() as u32
-    );
+    plib::sys_queuing_recv_timed(port, &mut buf, 1000).expect("sys_queuing_recv_timed");
     // Should not return quickly - keep yielding
     loop {
-        kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        plib::sys_yield().expect("sys_yield");
     }
 }
 kernel::partition_trampoline!(partition_main => partition_main_body);

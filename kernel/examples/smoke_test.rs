@@ -20,7 +20,6 @@ use kernel::kpanic as _;
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
-use kernel::syscall::SYS_YIELD;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(SmokeConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -63,8 +62,10 @@ kernel::define_unified_harness!(SmokeConfig, |tick, _k| {
 });
 
 extern "C" fn partition_main() -> ! {
-    let rc = kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-    YIELD_RC.store(rc, Ordering::Release);
+    match plib::sys_yield() {
+        Ok(rc) => YIELD_RC.store(rc, Ordering::Release),
+        Err(_) => YIELD_RC.store(u32::MAX, Ordering::Release),
+    }
     loop {
         cortex_m::asm::nop();
     }
