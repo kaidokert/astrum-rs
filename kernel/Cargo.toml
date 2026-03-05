@@ -255,6 +255,10 @@ name = "mpu_precompute_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "mpu_periph_precompute_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "mpu_dynamic_base_test"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
