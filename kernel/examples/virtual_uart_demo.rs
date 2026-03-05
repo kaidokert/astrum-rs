@@ -23,9 +23,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc,
-    svc::{Kernel, SvcError},
-    syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED, SYS_DEV_WRITE, SYS_YIELD},
+    svc::Kernel,
     virtual_device::VirtualDevice,
     DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncMinimal,
 };
@@ -39,7 +37,7 @@ const UART_A: u32 = 0;
 const UART_B: u32 = 1;
 
 /// Timeout in ticks for blocking device reads.
-const READ_TIMEOUT: u32 = 50;
+const READ_TIMEOUT: u16 = 50;
 
 /// Message P1 sends to P2 via UART-A TX → UART-B RX.
 const MSG_HELLO: &[u8] = b"Hi";
@@ -56,19 +54,16 @@ kernel::define_unified_harness!(DemoConfig);
 // ---------------------------------------------------------------------------
 extern "C" fn p1_main() -> ! {
     hprintln!("[P1] opening UART-A (dev {})", UART_A);
-    let rc = svc!(SYS_DEV_OPEN, UART_A, 0u32, 0u32);
-    assert_or_fail(!SvcError::is_error(rc), "P1: DEV_OPEN UART-A failed");
+    assert_or_fail(
+        plib::sys_dev_open(UART_A as u8).is_ok(),
+        "P1: DEV_OPEN UART-A failed",
+    );
 
     // Copy static data to the stack so the pointer falls within the
     // partition's MPU data region (required by validate_user_ptr).
     let hello_buf: [u8; 2] = [MSG_HELLO[0], MSG_HELLO[1]];
     hprintln!("[P1] writing {:?} to UART-A", &hello_buf);
-    let rc = svc!(
-        SYS_DEV_WRITE,
-        UART_A,
-        hello_buf.len() as u32,
-        hello_buf.as_ptr() as u32
-    );
+    let rc = plib::sys_dev_write(UART_A as u8, &hello_buf).unwrap_or(0);
     assert_or_fail(rc == MSG_HELLO.len() as u32, "P1: DEV_WRITE short");
     hprintln!("[P1] wrote {} bytes to UART-A TX", rc);
 
@@ -78,13 +73,7 @@ extern "C" fn p1_main() -> ! {
     let mut buf = [0u8; 8];
     let mut received = 0usize;
     while received < MSG_REPLY.len() {
-        let n = svc!(
-            SYS_DEV_READ_TIMED,
-            UART_A,
-            READ_TIMEOUT,
-            buf[received..].as_mut_ptr() as u32
-        );
-        if !SvcError::is_error(n) && n > 0 {
+        if let Ok(n) = plib::sys_dev_read_timed(UART_A as u8, &mut buf[received..], READ_TIMEOUT) {
             received += n as usize;
         }
     }
@@ -112,8 +101,10 @@ extern "C" fn p1_main() -> ! {
 // ---------------------------------------------------------------------------
 extern "C" fn p2_main() -> ! {
     hprintln!("[P2] opening UART-B (dev {})", UART_B);
-    let rc = svc!(SYS_DEV_OPEN, UART_B, 0u32, 0u32);
-    assert_or_fail(!SvcError::is_error(rc), "P2: DEV_OPEN UART-B failed");
+    assert_or_fail(
+        plib::sys_dev_open(UART_B as u8).is_ok(),
+        "P2: DEV_OPEN UART-B failed",
+    );
 
     // TODO: SYS_DEV_READ_TIMED currently reads one byte per call (kernel
     // hardcodes len=1). Replace this loop with a single multi-byte blocking
@@ -121,13 +112,7 @@ extern "C" fn p2_main() -> ! {
     let mut buf = [0u8; 8];
     let mut received = 0usize;
     while received < MSG_HELLO.len() {
-        let n = svc!(
-            SYS_DEV_READ_TIMED,
-            UART_B,
-            READ_TIMEOUT,
-            buf[received..].as_mut_ptr() as u32
-        );
-        if !SvcError::is_error(n) && n > 0 {
+        if let Ok(n) = plib::sys_dev_read_timed(UART_B as u8, &mut buf[received..], READ_TIMEOUT) {
             received += n as usize;
         }
     }
@@ -144,17 +129,12 @@ extern "C" fn p2_main() -> ! {
     // Copy static data to the stack for pointer validation.
     let reply_buf: [u8; 2] = [MSG_REPLY[0], MSG_REPLY[1]];
     hprintln!("[P2] writing {:?} to UART-B", &reply_buf);
-    let rc = svc!(
-        SYS_DEV_WRITE,
-        UART_B,
-        reply_buf.len() as u32,
-        reply_buf.as_ptr() as u32
-    );
+    let rc = plib::sys_dev_write(UART_B as u8, &reply_buf).unwrap_or(0);
     assert_or_fail(rc == MSG_REPLY.len() as u32, "P2: DEV_WRITE short");
     hprintln!("[P2] wrote {} bytes to UART-B TX", rc);
 
     loop {
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        let _ = plib::sys_yield();
     }
 }
 
