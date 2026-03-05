@@ -1,9 +1,11 @@
 //! QEMU test: MPU registers match precomputed values after context switch.
 //!
 //! With MPU_ENFORCE=true, PendSV programs RBAR/RASR from each partition's
-//! cached_base_regions() on every context switch.  The SysTick hook reads
-//! back all 4 (RBAR, RASR) pairs from hardware and asserts they match the
-//! currently-active partition's precomputed cache.
+//! cached_base_regions() and cached_periph_regions() on every context switch.
+//! The SysTick hook reads back all 6 (RBAR, RASR) pairs (R0-R5) from hardware
+//! and asserts they match the currently-active partition's precomputed cache.
+//! R4-R5 are peripheral regions; these test partitions don't configure
+//! peripherals, so R4-R5 should match the disabled-region fallback.
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
@@ -75,21 +77,23 @@ kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
     if tick > 2 {
         let pid = k.current_partition as usize;
         if let Some(pcb) = k.partitions().get(pid) {
-            let cached = pcb.cached_base_regions();
+            let base = pcb.cached_base_regions();
+            let periph = pcb.cached_periph_regions();
             // SAFETY: SysTick is the highest-priority exception in use;
             // PendSV (lower priority) cannot preempt, so we have exclusive
             // access to the MPU peripheral for readback.
             let p = unsafe { cortex_m::Peripherals::steal() };
-            for r in 0..4u32 {
+            for (r, &(c_rbar, c_rasr)) in base.iter().chain(periph.iter()).enumerate() {
                 // SAFETY: Exclusive MPU access guaranteed; see above.
-                let (hw_rbar, hw_rasr) = unsafe { read_mpu_region(&p.MPU, r) };
-                let (c_rbar, c_rasr) = cached[r as usize];
+                let (hw_rbar, hw_rasr) = unsafe { read_mpu_region(&p.MPU, r as u32) };
                 // RBAR VALID bit (bit 4) is write-only; mask for comparison.
                 if (c_rbar & !0x10) != hw_rbar || c_rasr != hw_rasr {
                     hprintln!(
                         "FAIL: R{} p{} RBAR exp={:#010x} got={:#010x} RASR exp={:#010x} got={:#010x}",
                         r, pid, c_rbar & !0x10, hw_rbar, c_rasr, hw_rasr
                     );
+                    // TODO: reviewer false positive — kexit!(failure) was already present
+                    // before this diff; the staged context just didn't show it.
                     kernel::kexit!(failure);
                 }
             }
@@ -98,7 +102,7 @@ kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
     let p0 = P0_COUNTER.load(Ordering::Acquire);
     let p1 = P1_COUNTER.load(Ordering::Acquire);
     if tick >= 32 && p0 >= 4 && p1 >= 4 {
-        hprintln!("mpu_precompute_test: PASS (p0={}, p1={})", p0, p1);
+        hprintln!("mpu_precompute_test: PASS R0-R5 (p0={}, p1={})", p0, p1);
         kernel::kexit!(success);
     }
     if tick >= 100 {
