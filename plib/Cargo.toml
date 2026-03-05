@@ -11,7 +11,6 @@ rtos-traits = { path = "../rtos-traits" }
 default = []
 partition-debug = ["rtos-traits/partition-debug"]
 dynamic-mpu = ["rtos-traits/dynamic-mpu"]
-# TODO: rtos-traits defines blackboard syscall constants unconditionally, so
-# there is nothing to propagate today.  If rtos-traits gains an ipc-blackboard
-# feature gate, propagate it here: ipc-blackboard = ["rtos-traits/ipc-blackboard"]
+# Gates blackboard wrapper functions in plib; raw constants in rtos-traits are
+# intentionally unconditional (harmless without the wrapper API).
 ipc-blackboard = []
