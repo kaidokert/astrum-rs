@@ -3164,8 +3164,10 @@ mod tests {
         for _ in 0..sem_count {
             k.semaphores_mut().add(Semaphore::new(1, 2)).unwrap();
         }
-        // Mutexes are pre-allocated at capacity in SyncPools::default()
-        let _ = mtx_count;
+        // Add mutexes via facade method
+        for _ in 0..mtx_count {
+            k.mutexes_mut().add().unwrap();
+        }
         // Add message queues via facade method
         for _ in 0..msg_queue_count {
             k.messages_mut().add(MessageQueue::new()).unwrap();
@@ -3663,7 +3665,7 @@ mod tests {
         events::event_set(&mut t, 0, 0b1111);
         let mut ef = frame(SYS_EVT_CLEAR, 0xDEADBEEF, 0b0101);
         dispatch_syscall(&mut ef, &mut t, 0);
-        assert_eq!(ef.r0, 0);
+        assert_eq!(ef.r0, 0b1111, "event_clear must return previous flags");
         assert_eq!(t.get(0).unwrap().event_flags(), 0b1010);
     }
 
@@ -3813,7 +3815,7 @@ mod tests {
         let mut ef = frame(SYS_EVT_CLEAR, 1, 0b0101);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
-        assert_eq!(ef.r0, 0, "EventClear must succeed");
+        assert_eq!(ef.r0, 0b1111, "EventClear must return previous flags");
         assert_eq!(
             k.partitions().get(0).unwrap().event_flags(),
             0b1010,
@@ -8017,14 +8019,15 @@ mod tests {
             },
         ];
         #[cfg(not(feature = "dynamic-mpu"))]
-        let k = Kernel::<TestConfig>::new(schedule, &cfgs).unwrap();
+        let mut k = Kernel::<TestConfig>::new(schedule, &cfgs).unwrap();
         #[cfg(feature = "dynamic-mpu")]
-        let k = Kernel::<TestConfig>::new(
+        let mut k = Kernel::<TestConfig>::new(
             schedule,
             &cfgs,
             crate::virtual_device::DeviceRegistry::new(),
         )
         .unwrap();
+        k.mutexes_mut().add().unwrap();
         k
     }
 

@@ -1,18 +1,20 @@
 use crate::partition::{PartitionState, PartitionTable};
 use crate::svc::SvcError;
 
-/// If any `mask` bits are set in caller's flags, clear and return them; else set Waiting.
+/// If any `mask` bits are set in caller's flags, clear the matched bits and
+/// return the full pending-event word (before clearing); else set Waiting.
 /// Returns `u32::MAX` on invalid partition ID, `0` when entering Waiting state.
 pub fn event_wait<const N: usize>(t: &mut PartitionTable<N>, caller: usize, mask: u32) -> u32 {
     let pcb = match t.get_mut(caller) {
         Some(p) => p,
         None => return SvcError::InvalidPartition.to_u32(),
     };
-    let matched = pcb.event_flags() & mask;
+    let pending = pcb.event_flags();
+    let matched = pending & mask;
     if matched != 0 {
         pcb.clear_event_flags(matched);
         pcb.set_event_wait_mask(0);
-        matched
+        pending
     } else {
         pcb.set_event_wait_mask(mask);
         let _ = pcb.transition(PartitionState::Waiting);
@@ -33,12 +35,14 @@ pub fn event_set<const N: usize>(t: &mut PartitionTable<N>, target: usize, mask:
     0
 }
 
-/// Clear `mask` bits in caller's flags. Returns `u32::MAX` on bad id.
+/// Clear `mask` bits in caller's flags. Returns the previous pending-event
+/// word on success, or `u32::MAX` on bad id.
 pub fn event_clear<const N: usize>(t: &mut PartitionTable<N>, caller: usize, mask: u32) -> u32 {
     match t.get_mut(caller) {
         Some(p) => {
+            let prev = p.event_flags();
             p.clear_event_flags(mask);
-            0
+            prev
         }
         None => SvcError::InvalidPartition.to_u32(),
     }
@@ -112,7 +116,28 @@ mod tests {
         assert_eq!(t.get(0).unwrap().event_flags(), 0b1100);
     }
     #[test]
-    fn clear_cross_partition_bitmask_and_invalid() {
+    fn clear_returns_previous_flags() {
+        let mut t = tbl();
+        event_set(&mut t, 0, 0b1111);
+        // event_clear returns the previous pending-event word
+        assert_eq!(event_clear(&mut t, 0, 0b0101), 0b1111);
+        assert_eq!(t.get(0).unwrap().event_flags(), 0b1010);
+        // clearing again returns the updated previous value
+        assert_eq!(event_clear(&mut t, 0, 0b1000), 0b1010);
+        assert_eq!(t.get(0).unwrap().event_flags(), 0b0010);
+    }
+    #[test]
+    fn wait_returns_all_pending_bits() {
+        let mut t = tbl();
+        // Set bits 0-2 (0b0111), then wait on bit 2 only (0b0100).
+        // event_wait returns all pending bits (0b0111), clears only matched (bit 2).
+        event_set(&mut t, 0, 0b0111);
+        assert_eq!(event_wait(&mut t, 0, 0b0100), 0b0111);
+        // Only bit 2 was cleared; bits 0-1 survive
+        assert_eq!(t.get(0).unwrap().event_flags(), 0b0011);
+    }
+    #[test]
+    fn cross_partition_and_invalid() {
         let mut t = tbl();
         event_set(&mut t, 0, 0b1111);
         event_clear(&mut t, 0, 0b0101);
