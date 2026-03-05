@@ -394,17 +394,10 @@ impl DynamicStrategy {
 
     /// Program regions R4-R7 into the MPU hardware.
     ///
-    /// Uses [`mpu::configure_region`] to write each of the four dynamic
-    /// slots' (RBAR, RASR) pairs, then issues DSB + ISB barriers to
-    /// ensure the new configuration takes effect before any subsequent
-    /// memory access.
-    ///
-    /// If the MPU is currently enabled (CTRL bit 0 set), it is disabled
-    /// before writing regions and re-enabled with PRIVDEFENA afterwards.
-    /// This prevents partially-configured region access during updates
-    /// (ARM architecture requirement).  If the MPU is not enabled
-    /// (pre-boot or non-MPU configuration), regions are written without
-    /// touching CTRL, preserving existing behaviour.
+    /// Delegates to [`mpu::with_mpu_disabled`] to disable the MPU,
+    /// write each of the four dynamic slots' (RBAR, RASR) pairs via
+    /// [`mpu::configure_region`], then re-enable with PRIVDEFENA and
+    /// DSB+ISB barriers.
     ///
     /// Regions R0-R3 (static background/code/data/guard) are left unchanged.
     ///
@@ -414,40 +407,11 @@ impl DynamicStrategy {
     pub fn program_regions(&self, mpu_periph: &cortex_m::peripheral::MPU) {
         let values = self.compute_region_values();
 
-        let ctrl = mpu_periph.ctrl.read();
-        let mpu_was_enabled = ctrl & 1 != 0;
-
-        // TODO: DRY — the disable-modify-enable MPU pattern is duplicated
-        // here, in __boot_mpu_init, and in mpu::init_mpu_regions.  Extract
-        // a safe helper (e.g. `mpu::with_disabled(|mpu| { ... })`) to
-        // centralise the disable/barrier/enable sequence.
-        if mpu_was_enabled {
-            // SAFETY: Disabling the MPU before reprogramming regions is
-            // required by the ARMv7-M architecture to avoid unpredictable
-            // behaviour from partially-configured regions.  DSB+ISB ensure
-            // the disable takes effect before any region writes.
-            unsafe { mpu_periph.ctrl.write(0) };
-            cortex_m::asm::dsb();
-            cortex_m::asm::isb();
-        }
-
-        for &(rbar, rasr) in &values {
-            mpu::configure_region(mpu_periph, rbar, rasr);
-        }
-
-        if mpu_was_enabled {
-            // Verify PRIVDEFENA (bit 2) is set — the kernel relies on the
-            // default memory map for privileged access.  Evaluated at
-            // compile time.
-            const { assert!(mpu::MPU_CTRL_ENABLE_PRIVDEFENA & (1 << 2) != 0) };
-
-            // SAFETY: Re-enabling the MPU with PRIVDEFENA after all regions
-            // have been programmed.  The exclusive &MPU reference guarantees
-            // no concurrent access.
-            unsafe { mpu_periph.ctrl.write(mpu::MPU_CTRL_ENABLE_PRIVDEFENA) };
-            cortex_m::asm::dsb();
-            cortex_m::asm::isb();
-        }
+        mpu::with_mpu_disabled(mpu_periph, |mpu| {
+            for &(rbar, rasr) in &values {
+                mpu::configure_region(mpu, rbar, rasr);
+            }
+        });
     }
 }
 
