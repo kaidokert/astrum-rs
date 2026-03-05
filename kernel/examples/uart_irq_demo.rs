@@ -15,9 +15,10 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::split_isr::StaticIsrRing;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 // ── LM3S6965 UART0 registers ──
 const UART0_BASE: u32 = 0x4000_C000;
@@ -87,9 +88,8 @@ kernel::define_unified_harness!(Cfg, |tick, _k| {
 
 extern "C" fn p0_body(_r0: u32) -> ! {
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("uart_demo: FAIL evt_wait 0x{:08X}", rc);
+        if let Err(e) = plib::sys_event_wait(0x01) {
+            hprintln!("uart_demo: FAIL evt_wait {:?}", e);
             debug::exit(debug::EXIT_FAILURE);
         }
         // Drain the ring buffer while IRQ is masked.
@@ -121,9 +121,8 @@ extern "C" fn p0_body(_r0: u32) -> ! {
             POP_COUNT.fetch_add(1, Ordering::Release);
         }
         // Unmask UART0 IRQ so the ISR can fire again.
-        let rc = kernel::svc!(SYS_IRQ_ACK, UART0_IRQ as u32, 0u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("uart_demo: FAIL irq_ack 0x{:08X}", rc);
+        if let Err(e) = plib::sys_irq_ack(UART0_IRQ) {
+            hprintln!("uart_demo: FAIL irq_ack {:?}", e);
             debug::exit(debug::EXIT_FAILURE);
         }
     }

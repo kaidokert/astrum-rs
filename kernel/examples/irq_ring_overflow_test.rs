@@ -15,9 +15,10 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::split_isr::StaticIsrRing;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 kernel::compose_kernel_config!(
     Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -120,18 +121,15 @@ fn fail(checkpoint: u32) {
 
 extern "C" fn p0_body(_r0: u32) -> ! {
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            fail(1);
-            continue;
-        }
-        // NOTE: SYS_EVT_WAIT returns 0 when the partition was scheduled in
-        // Waiting state but no matching event bits are set yet (i.e. the ISR
-        // has not fired).  Re-issue the wait so we only proceed once the ISR
-        // has signalled.
-        // TODO: verify this rc==0 behaviour is specified in the kernel syscall
-        // contract, not just observed (out of scope for this test).
-        if rc == 0 {
+        let bits = match plib::sys_event_wait(0x01) {
+            Ok(v) => v,
+            Err(_) => {
+                fail(1);
+                continue;
+            }
+        };
+        // event_wait returns 0 when entering Waiting state; skip that.
+        if bits == 0 {
             continue;
         }
         let phase = ISR_PHASE.load(Ordering::Acquire);
@@ -140,8 +138,7 @@ extern "C" fn p0_body(_r0: u32) -> ! {
         } else {
             p0_phase1();
         }
-        let rc = kernel::svc!(SYS_IRQ_ACK, 60u32, 0u32, 0u32);
-        if SvcError::is_error(rc) {
+        if plib::sys_irq_ack(60).is_err() {
             fail(2);
         }
     }

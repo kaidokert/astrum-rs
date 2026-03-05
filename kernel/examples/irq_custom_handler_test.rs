@@ -11,9 +11,10 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 kernel::compose_kernel_config!(
     CustomHandlerConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -75,18 +76,20 @@ kernel::define_unified_harness!(CustomHandlerConfig, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("custom_handler: p0 evt_wait FAIL 0x{:08X}", rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
+        let bits = match plib::sys_event_wait(0x01) {
+            Ok(v) => v,
+            Err(e) => {
+                hprintln!("custom_handler: p0 evt_wait FAIL {:?}", e);
+                debug::exit(debug::EXIT_FAILURE);
+                continue;
+            }
+        };
         // event_wait returns 0 when entering Waiting state; skip that.
-        if rc == 0 {
+        if bits == 0 {
             continue;
         }
-        let rc = kernel::svc!(SYS_IRQ_ACK, 60u32, 0u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("custom_handler: p0 irq_ack FAIL 0x{:08X}", rc);
+        if let Err(e) = plib::sys_irq_ack(60) {
+            hprintln!("custom_handler: p0 irq_ack FAIL {:?}", e);
             debug::exit(debug::EXIT_FAILURE);
         }
         P0_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -95,18 +98,20 @@ extern "C" fn p0_main() -> ! {
 
 extern "C" fn p1_main() -> ! {
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x02u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("custom_handler: p1 evt_wait FAIL 0x{:08X}", rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
+        let bits = match plib::sys_event_wait(0x02) {
+            Ok(v) => v,
+            Err(e) => {
+                hprintln!("custom_handler: p1 evt_wait FAIL {:?}", e);
+                debug::exit(debug::EXIT_FAILURE);
+                continue;
+            }
+        };
         // event_wait returns 0 when entering Waiting state; skip that.
-        if rc == 0 {
+        if bits == 0 {
             continue;
         }
-        let rc = kernel::svc!(SYS_IRQ_ACK, 61u32, 0u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("custom_handler: p1 irq_ack FAIL 0x{:08X}", rc);
+        if let Err(e) = plib::sys_irq_ack(61) {
+            hprintln!("custom_handler: p1 irq_ack FAIL {:?}", e);
             debug::exit(debug::EXIT_FAILURE);
         }
         P1_COUNT.fetch_add(1, Ordering::Relaxed);

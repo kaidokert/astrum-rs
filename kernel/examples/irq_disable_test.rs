@@ -14,9 +14,10 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 kernel::compose_kernel_config!(
     Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -84,16 +85,16 @@ kernel::define_unified_harness!(Cfg, |tick, _k| {
 
 extern "C" fn p0_body(_r0: u32) -> ! {
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("FAIL (event_wait 0x{:08X})", rc);
+        // TODO: uses `if let Err` (discards Ok value) unlike match-based examples
+        // that inspect the returned bits; both patterns are intentional.
+        if let Err(e) = plib::sys_event_wait(0x01) {
+            hprintln!("FAIL (event_wait {:?})", e);
             debug::exit(debug::EXIT_FAILURE);
         }
         // ACK once only — prevents re-unmasking after disable_bound_irqs.
         if PHASE.load(Ordering::Acquire) == 0 {
-            let rc = kernel::svc!(SYS_IRQ_ACK, 0u32, 0u32, 0u32);
-            if SvcError::is_error(rc) {
-                hprintln!("FAIL (irq_ack 0x{:08X})", rc);
+            if let Err(e) = plib::sys_irq_ack(0) {
+                hprintln!("FAIL (irq_ack {:?})", e);
                 debug::exit(debug::EXIT_FAILURE);
             }
             PHASE.store(1, Ordering::Release);

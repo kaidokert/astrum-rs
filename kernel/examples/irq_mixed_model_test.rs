@@ -13,9 +13,10 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::irq_dispatch::{ClearStrategy, IrqClearModel};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 kernel::compose_kernel_config!(
     MixedConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -70,14 +71,12 @@ kernel::define_unified_harness!(MixedConfig, |tick, _k| {
 /// Partition 0: PartitionAcks — event_wait + SYS_IRQ_ACK loop.
 extern "C" fn p0_main() -> ! {
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_mixed_model_test: p0 FAIL (evt_wait 0x{:08X})", rc);
+        if let Err(e) = plib::sys_event_wait(0x01) {
+            hprintln!("irq_mixed_model_test: p0 FAIL (evt_wait {:?})", e);
             debug::exit(debug::EXIT_FAILURE);
         }
-        let rc = kernel::svc!(SYS_IRQ_ACK, 5u32, 0u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_mixed_model_test: p0 FAIL (irq_ack 0x{:08X})", rc);
+        if let Err(e) = plib::sys_irq_ack(5) {
+            hprintln!("irq_mixed_model_test: p0 FAIL (irq_ack {:?})", e);
             debug::exit(debug::EXIT_FAILURE);
         }
         P0_COUNT.fetch_add(1, Ordering::Release);
@@ -87,9 +86,8 @@ extern "C" fn p0_main() -> ! {
 /// Partition 1: KernelClears — event_wait only, no ack needed.
 extern "C" fn p1_main() -> ! {
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x02u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_mixed_model_test: p1 FAIL (evt_wait 0x{:08X})", rc);
+        if let Err(e) = plib::sys_event_wait(0x02) {
+            hprintln!("irq_mixed_model_test: p1 FAIL (evt_wait {:?})", e);
             debug::exit(debug::EXIT_FAILURE);
         }
         P1_COUNT.fetch_add(1, Ordering::Release);

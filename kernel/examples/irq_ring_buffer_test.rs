@@ -11,9 +11,10 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::split_isr::StaticIsrRing;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 kernel::compose_kernel_config!(
     Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -69,9 +70,8 @@ kernel::define_unified_harness!(Cfg, |tick, _k| {
 extern "C" fn p0_body(_r0: u32) -> ! {
     let mut next_tag: u8 = 1;
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("rb_test: FAIL evt_wait 0x{:08X}", rc);
+        if let Err(e) = plib::sys_event_wait(0x01) {
+            hprintln!("rb_test: FAIL evt_wait {:?}", e);
             debug::exit(debug::EXIT_FAILURE);
         }
         // Drain the ring buffer while the IRQ is still masked (PartitionAcks
@@ -98,9 +98,8 @@ extern "C" fn p0_body(_r0: u32) -> ! {
             POP_COUNT.fetch_add(1, Ordering::Release);
         }
         // Unmask the IRQ after draining so the ISR can fire again.
-        let rc = kernel::svc!(SYS_IRQ_ACK, 0u32, 0u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("rb_test: FAIL irq_ack 0x{:08X}", rc);
+        if let Err(e) = plib::sys_irq_ack(0) {
+            hprintln!("rb_test: FAIL irq_ack {:?}", e);
             debug::exit(debug::EXIT_FAILURE);
         }
     }
