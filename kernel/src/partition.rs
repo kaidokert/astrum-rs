@@ -2267,7 +2267,7 @@ mod tests {
     fn new_pcb_has_zero_initialized_cached_regions() {
         let pcb = make_pcb();
         assert_eq!(*pcb.cached_base_regions(), [(0, 0); 4]);
-        assert_eq!(*pcb.cached_periph_regions(), [(0, 0); 2]);
+        assert_eq!(*pcb.cached_periph_regions(), [(0, 0); 3]);
     }
 
     #[test]
@@ -2286,7 +2286,11 @@ mod tests {
     #[test]
     fn set_get_cached_periph_regions_roundtrip() {
         let mut pcb = make_pcb();
-        let regions = [(0x4000_0014, 0x0000_1315), (0x4000_1014, 0x0000_1317)];
+        let regions = [
+            (0x4000_0014, 0x0000_1315),
+            (0x4000_1014, 0x0000_1317),
+            (0x4000_2014, 0x0000_1319),
+        ];
         pcb.set_cached_periph_regions(regions).unwrap();
         assert_eq!(*pcb.cached_periph_regions(), regions);
     }
@@ -2318,7 +2322,7 @@ mod tests {
         assert!(pcb.fix_stack_region(0x2000_0000, 2048).is_ok());
         pcb.fix_mpu_data_region(0x2000_0000);
         pcb.set_cached_base_regions([(1, 2); 4]).unwrap();
-        pcb.set_cached_periph_regions([(3, 4); 2]).unwrap();
+        pcb.set_cached_periph_regions([(3, 4); 3]).unwrap();
         // promote_sentinel_mpu requires size==0; use a sentinel PCB.
         let mut sentinel = make_sentinel_pcb();
         assert!(sentinel
@@ -2357,7 +2361,7 @@ mod tests {
         let mut pcb = make_pcb();
         pcb.seal_cache();
         assert_eq!(
-            pcb.set_cached_periph_regions([(3, 4); 2]),
+            pcb.set_cached_periph_regions([(3, 4); 3]),
             Err("set_cached_periph_regions called after MPU cache sealed")
         );
     }

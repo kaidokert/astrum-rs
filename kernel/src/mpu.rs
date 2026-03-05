@@ -339,9 +339,9 @@ fn peripheral_region_pair(region: &MpuRegion, slot: u32) -> Option<(u32, u32)> {
     Some((rbar, rasr))
 }
 
-/// Build (RBAR, RASR) pairs for peripheral regions R4-R5.
+/// Build (RBAR, RASR) pairs for peripheral regions R4-R6.
 ///
-/// Returns up to 2 pairs from the PCB's peripheral regions.  Unused
+/// Returns up to 3 pairs from the PCB's peripheral regions.  Unused
 /// slots are disabled (RASR enable bit = 0).  Returns `None` if a
 /// configured peripheral region has invalid MPU parameters.
 ///
@@ -480,7 +480,7 @@ pub fn write_cached_base_regions(mpu: &cortex_m::peripheral::MPU, pcb: &Partitio
     }
 }
 
-/// Write pre-computed peripheral regions (R4–R5) from the PCB cache to the MPU.
+/// Write pre-computed peripheral regions (R4–R6) from the PCB cache to the MPU.
 ///
 /// The caller must disable the MPU before calling this function and
 /// re-enable it afterwards.
@@ -508,7 +508,7 @@ pub fn with_mpu_disabled(
 /// Configure MPU from pre-computed cached regions stored in the PCB.
 ///
 /// Reads `pcb.cached_base_regions()` (R0–R3) and
-/// `pcb.cached_periph_regions()` (R4–R5) instead of recomputing them
+/// `pcb.cached_periph_regions()` (R4–R6) instead of recomputing them
 /// on the fly.  The cache must have been populated by
 /// [`precompute_mpu_cache`] during boot; a `debug_assert` guards
 /// against using an uninitialised (all-zeros) base-region cache.
@@ -520,10 +520,10 @@ pub fn apply_partition_mpu_cached(mpu: &cortex_m::peripheral::MPU, pcb: &Partiti
     });
 }
 
-/// Apply deny-all MPU configuration (R0-R5).
+/// Apply deny-all MPU configuration (R0-R6).
 ///
 /// Programmes the MPU with [`deny_all_regions`] and disables peripheral
-/// slots R4-R5 so that all unprivileged memory accesses fault.  Used as
+/// slots R4-R6 so that all unprivileged memory accesses fault.  Used as
 /// a panic fallback when the next partition ID is invalid.
 #[cfg(not(test))]
 pub fn apply_deny_all_mpu(mpu: &cortex_m::peripheral::MPU) {
@@ -1061,7 +1061,8 @@ mod tests {
             r,
             [
                 (build_rbar(0, 4).unwrap(), 0),
-                (build_rbar(0, 5).unwrap(), 0)
+                (build_rbar(0, 5).unwrap(), 0),
+                (build_rbar(0, 6).unwrap(), 0),
             ]
         );
     }
@@ -1167,7 +1168,7 @@ mod tests {
         let expected_bases: [u32; 2] = [0x4000_0000, 0x4000_1000];
         let expected_sizes: [u32; 2] = [4096, 256];
 
-        for (i, &(_rbar, rasr)) in r.iter().enumerate() {
+        for (i, &(_rbar, rasr)) in r[..2].iter().enumerate() {
             let slot = i as u32 + 4;
             // Enable bit
             assert_eq!(rasr & 1, 1, "R{slot} must be enabled");
@@ -1195,6 +1196,11 @@ mod tests {
                 "R{slot} size mismatch"
             );
         }
+        // Unused slot R6 must be explicitly disabled.
+        assert_eq!(
+            r[2], DISABLED_R6,
+            "R6 must be disabled when only 2 peripherals configured"
+        );
     }
 
     /// Verify that a PCB with no peripheral regions produces disabled
@@ -1656,7 +1662,10 @@ mod tests {
     fn precompute_cache_periph_disabled_when_no_peripherals() {
         let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
         precompute_mpu_cache(&mut pcb).unwrap();
-        assert_eq!(*pcb.cached_periph_regions(), [DISABLED_R4, DISABLED_R5],);
+        assert_eq!(
+            *pcb.cached_periph_regions(),
+            [DISABLED_R4, DISABLED_R5, DISABLED_R6],
+        );
     }
 
     // ── apply_partition_mpu_cached tests ──
@@ -1705,7 +1714,10 @@ mod tests {
     fn cached_periph_disabled_matches_fallback() {
         let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
         precompute_mpu_cache(&mut pcb).unwrap();
-        assert_eq!(*pcb.cached_periph_regions(), [DISABLED_R4, DISABLED_R5]);
+        assert_eq!(
+            *pcb.cached_periph_regions(),
+            [DISABLED_R4, DISABLED_R5, DISABLED_R6]
+        );
     }
 
     /// Calling `precompute_mpu_cache` twice on the same PCB must fail on the
