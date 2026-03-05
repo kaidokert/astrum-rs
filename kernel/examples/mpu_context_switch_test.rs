@@ -18,9 +18,10 @@ use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    syscall::SYS_YIELD,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 const NP: usize = 2;
 const REGION_SZ: u32 = 1024;
@@ -52,11 +53,7 @@ macro_rules! partition_entry {
                 let val = core::hint::black_box(local);
                 $readback.store(val, Ordering::Release);
                 $counter.fetch_add(1, Ordering::Release);
-                let rc = kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-                if rc != 0 {
-                    hprintln!("FAIL: SYS_YIELD returned {:#x}", rc);
-                    kernel::kexit!(failure);
-                }
+                plib::sys_yield().expect("failed to yield remaining time slice");
             }
         }
     };

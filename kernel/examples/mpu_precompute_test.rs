@@ -20,9 +20,10 @@ use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    syscall::SYS_YIELD,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 const NP: usize = 2;
 const REGION_SZ: u32 = 1024;
@@ -42,8 +43,7 @@ kernel::compose_kernel_config!(
 // and registers (SVC ABI).
 fn partition_loop() -> ! {
     loop {
-        let rc = kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
-        assert!(rc == 0, "SYS_YIELD returned non-zero");
+        plib::sys_yield().expect("yield failed");
     }
 }
 

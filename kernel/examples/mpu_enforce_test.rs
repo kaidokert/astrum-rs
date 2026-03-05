@@ -20,9 +20,10 @@ use kernel::{
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    syscall::SYS_YIELD,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
+#[allow(clippy::single_component_path_imports)]
+use plib;
 
 const NP: usize = 2;
 const SW: usize = 256; // AlignedStack1K = 256 words = 1024 bytes
@@ -42,12 +43,12 @@ kernel::compose_kernel_config!(
 // stack (covered by the MPU data region) and registers (SVC ABI).
 extern "C" fn p0_entry() -> ! {
     loop {
-        kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        plib::sys_yield().expect("yield failed");
     }
 }
 extern "C" fn p1_entry() -> ! {
     loop {
-        kernel::svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        plib::sys_yield().expect("yield failed");
     }
 }
 
