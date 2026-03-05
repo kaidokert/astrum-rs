@@ -267,7 +267,7 @@ pub fn debug_write<const N: usize>(
 /// `Ok(bits)` with the bitmask of events that were pending, or
 /// `Err(SvcError)` if the syscall failed.
 pub fn sys_event_wait(mask: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_EVT_WAIT, mask, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_EVT_WAIT, 0u32, mask, 0u32))
 }
 
 /// Set event bits on another partition.
@@ -291,7 +291,7 @@ pub fn sys_event_set(target_partition: u32, mask: u32) -> Result<u32, SvcError> 
 /// `Ok(prev)` with the previous pending-event word value, or
 /// `Err(SvcError)` if the syscall failed.
 pub fn sys_event_clear(mask: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_EVT_CLEAR, mask, 0u32, 0u32))
+    decode_rc(rtos_traits::svc!(SYS_EVT_CLEAR, 0u32, mask, 0u32))
 }
 
 /// Acknowledge a hardware IRQ after the partition has handled it.
