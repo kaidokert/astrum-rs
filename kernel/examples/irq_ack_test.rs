@@ -22,8 +22,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(AckTestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -45,6 +44,8 @@ kernel::define_unified_harness!(AckTestConfig, |tick, _k| {
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));
         hprintln!("irq_ack_test: pended IRQ 0 at tick {}", tick);
     }
+    // TODO: verify IRQ delivery timing, not just activity counter, to confirm
+    // the IRQ actually fired at the expected ticks.
     if tick >= 8 {
         let count = ACK_COUNT.load(Ordering::Acquire);
         if count >= 2 {
@@ -59,21 +60,20 @@ kernel::define_unified_harness!(AckTestConfig, |tick, _k| {
     }
 });
 
+fn unwrap_or_fail(r: Result<u32, plib::SvcError>, ctx: &str) {
+    if let Err(e) = r {
+        hprintln!("{}: FAIL ({:?})", ctx, e);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+}
+
 extern "C" fn p0_main_body(_r0: u32) -> ! {
     loop {
         // Block until event 0x01 is signalled by the IRQ dispatch handler.
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_ack_test: FAIL (event_wait rc=0x{:08X})", rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
+        unwrap_or_fail(plib::sys_event_wait(0x01), "irq_ack_test: event_wait");
 
         // Acknowledge (unmask) IRQ 0 so it can fire again.
-        let rc = kernel::svc!(SYS_IRQ_ACK, 0u32, 0u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_ack_test: FAIL (irq_ack rc=0x{:08X})", rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
+        unwrap_or_fail(plib::sys_irq_ack(0), "irq_ack_test: irq_ack");
 
         // Only count after both syscalls succeeded.
         ACK_COUNT.fetch_add(1, Ordering::Release);

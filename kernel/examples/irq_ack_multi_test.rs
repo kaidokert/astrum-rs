@@ -11,8 +11,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(AckMultiConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -67,18 +66,17 @@ kernel::define_unified_harness!(AckMultiConfig, |tick, _k| {
     }
 });
 
-fn ack_loop(evt: u32, irq: u32, ctr: &AtomicU32, tag: &str) -> ! {
+fn unwrap_or_fail(r: Result<u32, plib::SvcError>, tag: &str, op: &str) {
+    if let Err(e) = r {
+        hprintln!("irq_ack_multi_test: {} FAIL ({} {:?})", tag, op, e);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+}
+
+fn ack_loop(evt: u32, irq: u8, ctr: &AtomicU32, tag: &str) -> ! {
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, evt, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_ack_multi_test: {} FAIL (evt_wait 0x{:08X})", tag, rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
-        let rc = kernel::svc!(SYS_IRQ_ACK, irq, 0u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_ack_multi_test: {} FAIL (irq_ack 0x{:08X})", tag, rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
+        unwrap_or_fail(plib::sys_event_wait(evt), tag, "evt_wait");
+        unwrap_or_fail(plib::sys_irq_ack(irq), tag, "irq_ack");
         ctr.fetch_add(1, Ordering::Release);
     }
 }

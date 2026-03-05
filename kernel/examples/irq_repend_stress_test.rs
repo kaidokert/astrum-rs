@@ -22,8 +22,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(StressConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -68,22 +67,21 @@ kernel::define_unified_harness!(StressConfig, |tick, _k| {
     }
 });
 
+fn unwrap_or_fail(r: Result<u32, plib::SvcError>, ctx: &str) {
+    if let Err(e) = r {
+        hprintln!("{}: FAIL ({:?})", ctx, e);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+}
+
 // TODO: consider moving error reporting to the harness to reduce partition noise.
 extern "C" fn p0_main_body(_r0: u32) -> ! {
     loop {
         // Block until event 0x01 is signalled by the IRQ dispatch handler.
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_repend_stress: FAIL (event_wait rc=0x{:08X})", rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
+        unwrap_or_fail(plib::sys_event_wait(0x01), "irq_repend_stress: event_wait");
 
         // Acknowledge (unmask) IRQ 0 so the next pend fires.
-        let rc = kernel::svc!(SYS_IRQ_ACK, 0u32, 0u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_repend_stress: FAIL (irq_ack rc=0x{:08X})", rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
+        unwrap_or_fail(plib::sys_irq_ack(0), "irq_repend_stress: irq_ack");
 
         // Only count after both syscalls succeeded.
         ACK_COUNT.fetch_add(1, Ordering::Release);

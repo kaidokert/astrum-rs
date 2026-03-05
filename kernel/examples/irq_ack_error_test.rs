@@ -18,9 +18,9 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
-use kernel::syscall::{SYS_EVT_WAIT, SYS_IRQ_ACK};
+use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use plib::SvcError;
 
 kernel::compose_kernel_config!(ErrTestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
@@ -51,43 +51,49 @@ kernel::define_unified_harness!(ErrTestConfig, |tick, _k| {
     }
 });
 
+fn unwrap_or_fail(r: Result<u32, plib::SvcError>, ctx: &str) {
+    if let Err(e) = r {
+        hprintln!("{}: FAIL ({:?})", ctx, e);
+        debug::exit(debug::EXIT_FAILURE);
+    }
+}
+
 extern "C" fn p0_main() -> ! {
     // Error-path tests: run once before entering normal event loop.
     //
     // Test 1: ack unbound IRQ 99 → InvalidResource.
-    let rc = kernel::svc!(SYS_IRQ_ACK, 99u32, 0u32, 0u32);
-    if rc == SvcError::InvalidResource.to_u32() {
-        CHECKS_PASSED.fetch_add(1, Ordering::Release);
-    } else {
-        hprintln!("FAIL test1 (rc=0x{:08X})", rc);
-        debug::exit(debug::EXIT_FAILURE);
+    match plib::sys_irq_ack(99) {
+        Err(SvcError::InvalidResource) => {
+            CHECKS_PASSED.fetch_add(1, Ordering::Release);
+        }
+        other => {
+            hprintln!("FAIL test1 ({:?})", other);
+            debug::exit(debug::EXIT_FAILURE);
+        }
     }
 
     // Test 2: ack IRQ 1 owned by partition 1 → PermissionDenied.
-    let rc = kernel::svc!(SYS_IRQ_ACK, 1u32, 0u32, 0u32);
-    if rc == SvcError::PermissionDenied.to_u32() {
-        CHECKS_PASSED.fetch_add(1, Ordering::Release);
-    } else {
-        hprintln!("FAIL test2 (rc=0x{:08X})", rc);
-        debug::exit(debug::EXIT_FAILURE);
+    match plib::sys_irq_ack(1) {
+        Err(SvcError::PermissionDenied) => {
+            CHECKS_PASSED.fetch_add(1, Ordering::Release);
+        }
+        other => {
+            hprintln!("FAIL test2 ({:?})", other);
+            debug::exit(debug::EXIT_FAILURE);
+        }
     }
 
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("p0 evt_wait error (0x{:08X})", rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
+        unwrap_or_fail(plib::sys_event_wait(0x01), "p0 evt_wait");
     }
 }
 
 extern "C" fn p1_main() -> ! {
     loop {
-        let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x02u32, 0u32);
-        if SvcError::is_error(rc) {
-            hprintln!("irq_ack_error_test: p1 evt_wait FAIL (0x{:08X})", rc);
-            debug::exit(debug::EXIT_FAILURE);
-        }
+        unwrap_or_fail(
+            plib::sys_event_wait(0x02),
+            "irq_ack_error_test: p1 evt_wait",
+        );
     }
 }
 
