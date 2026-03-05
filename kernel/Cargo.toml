@@ -267,6 +267,10 @@ name = "plib_abi_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "plib_mutex_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "callee_save_check"
 required-features = ["qemu", "log-semihosting"]
 
