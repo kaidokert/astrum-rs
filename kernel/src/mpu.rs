@@ -1825,4 +1825,87 @@ mod tests {
         // (5) Sentinel partition (mpu_region size == 0)
         assert_cache_matches(make_sentinel_pcb(0x2000_0000, 1024), "sentinel");
     }
+
+    // ------------------------------------------------------------------
+    // precompute_mpu_cache for sentinel-promoted PCBs
+    // ------------------------------------------------------------------
+
+    /// Sentinel PCB promoted via `promote_sentinel_mpu` must produce
+    /// cached regions that match the on-the-fly computation of the
+    /// post-promotion state.  This tests the boot path where sentinel
+    /// partitions are promoted before cache population.
+    #[test]
+    fn precompute_cache_promoted_sentinel_matches_on_the_fly() {
+        use crate::partition::SENTINEL_DATA_PERMISSIONS;
+
+        let mut pcb = make_sentinel_pcb(0x2000_0000, 1024);
+
+        // Sentinel before promotion → deny-all base regions.
+        assert!(
+            partition_mpu_regions(&pcb).is_none(),
+            "sentinel must yield None before promotion"
+        );
+
+        // Promote: give it a real 4 KB data region at 0x2000_4000.
+        pcb.promote_sentinel_mpu(0x2000_4000, 4096, SENTINEL_DATA_PERMISSIONS)
+            .expect("promote must succeed");
+
+        // Snapshot expected regions *after* promotion, *before* caching.
+        let expected_base = partition_mpu_regions_or_deny_all(&pcb);
+        let expected_periph = peripheral_mpu_regions_or_disabled(&pcb);
+
+        // The promoted PCB must now yield Some (not deny-all).
+        assert!(
+            partition_mpu_regions(&pcb).is_some(),
+            "promoted PCB must produce valid regions"
+        );
+
+        precompute_mpu_cache(&mut pcb).expect("cache after promotion");
+
+        assert_eq!(
+            *pcb.cached_base_regions(),
+            expected_base,
+            "cached base regions must match on-the-fly post-promotion"
+        );
+        assert_eq!(
+            *pcb.cached_periph_regions(),
+            expected_periph,
+            "cached periph regions must match on-the-fly post-promotion"
+        );
+    }
+
+    /// Promoted sentinel with 1 peripheral region produces correct
+    /// peripheral cache entries (R4 enabled, R5-R6 disabled).
+    #[test]
+    fn precompute_cache_promoted_sentinel_with_peripheral() {
+        use crate::partition::SENTINEL_DATA_PERMISSIONS;
+
+        let mut pcb = make_sentinel_pcb(0x2000_0000, 512)
+            .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 256, 0)]);
+
+        pcb.promote_sentinel_mpu(0x2000_2000, 2048, SENTINEL_DATA_PERMISSIONS)
+            .expect("promote must succeed");
+
+        let expected_base = partition_mpu_regions_or_deny_all(&pcb);
+        let expected_periph = peripheral_mpu_regions_or_disabled(&pcb);
+
+        precompute_mpu_cache(&mut pcb).expect("cache promoted+periph");
+
+        assert_eq!(
+            *pcb.cached_base_regions(),
+            expected_base,
+            "promoted+periph: base mismatch"
+        );
+        assert_eq!(
+            *pcb.cached_periph_regions(),
+            expected_periph,
+            "promoted+periph: periph mismatch"
+        );
+
+        // R4 must be enabled (peripheral), R5-R6 disabled.
+        let periph = pcb.cached_periph_regions();
+        assert_eq!(periph[0].1 & 1, 1, "R4 must be enabled");
+        assert_eq!(periph[1], DISABLED_R5, "R5 must be disabled");
+        assert_eq!(periph[2], DISABLED_R6, "R6 must be disabled");
+    }
 }
