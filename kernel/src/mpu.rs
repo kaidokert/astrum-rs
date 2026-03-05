@@ -1908,4 +1908,40 @@ mod tests {
         assert_eq!(periph[1], DISABLED_R5, "R5 must be disabled");
         assert_eq!(periph[2], DISABLED_R6, "R6 must be disabled");
     }
+
+    // ------------------------------------------------------------------
+    // precompute_mpu_cache for high-address partitions (u32 boundary)
+    // ------------------------------------------------------------------
+
+    /// Partitions near the top of the 32-bit address space and at the
+    /// Cortex-M peripheral base (0xE000_0000) must produce cached values
+    /// identical to on-the-fly computation.  This catches address-
+    /// arithmetic overflow in RBAR/RASR encoding.
+    #[test]
+    fn precompute_cache_high_address_partition() {
+        // (1) High code + high data, no peripherals.
+        //     entry=0xFFFC_0000 (256 KB code), data=0xFFFE_0000 (64 KB).
+        assert_cache_matches(
+            make_pcb(0xFFFC_0000, 0xFFFE_0000, 0x1_0000),
+            "high-addr-no-periph",
+        );
+
+        // (2) High code + high data with peripheral at 0xE000_0000.
+        assert_cache_matches(
+            make_pcb(0xFFFC_0000, 0xFFFE_0000, 0x1_0000)
+                .with_peripheral_regions(&[MpuRegion::new(0xE000_0000, 4096, 0)]),
+            "high-addr-periph-E000",
+        );
+
+        // (3) Peripheral-only: partition in normal range, peripheral at
+        //     the PPB base (0xE000_0000) — typical Cortex-M MMIO region.
+        assert_cache_matches(
+            make_pcb(0x0000_0000, 0x2000_0000, 4096).with_peripheral_regions(&[MpuRegion::new(
+                0xE000_0000,
+                1024,
+                0,
+            )]),
+            "normal-partition-periph-E000",
+        );
+    }
 }
