@@ -106,8 +106,8 @@ pub struct PartitionControlBlock {
     event_flags: u32,
     event_wait_mask: u32,
     /// Optional peripheral register block regions for user-space drivers.
-    /// Supports up to 2 peripheral regions (Approach D).
-    peripheral_regions: Vec<MpuRegion, 2>,
+    /// Supports up to 3 peripheral regions (mapped to MPU R4–R6).
+    peripheral_regions: Vec<MpuRegion, 3>,
     /// Flag set by SYS_DEBUG_NOTIFY syscall, cleared after kernel drains debug ring buffer.
     debug_pending: bool,
     /// Reference to the partition's debug ring buffer (type-erased via trait object).
@@ -150,10 +150,10 @@ impl PartitionControlBlock {
         }
     }
 
-    /// Add up to 2 peripheral regions. Only non-zero-size regions are stored.
+    /// Add up to 3 peripheral regions. Only non-zero-size regions are stored.
     pub fn with_peripheral_regions(mut self, regions: &[MpuRegion]) -> Self {
         self.peripheral_regions.clear();
-        for region in regions.iter().take(2) {
+        for region in regions.iter().take(3) {
             if region.size() > 0 {
                 let _ = self.peripheral_regions.push(*region);
             }
@@ -199,8 +199,8 @@ impl PartitionControlBlock {
     }
 
     /// Returns (base, size) pairs: data region, stack, then peripheral regions.
-    /// Only non-zero-size regions are included. Capacity is 4.
-    pub fn accessible_static_regions(&self) -> Vec<(u32, u32), 4> {
+    /// Only non-zero-size regions are included. Capacity is 5 (1 data + 1 stack + 3 peripherals).
+    pub fn accessible_static_regions(&self) -> Vec<(u32, u32), 5> {
         let mut regions = Vec::new();
         let data_size = self.mpu_region.size();
         if data_size > 0 {
@@ -219,18 +219,22 @@ impl PartitionControlBlock {
     ///
     /// Used by the overlap invariant check: data regions may legitimately be
     /// shared across partitions, while stacks and peripherals must be exclusive.
-    // TODO: capacity 4 assumes 1 stack + at most 3 peripherals; consider a
-    // compile-time or runtime check if peripheral_regions can ever exceed 3.
+    ///
+    /// Capacity 4 assumes 1 stack + at most 3 peripheral regions.
     pub fn exclusive_static_regions(&self) -> Vec<(u32, u32), 4> {
+        debug_assert!(
+            self.peripheral_regions.len() <= 3,
+            "peripheral_regions exceeds 3"
+        );
         let mut regions = Vec::new();
         if self.stack_size > 0 {
             let ok = regions.push((self.stack_base, self.stack_size)).is_ok();
-            debug_assert!(ok);
+            debug_assert!(ok, "stack push exceeded capacity 4");
         }
         for pr in self.peripheral_regions.iter() {
             if pr.size() > 0 {
                 let ok = regions.push((pr.base(), pr.size())).is_ok();
-                debug_assert!(ok);
+                debug_assert!(ok, "peripheral push exceeded capacity 4");
             }
         }
         regions
@@ -1377,11 +1381,12 @@ mod tests {
             r(0x4000_1000, 256),
             r(0x4000_2000, 512),
         ]);
-        assert_eq!(pcb.peripheral_regions().len(), 2); // limits to two
+        assert_eq!(pcb.peripheral_regions().len(), 3); // limits to three
         let regions = pcb.accessible_static_regions();
-        assert_eq!((regions.capacity(), regions.len()), (4, 4));
+        assert_eq!(regions.len(), 5); // data + stack + 3 peripherals
         assert_eq!(regions[2], (0x4000_0000, 4096));
         assert_eq!(regions[3], (0x4000_1000, 256));
+        assert_eq!(regions[4], (0x4000_2000, 512));
     }
 
     // ------------------------------------------------------------------
@@ -1459,6 +1464,46 @@ mod tests {
         .with_peripheral_regions(&[r(0x4000_0000, 0)]);
         let regions = pcb.exclusive_static_regions();
         assert!(regions.is_empty());
+    }
+
+    /// Capacity of `exclusive_static_regions` is 4: 1 stack + up to 3 peripherals.
+    /// Verify all 4 entries are returned with exactly 3 peripheral regions.
+    #[test]
+    fn exclusive_static_regions_max_peripherals_fits_capacity() {
+        let r = |b, s| MpuRegion::new(b, s, 0x03);
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_2000,
+            0x2000_2400, // stack_size = 1024
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        )
+        .with_peripheral_regions(&[
+            r(0x4000_0000, 4096),
+            r(0x4000_1000, 256),
+            r(0x4000_2000, 512),
+        ]);
+        let regions = pcb.exclusive_static_regions();
+        // 1 stack + 3 peripherals = 4 entries, exactly filling capacity 4
+        assert_eq!(regions.len(), 4);
+        assert_eq!(regions.capacity(), 4);
+        assert_eq!(regions[0], (0x2000_2000, 1024)); // stack
+        assert_eq!(regions[1], (0x4000_0000, 4096)); // peripheral 1
+        assert_eq!(regions[2], (0x4000_1000, 256)); // peripheral 2
+        assert_eq!(regions[3], (0x4000_2000, 512)); // peripheral 3
+    }
+
+    /// Documents that `peripheral_regions` capacity (3) bounds the maximum
+    /// entries in `exclusive_static_regions` to 4 (1 stack + 3 peripherals),
+    /// exactly filling the output Vec capacity of 4.
+    #[test]
+    fn exclusive_static_regions_capacity_bounded_by_peripheral_vec() {
+        let pcb = make_pcb();
+        // peripheral_regions Vec<MpuRegion, 3>: at most 3 peripherals
+        assert!(pcb.peripheral_regions().len() <= 3);
+        // exclusive_static_regions Vec<(u32, u32), 4>: at most 1 + 3 = 4 entries
+        let regions = pcb.exclusive_static_regions();
+        assert!(regions.len() <= 4);
     }
 
     #[test]
