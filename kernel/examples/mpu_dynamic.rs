@@ -69,7 +69,7 @@ kernel::define_unified_kernel!(TestConfig, |_k| {});
 
 static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 
-kernel::define_pendsv_dynamic!(STRATEGY);
+kernel::define_pendsv_dynamic!(STRATEGY, TestConfig);
 
 extern "C" fn partition_main() -> ! {
     loop {

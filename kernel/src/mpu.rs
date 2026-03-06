@@ -470,6 +470,10 @@ pub fn mpu_enable(mpu: &cortex_m::peripheral::MPU) {
 /// uninitialised (all-zeros) cache.
 #[cfg(not(test))]
 pub fn write_cached_base_regions(mpu: &cortex_m::peripheral::MPU, pcb: &PartitionControlBlock) {
+    debug_assert!(
+        pcb.cache_sealed(),
+        "write_cached_base_regions called before cache sealed"
+    );
     let base = pcb.cached_base_regions();
     debug_assert!(
         base[0].0 != 0 || base[0].1 != 0,

@@ -71,7 +71,7 @@ kernel::define_unified_kernel!(TestConfig, |_k| {});
 
 static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 
-kernel::define_pendsv_dynamic!(STRATEGY);
+kernel::define_pendsv_dynamic!(STRATEGY, TestConfig);
 
 /// Compute the expected RASR value for partition `pid`.
 ///

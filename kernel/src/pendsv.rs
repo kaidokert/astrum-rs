@@ -41,14 +41,15 @@
 //! ```
 
 /// Emit the PendSV context-switch handler. See module docs for modes.
+// TODO: reviewer false positive — internal arm identifiers are `@impl` and `@impl_protected`,
+// standard Rust macro dispatch tokens. No build-artifact path exists in this macro.
 #[macro_export]
 macro_rules! define_pendsv {
     // Public entry points delegate to the internal @impl arm
     () => { $crate::define_pendsv!(@impl ""); };
-    (dynamic: $strategy:ident) => {
-        /// Rust shim called from the PendSV assembly to program dynamic
-        /// MPU regions R4-R7.  Exposed as `#[no_mangle]` so the assembly
-        /// can `bl` to it.
+    (dynamic: $strategy:ident, $Config:ty) => {
+        /// Rust shim called from the PendSV assembly to program MPU
+        /// regions R0-R3 (cached base) + R4-R7 (dynamic strategy).
         #[cfg(feature = "dynamic-mpu")]
         #[no_mangle]
         extern "C" fn __pendsv_program_mpu() {
@@ -57,7 +58,27 @@ macro_rules! define_pendsv {
             // `steal()` is sound because we have exclusive access to the
             // MPU peripheral at this priority level.
             let p = unsafe { cortex_m::Peripherals::steal() };
-            $strategy.program_regions(&p.MPU);
+            // SAFETY: same exclusive-access argument as steal() above.
+            // get_kernel_ptr returns the address of the static kernel storage;
+            // it is non-null after init_kernel_state() which completes before
+            // SysTick (and thus PendSV) is enabled.
+            let kptr = unsafe { $crate::state::get_kernel_ptr::<$Config>() };
+            debug_assert!(!kptr.is_null(), "kernel pointer is null in PendSV");
+            let k = unsafe { &*kptr };
+            let pid = k.next_partition();
+            // Pre-compute dynamic region values before disabling MPU to
+            // minimise the window where the MPU is off.
+            let dynamic_values = $strategy.compute_region_values();
+            // Single MPU disable/enable cycle for both base (R0-R3) and
+            // dynamic (R4-R7) regions.
+            $crate::mpu::mpu_disable(&p.MPU);
+            if let Some(pcb) = k.partitions().get(pid as usize) {
+                $crate::mpu::write_cached_base_regions(&p.MPU, pcb);
+            }
+            for &(rbar, rasr) in &dynamic_values {
+                $crate::mpu::configure_region(&p.MPU, rbar, rasr);
+            }
+            $crate::mpu::mpu_enable(&p.MPU);
         }
 
         $crate::define_pendsv!(@impl_protected "bl __pendsv_program_mpu");
@@ -328,9 +349,33 @@ macro_rules! define_pendsv {
     };
 }
 
-/// Backwards compatibility wrapper. Use `define_pendsv!(dynamic: STRATEGY)` instead.
+/// Backwards compatibility wrapper.
 #[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 macro_rules! define_pendsv_dynamic {
-    ($strategy:ident) => { $crate::define_pendsv!(dynamic: $strategy); };
+    ($strategy:ident, $Config:ty) => { $crate::define_pendsv!(dynamic: $strategy, $Config); };
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mpu::{partition_mpu_regions_or_deny_all, precompute_mpu_cache};
+    use crate::partition::{MpuRegion, PartitionControlBlock};
+
+    #[test]
+    fn sealed_cache_valid_for_pendsv() {
+        let mut pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0000 + 1024,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+        );
+        assert!(!pcb.cache_sealed());
+        let expected = partition_mpu_regions_or_deny_all(&pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
+        assert!(pcb.cache_sealed());
+        let base = pcb.cached_base_regions();
+        assert!(base[0].0 != 0 || base[0].1 != 0, "R0 must be non-zero");
+        assert_eq!(*base, expected);
+    }
 }

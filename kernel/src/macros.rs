@@ -122,17 +122,17 @@ macro_rules! define_kernel_runtime {
     // Unified arm: handles static/dynamic mode and optional systick
     ($name:ident : Kernel<$Config:ty> $(, dynamic: $strategy:ident)? $(, systick)?) => {
         $crate::define_unified_kernel!($name : Kernel<$Config>);
-        $crate::define_kernel_runtime!(@pendsv_impl $(dynamic: $strategy)?);
+        $crate::define_kernel_runtime!(@pendsv_impl $Config $(, dynamic: $strategy)?);
         $crate::define_kernel_runtime!(@systick_impl $Config $(, systick)?);
     };
 
     // Internal: emit PendSV for static mode
-    (@pendsv_impl) => {
+    (@pendsv_impl $Config:ty) => {
         $crate::define_pendsv!();
     };
     // Internal: emit PendSV for dynamic mode
-    (@pendsv_impl dynamic: $strategy:ident) => {
-        $crate::define_pendsv!(dynamic: $strategy);
+    (@pendsv_impl $Config:ty, dynamic: $strategy:ident) => {
+        $crate::define_pendsv!(dynamic: $strategy, $Config);
     };
     // Internal: no SysTick handler
     (@systick_impl $Config:ty) => {};
