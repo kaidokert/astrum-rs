@@ -703,6 +703,34 @@ macro_rules! define_unified_kernel {
         static CORE_PARTITION_SP_OFFSET: usize =
             ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, partition_sp);
 
+        // Compile-time assertions for PendSV assembly invariants.
+        //
+        // Placed in define_unified_kernel! (not define_pendsv!) because
+        // define_pendsv!() has no $Config type parameter; only the
+        // `dynamic:` arm receives $Config.  define_unified_kernel! is
+        // invoked once per configuration, which is the correct scope.
+        const _: () = {
+            type K = $crate::svc::Kernel<$Config>;
+            type C = <$Config as $crate::config::KernelConfig>::Core;
+
+            // PendSV uses ldrb/strb for current_partition — must be u8.
+            #[allow(unused)]
+            fn _assert_cp_is_u8(k: &K) { let _: u8 = k.current_partition; }
+
+            // PendSV uses ldrb for next_partition — must be u8.
+            #[allow(unused)]
+            fn _assert_np_is_u8(c: &C) { let _: u8 = c.next_partition; }
+
+            // PendSV indexes partition_sp with `lsl r0, #2` (×4) and
+            // loads/stores with ldr/str (32-bit) — elements must be u32.
+            #[allow(unused)]
+            fn _assert_sp_elem_is_u32(c: &C) { let _: u32 = c.partition_sp[0]; }
+
+            // partition_sp must be 4-byte aligned for word-sized ldr/str.
+            let sp = ::core::mem::offset_of!(C, partition_sp);
+            assert!(sp % 4 == 0, "partition_sp must be 4-byte aligned");
+        };
+
         /// SVC dispatch hook that routes syscalls through the unified kernel.
         ///
         /// # Safety
