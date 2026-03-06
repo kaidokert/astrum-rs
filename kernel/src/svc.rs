@@ -8540,7 +8540,7 @@ mod tests {
             }, // P0→P1
             // P1(3 ticks) then SystemWindow(1 tick) before P0
             Boundary {
-                interior_ticks: 3,
+                interior_ticks: 2,
                 outgoing: 1,
                 incoming: 0,
             }, // P1→SW→P0
@@ -9149,7 +9149,12 @@ mod tests {
     fn query_bottom_half_returns_stale_flag_in_r1() {
         // Use new_empty so we can exceed the threshold without system window reset
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
-        k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
+        k.schedule_mut()
+            .add(ScheduleEntry::new(
+                0,
+                TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS + 10,
+            ))
+            .unwrap();
         k.schedule_mut().start();
 
         // Advance past the threshold to trigger the stale flag
@@ -10943,6 +10948,8 @@ mod tests {
 
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        schedule.add_system_window(1).unwrap();
         schedule.start();
         let cfgs = [PartitionConfig {
             id: 0,
