@@ -40,6 +40,29 @@
 //! kernel::define_pendsv!(dynamic: STRATEGY);   // dynamic mode
 //! ```
 
+// --- ICSR constants for PendSV assembly ----------------------------------
+
+/// Interrupt Control and State Register address.
+/// ARMv7-M SCS base (0xE000\_E000) + ICSR offset (0xD04).
+pub const ICSR_ADDR: u32 = 0xE000_ED04;
+
+/// PENDSVCLR: bit 27 of ICSR. Writing 1 clears PendSV pending.
+pub const PENDSVCLR_BIT: u32 = 1 << 27;
+
+/// PENDSTCLR: bit 25 of ICSR. Writing 1 clears SysTick pending.
+pub const PENDSTCLR_BIT: u32 = 1 << 25;
+
+/// Combined PENDSVCLR | PENDSTCLR for clearing both pending bits.
+pub const PENDSV_SYSTICK_CLEAR: u32 = PENDSVCLR_BIT | PENDSTCLR_BIT;
+
+// Compile-time validation against ARMv7-M specification values.
+const _: () = {
+    assert!(ICSR_ADDR == 0xE000_ED04);
+    assert!(PENDSVCLR_BIT == 0x0800_0000);
+    assert!(PENDSTCLR_BIT == 0x0200_0000);
+    assert!(PENDSV_SYSTICK_CLEAR == 0x0A00_0000);
+};
+
 /// Emit the PendSV context-switch handler. See module docs for modes.
 #[macro_export]
 macro_rules! define_pendsv {
@@ -217,8 +240,8 @@ macro_rules! define_pendsv {
              * liveness wins. The lost tick cost is ≤1ms in debug
              * builds; in release the critical section is sub-µs and
              * PENDSTCLR clears a bit already 0. */
-            ldr     r0, =0xE000ED04     /* ICSR address */
-            mov     r1, #0x0A000000     /* PENDSVCLR (bit 27) | PENDSTCLR (bit 25) */
+            ldr     r0, ={icsr_addr}     /* ICSR address */
+            mov     r1, #{pendsv_systick_clear}     /* PENDSVCLR | PENDSTCLR */
             str     r1, [r0]
             dsb                         /* ensure PENDSVCLR write completes */
             cpsie   i                   /* unmask all configurable exceptions */
@@ -232,7 +255,9 @@ macro_rules! define_pendsv {
 
             .size PendSV, . - PendSV
         "#
-            )
+            ),
+            icsr_addr = const $crate::pendsv::ICSR_ADDR,
+            pendsv_systick_clear = const $crate::pendsv::PENDSV_SYSTICK_CLEAR,
         );
     };
 }
@@ -310,6 +335,29 @@ mod tests {
             4,
             "partition_sp element stride must be 4 bytes"
         );
+    }
+
+    #[test]
+    fn icsr_constants_match_armv7m_spec() {
+        use super::{ICSR_ADDR, PENDSTCLR_BIT, PENDSVCLR_BIT, PENDSV_SYSTICK_CLEAR};
+
+        // ICSR is at SCS base (0xE000_E000) + offset 0xD04.
+        assert_eq!(ICSR_ADDR, 0xE000_ED04);
+
+        // PENDSVCLR is bit 27 (write-1-to-clear).
+        assert_eq!(PENDSVCLR_BIT, 1 << 27);
+        assert_eq!(PENDSVCLR_BIT, 0x0800_0000);
+
+        // PENDSTCLR is bit 25 (write-1-to-clear).
+        assert_eq!(PENDSTCLR_BIT, 1 << 25);
+        assert_eq!(PENDSTCLR_BIT, 0x0200_0000);
+
+        // Combined value clears both pending bits.
+        assert_eq!(PENDSV_SYSTICK_CLEAR, PENDSVCLR_BIT | PENDSTCLR_BIT);
+        assert_eq!(PENDSV_SYSTICK_CLEAR, 0x0A00_0000);
+
+        // Bits must not overlap.
+        assert_eq!(PENDSVCLR_BIT & PENDSTCLR_BIT, 0);
     }
 
     #[test]
