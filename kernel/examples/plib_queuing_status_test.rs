@@ -36,12 +36,12 @@ extern "C" fn p0_main() -> ! {
     // Copy to stack so pointer is in MPU-accessible partition memory.
     let payload = [0xDE_u8, 0xAD, 0xBE, 0xEF];
     // Send on Source port 0; message is routed to Destination port 1.
-    match plib::sys_queuing_send(0, &payload) {
+    match plib::sys_queuing_send(plib::QueuingPortId::new(0), &payload) {
         Ok(rc) => SEND_RC.store(rc, Ordering::Release),
         Err(_) => SEND_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
     // Query status of Destination port 1 to see nb_messages == 1.
-    match plib::sys_queuing_status(1) {
+    match plib::sys_queuing_status(plib::QueuingPortId::new(1)) {
         Ok(status) => STATUS_RC.store(status.nb_messages, Ordering::Release),
         Err(_) => STATUS_RC.store(0xFFFF_FFFF, Ordering::Release),
     }

@@ -39,14 +39,14 @@ kernel::define_unified_harness!(no_boot, Cfg, |tick, k| {
 });
 extern "C" fn p0_main_body(r0: u32) -> ! {
     PARTS_RAN.fetch_or(1, Ordering::Release);
-    let (port, msg) = (r0 >> 16, [0xDE_u8, 0xAD, 0xBE, 0xEF]);
+    let (port, msg) = (plib::QueuingPortId::new(r0 >> 16), [0xDE_u8, 0xAD, 0xBE, 0xEF]);
     if plib::sys_queuing_send(port, &msg).is_ok() { P0_SENT.store(1, Ordering::Release); }
     loop { plib::sys_yield().expect("sys_yield"); }
 }
 kernel::partition_trampoline!(p0_main => p0_main_body);
 extern "C" fn p1_main_body(r0: u32) -> ! {
     PARTS_RAN.fetch_or(2, Ordering::Release);
-    let port = r0 & 0xFFFF;
+    let port = plib::QueuingPortId::new(r0 & 0xFFFF);
     loop {
         let mut buf = [0u8; 4];
         if plib::sys_queuing_recv(port, &mut buf).is_ok() && buf == [0xDE, 0xAD, 0xBE, 0xEF] {

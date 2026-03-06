@@ -72,7 +72,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     let payload = PAYLOAD;
-    match plib::sys_queuing_send_timed(0, &payload, 10) {
+    match plib::sys_queuing_send_timed(plib::QueuingPortId::new(0), &payload, 10) {
         Ok(rc) => SEND_RC.store(rc, Ordering::Release),
         Err(_) => SEND_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
@@ -85,7 +85,7 @@ extern "C" fn p1_main() -> ! {
     // Yield once so P0 sends before we receive.
     let _ = plib::sys_yield();
     let mut buf = [0u8; 4];
-    match plib::sys_queuing_recv_timed(1, &mut buf, 10) {
+    match plib::sys_queuing_recv_timed(plib::QueuingPortId::new(1), &mut buf, 10) {
         Ok(rc) => {
             RECV_DATA.store(u32::from_le_bytes(buf), Ordering::Release);
             RECV_RC.store(rc, Ordering::Release);

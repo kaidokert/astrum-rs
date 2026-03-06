@@ -468,10 +468,10 @@ pub fn sys_msg_send(target_partition: PartitionId, data: &[u8]) -> Result<u32, S
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-pub fn sys_queuing_send(port_id: u32, data: &[u8]) -> Result<u32, SvcError> {
+pub fn sys_queuing_send(port_id: QueuingPortId, data: &[u8]) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_QUEUING_SEND,
-        port_id,
+        port_id.as_raw(),
         data.len() as u32,
         data.as_ptr() as u32
     ))
@@ -485,10 +485,10 @@ pub fn sys_queuing_send(port_id: u32, data: &[u8]) -> Result<u32, SvcError> {
 ///
 /// `Ok(n)` with the number of bytes received, or `Err(SvcError)` if the
 /// syscall failed.
-pub fn sys_queuing_recv(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
+pub fn sys_queuing_recv(port_id: QueuingPortId, buf: &mut [u8]) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_QUEUING_RECV,
-        port_id,
+        port_id.as_raw(),
         buf.len() as u32,
         buf.as_mut_ptr() as u32
     ))
@@ -503,7 +503,7 @@ pub fn sys_queuing_recv(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
 /// `Ok(0)` on success, `Err(SvcError::InvalidParameter)` if `data` exceeds
 /// 65 535 bytes, or `Err(SvcError)` if the syscall failed.
 pub fn sys_queuing_send_timed(
-    port_id: u32,
+    port_id: QueuingPortId,
     data: &[u8],
     timeout_ticks: u16,
 ) -> Result<u32, SvcError> {
@@ -516,7 +516,7 @@ pub fn sys_queuing_send_timed(
     // packed r2 encodes the length so the kernel can bounds-check it.
     decode_rc(rtos_traits::svc!(
         SYS_QUEUING_SEND_TIMED,
-        port_id,
+        port_id.as_raw(),
         r2,
         data.as_ptr() as u32
     ))
@@ -531,7 +531,7 @@ pub fn sys_queuing_send_timed(
 /// `Ok(n)` with the number of bytes received, `Err(SvcError::InvalidParameter)`
 /// if `buf` exceeds 65 535 bytes, or `Err(SvcError)` if the syscall failed.
 pub fn sys_queuing_recv_timed(
-    port_id: u32,
+    port_id: QueuingPortId,
     buf: &mut [u8],
     timeout_ticks: u16,
 ) -> Result<u32, SvcError> {
@@ -544,7 +544,7 @@ pub fn sys_queuing_recv_timed(
     // packed r2 encodes the length so the kernel can bounds-check it.
     decode_rc(rtos_traits::svc!(
         SYS_QUEUING_RECV_TIMED,
-        port_id,
+        port_id.as_raw(),
         r2,
         buf.as_mut_ptr() as u32
     ))
@@ -559,14 +559,14 @@ pub fn sys_queuing_recv_timed(
 ///
 /// `Ok(status)` with the full port status, or `Err(SvcError)` if the
 /// syscall failed.
-pub fn sys_queuing_status(port_id: u32) -> Result<QueuingPortStatus, SvcError> {
+pub fn sys_queuing_status(port_id: QueuingPortId) -> Result<QueuingPortStatus, SvcError> {
     let mut status = core::mem::MaybeUninit::<QueuingPortStatus>::zeroed();
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The pointer is valid for writes of size_of::<QueuingPortStatus>()
     // and the kernel writes the full struct before returning 0.
     let rc = rtos_traits::svc!(
         SYS_QUEUING_STATUS,
-        port_id,
+        port_id.as_raw(),
         status.as_mut_ptr() as u32,
         0u32
     );
@@ -1037,24 +1037,27 @@ mod tests {
 
     #[test]
     fn queuing_send_returns_ok_zero_on_host() {
-        assert_eq!(sys_queuing_send(0, &[0xDE, 0xAD]), Ok(0));
+        assert_eq!(
+            sys_queuing_send(QueuingPortId::new(0), &[0xDE, 0xAD]),
+            Ok(0)
+        );
     }
 
     #[test]
     fn queuing_send_empty_data_returns_ok_zero_on_host() {
-        assert_eq!(sys_queuing_send(1, &[]), Ok(0));
+        assert_eq!(sys_queuing_send(QueuingPortId::new(1), &[]), Ok(0));
     }
 
     #[test]
     fn queuing_recv_returns_ok_zero_on_host() {
         let mut buf = [0u8; 8];
-        assert_eq!(sys_queuing_recv(0, &mut buf), Ok(0));
+        assert_eq!(sys_queuing_recv(QueuingPortId::new(0), &mut buf), Ok(0));
     }
 
     #[test]
     fn queuing_recv_empty_buf_returns_ok_zero_on_host() {
         let mut buf = [0u8; 0];
-        assert_eq!(sys_queuing_recv(1, &mut buf), Ok(0));
+        assert_eq!(sys_queuing_recv(QueuingPortId::new(1), &mut buf), Ok(0));
     }
 
     #[test]
@@ -1065,17 +1068,23 @@ mod tests {
             max_message_size: 0,
             direction: 0,
         };
-        assert_eq!(sys_queuing_status(0), Ok(expected));
+        assert_eq!(sys_queuing_status(QueuingPortId::new(0)), Ok(expected));
     }
 
     #[test]
     fn queuing_send_timed_returns_ok_zero_on_host() {
-        assert_eq!(sys_queuing_send_timed(0, &[0xAA, 0xBB], 100), Ok(0));
+        assert_eq!(
+            sys_queuing_send_timed(QueuingPortId::new(0), &[0xAA, 0xBB], 100),
+            Ok(0)
+        );
     }
 
     #[test]
     fn queuing_send_timed_empty_data_returns_ok_zero_on_host() {
-        assert_eq!(sys_queuing_send_timed(1, &[], 50), Ok(0));
+        assert_eq!(
+            sys_queuing_send_timed(QueuingPortId::new(1), &[], 50),
+            Ok(0)
+        );
     }
 
     #[test]
@@ -1083,7 +1092,7 @@ mod tests {
         // A slice longer than u16::MAX must be rejected before the syscall.
         let big = vec![0u8; u16::MAX as usize + 1];
         assert_eq!(
-            sys_queuing_send_timed(0, &big, 100),
+            sys_queuing_send_timed(QueuingPortId::new(0), &big, 100),
             Err(SvcError::InvalidParameter)
         );
     }
@@ -1091,19 +1100,28 @@ mod tests {
     #[test]
     fn queuing_recv_timed_returns_ok_zero_on_host() {
         let mut buf = [0u8; 8];
-        assert_eq!(sys_queuing_recv_timed(0, &mut buf, 200), Ok(0));
+        assert_eq!(
+            sys_queuing_recv_timed(QueuingPortId::new(0), &mut buf, 200),
+            Ok(0)
+        );
     }
 
     #[test]
     fn queuing_recv_timed_empty_buf_returns_ok_zero_on_host() {
         let mut buf = [0u8; 0];
-        assert_eq!(sys_queuing_recv_timed(1, &mut buf, 0), Ok(0));
+        assert_eq!(
+            sys_queuing_recv_timed(QueuingPortId::new(1), &mut buf, 0),
+            Ok(0)
+        );
     }
 
     #[test]
     fn queuing_recv_timed_max_timeout_returns_ok_zero_on_host() {
         let mut buf = [0u8; 4];
-        assert_eq!(sys_queuing_recv_timed(0, &mut buf, u16::MAX), Ok(0));
+        assert_eq!(
+            sys_queuing_recv_timed(QueuingPortId::new(0), &mut buf, u16::MAX),
+            Ok(0)
+        );
     }
 
     #[test]
@@ -1111,7 +1129,7 @@ mod tests {
         // A buffer longer than u16::MAX must be rejected before the syscall.
         let mut big = vec![0u8; u16::MAX as usize + 1];
         assert_eq!(
-            sys_queuing_recv_timed(0, &mut big, 100),
+            sys_queuing_recv_timed(QueuingPortId::new(0), &mut big, 100),
             Err(SvcError::InvalidParameter)
         );
     }
@@ -1120,14 +1138,20 @@ mod tests {
     fn queuing_send_timed_packing_boundary() {
         // Verify the largest valid data length (u16::MAX) is accepted.
         let data = vec![0u8; u16::MAX as usize];
-        assert_eq!(sys_queuing_send_timed(0, &data, u16::MAX), Ok(0));
+        assert_eq!(
+            sys_queuing_send_timed(QueuingPortId::new(0), &data, u16::MAX),
+            Ok(0)
+        );
     }
 
     #[test]
     fn queuing_recv_timed_packing_boundary() {
         // Verify the largest valid buffer length (u16::MAX) is accepted.
         let mut buf = vec![0u8; u16::MAX as usize];
-        assert_eq!(sys_queuing_recv_timed(0, &mut buf, u16::MAX), Ok(0));
+        assert_eq!(
+            sys_queuing_recv_timed(QueuingPortId::new(0), &mut buf, u16::MAX),
+            Ok(0)
+        );
     }
 
     // TODO: Host stub returns 0 unconditionally so we cannot verify that

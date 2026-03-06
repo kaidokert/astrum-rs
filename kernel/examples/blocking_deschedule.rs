@@ -59,7 +59,7 @@ static BLOCKED: AtomicU32 = AtomicU32::new(0);
 
 /// Partition: waits a bit, then calls blocking recv on empty queue.
 extern "C" fn partition_main_body(r0: u32) -> ! {
-    let port = r0;
+    let port = plib::QueuingPortId::new(r0);
     // Wait for a few ticks
     while plib::sys_get_time().expect("sys_get_time") < 5 {
         plib::sys_yield().expect("sys_yield");

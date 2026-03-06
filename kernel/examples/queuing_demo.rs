@@ -155,7 +155,10 @@ kernel::define_unified_harness!(DemoConfig, |tick, _k| {
 extern "C" fn commander_main_body(r0: u32) -> ! {
     // Unpack port IDs: upper 16 bits = command Source port, lower 16 = response Destination port.
     let packed = r0;
-    let (cmd_port, rsp_port) = (packed >> 16, packed & 0xFFFF);
+    let (cmd_port, rsp_port) = (
+        plib::QueuingPortId::new(packed >> 16),
+        plib::QueuingPortId::new(packed & 0xFFFF),
+    );
 
     // Phase 1: Flood the command queue to demonstrate queue-full detection.
     // QUEUE_DEPTH is 4, so the 5th send must fail with a kernel error.
@@ -258,7 +261,10 @@ kernel::partition_trampoline!(commander_main => commander_main_body);
 extern "C" fn worker_main_body(r0: u32) -> ! {
     // Unpack port IDs: upper 16 bits = response Source port, lower 16 = command Destination port.
     let packed = r0;
-    let (rsp_port, cmd_port) = (packed >> 16, packed & 0xFFFF);
+    let (rsp_port, cmd_port) = (
+        plib::QueuingPortId::new(packed >> 16),
+        plib::QueuingPortId::new(packed & 0xFFFF),
+    );
 
     // Phase 1-2: Process the initial batch of commands using non-blocking recv.
     let mut processed: u32 = 0;
