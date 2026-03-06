@@ -41,8 +41,6 @@
 //! ```
 
 /// Emit the PendSV context-switch handler. See module docs for modes.
-// TODO: reviewer false positive — internal arm identifiers are `@impl` and `@impl_protected`,
-// standard Rust macro dispatch tokens. No build-artifact path exists in this macro.
 #[macro_export]
 macro_rules! define_pendsv {
     // Public entry points delegate to the internal @impl arm
@@ -81,122 +79,12 @@ macro_rules! define_pendsv {
             $crate::mpu::mpu_enable(&p.MPU);
         }
 
-        $crate::define_pendsv!(@impl_protected "bl __pendsv_program_mpu");
+        $crate::define_pendsv!(@impl "bl __pendsv_program_mpu");
     };
 
-    // Internal implementation: default PendSV without BASEPRI critical section.
-    // Used by static-mode callers that do not need the TOCTOU protection.
+    // Internal implementation: PendSV with PRIMASK critical section.
+    // All callers use this single implementation path.
     (@impl $mpu_call:literal) => {
-        #[cfg(target_arch = "arm")]
-        // SAFETY: This assembly implements the PendSV exception handler which
-        // performs partition context switches. The operations are sound because:
-        //
-        // 1. Single-core exclusivity: PendSV is configured as the lowest-priority
-        //    exception (priority 0xFF). It cannot preempt itself, and higher-priority
-        //    exceptions (SysTick, SVC) complete before PendSV runs. On single-core
-        //    Cortex-M, this guarantees exclusive access to the partition state being
-        //    saved/restored without needing critical sections or atomic operations.
-        //
-        // 2. Boot sequence invariants: This handler assumes boot() has completed:
-        //    - partition_sp[i] contains valid stack pointers for all partitions
-        //      (initialized via init_stack_frame() during boot)
-        //    - current_partition == 0xFF initially (sentinel for first switch)
-        //    - next_partition contains a valid partition index (set by scheduler)
-        //    - Exception priorities configured: SVCall < SysTick < PendSV (0xFF)
-        //    These invariants are established before SysTick is enabled.
-        //
-        // 3. Offset constant validity: Kernel state fields are accessed directly
-        //    via __kernel_state_start + compile-time field offsets. The offsets
-        //    (KERNEL_CURRENT_PARTITION_OFFSET, KERNEL_CORE_OFFSET, etc.) are:
-        //    - Computed using core::mem::offset_of! in define_unified_kernel!
-        //    - Valid because Kernel<C> and PartitionCore use #[repr(C)] layout
-        //    - Exported as #[no_mangle] symbols, linking the same values used here
-        //
-        // 4. Register convention compliance: The assembly follows ARM AAPCS.
-        //    - Before pendsv_context_save: only r0-r3 (hardware-saved on
-        //      exception entry) are used as scratch. r4-r11 are untouched,
-        //      preserving the outgoing partition's callee-saved state for
-        //      the save routine.
-        //    - After save: r4-r11 are free for use as callee-saved working
-        //      registers (e.g. r4 holds partition index, r5 holds kernel base).
-        //    - lr is saved/restored around bl instructions
-        //
-        // 5. PSP/register save ordering: The outgoing partition's r4-r11 are
-        //    pushed to its process stack before modifying kernel state.
-        //    The incoming partition's registers are restored after all state
-        //    updates complete, ensuring no register corruption.
-        //
-        // 6. MPU programming (dynamic mode only): When $mpu_call is non-empty,
-        //    __pendsv_program_mpu is called AFTER saving the outgoing context
-        //    and BEFORE restoring the incoming context. This ensures the MPU
-        //    is reconfigured for the incoming partition before any of its code
-        //    executes, eliminating TOCTOU races.
-        core::arch::global_asm!(
-            concat!(
-                r#"
-            .syntax unified
-            .thumb
-
-            .global PendSV
-            .type PendSV, %function
-            .thumb_func
-
-        PendSV:
-            /* r4-r11 contain the outgoing partition's callee-saved registers
-             * and must NOT be modified before pendsv_context_save. */
-
-            /* Load current_partition using only r0-r3 (hardware-saved) */
-            ldr     r0, =__kernel_state_start
-            ldr     r1, =KERNEL_CURRENT_PARTITION_OFFSET
-            ldr     r1, [r1]            /* r1 = offset value */
-            ldrb    r1, [r0, r1]        /* r1 = current_partition */
-
-            /* Skip save if current_partition == 0xFF (first switch) */
-            cmp     r1, #0xFF
-            beq     .Lpendsv_skip_save
-
-            /* Save outgoing partition context: r0 = partition index */
-            mov     r0, r1
-            bl      pendsv_context_save
-
-        .Lpendsv_skip_save:
-            /* Load kernel base into r5 (safe now: context is saved) */
-            ldr     r5, =__kernel_state_start
-            /* Dynamic mode: program MPU regions (empty string = no-op) */
-            "#,
-                $mpu_call,
-                r#"
-            /* Load next_partition: kernel_base + KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET */
-            ldr     r0, =KERNEL_CORE_OFFSET
-            ldr     r0, [r0]            /* r0 = core offset */
-            add     r6, r5, r0          /* r6 = &kernel.core */
-
-            ldr     r0, =CORE_NEXT_PARTITION_OFFSET
-            ldr     r0, [r0]            /* r0 = next_partition offset within core */
-            ldrb    r4, [r6, r0]        /* r4 = next_partition (callee-saved) */
-
-            /* Store next_partition to current_partition */
-            ldr     r0, =KERNEL_CURRENT_PARTITION_OFFSET
-            ldr     r0, [r0]            /* r0 = current_partition offset */
-            strb    r4, [r5, r0]        /* current_partition = next_partition */
-
-            /* Restore incoming partition context: r0 = partition index */
-            mov     r0, r4
-            bl      pendsv_context_restore
-
-            /* pendsv_return_unprivileged does not return */
-            bl      pendsv_return_unprivileged
-
-            .size PendSV, . - PendSV
-        "#
-            )
-        );
-    };
-
-    // Internal implementation: PendSV with PRIMASK critical section (Bug 14-numbat).
-    // Used by dynamic-mode and harness callers that program MPU regions and need
-    // the TOCTOU race protection around MPU + next_partition + context restore.
-    (@impl_protected $mpu_call:literal) => {
         #[cfg(target_arch = "arm")]
         // SAFETY: This assembly implements the PendSV exception handler which
         // performs partition context switches. The operations are sound because:

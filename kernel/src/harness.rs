@@ -366,7 +366,7 @@ macro_rules! define_unified_harness {
                 $crate::mpu::mpu_enable(&p.MPU);
             }
         }
-        $crate::define_pendsv!(@impl_protected "bl __pendsv_program_mpu");
+        $crate::define_pendsv!(@impl "bl __pendsv_program_mpu");
 
         #[exception]
         fn SysTick() {
