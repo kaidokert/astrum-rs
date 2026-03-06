@@ -71,7 +71,7 @@ pub use rtos_traits::syscall::{SYS_DEBUG_NOTIFY, SYS_DEBUG_WRITE};
 #[cfg(feature = "ipc-blackboard")]
 pub use rtos_traits::ids::BlackboardId;
 #[cfg(feature = "dynamic-mpu")]
-pub use rtos_traits::ids::DeviceId;
+pub use rtos_traits::ids::{BufferSlotId, DeviceId};
 pub use rtos_traits::ids::{
     EventMask, MutexId, PartitionId, QueuingPortId, SamplingPortId, SemaphoreId,
 };
