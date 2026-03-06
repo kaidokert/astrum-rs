@@ -768,6 +768,17 @@ pub fn sys_query_bottom_half(device_id: DeviceId) -> Result<u32, SvcError> {
     ))
 }
 
+/// Query bottom-half status, returning both ticks and stale flag.
+///
+/// Like [`sys_query_bottom_half`] but also captures the stale flag from r1.
+/// Returns `Ok((ticks_since_bottom_half, stale_flag))` or `Err(SvcError)`.
+#[cfg(feature = "dynamic-mpu")]
+pub fn sys_query_bottom_half_with_stale(device_id: DeviceId) -> Result<(u32, u32), SvcError> {
+    let (r0, r1) =
+        rtos_traits::svc_r01!(SYS_QUERY_BOTTOM_HALF, device_id.as_raw() as u32, 0u32, 0u32);
+    decode_rc(r0).map(|ticks| (ticks, r1))
+}
+
 /// Allocate a buffer slot from the shared buffer pool.
 ///
 /// `writable`: request a writable (`true`) or read-only (`false`) borrow.
