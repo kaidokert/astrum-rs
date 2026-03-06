@@ -311,6 +311,10 @@ name = "plib_debug_print_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "plib_dev_test"
+required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+
+[[example]]
 name = "callee_save_check"
 required-features = ["qemu", "log-semihosting"]
 
