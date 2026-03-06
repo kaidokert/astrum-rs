@@ -1165,10 +1165,8 @@ mod tests {
         );
     }
 
-    // TODO: Host stub returns 0 unconditionally so we cannot verify that
-    // the packed r2 value (timeout_hi16 | len_lo16) is correctly formed
-    // from these tests.  Register-level verification requires an on-target
-    // (QEMU) integration test that inspects the actual SVC arguments.
+    // Packed-r2 ABI is verified end-to-end in the QEMU integration test
+    // kernel/examples/plib_dev_read_timed_test.rs.
 
     // Parameter-verification tests live in kernel/src/debug.rs per the
     // crate's documented testing policy (see module docs).
