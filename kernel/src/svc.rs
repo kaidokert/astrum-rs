@@ -424,6 +424,19 @@ core::arch::global_asm!(
     "movt r0, #0xFFFF",
     "cmp lr, r0",
     "bne .Lsvc_bad_exc_return",
+    // Defense-in-depth: ensure BASEPRI is 0 so Thread mode runs with
+    // SysTick (and all configurable interrupts) unblocked. If PendSV
+    // raised BASEPRI to mask SysTick during MPU programming and a
+    // partition issued SVC before PendSV's return path cleared it,
+    // Thread mode would run with SysTick blocked. On the normal path
+    // where BASEPRI is already 0 this is a harmless no-op (~2 cycles).
+    //
+    // SAFETY: Writing 0 to BASEPRI disables priority masking without
+    // side-effects (ARMv7-M B5.2.3). r0 is used as scratch here; this
+    // is safe because `mrs r0, psp` on the very next instruction
+    // overwrites r0 unconditionally, so no prior value is lost.
+    "mov r0, #0",
+    "msr BASEPRI, r0",
     "mrs r0, psp",
     "push {{lr}}",
     "bl dispatch_svc",
