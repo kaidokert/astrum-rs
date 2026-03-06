@@ -108,6 +108,15 @@ fn overlaps_kernel_data(ptr: u32, end: u32, kernel_end: u32) -> bool {
     ptr < kernel_end && end > 0x2000_0000
 }
 
+/// Unpack a packed r2 register used by timed syscalls.
+///
+/// ABI: `r2 = (timeout_ticks_hi16 << 16) | buf_len_lo16`.
+/// Returns `(timeout_ticks, buf_len)`.
+#[inline]
+pub fn unpack_packed_r2(r2: u32) -> (u16, u16) {
+    ((r2 >> 16) as u16, (r2 & 0xFFFF) as u16)
+}
+
 /// Validate that `[ptr, ptr+len)` fits within a static region of partition `pid`.
 ///
 /// Guards: (1) flash rejects `[0, KERNEL_CODE_END)`, (2) grant accepts if range
@@ -2116,7 +2125,8 @@ where
                 // Reads a single byte; blocks caller if no data and timeout > 0.
                 validated_ptr!(self, frame.r3, 1, {
                     let buf_ptr = frame.r3 as *mut u8;
-                    let timeout = frame.r2 >> 16;
+                    let (timeout_ticks, _) = unpack_packed_r2(frame.r2);
+                    let timeout = timeout_ticks as u32;
                     let pid = self.current_partition;
                     let device_id = frame.r1 as u8;
                     match self.registry.get_mut(device_id) {
@@ -2159,7 +2169,8 @@ where
             }
             #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingRecvTimed) => {
-                let rlen = core::cmp::min((arg2 & 0xFFFF) as usize, C::QM);
+                let (timeout_ticks, buf_len) = unpack_packed_r2(arg2);
+                let rlen = core::cmp::min(buf_len as usize, C::QM);
                 validated_ptr!(self, arg3, rlen, {
                     // SAFETY: validated_ptr confirmed [r3, r3+rlen) lies within
                     // the calling partition's MPU data region.
@@ -2170,7 +2181,7 @@ where
                         arg1 as usize,
                         pid,
                         b,
-                        (arg2 >> 16) as u64,
+                        timeout_ticks as u64,
                         tick,
                     ) {
                         Ok(RecvQueuingOutcome::Received {
@@ -2200,8 +2211,9 @@ where
             }
             #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingSendTimed) => {
-                let data_len = (frame.r2 & 0xFFFF) as usize;
-                let timeout = (frame.r2 >> 16) as u64;
+                let (timeout_ticks, buf_len) = unpack_packed_r2(frame.r2);
+                let data_len = buf_len as usize;
+                let timeout = timeout_ticks as u64;
                 validated_ptr!(self, frame.r3, data_len, {
                     // SAFETY: validated_ptr confirmed [r3, r3+data_len) lies within
                     // the calling partition's MPU data region.
@@ -3037,6 +3049,69 @@ mod tests {
     use crate::semaphore::Semaphore;
     use crate::syscall::SYS_GET_PARTITION_ID;
     use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_IRQ_ACK, SYS_YIELD};
+
+    // ---- unpack_packed_r2 unit tests ----
+
+    #[test]
+    fn unpack_packed_r2_zero_zero() {
+        assert_eq!(unpack_packed_r2(0), (0, 0));
+    }
+
+    #[test]
+    fn unpack_packed_r2_max_max() {
+        let r2 = ((u16::MAX as u32) << 16) | (u16::MAX as u32);
+        assert_eq!(unpack_packed_r2(r2), (u16::MAX, u16::MAX));
+    }
+
+    #[test]
+    fn unpack_packed_r2_timeout_only() {
+        let r2 = (1u32) << 16;
+        assert_eq!(unpack_packed_r2(r2), (1, 0));
+    }
+
+    #[test]
+    fn unpack_packed_r2_len_only() {
+        assert_eq!(unpack_packed_r2(1), (0, 1));
+    }
+
+    #[test]
+    fn unpack_packed_r2_typical() {
+        let r2 = (100u32 << 16) | 64;
+        assert_eq!(unpack_packed_r2(r2), (100, 64));
+    }
+
+    #[test]
+    fn unpack_packed_r2_asymmetric() {
+        let r2 = (500u32 << 16) | 1;
+        assert_eq!(unpack_packed_r2(r2), (500, 1));
+    }
+
+    /// Round-trip: for all test pairs, packing with plib's formula and
+    /// unpacking with `unpack_packed_r2` must be identity.
+    #[test]
+    fn unpack_packed_r2_round_trip() {
+        let cases: &[(u16, u16)] = &[
+            (0, 0),
+            (u16::MAX, u16::MAX),
+            (1, 0),
+            (0, 1),
+            (100, 64),
+            (500, 1),
+            (1000, 255),
+            (0, u16::MAX),
+            (u16::MAX, 0),
+        ];
+        for &(timeout, len) in cases {
+            // plib packing formula: ((timeout as u32) << 16) | (len as u32)
+            let packed = ((timeout as u32) << 16) | (len as u32);
+            let (got_timeout, got_len) = unpack_packed_r2(packed);
+            assert_eq!(
+                (got_timeout, got_len),
+                (timeout, len),
+                "round-trip failed for ({timeout}, {len})"
+            );
+        }
+    }
 
     /// Test kernel configuration with small, fixed pool sizes.
     struct TestConfig;
