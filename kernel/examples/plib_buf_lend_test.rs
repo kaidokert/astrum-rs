@@ -61,9 +61,18 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 });
 
 extern "C" fn p0_main() -> ! {
-    let rc = plib::sys_buf_alloc(true, 0).unwrap_or(SYSCALL_FAILED);
-    ALLOC_RC.store(rc, Ordering::Release);
-    let slot = rc as u8;
+    let slot = match plib::sys_buf_alloc(true, 0) {
+        Ok(id) => {
+            ALLOC_RC.store(id.as_raw() as u32, Ordering::Release);
+            id
+        }
+        Err(_) => {
+            ALLOC_RC.store(SYSCALL_FAILED, Ordering::Release);
+            loop {
+                cortex_m::asm::nop();
+            }
+        }
+    };
     let payload = PAYLOAD;
     let wr = plib::sys_buf_write(slot, &payload).unwrap_or(SYSCALL_FAILED);
     WRITE_RC.store(wr, Ordering::Release);
@@ -87,7 +96,7 @@ extern "C" fn p1_main() -> ! {
     while LENT.load(Ordering::Acquire) == 0 {
         cortex_m::asm::nop();
     }
-    let slot = ALLOC_RC.load(Ordering::Relaxed) as u8;
+    let slot = plib::BufferSlotId::new(ALLOC_RC.load(Ordering::Relaxed) as u8);
     // Negative test: P1 must NOT be able to write when writable=false.
     let wr = plib::sys_buf_write(slot, &[0xFF; 4]).unwrap_or(SYSCALL_FAILED);
     P1_WRITE_RC.store(wr, Ordering::Release);

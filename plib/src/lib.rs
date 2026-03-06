@@ -780,7 +780,7 @@ pub fn sys_query_bottom_half(device_id: DeviceId) -> Result<u32, SvcError> {
 /// `Ok(slot)` with the allocated slot index, or `Err(SvcError)` if the
 /// syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_buf_alloc(writable: bool, max_ticks: u16) -> Result<u32, SvcError> {
+pub fn sys_buf_alloc(writable: bool, max_ticks: u16) -> Result<BufferSlotId, SvcError> {
     let mode = if writable { 1u32 } else { 0u32 };
     decode_rc(rtos_traits::svc!(
         SYS_BUF_ALLOC,
@@ -788,6 +788,7 @@ pub fn sys_buf_alloc(writable: bool, max_ticks: u16) -> Result<u32, SvcError> {
         max_ticks as u32,
         0u32
     ))
+    .map(|val| BufferSlotId::new(val as u8))
 }
 
 /// Release a buffer slot back to the shared pool.
@@ -798,8 +799,13 @@ pub fn sys_buf_alloc(writable: bool, max_ticks: u16) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_buf_release(slot: u8) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_BUF_RELEASE, slot as u32, 0u32, 0u32))
+pub fn sys_buf_release(slot: BufferSlotId) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_BUF_RELEASE,
+        slot.as_raw() as u32,
+        0u32,
+        0u32
+    ))
 }
 
 /// Read data from a buffer slot into `dst`.
@@ -811,13 +817,13 @@ pub fn sys_buf_release(slot: u8) -> Result<u32, SvcError> {
 /// `Ok(n)` with the number of bytes read, `Err(SvcError::OperationFailed)`
 /// if `dst` exceeds 65 535 bytes, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_buf_read(slot: u8, dst: &mut [u8]) -> Result<u32, SvcError> {
+pub fn sys_buf_read(slot: BufferSlotId, dst: &mut [u8]) -> Result<u32, SvcError> {
     if dst.len() > u16::MAX as usize {
         return Err(SvcError::InvalidParameter);
     }
     decode_rc(rtos_traits::svc!(
         SYS_BUF_READ,
-        slot as u32,
+        slot.as_raw() as u32,
         dst.len() as u32,
         dst.as_mut_ptr() as u32
     ))
@@ -832,13 +838,13 @@ pub fn sys_buf_read(slot: u8, dst: &mut [u8]) -> Result<u32, SvcError> {
 /// `Ok(n)` with the number of bytes written, `Err(SvcError::OperationFailed)`
 /// if `data` exceeds 65 535 bytes, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_buf_write(slot: u8, data: &[u8]) -> Result<u32, SvcError> {
+pub fn sys_buf_write(slot: BufferSlotId, data: &[u8]) -> Result<u32, SvcError> {
     if data.len() > u16::MAX as usize {
         return Err(SvcError::InvalidParameter);
     }
     decode_rc(rtos_traits::svc!(
         SYS_BUF_WRITE,
-        slot as u32,
+        slot.as_raw() as u32,
         data.len() as u32,
         data.as_ptr() as u32
     ))
@@ -853,13 +859,18 @@ pub fn sys_buf_write(slot: u8, data: &[u8]) -> Result<u32, SvcError> {
 /// `Ok(region_id)` with the MPU region assigned to the target, or
 /// `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_buf_lend(slot: u8, target: u8, writable: bool) -> Result<u32, SvcError> {
+pub fn sys_buf_lend(slot: BufferSlotId, target: u8, writable: bool) -> Result<u32, SvcError> {
     let flags: u32 = if writable { lend_flags::WRITABLE } else { 0 };
     let r2 = (target as u32) | flags;
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The slot and packed r2 contain only small integer values;
     // no pointers are passed.
-    decode_rc(rtos_traits::svc!(SYS_BUF_LEND, slot as u32, r2, 0u32))
+    decode_rc(rtos_traits::svc!(
+        SYS_BUF_LEND,
+        slot.as_raw() as u32,
+        r2,
+        0u32
+    ))
 }
 
 /// Revoke a previously lent buffer slot from a target partition.
@@ -870,12 +881,12 @@ pub fn sys_buf_lend(slot: u8, target: u8, writable: bool) -> Result<u32, SvcErro
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_buf_revoke(slot: u8, target: u8) -> Result<u32, SvcError> {
+pub fn sys_buf_revoke(slot: BufferSlotId, target: u8) -> Result<u32, SvcError> {
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  Only small integer values are passed; no pointers.
     decode_rc(rtos_traits::svc!(
         SYS_BUF_REVOKE,
-        slot as u32,
+        slot.as_raw() as u32,
         target as u32,
         0u32
     ))
@@ -889,12 +900,12 @@ pub fn sys_buf_revoke(slot: u8, target: u8) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_buf_transfer(slot: u8, new_owner: u8) -> Result<u32, SvcError> {
+pub fn sys_buf_transfer(slot: BufferSlotId, new_owner: u8) -> Result<u32, SvcError> {
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  Only small integer values are passed; no pointers.
     decode_rc(rtos_traits::svc!(
         SYS_BUF_TRANSFER,
-        slot as u32,
+        slot.as_raw() as u32,
         new_owner as u32,
         0u32
     ))
@@ -1459,85 +1470,91 @@ mod tests {
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_alloc_readonly_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_alloc(false, 0), Ok(0));
+        assert_eq!(sys_buf_alloc(false, 0), Ok(BufferSlotId::new(0)));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_alloc_writable_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_alloc(true, 100), Ok(0));
+        assert_eq!(sys_buf_alloc(true, 100), Ok(BufferSlotId::new(0)));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_alloc_max_ticks_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_alloc(false, u16::MAX), Ok(0));
+        assert_eq!(sys_buf_alloc(false, u16::MAX), Ok(BufferSlotId::new(0)));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_release_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_release(0), Ok(0));
+        assert_eq!(sys_buf_release(BufferSlotId::new(0)), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_release_max_slot_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_release(u8::MAX), Ok(0));
+        assert_eq!(sys_buf_release(BufferSlotId::new(u8::MAX)), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_returns_ok_zero_on_host() {
         let mut buf = [0u8; 16];
-        assert_eq!(sys_buf_read(0, &mut buf), Ok(0));
+        assert_eq!(sys_buf_read(BufferSlotId::new(0), &mut buf), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_empty_dst_returns_ok_zero_on_host() {
         let mut buf = [0u8; 0];
-        assert_eq!(sys_buf_read(1, &mut buf), Ok(0));
+        assert_eq!(sys_buf_read(BufferSlotId::new(1), &mut buf), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_rejects_oversized_dst() {
         let mut big = vec![0u8; u16::MAX as usize + 1];
-        assert_eq!(sys_buf_read(0, &mut big), Err(SvcError::InvalidParameter));
+        assert_eq!(
+            sys_buf_read(BufferSlotId::new(0), &mut big),
+            Err(SvcError::InvalidParameter)
+        );
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_boundary_len_accepted() {
         let mut buf = vec![0u8; u16::MAX as usize];
-        assert_eq!(sys_buf_read(0, &mut buf), Ok(0));
+        assert_eq!(sys_buf_read(BufferSlotId::new(0), &mut buf), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_write_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_write(0, &[0xDE, 0xAD]), Ok(0));
+        assert_eq!(sys_buf_write(BufferSlotId::new(0), &[0xDE, 0xAD]), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_write_empty_data_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_write(1, &[]), Ok(0));
+        assert_eq!(sys_buf_write(BufferSlotId::new(1), &[]), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_write_rejects_oversized_data() {
         let big = vec![0u8; u16::MAX as usize + 1];
-        assert_eq!(sys_buf_write(0, &big), Err(SvcError::InvalidParameter));
+        assert_eq!(
+            sys_buf_write(BufferSlotId::new(0), &big),
+            Err(SvcError::InvalidParameter)
+        );
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_write_boundary_len_accepted() {
         let data = vec![0u8; u16::MAX as usize];
-        assert_eq!(sys_buf_write(0, &data), Ok(0));
+        assert_eq!(sys_buf_write(BufferSlotId::new(0), &data), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -1573,37 +1590,37 @@ mod tests {
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_readonly_returns_ok_on_host() {
-        assert_eq!(sys_buf_lend(0, 1, false), Ok(0));
+        assert_eq!(sys_buf_lend(BufferSlotId::new(0), 1, false), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_writable_returns_ok_on_host() {
-        assert_eq!(sys_buf_lend(2, 3, true), Ok(0));
+        assert_eq!(sys_buf_lend(BufferSlotId::new(2), 3, true), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_revoke_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_revoke(0, 1), Ok(0));
+        assert_eq!(sys_buf_revoke(BufferSlotId::new(0), 1), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_revoke_max_slot_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_revoke(u8::MAX, 0), Ok(0));
+        assert_eq!(sys_buf_revoke(BufferSlotId::new(u8::MAX), 0), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_transfer_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_transfer(0, 1), Ok(0));
+        assert_eq!(sys_buf_transfer(BufferSlotId::new(0), 1), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_transfer_max_slot_returns_ok_zero_on_host() {
-        assert_eq!(sys_buf_transfer(u8::MAX, u8::MAX), Ok(0));
+        assert_eq!(sys_buf_transfer(BufferSlotId::new(u8::MAX), u8::MAX), Ok(0));
     }
 
     #[test]

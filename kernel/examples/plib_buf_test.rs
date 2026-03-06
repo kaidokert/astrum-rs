@@ -89,9 +89,9 @@ extern "C" fn p0_main() -> ! {
     hprintln!("p0: entering");
     // 1. Allocate a writable buffer slot (no timeout).
     let slot = match plib::sys_buf_alloc(true, 0) {
-        Ok(rc) => {
-            ALLOC_RC.store(rc, Ordering::Release);
-            rc as u8
+        Ok(id) => {
+            ALLOC_RC.store(id.as_raw() as u32, Ordering::Release);
+            id
         }
         Err(_) => {
             ALLOC_RC.store(0xFFFF_FFFF, Ordering::Release);
