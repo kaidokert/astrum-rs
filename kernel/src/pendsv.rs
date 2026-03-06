@@ -60,10 +60,11 @@ macro_rules! define_pendsv {
             $strategy.program_regions(&p.MPU);
         }
 
-        $crate::define_pendsv!(@impl "bl __pendsv_program_mpu");
+        $crate::define_pendsv!(@impl_protected "bl __pendsv_program_mpu");
     };
 
-    // Internal implementation: single assembly block with optional MPU call
+    // Internal implementation: default PendSV without BASEPRI critical section.
+    // Used by static-mode callers that do not need the TOCTOU protection.
     (@impl $mpu_call:literal) => {
         #[cfg(target_arch = "arm")]
         // SAFETY: This assembly implements the PendSV exception handler which
@@ -163,6 +164,156 @@ macro_rules! define_pendsv {
             bl      pendsv_context_restore
 
             /* pendsv_return_unprivileged does not return */
+            bl      pendsv_return_unprivileged
+
+            .size PendSV, . - PendSV
+        "#
+            )
+        );
+    };
+
+    // Internal implementation: PendSV with BASEPRI critical section (Bug 14-numbat).
+    // Used by dynamic-mode and harness callers that program MPU regions and need
+    // the TOCTOU race protection around MPU + next_partition + context restore.
+    (@impl_protected $mpu_call:literal) => {
+        #[cfg(target_arch = "arm")]
+        // SAFETY: This assembly implements the PendSV exception handler which
+        // performs partition context switches. The operations are sound because:
+        //
+        // 1. Single-core exclusivity + BASEPRI critical section: PendSV runs at
+        //    the lowest exception priority (0xFF). A BASEPRI critical section
+        //    (BASEPRI = SYSTICK_PRIORITY, loaded from symbol) masks SysTick and all app IRQs
+        //    around the MPU programming + next_partition read + context restore
+        //    sequence, eliminating the TOCTOU race where SysTick could change
+        //    next_partition between MPU programming and context restore (Bug
+        //    14-numbat). PENDSVCLR is written to ICSR before clearing BASEPRI to
+        //    prevent spurious tail-chained PendSV from a masked SysTick tick.
+        //
+        // 2. Boot sequence invariants: This handler assumes boot() has completed:
+        //    - partition_sp[i] contains valid stack pointers for all partitions
+        //      (initialized via init_stack_frame() during boot)
+        //    - current_partition == 0xFF initially (sentinel for first switch)
+        //    - next_partition contains a valid partition index (set by scheduler)
+        //    - Exception priorities configured: SVCall < SysTick < PendSV (0xFF)
+        //    These invariants are established before SysTick is enabled.
+        //
+        // 3. Offset constant validity: Kernel state fields are accessed directly
+        //    via __kernel_state_start + compile-time field offsets. The offsets
+        //    (KERNEL_CURRENT_PARTITION_OFFSET, KERNEL_CORE_OFFSET, etc.) are:
+        //    - Computed using core::mem::offset_of! in define_unified_kernel!
+        //    - Valid because Kernel<C> and PartitionCore use #[repr(C)] layout
+        //    - Exported as #[no_mangle] symbols, linking the same values used here
+        //
+        // 4. Register convention compliance: The assembly follows ARM AAPCS.
+        //    - Before pendsv_context_save: only r0-r3 (hardware-saved on
+        //      exception entry) are used as scratch. r4-r11 are untouched,
+        //      preserving the outgoing partition's callee-saved state for
+        //      the save routine.
+        //    - After save: r4-r11 are free for use as callee-saved working
+        //      registers (e.g. r4 holds partition index, r5 holds kernel base).
+        //    - lr is saved/restored around bl instructions
+        //
+        // 5. PSP/register save ordering: The outgoing partition's r4-r11 are
+        //    pushed to its process stack before modifying kernel state.
+        //    The incoming partition's registers are restored after all state
+        //    updates complete, ensuring no register corruption.
+        //
+        // 6. MPU programming (dynamic mode only): When $mpu_call is non-empty,
+        //    __pendsv_program_mpu is called AFTER saving the outgoing context
+        //    and BEFORE restoring the incoming context, all within the BASEPRI
+        //    critical section. This ensures MPU regions and the next_partition
+        //    read are atomic with respect to SysTick, preventing the race where
+        //    SysTick changes next_partition after MPU is already programmed.
+        core::arch::global_asm!(
+            concat!(
+                r#"
+            .syntax unified
+            .thumb
+
+            .global PendSV
+            .type PendSV, %function
+            .thumb_func
+
+        PendSV:
+            /* r4-r11 contain the outgoing partition's callee-saved registers
+             * and must NOT be modified before pendsv_context_save. */
+
+            /* Load current_partition using only r0-r3 (hardware-saved) */
+            ldr     r0, =__kernel_state_start
+            ldr     r1, =KERNEL_CURRENT_PARTITION_OFFSET
+            ldr     r1, [r1]            /* r1 = offset value */
+            ldrb    r1, [r0, r1]        /* r1 = current_partition */
+
+            /* Skip save if current_partition == 0xFF (first switch) */
+            cmp     r1, #0xFF
+            beq     .Lpendsv_skip_save
+
+            /* Save outgoing partition context: r0 = partition index */
+            mov     r0, r1
+            bl      pendsv_context_save
+
+        .Lpendsv_skip_save:
+            /* Load kernel base into r5 (safe now: context is saved) */
+            ldr     r5, =__kernel_state_start
+
+            /* --- Begin BASEPRI critical section: mask SysTick ---
+             * Raise BASEPRI to SYSTICK_PRIORITY to prevent SysTick
+             * from preempting between MPU programming and next_partition
+             * read, eliminating the TOCTOU race (Bug 14-numbat).
+             * Value loaded from the SYSTICK_PRIORITY symbol exported by
+             * define_unified_kernel!, not hardcoded. */
+            ldr     r0, =SYSTICK_PRIORITY
+            ldr     r0, [r0]           /* r0 = KernelConfig::SYSTICK_PRIORITY */
+            msr     BASEPRI, r0
+
+            /* Dynamic mode: program MPU regions (empty string = no-op) */
+            "#,
+                $mpu_call,
+                r#"
+            /* Load next_partition: kernel_base + KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET */
+            ldr     r0, =KERNEL_CORE_OFFSET
+            ldr     r0, [r0]            /* r0 = core offset */
+            add     r6, r5, r0          /* r6 = &kernel.core */
+
+            ldr     r0, =CORE_NEXT_PARTITION_OFFSET
+            ldr     r0, [r0]            /* r0 = next_partition offset within core */
+            ldrb    r4, [r6, r0]        /* r4 = next_partition (callee-saved) */
+
+            /* Store next_partition to current_partition */
+            ldr     r0, =KERNEL_CURRENT_PARTITION_OFFSET
+            ldr     r0, [r0]            /* r0 = current_partition offset */
+            strb    r4, [r5, r0]        /* current_partition = next_partition */
+
+            /* Restore incoming partition context: r0 = partition index */
+            mov     r0, r4
+            bl      pendsv_context_restore
+
+            /* --- End BASEPRI critical section ---
+             * Clear any PendSV re-pended by masked SysTick, then unmask.
+             * See notes/pendstclr-basepri-ordering.md for rationale.
+             *
+             * PENDSVCLR (ICSR bit 27) clears a spurious PendSV pended by
+             * SysTick while masked. The subtask named this "PENDSTCLR"
+             * but specified bit 27 / 0x08000000 which is PENDSVCLR.
+             * PENDSVCLR is correct here: we clear the *PendSV* pending
+             * bit, not the SysTick pending bit (PENDSTCLR = bit 25).
+             *
+             * TODO: evaluate whether PENDSTCLR (bit 25) should also be
+             * cleared to prevent a stale SysTick from firing immediately
+             * after BASEPRI is lowered (currently harmless since SysTick
+             * just re-evaluates the schedule, but wastes cycles). */
+            ldr     r0, =0xE000ED04     /* ICSR address */
+            mov     r1, #0x08000000     /* PENDSVCLR = bit 27 */
+            str     r1, [r0]
+            dsb                         /* ensure PENDSVCLR write completes */
+            mov     r0, #0
+            msr     BASEPRI, r0         /* unmask SysTick */
+
+            /* pendsv_return_unprivileged does not return.
+             * r0 clobber above is safe: pendsv_return_unprivileged takes
+             * no inputs (starts with `mrs r0, CONTROL`), and
+             * pendsv_context_restore has no return value in r0 (outputs
+             * via PSP/r4-r11 side effects per AAPCS). */
             bl      pendsv_return_unprivileged
 
             .size PendSV, . - PendSV

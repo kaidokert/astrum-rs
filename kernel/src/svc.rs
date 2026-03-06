@@ -693,6 +693,15 @@ macro_rules! define_unified_kernel {
         static CORE_PARTITION_SP_OFFSET: usize =
             ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, partition_sp);
 
+        /// SysTick priority value from KernelConfig, exported for PendSV assembly.
+        /// The PendSV handler (@impl_protected) uses this to set BASEPRI during
+        /// its critical section (Bug 14-numbat), masking SysTick and app IRQs.
+        #[no_mangle]
+        #[cfg_attr(not(test), link_section = ".rodata")]
+        #[allow(dead_code)]
+        static SYSTICK_PRIORITY: usize =
+            <$Config as $crate::config::KernelConfig>::SYSTICK_PRIORITY as usize;
+
         /// SVC dispatch hook that routes syscalls through the unified kernel.
         ///
         /// # Safety
