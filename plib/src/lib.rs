@@ -362,8 +362,8 @@ pub fn sys_get_time() -> Result<u32, SvcError> {
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-pub fn sys_sem_wait(sem_id: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_SEM_WAIT, sem_id, 0u32, 0u32))
+pub fn sys_sem_wait(sem_id: SemaphoreId) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(SYS_SEM_WAIT, sem_id.as_raw(), 0u32, 0u32))
 }
 
 /// Signal (increment) a semaphore.
@@ -373,8 +373,13 @@ pub fn sys_sem_wait(sem_id: u32) -> Result<u32, SvcError> {
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-pub fn sys_sem_signal(sem_id: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_SEM_SIGNAL, sem_id, 0u32, 0u32))
+pub fn sys_sem_signal(sem_id: SemaphoreId) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_SEM_SIGNAL,
+        sem_id.as_raw(),
+        0u32,
+        0u32
+    ))
 }
 
 /// Lock a mutex.
@@ -385,8 +390,8 @@ pub fn sys_sem_signal(sem_id: u32) -> Result<u32, SvcError> {
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-pub fn sys_mtx_lock(mtx_id: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_MTX_LOCK, mtx_id, 0u32, 0u32))
+pub fn sys_mtx_lock(mtx_id: MutexId) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(SYS_MTX_LOCK, mtx_id.as_raw(), 0u32, 0u32))
 }
 
 /// Unlock a mutex.
@@ -397,8 +402,13 @@ pub fn sys_mtx_lock(mtx_id: u32) -> Result<u32, SvcError> {
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-pub fn sys_mtx_unlock(mtx_id: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_MTX_UNLOCK, mtx_id, 0u32, 0u32))
+pub fn sys_mtx_unlock(mtx_id: MutexId) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_MTX_UNLOCK,
+        mtx_id.as_raw(),
+        0u32,
+        0u32
+    ))
 }
 
 /// Write data to a sampling port.
@@ -958,22 +968,22 @@ mod tests {
 
     #[test]
     fn sem_wait_returns_ok_zero_on_host() {
-        assert_eq!(sys_sem_wait(0), Ok(0));
+        assert_eq!(sys_sem_wait(SemaphoreId::new(0)), Ok(0));
     }
 
     #[test]
     fn sem_signal_returns_ok_zero_on_host() {
-        assert_eq!(sys_sem_signal(0), Ok(0));
+        assert_eq!(sys_sem_signal(SemaphoreId::new(0)), Ok(0));
     }
 
     #[test]
     fn mtx_lock_returns_ok_zero_on_host() {
-        assert_eq!(sys_mtx_lock(0), Ok(0));
+        assert_eq!(sys_mtx_lock(MutexId::new(0)), Ok(0));
     }
 
     #[test]
     fn mtx_unlock_returns_ok_zero_on_host() {
-        assert_eq!(sys_mtx_unlock(0), Ok(0));
+        assert_eq!(sys_mtx_unlock(MutexId::new(0)), Ok(0));
     }
 
     #[test]

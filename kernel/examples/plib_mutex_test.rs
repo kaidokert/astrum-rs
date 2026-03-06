@@ -81,14 +81,14 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     // Lock the mutex — P0 runs first so this should be immediate (Ok(1)).
-    match plib::sys_mtx_lock(0) {
+    match plib::sys_mtx_lock(plib::MutexId::new(0)) {
         Ok(rc) => P0_LOCK_RC.store(rc, Ordering::Release),
         Err(_) => P0_LOCK_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
     // Yield to let P1 run and attempt to lock (P1 will block).
     let _ = plib::sys_yield();
     // Unlock — wakes P1 which was blocked on the mutex.
-    match plib::sys_mtx_unlock(0) {
+    match plib::sys_mtx_unlock(plib::MutexId::new(0)) {
         Ok(rc) => P0_UNLOCK_RC.store(rc, Ordering::Release),
         Err(_) => P0_UNLOCK_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
@@ -100,11 +100,11 @@ extern "C" fn p0_main() -> ! {
 extern "C" fn p1_main() -> ! {
     // Attempt to lock the mutex while P0 holds it — P1 blocks until P0 unlocks.
     // Expected: Ok(0) indicating blocked-then-acquired.
-    match plib::sys_mtx_lock(0) {
+    match plib::sys_mtx_lock(plib::MutexId::new(0)) {
         Ok(rc) => P1_LOCK_RC.store(rc, Ordering::Release),
         Err(_) => P1_LOCK_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
-    match plib::sys_mtx_unlock(0) {
+    match plib::sys_mtx_unlock(plib::MutexId::new(0)) {
         Ok(rc) => P1_UNLOCK_RC.store(rc, Ordering::Release),
         Err(_) => P1_UNLOCK_RC.store(0xFFFF_FFFF, Ordering::Release),
     }

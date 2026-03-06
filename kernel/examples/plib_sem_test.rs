@@ -70,7 +70,7 @@ extern "C" fn p0_main() -> ! {
     // Yield so P1 runs first and blocks on sem_wait(0).
     let _ = plib::sys_yield();
     // Signal the semaphore — wakes P1 which is blocked on wait.
-    match plib::sys_sem_signal(0) {
+    match plib::sys_sem_signal(plib::SemaphoreId::new(0)) {
         Ok(rc) => P0_SIGNAL_RC.store(rc, Ordering::Release),
         Err(e) => P0_SIGNAL_RC.store(e.to_u32(), Ordering::Release),
     }
@@ -81,7 +81,7 @@ extern "C" fn p0_main() -> ! {
 
 extern "C" fn p1_main() -> ! {
     // Wait on the semaphore — blocks until P0 signals.
-    match plib::sys_sem_wait(0) {
+    match plib::sys_sem_wait(plib::SemaphoreId::new(0)) {
         Ok(rc) => P1_WAIT_RC.store(rc, Ordering::Release),
         Err(e) => P1_WAIT_RC.store(e.to_u32(), Ordering::Release),
     }
