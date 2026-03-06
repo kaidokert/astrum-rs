@@ -192,6 +192,10 @@ name = "uart_irq_demo"
 required-features = ["qemu", "log-semihosting", "custom-ivt"]
 
 [[example]]
+name = "all_syscalls_smoke_test"
+required-features = ["qemu", "log-semihosting", "ipc-blackboard"]
+
+[[example]]
 name = "smoke_test"
 required-features = ["qemu", "log-semihosting"]
 
