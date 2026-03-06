@@ -2692,6 +2692,17 @@ where
             }
             self.transition_outgoing_ready();
             self.active_partition = Some(pid);
+        } else {
+            // Bug 05: force_advance returned no partition (empty/unstarted
+            // schedule or SystemWindow slot). If the active partition is
+            // Waiting, restore it to Running so it remains schedulable.
+            // Transition chain: Waiting → Ready → Running (no direct path).
+            if let Some(ap) = self.active_partition {
+                if try_transition(self.partitions_mut(), ap, PartitionState::Ready) {
+                    let _ = try_transition(self.partitions_mut(), ap, PartitionState::Running);
+                }
+            }
+            return ScheduleEvent::None;
         }
         result
     }
@@ -9851,17 +9862,38 @@ mod tests {
         );
         assert_partition_state_consistency(k.partitions().as_slice());
 
-        // Step 5: Advance 3 ticks to exhaust P1's slot → switch to P0.
+        // Step 5: Advance ticks to exhaust P1's slot → switch to P0.
+        // With dynamic-mpu the schedule is [P0:5, P1:3, SW:1], so
+        // after P1's 3 ticks we hit a SystemWindow before P0.
+        // TODO: cfg-split is driven by kernel_with_schedule() adding
+        // add_system_window(1) under dynamic-mpu. If schedule layout
+        // changes, these tick counts must be re-derived from the layout.
         for i in 0..2 {
             let ev = k.advance_schedule_tick();
             assert_eq!(ev, ScheduleEvent::None, "tick {}: interior", i + 1);
         }
         let ev = k.advance_schedule_tick();
+        #[cfg(feature = "dynamic-mpu")]
+        assert_eq!(
+            ev,
+            ScheduleEvent::SystemWindow,
+            "3rd tick hits system window"
+        );
+        #[cfg(not(feature = "dynamic-mpu"))]
         assert_eq!(
             ev,
             ScheduleEvent::PartitionSwitch(0),
-            "3rd tick must trigger switch to P0"
+            "3rd tick switches to P0"
         );
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            let ev = k.advance_schedule_tick();
+            assert_eq!(
+                ev,
+                ScheduleEvent::PartitionSwitch(0),
+                "4th tick switches to P0"
+            );
+        }
         assert_eq!(k.active_partition(), Some(0));
         assert_eq!(
             k.partitions().get(1).unwrap().state(),
