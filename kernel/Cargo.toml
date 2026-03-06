@@ -299,6 +299,10 @@ name = "plib_bb_test"
 required-features = ["qemu", "log-semihosting", "ipc-blackboard"]
 
 [[example]]
+name = "plib_buf_lend_test"
+required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+
+[[example]]
 name = "plib_buf_test"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
@@ -390,7 +394,7 @@ arinc-compat = ["ipc-sampling", "ipc-queuing", "ipc-blackboard", "ipc-message"]
 # custom one (e.g. from bind_interrupts!) can be linked instead.
 custom-ivt = []
 qemu = []
-dynamic-mpu = ["rtos-traits/dynamic-mpu"]
+dynamic-mpu = ["rtos-traits/dynamic-mpu", "plib/dynamic-mpu"]
 partition-debug = ["rtos-traits/partition-debug"]
 panic-halt = ["dep:panic-halt"]
 log-semihosting = ["dep:cortex-m-semihosting", "dep:panic-semihosting"]

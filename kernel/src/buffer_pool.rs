@@ -454,21 +454,44 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
 
     /// Copy data from a borrowed slot's internal buffer into `dst`.
     ///
-    /// Both `BorrowedRead` and `BorrowedWrite` owners may read.  The copy
-    /// length is `min(dst.len(), slot.data.len())`.  Returns the number of
-    /// bytes copied on success.
+    /// Both `BorrowedRead` and `BorrowedWrite` owners may read.  Lendees
+    /// (partitions that have been granted access via `share_with_partition`)
+    /// may also read regardless of the `lend.writable` flag, since this
+    /// is a read-only operation — `writable` only gates write access,
+    /// which is enforced separately by the `SYS_BUF_WRITE` handler.
+    ///
+    /// The copy length is `min(dst.len(), slot.data.len())`.
+    /// Returns the number of bytes copied on success.
+    ///
+    /// # Authorization
+    ///
+    /// This method grants **read-only** data access.  It does not confer
+    /// owner-level privileges: `share_with_partition` (lend),
+    /// `unshare_from_partition` (revoke), `release`, and
+    /// `transfer_ownership` each perform their own independent owner
+    /// checks and are unreachable through this path.
+    // TODO: reviewer false positive — reviewer claimed this bypass lets
+    // lendees call revoke/lend and ignores writable.  In fact, only
+    // read_from_slot is affected (read-only); revoke/lend/write have
+    // independent owner checks in their respective methods and SVC handlers.
     pub fn read_from_slot(
         &self,
         slot: usize,
-        owner: u8,
+        caller: u8,
         dst: &mut [u8],
     ) -> Result<usize, BufferError> {
         let s = self.slots.get(slot).ok_or(BufferError::InvalidSlot)?;
         match s.state {
             BorrowState::Free => return Err(BufferError::SlotNotBorrowed),
             BorrowState::BorrowedRead { owner: o } | BorrowState::BorrowedWrite { owner: o } => {
-                if o != owner {
-                    return Err(BufferError::NotOwner);
+                if o != caller {
+                    // Caller is not the owner — check if they are an
+                    // authorized lendee (read access is always permitted
+                    // for lendees; writable only gates SYS_BUF_WRITE).
+                    match &s.lent_to {
+                        Some(lend) if lend.target == caller => {}
+                        _ => return Err(BufferError::NotOwner),
+                    }
                 }
             }
         }
@@ -1347,6 +1370,28 @@ mod tests {
         let n = pool.read_from_slot(0, 1, &mut dst).unwrap();
         assert_eq!(n, 32);
         assert_eq!(dst, pattern);
+    }
+
+    #[test] fn read_from_slot_lendee_succeeds() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        let pattern: [u8; 32] = core::array::from_fn(|i| i as u8);
+        pool.get_mut(0).unwrap().data_mut().copy_from_slice(&pattern);
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        let mut dst = [0u8; 32];
+        let n = pool.read_from_slot(0, 2, &mut dst).unwrap();
+        assert_eq!(n, 32);
+        assert_eq!(dst, pattern);
+    }
+
+    #[test] fn read_from_slot_non_lendee_rejected() {
+        let mut pool = BufferPool::<1, 32>::new();
+        let ds = DynamicStrategy::new();
+        pool.alloc(1, BorrowMode::Write).unwrap();
+        pool.share_with_partition(0, 1, 2, false, &ds).unwrap();
+        let mut dst = [0u8; 32];
+        assert_eq!(pool.read_from_slot(0, 3, &mut dst), Err(BufferError::NotOwner));
     }
 
     #[test] fn read_from_slot_borrowed_write_success() {
