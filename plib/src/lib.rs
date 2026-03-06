@@ -337,10 +337,10 @@ pub fn sys_yield() -> Result<u32, SvcError> {
 ///
 /// # Returns
 ///
-/// `Ok(id)` with the caller's partition index, or `Err(SvcError)` if the
-/// syscall failed.
-pub fn sys_get_partition_id() -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_GET_PARTITION_ID, 0u32, 0u32, 0u32))
+/// `Ok(PartitionId)` with the caller's partition index, or `Err(SvcError)` if
+/// the syscall failed.
+pub fn sys_get_partition_id() -> Result<PartitionId, SvcError> {
+    decode_rc(rtos_traits::svc!(SYS_GET_PARTITION_ID, 0u32, 0u32, 0u32)).map(PartitionId::new)
 }
 
 /// Get the current kernel tick count.
@@ -968,7 +968,7 @@ mod tests {
 
     #[test]
     fn get_partition_id_returns_ok_zero_on_host() {
-        assert_eq!(sys_get_partition_id(), Ok(0));
+        assert_eq!(sys_get_partition_id(), Ok(PartitionId::new(0)));
     }
 
     #[test]

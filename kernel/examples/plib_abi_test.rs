@@ -84,9 +84,9 @@ extern "C" fn partition_main() -> ! {
         Err(_) => YIELD_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
 
-    // 2. sys_get_partition_id: expect Ok(0)
+    // 2. sys_get_partition_id: expect Ok(PartitionId(0))
     match plib::sys_get_partition_id() {
-        Ok(id) => PID_RC.store(id, Ordering::Release),
+        Ok(id) => PID_RC.store(id.as_raw(), Ordering::Release),
         Err(_) => PID_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
 
