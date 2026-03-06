@@ -121,7 +121,7 @@ fn fail(checkpoint: u32) {
 
 extern "C" fn p0_body(_r0: u32) -> ! {
     loop {
-        let bits = match plib::sys_event_wait(0x01) {
+        let bits = match plib::sys_event_wait(plib::EventMask::new(0x01)) {
             Ok(v) => v,
             Err(_) => {
                 fail(1);
@@ -129,7 +129,7 @@ extern "C" fn p0_body(_r0: u32) -> ! {
             }
         };
         // event_wait returns 0 when entering Waiting state; skip that.
-        if bits == 0 {
+        if bits == plib::EventMask::new(0) {
             continue;
         }
         let phase = ISR_PHASE.load(Ordering::Acquire);

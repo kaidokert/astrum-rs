@@ -279,8 +279,8 @@ pub fn debug_write<const N: usize>(
 ///
 /// `Ok(bits)` with the bitmask of events that were pending, or
 /// `Err(SvcError)` if the syscall failed.
-pub fn sys_event_wait(mask: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_EVT_WAIT, 0u32, mask, 0u32))
+pub fn sys_event_wait(mask: EventMask) -> Result<EventMask, SvcError> {
+    decode_rc(rtos_traits::svc!(SYS_EVT_WAIT, 0u32, mask.as_raw(), 0u32)).map(EventMask::new)
 }
 
 /// Set event bits on another partition.
@@ -291,8 +291,13 @@ pub fn sys_event_wait(mask: u32) -> Result<u32, SvcError> {
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-pub fn sys_event_set(target_partition: u32, mask: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_EVT_SET, target_partition, mask, 0u32))
+pub fn sys_event_set(target_partition: PartitionId, mask: EventMask) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_EVT_SET,
+        target_partition.as_raw(),
+        mask.as_raw(),
+        0u32
+    ))
 }
 
 /// Clear event bits in the calling partition's pending-event word.
@@ -303,8 +308,8 @@ pub fn sys_event_set(target_partition: u32, mask: u32) -> Result<u32, SvcError> 
 ///
 /// `Ok(prev)` with the previous pending-event word value, or
 /// `Err(SvcError)` if the syscall failed.
-pub fn sys_event_clear(mask: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_EVT_CLEAR, 0u32, mask, 0u32))
+pub fn sys_event_clear(mask: EventMask) -> Result<EventMask, SvcError> {
+    decode_rc(rtos_traits::svc!(SYS_EVT_CLEAR, 0u32, mask.as_raw(), 0u32)).map(EventMask::new)
 }
 
 /// Acknowledge a hardware IRQ after the partition has handled it.
@@ -437,10 +442,10 @@ pub fn sys_sampling_read(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> 
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-pub fn sys_msg_send(target_partition: u32, data: &[u8]) -> Result<u32, SvcError> {
+pub fn sys_msg_send(target_partition: PartitionId, data: &[u8]) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_MSG_SEND,
-        target_partition,
+        target_partition.as_raw(),
         data.len() as u32,
         data.as_ptr() as u32
     ))
@@ -910,17 +915,20 @@ mod tests {
 
     #[test]
     fn event_wait_returns_ok_zero_on_host() {
-        assert_eq!(sys_event_wait(0x01), Ok(0));
+        assert_eq!(sys_event_wait(EventMask::new(0x01)), Ok(EventMask::new(0)));
     }
 
     #[test]
     fn event_set_returns_ok_zero_on_host() {
-        assert_eq!(sys_event_set(1, 0xFF), Ok(0));
+        assert_eq!(
+            sys_event_set(PartitionId::new(1), EventMask::new(0xFF)),
+            Ok(0)
+        );
     }
 
     #[test]
     fn event_clear_returns_ok_zero_on_host() {
-        assert_eq!(sys_event_clear(0x03), Ok(0));
+        assert_eq!(sys_event_clear(EventMask::new(0x03)), Ok(EventMask::new(0)));
     }
 
     #[test]
@@ -981,12 +989,15 @@ mod tests {
 
     #[test]
     fn msg_send_returns_ok_zero_on_host() {
-        assert_eq!(sys_msg_send(1, &[0xAA, 0xBB, 0xCC]), Ok(0));
+        assert_eq!(
+            sys_msg_send(PartitionId::new(1), &[0xAA, 0xBB, 0xCC]),
+            Ok(0)
+        );
     }
 
     #[test]
     fn msg_send_empty_data_returns_ok_zero_on_host() {
-        assert_eq!(sys_msg_send(0, &[]), Ok(0));
+        assert_eq!(sys_msg_send(PartitionId::new(0), &[]), Ok(0));
     }
 
     #[test]

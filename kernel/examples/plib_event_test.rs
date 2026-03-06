@@ -84,7 +84,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     // Set bits 0-2 on P1 (partition index 1).
-    match plib::sys_event_set(1, 0x07) {
+    match plib::sys_event_set(plib::PartitionId::new(1), plib::EventMask::new(0x07)) {
         Ok(rc) => SET_RC.store(rc, Ordering::Release),
         Err(_) => SET_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
@@ -96,18 +96,18 @@ extern "C" fn p0_main() -> ! {
 extern "C" fn p1_main() -> ! {
     // Wait for bit 2 only — event_wait clears matched bits, so bits 0-1
     // (0x03) remain in P1's pending flags after this call.
-    match plib::sys_event_wait(0x04) {
-        Ok(rc) => WAIT_RC.store(rc, Ordering::Release),
+    match plib::sys_event_wait(plib::EventMask::new(0x04)) {
+        Ok(rc) => WAIT_RC.store(rc.as_raw(), Ordering::Release),
         Err(_) => WAIT_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
     // Clear bit 0 — bit 1 should survive.
-    match plib::sys_event_clear(0x01) {
-        Ok(rc) => CLEAR_RC.store(rc, Ordering::Release),
+    match plib::sys_event_clear(plib::EventMask::new(0x01)) {
+        Ok(rc) => CLEAR_RC.store(rc.as_raw(), Ordering::Release),
         Err(_) => CLEAR_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
     // Verify bit 1 survived by waiting on it — should return immediately.
-    match plib::sys_event_wait(0x02) {
-        Ok(rc) => REMAIN_RC.store(rc, Ordering::Release),
+    match plib::sys_event_wait(plib::EventMask::new(0x02)) {
+        Ok(rc) => REMAIN_RC.store(rc.as_raw(), Ordering::Release),
         Err(_) => REMAIN_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
     loop {

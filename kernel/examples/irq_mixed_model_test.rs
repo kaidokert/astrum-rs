@@ -71,7 +71,7 @@ kernel::define_unified_harness!(MixedConfig, |tick, _k| {
 /// Partition 0: PartitionAcks — event_wait + SYS_IRQ_ACK loop.
 extern "C" fn p0_main() -> ! {
     loop {
-        if let Err(e) = plib::sys_event_wait(0x01) {
+        if let Err(e) = plib::sys_event_wait(plib::EventMask::new(0x01)) {
             hprintln!("irq_mixed_model_test: p0 FAIL (evt_wait {:?})", e);
             debug::exit(debug::EXIT_FAILURE);
         }
@@ -86,7 +86,7 @@ extern "C" fn p0_main() -> ! {
 /// Partition 1: KernelClears — event_wait only, no ack needed.
 extern "C" fn p1_main() -> ! {
     loop {
-        if let Err(e) = plib::sys_event_wait(0x02) {
+        if let Err(e) = plib::sys_event_wait(plib::EventMask::new(0x02)) {
             hprintln!("irq_mixed_model_test: p1 FAIL (evt_wait {:?})", e);
             debug::exit(debug::EXIT_FAILURE);
         }

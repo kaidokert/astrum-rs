@@ -84,7 +84,7 @@ kernel::define_unified_harness!(Config, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     loop {
-        match plib::sys_event_wait(0x01) {
+        match plib::sys_event_wait(plib::EventMask::new(0x01)) {
             Ok(_) => {
                 WAIT_COUNT.fetch_add(1, Ordering::Release);
             }

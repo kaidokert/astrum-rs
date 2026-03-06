@@ -135,14 +135,14 @@ extern "C" fn config_main_body(r0: u32) -> ! {
         }
         let _ = plib::sys_yield();
 
-        let mask = 0x03u32;
+        let mask = plib::EventMask::new(0x03);
         let mut got = plib::sys_event_wait(mask);
-        while matches!(got, Ok(v) if v & mask != mask) {
+        while matches!(got, Ok(v) if v.as_raw() & mask.as_raw() != mask.as_raw()) {
             let _ = plib::sys_yield();
             got = plib::sys_event_wait(mask);
         }
         if let Ok(v) = got {
-            CONFIG_EVENTS.store(v, Ordering::Release);
+            CONFIG_EVENTS.store(v.as_raw(), Ordering::Release);
             CONFIG_DONE.fetch_add(1, Ordering::Release);
         }
     }
@@ -172,7 +172,9 @@ fn worker(read_counter: &AtomicU32, sem_counter: &AtomicU32, bb: u32, sem: u32, 
                     if plib::sys_sem_signal(sem).is_err() {
                         DATA_ERRORS.fetch_add(1, Ordering::Release);
                     }
-                    if plib::sys_event_set(0, evt).is_err() {
+                    if plib::sys_event_set(plib::PartitionId::new(0), plib::EventMask::new(evt))
+                        .is_err()
+                    {
                         DATA_ERRORS.fetch_add(1, Ordering::Release);
                     }
                 }

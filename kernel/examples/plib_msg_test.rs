@@ -88,7 +88,9 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     let payload = PAYLOAD;
-    match plib::sys_msg_send(0, &payload) {
+    // TODO: PartitionId(0) is actually queue_id 0 here, not a partition target;
+    // see file-level comment. Consider a QueueId newtype for sys_msg_send.
+    match plib::sys_msg_send(plib::PartitionId::new(0), &payload) {
         Ok(rc) => SEND_RC.store(rc, Ordering::Release),
         Err(_) => SEND_RC.store(0xFFFF_FFFF, Ordering::Release),
     }

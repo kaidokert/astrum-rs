@@ -51,7 +51,7 @@ kernel::define_unified_harness!(ErrTestConfig, |tick, _k| {
     }
 });
 
-fn unwrap_or_fail(r: Result<u32, plib::SvcError>, ctx: &str) {
+fn unwrap_or_fail<T>(r: Result<T, plib::SvcError>, ctx: &str) {
     if let Err(e) = r {
         hprintln!("{}: FAIL ({:?})", ctx, e);
         debug::exit(debug::EXIT_FAILURE);
@@ -84,14 +84,17 @@ extern "C" fn p0_main() -> ! {
     }
 
     loop {
-        unwrap_or_fail(plib::sys_event_wait(0x01), "p0 evt_wait");
+        unwrap_or_fail(
+            plib::sys_event_wait(plib::EventMask::new(0x01)),
+            "p0 evt_wait",
+        );
     }
 }
 
 extern "C" fn p1_main() -> ! {
     loop {
         unwrap_or_fail(
-            plib::sys_event_wait(0x02),
+            plib::sys_event_wait(plib::EventMask::new(0x02)),
             "irq_ack_error_test: p1 evt_wait",
         );
     }

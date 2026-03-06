@@ -70,7 +70,7 @@ kernel::define_unified_harness!(Cfg, |tick, _k| {
 extern "C" fn p0_body(_r0: u32) -> ! {
     let mut next_tag: u8 = 1;
     loop {
-        if let Err(e) = plib::sys_event_wait(0x01) {
+        if let Err(e) = plib::sys_event_wait(plib::EventMask::new(0x01)) {
             hprintln!("rb_test: FAIL evt_wait {:?}", e);
             debug::exit(debug::EXIT_FAILURE);
         }

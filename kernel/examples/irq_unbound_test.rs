@@ -59,13 +59,13 @@ kernel::define_unified_harness!(UnboundConfig, |tick, _k| {
 
 extern "C" fn p0_main_body(_r0: u32) -> ! {
     loop {
-        match plib::sys_event_wait(0x01) {
-            Ok(0) => {} // Entered waiting state, no event yet
+        match plib::sys_event_wait(plib::EventMask::new(0x01)) {
+            Ok(bits) if bits == plib::EventMask::new(0) => {} // Entered waiting state, no event yet
             Ok(bits) => {
-                if bits != 0x01 {
+                if bits != plib::EventMask::new(0x01) {
                     hprintln!(
                         "irq_unbound_test: FAIL (event_wait bits=0x{:08X}, expected 0x01)",
-                        bits
+                        bits.as_raw()
                     );
                     debug::exit(debug::EXIT_FAILURE);
                 }

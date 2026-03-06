@@ -76,7 +76,7 @@ kernel::define_unified_harness!(CustomHandlerConfig, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     loop {
-        let bits = match plib::sys_event_wait(0x01) {
+        let bits = match plib::sys_event_wait(plib::EventMask::new(0x01)) {
             Ok(v) => v,
             Err(e) => {
                 hprintln!("custom_handler: p0 evt_wait FAIL {:?}", e);
@@ -85,7 +85,7 @@ extern "C" fn p0_main() -> ! {
             }
         };
         // event_wait returns 0 when entering Waiting state; skip that.
-        if bits == 0 {
+        if bits == plib::EventMask::new(0) {
             continue;
         }
         if let Err(e) = plib::sys_irq_ack(60) {
@@ -98,7 +98,7 @@ extern "C" fn p0_main() -> ! {
 
 extern "C" fn p1_main() -> ! {
     loop {
-        let bits = match plib::sys_event_wait(0x02) {
+        let bits = match plib::sys_event_wait(plib::EventMask::new(0x02)) {
             Ok(v) => v,
             Err(e) => {
                 hprintln!("custom_handler: p1 evt_wait FAIL {:?}", e);
@@ -107,7 +107,7 @@ extern "C" fn p1_main() -> ! {
             }
         };
         // event_wait returns 0 when entering Waiting state; skip that.
-        if bits == 0 {
+        if bits == plib::EventMask::new(0) {
             continue;
         }
         if let Err(e) = plib::sys_irq_ack(61) {

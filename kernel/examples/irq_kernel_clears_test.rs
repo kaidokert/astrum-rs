@@ -81,8 +81,8 @@ extern "C" fn p0_main_body(_r0: u32) -> ! {
     loop {
         // Block until event 0x01 is signalled by the IRQ dispatch handler.
         // No SYS_IRQ_ACK needed — kernel already cleared the source.
-        match plib::sys_event_wait(0x01) {
-            Ok(bits) if bits != 0 => {
+        match plib::sys_event_wait(plib::EventMask::new(0x01)) {
+            Ok(bits) if bits != plib::EventMask::new(0) => {
                 WAIT_COUNT.fetch_add(1, Ordering::Release);
             }
             Ok(_) => {}

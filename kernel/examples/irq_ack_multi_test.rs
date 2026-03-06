@@ -66,7 +66,7 @@ kernel::define_unified_harness!(AckMultiConfig, |tick, _k| {
     }
 });
 
-fn unwrap_or_fail(r: Result<u32, plib::SvcError>, tag: &str, op: &str) {
+fn unwrap_or_fail<T>(r: Result<T, plib::SvcError>, tag: &str, op: &str) {
     if let Err(e) = r {
         hprintln!("irq_ack_multi_test: {} FAIL ({} {:?})", tag, op, e);
         debug::exit(debug::EXIT_FAILURE);
@@ -75,7 +75,11 @@ fn unwrap_or_fail(r: Result<u32, plib::SvcError>, tag: &str, op: &str) {
 
 fn ack_loop(evt: u32, irq: u8, ctr: &AtomicU32, tag: &str) -> ! {
     loop {
-        unwrap_or_fail(plib::sys_event_wait(evt), tag, "evt_wait");
+        unwrap_or_fail(
+            plib::sys_event_wait(plib::EventMask::new(evt)),
+            tag,
+            "evt_wait",
+        );
         unwrap_or_fail(plib::sys_irq_ack(irq), tag, "irq_ack");
         ctr.fetch_add(1, Ordering::Release);
     }

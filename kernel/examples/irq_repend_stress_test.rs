@@ -67,7 +67,7 @@ kernel::define_unified_harness!(StressConfig, |tick, _k| {
     }
 });
 
-fn unwrap_or_fail(r: Result<u32, plib::SvcError>, ctx: &str) {
+fn unwrap_or_fail<T>(r: Result<T, plib::SvcError>, ctx: &str) {
     if let Err(e) = r {
         hprintln!("{}: FAIL ({:?})", ctx, e);
         debug::exit(debug::EXIT_FAILURE);
@@ -78,7 +78,10 @@ fn unwrap_or_fail(r: Result<u32, plib::SvcError>, ctx: &str) {
 extern "C" fn p0_main_body(_r0: u32) -> ! {
     loop {
         // Block until event 0x01 is signalled by the IRQ dispatch handler.
-        unwrap_or_fail(plib::sys_event_wait(0x01), "irq_repend_stress: event_wait");
+        unwrap_or_fail(
+            plib::sys_event_wait(plib::EventMask::new(0x01)),
+            "irq_repend_stress: event_wait",
+        );
 
         // Acknowledge (unmask) IRQ 0 so the next pend fires.
         unwrap_or_fail(plib::sys_irq_ack(0), "irq_repend_stress: irq_ack");

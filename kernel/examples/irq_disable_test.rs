@@ -87,7 +87,7 @@ extern "C" fn p0_body(_r0: u32) -> ! {
     loop {
         // TODO: uses `if let Err` (discards Ok value) unlike match-based examples
         // that inspect the returned bits; both patterns are intentional.
-        if let Err(e) = plib::sys_event_wait(0x01) {
+        if let Err(e) = plib::sys_event_wait(plib::EventMask::new(0x01)) {
             hprintln!("FAIL (event_wait {:?})", e);
             debug::exit(debug::EXIT_FAILURE);
         }
