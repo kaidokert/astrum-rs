@@ -2112,11 +2112,11 @@ where
             }),
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevReadTimed) => {
-                // r1 = device_id, r2 = timeout_ticks (0 = non-blocking), r3 = buf_ptr
+                // r1 = device_id, r2 = (timeout_ticks << 16 | buf_len), r3 = buf_ptr
                 // Reads a single byte; blocks caller if no data and timeout > 0.
                 validated_ptr!(self, frame.r3, 1, {
                     let buf_ptr = frame.r3 as *mut u8;
-                    let timeout = frame.r2;
+                    let timeout = frame.r2 >> 16;
                     let pid = self.current_partition;
                     let device_id = frame.r1 as u8;
                     match self.registry.get_mut(device_id) {
@@ -5493,8 +5493,8 @@ mod tests {
         // SAFETY: uart_a points to a leaked VirtualUartBackend; no aliasing.
         unsafe { &mut *uart_a }.push_rx(&[0x42]);
         let ptr = low32_buf(0);
-        // timeout=10 but data is available, so should return immediately.
-        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 10, ptr as u32);
+        // timeout=10, buf_len=1; data is available, so should return immediately.
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, (10 << 16) | 1, ptr as u32);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 1, "should return 1 byte read");
@@ -5520,8 +5520,8 @@ mod tests {
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         let ptr = low32_buf(0);
-        // No RX data; timeout=50 should block the caller.
-        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 50, ptr as u32);
+        // No RX data; timeout=50, buf_len=1 should block the caller.
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, (50 << 16) | 1, ptr as u32);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
@@ -5546,7 +5546,7 @@ mod tests {
         let ptr = low32_buf(0);
         // No RX data; timeout>0 should block and trigger deschedule.
         assert!(!k.yield_requested());
-        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 50, ptr as u32);
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, (50 << 16) | 1, ptr as u32);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
@@ -5572,8 +5572,9 @@ mod tests {
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
         let ptr = low32_buf(0);
-        // No RX data; timeout=0 (non-blocking) should return 0 immediately.
-        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 0, ptr as u32);
+        // No RX data; timeout=0, buf_len=1 (non-blocking) should return 0 immediately.
+        // Packed r2: (timeout << 16) | buf_len = (0 << 16) | 1 = 1.
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 1, ptr as u32);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0);
@@ -5587,11 +5588,37 @@ mod tests {
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
+    fn dev_read_timed_nonblocking_packed_len64_returns_zero() {
+        use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
+        let (registry, _, _) = default_registry();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
+        // Open device 0
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        let ptr = low32_buf(0);
+        // No RX data; packed r2 with timeout=0, buf_len=64 must NOT block.
+        // Packed r2: (timeout << 16) | buf_len = (0 << 16) | 64 = 64.
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 64, ptr as u32);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "non-blocking read must return 0 immediately");
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running,
+            "partition must remain Running for non-blocking read"
+        );
+        assert_eq!(k.dev_wait_queue().len(), 0, "must not enqueue a waiter");
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
     fn dev_read_timed_invalid_device_returns_error() {
         use crate::syscall::SYS_DEV_READ_TIMED;
         let mut k = kernel(0, 0, 0);
         let ptr = low32_buf(0);
-        let mut ef = frame4(SYS_DEV_READ_TIMED, 99, 10, ptr as u32);
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 99, (10 << 16) | 1, ptr as u32);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
@@ -5602,7 +5629,7 @@ mod tests {
     fn dev_read_timed_rejects_out_of_bounds_pointer() {
         use crate::syscall::SYS_DEV_READ_TIMED;
         let mut k = kernel(0, 0, 0);
-        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 10, 0xDEAD_0000);
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, (10 << 16) | 1, 0xDEAD_0000);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
@@ -10604,7 +10631,7 @@ mod tests {
 
         // Step 3: Dispatch SYS_DEV_READ_TIMED with empty RX buffer, timeout>0.
         let ptr = low32_buf(0);
-        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, 50, ptr as u32);
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, (50 << 16) | 1, ptr as u32);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 0, "blocking device read must return 0");
