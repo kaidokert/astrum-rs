@@ -2114,18 +2114,18 @@ where
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevReadTimed) => {
                 // r1 = device_id, r2 = (timeout_ticks << 16 | buf_len), r3 = buf_ptr
-                // Reads a single byte; blocks caller if no data and timeout > 0.
-                validated_ptr!(self, frame.r3, 1, {
+                let (timeout_ticks, buf_len) = unpack_packed_r2(frame.r2);
+                let buf_len = buf_len as usize;
+                validated_ptr!(self, frame.r3, buf_len, {
                     let buf_ptr = frame.r3 as *mut u8;
-                    let (timeout_ticks, _) = unpack_packed_r2(frame.r2);
                     let timeout = timeout_ticks as u32;
                     let pid = self.current_partition;
                     let device_id = frame.r1 as u8;
                     match self.registry.get_mut(device_id) {
                         Some(dev) => {
-                            // SAFETY: validated_ptr confirmed [r3, r3+1) lies
+                            // SAFETY: validated_ptr confirmed [r3, r3+buf_len) lies
                             // within the calling partition's MPU data region.
-                            let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, 1) };
+                            let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_len) };
                             match dev.read(pid, buf) {
                                 Ok(n) if n > 0 => n as u32,
                                 Ok(_) if timeout > 0 => {
@@ -5728,6 +5728,40 @@ mod tests {
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn dev_read_timed_multibyte_reads_correct_buffer_length() {
+        use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
+        let (registry, uart_a, _) = default_registry();
+        let mut k = kernel_with_registry(0, 0, 0, registry);
+        // Open device 0
+        let mut ef = frame(SYS_DEV_OPEN, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        // Push 16 bytes with a known pattern into the RX buffer.
+        let pattern: [u8; 16] = [
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
+            0x1E, 0x1F,
+        ];
+        // SAFETY: uart_a points to a leaked VirtualUartBackend; no aliasing.
+        unsafe { &mut *uart_a }.push_rx(&pattern);
+        let ptr = low32_buf(0);
+        // timeout=10, buf_len=16; data is available, so should return immediately.
+        let mut ef = frame4(SYS_DEV_READ_TIMED, 0, (10 << 16) | 16, ptr as u32);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 16, "should return 16 bytes read");
+        // SAFETY: ptr was mmap'd by low32_buf and dispatch wrote 16 bytes.
+        let out = unsafe { core::slice::from_raw_parts(ptr, 16) };
+        assert_eq!(out, &pattern, "buffer contents must match pushed pattern");
+        // Partition should remain Running (not blocked).
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
     }
 
     // ---- InvalidPointer and validate_user_ptr tests ----
