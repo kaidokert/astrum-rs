@@ -319,6 +319,10 @@ name = "callee_save_check"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "pendsv_basepri_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "adversarial_mod_stub"
 required-features = ["qemu", "log-semihosting"]
 
