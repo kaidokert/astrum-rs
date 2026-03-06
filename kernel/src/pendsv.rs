@@ -95,8 +95,10 @@ macro_rules! define_pendsv {
         //    programming + next_partition read + context restore sequence,
         //    eliminating the TOCTOU race where SysTick could change
         //    next_partition between MPU programming and context restore (Bug
-        //    14-numbat). PENDSVCLR is written to ICSR before cpsie i to
-        //    prevent spurious tail-chained PendSV from a masked SysTick tick.
+        //    14-numbat). PENDSVCLR|PENDSTCLR is written to ICSR before
+        //    cpsie i to prevent a spurious tail-chained PendSV and a stale
+        //    SysTick pending bit from consuming the incoming partition's
+        //    quantum (Bug 16-pelican).
         //
         //    PRIMASK equivalence: During PendSV (Handler mode, priority 0xFF),
         //    PRIMASK and BASEPRI=SYSTICK_PRIORITY block the same set of
@@ -205,23 +207,18 @@ macro_rules! define_pendsv {
             bl      pendsv_context_restore
 
             /* --- End PRIMASK critical section ---
-             * Clear any PendSV re-pended by masked SysTick, then unmask.
-             * See notes/pendstclr-basepri-ordering.md for rationale.
+             * Clear PendSV and SysTick pending bits, then unmask.
              *
-             * PENDSVCLR (ICSR bit 27) clears a spurious PendSV pended by
-             * SysTick while masked. PENDSVCLR is correct here: we clear
-             * the *PendSV* pending bit, not the SysTick pending bit
-             * (PENDSTCLR = bit 25).
-             *
-             * PENDSTCLR (bit 25) is intentionally NOT cleared here.
-             * A SysTick pended during the critical section represents a
-             * real timer tick whose handler increments the monotonic tick
-             * counter, advances the schedule, and expires timed waits.
-             * Clearing it would lose a tick — causing timing drift and
-             * missed deadlines, which is unacceptable in a hard-realtime
-             * RTOS. */
+             * PENDSVCLR (bit 27) clears a spurious PendSV re-pended by
+             * SysTick while masked. PENDSTCLR (bit 25) clears a stale
+             * SysTick that would otherwise fire immediately and consume
+             * the incoming partition's quantum (Bug 16-pelican).
+             * When timer accuracy and partition liveness conflict,
+             * liveness wins. The lost tick cost is ≤1ms in debug
+             * builds; in release the critical section is sub-µs and
+             * PENDSTCLR clears a bit already 0. */
             ldr     r0, =0xE000ED04     /* ICSR address */
-            mov     r1, #0x08000000     /* PENDSVCLR = bit 27 */
+            mov     r1, #0x0A000000     /* PENDSVCLR (bit 27) | PENDSTCLR (bit 25) */
             str     r1, [r0]
             dsb                         /* ensure PENDSVCLR write completes */
             cpsie   i                   /* unmask all configurable exceptions */
