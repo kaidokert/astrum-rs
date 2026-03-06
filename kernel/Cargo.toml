@@ -323,6 +323,10 @@ name = "plib_debug_print_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "plib_irq_ack_test"
+required-features = ["qemu", "log-semihosting", "custom-ivt"]
+
+[[example]]
 name = "plib_dev_test"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
