@@ -560,6 +560,31 @@ mod tests {
     }
 
     #[test]
+    fn cached_periph_matches_on_the_fly() {
+        use crate::mpu::{peripheral_mpu_regions_or_disabled, precompute_mpu_cache};
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+
+        let mut pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,        // entry_point
+            0x2000_0000,        // stack_base (1024-byte aligned)
+            0x2000_0000 + 1024, // stack_pointer
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+        )
+        .with_peripheral_regions(&[
+            MpuRegion::new(0x4000_0000, 0x400, 0x1300_0000),
+            MpuRegion::new(0x4000_1000, 0x1000, 0x1300_0000),
+        ]);
+        let expected = peripheral_mpu_regions_or_disabled(&pcb);
+        precompute_mpu_cache(&mut pcb).unwrap();
+        assert_eq!(
+            *pcb.cached_periph_regions(),
+            expected,
+            "PendSV contract: cached_periph_regions must match on-the-fly R4-R6"
+        );
+    }
+
+    #[test]
     fn cached_base_plus_periph_covers_r0_through_r5_for_boot() {
         use crate::mpu::{
             partition_mpu_regions_or_deny_all, peripheral_mpu_regions_or_disabled,
