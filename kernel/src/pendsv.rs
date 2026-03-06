@@ -298,10 +298,15 @@ macro_rules! define_pendsv {
              * PENDSVCLR is correct here: we clear the *PendSV* pending
              * bit, not the SysTick pending bit (PENDSTCLR = bit 25).
              *
-             * TODO: evaluate whether PENDSTCLR (bit 25) should also be
-             * cleared to prevent a stale SysTick from firing immediately
-             * after BASEPRI is lowered (currently harmless since SysTick
-             * just re-evaluates the schedule, but wastes cycles). */
+             * PENDSTCLR (bit 25) is intentionally NOT cleared here.
+             * A SysTick pended during the critical section represents a
+             * real timer tick whose handler increments the monotonic tick
+             * counter, advances the schedule, and expires timed waits.
+             * Clearing it would lose a tick — causing timing drift and
+             * missed deadlines, which is unacceptable in a hard-realtime
+             * RTOS. The cost of one redundant SysTick invocation (the
+             * schedule was just evaluated) is negligible compared to the
+             * correctness risk of a lost tick. */
             ldr     r0, =0xE000ED04     /* ICSR address */
             mov     r1, #0x08000000     /* PENDSVCLR = bit 27 */
             str     r1, [r0]
