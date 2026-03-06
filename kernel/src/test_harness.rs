@@ -2487,9 +2487,12 @@ mod tests {
         assert_eq!(st(&h, 0), PartitionState::Running, "P0 must start Running");
 
         // -- Step 2: Dispatch QueuingRecvTimed (empty queue, timeout=50) → blocks --
+        // TODO: drive-by fix — r2 must be packed per unpack_packed_r2 convention
         let timeout: u32 = 50;
+        let buf_len: u32 = 4;
+        let r2 = (timeout << 16) | buf_len;
         let mpu_base = h.kernel().partitions().get(0).unwrap().mpu_region().base();
-        let frame = h.dispatch(SYS_QUEUING_RECV_TIMED, dst as u32, timeout, mpu_base);
+        let frame = h.dispatch(SYS_QUEUING_RECV_TIMED, dst as u32, r2, mpu_base);
 
         // -- Step 3: Verify Running→Waiting transition and yield_requested --
         assert_eq!(

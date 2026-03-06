@@ -2667,6 +2667,23 @@ where
     /// Called by the harness when a partition yields.
     pub fn yield_current_slot(&mut self) -> impl YieldResult {
         let result = self.schedule_mut().force_advance();
+        // TODO: The loop below is a brute-force skip of SystemWindow slots;
+        // ideally force_advance itself would be schedulable-aware.
+        // Dynamic-MPU: skip system-window slots — yield advances to the
+        // next *partition* slot.  Bounded by schedule-table length.
+        #[cfg(feature = "dynamic-mpu")]
+        let result = {
+            let mut r = result;
+            for _ in 0..self.schedule().len() {
+                if !matches!(r, ScheduleEvent::SystemWindow) {
+                    break;
+                }
+                self.ticks_since_bottom_half = 0;
+                self.bottom_half_stale = false;
+                r = self.schedule_mut().force_advance();
+            }
+            r
+        };
         if let Some(pid) = result.partition_id() {
             let is_waiting = self
                 .partitions()
@@ -9334,7 +9351,10 @@ mod tests {
             let ev = k.advance_schedule_tick();
             assert_eq!(ev.partition_id(), None);
         }
-        // 3rd tick triggers major frame boundary wrap-around: P1 → P0.
+        // With dynamic-mpu, the system window sits between P1 and P0.
+        #[cfg(feature = "dynamic-mpu")]
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::SystemWindow);
+        // Next tick triggers major frame boundary wrap-around: P1 → P0.
         let ev = k.advance_schedule_tick();
         assert_eq!(ev.partition_id(), Some(0));
 

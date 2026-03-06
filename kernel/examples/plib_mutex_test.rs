@@ -122,8 +122,9 @@ fn main() -> ! {
         .expect("plib_mutex_test: round_robin");
 
     let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let mut k = Kernel::<TestConfig>::create(sched, &cfgs).expect("plib_mutex_test: kernel");
-    k.mutexes_mut().add().expect("plib_mutex_test: add mutex");
+    // TODO: reviewer false positive — MutexPool::add() no longer exists;
+    // SyncPools::new() pre-allocates MS=1 mutexes at construction time.
+    let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("plib_mutex_test: kernel");
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
