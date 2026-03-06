@@ -1948,4 +1948,20 @@ mod tests {
             "normal-partition-periph-E000",
         );
     }
+
+    /// Calling `precompute_mpu_cache` on an already-sealed PCB must fail.
+    /// Individual setters are tested for seal rejection in partition.rs;
+    /// this covers the top-level entry point.
+    #[test]
+    fn precompute_mpu_cache_rejects_sealed_pcb() {
+        let mut pcb = make_pcb(0x0800_0000, 0x2000_0000, 4096);
+        assert!(!pcb.cache_sealed());
+
+        // First call succeeds and seals the cache.
+        assert!(precompute_mpu_cache(&mut pcb).is_ok());
+        assert!(pcb.cache_sealed());
+
+        // Second call must fail because the cache is already sealed.
+        assert!(precompute_mpu_cache(&mut pcb).is_err());
+    }
 }
