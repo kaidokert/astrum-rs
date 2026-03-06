@@ -418,10 +418,10 @@ pub fn sys_mtx_unlock(mtx_id: MutexId) -> Result<u32, SvcError> {
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-pub fn sys_sampling_write(port_id: u32, data: &[u8]) -> Result<u32, SvcError> {
+pub fn sys_sampling_write(port_id: SamplingPortId, data: &[u8]) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_SAMPLING_WRITE,
-        port_id,
+        port_id.as_raw(),
         data.len() as u32,
         data.as_ptr() as u32
     ))
@@ -436,10 +436,10 @@ pub fn sys_sampling_write(port_id: u32, data: &[u8]) -> Result<u32, SvcError> {
 ///
 /// `Ok(n)` with the number of bytes read, or `Err(SvcError)` if the
 /// syscall failed.
-pub fn sys_sampling_read(port_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
+pub fn sys_sampling_read(port_id: SamplingPortId, buf: &mut [u8]) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_SAMPLING_READ,
-        port_id,
+        port_id.as_raw(),
         buf.len() as u32,
         buf.as_mut_ptr() as u32
     ))
@@ -998,13 +998,16 @@ mod tests {
 
     #[test]
     fn sampling_write_returns_ok_zero_on_host() {
-        assert_eq!(sys_sampling_write(0, &[1, 2, 3]), Ok(0));
+        assert_eq!(
+            sys_sampling_write(SamplingPortId::new(0), &[1, 2, 3]),
+            Ok(0)
+        );
     }
 
     #[test]
     fn sampling_read_returns_ok_zero_on_host() {
         let mut buf = [0u8; 8];
-        assert_eq!(sys_sampling_read(0, &mut buf), Ok(0));
+        assert_eq!(sys_sampling_read(SamplingPortId::new(0), &mut buf), Ok(0));
     }
 
     #[test]

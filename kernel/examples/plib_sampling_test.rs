@@ -72,7 +72,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 extern "C" fn p0_main() -> ! {
     // Copy const to stack so pointer is in MPU-accessible partition memory.
     let payload = PAYLOAD;
-    match plib::sys_sampling_write(0, &payload) {
+    match plib::sys_sampling_write(plib::SamplingPortId::new(0), &payload) {
         Ok(rc) => WRITE_RC.store(rc, Ordering::Release),
         Err(_) => WRITE_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
@@ -85,7 +85,7 @@ extern "C" fn p1_main() -> ! {
     // Yield once so P0 writes before we read.
     let _ = plib::sys_yield();
     let mut buf = [0u8; 4];
-    match plib::sys_sampling_read(1, &mut buf) {
+    match plib::sys_sampling_read(plib::SamplingPortId::new(1), &mut buf) {
         Ok(rc) => {
             READ_DATA.store(u32::from_le_bytes(buf), Ordering::Release);
             READ_RC.store(rc, Ordering::Release);

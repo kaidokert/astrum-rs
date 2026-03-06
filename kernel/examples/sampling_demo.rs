@@ -92,7 +92,7 @@ kernel::define_unified_harness!(no_boot, DemoConfig, |tick, _k| {
 });
 
 extern "C" fn sensor_main_body(r0: u32) -> ! {
-    let (src, mut v) = (r0 >> 16, 0u8);
+    let (src, mut v) = (plib::SamplingPortId::new(r0 >> 16), 0u8);
     loop {
         v = v.wrapping_add(1);
         if plib::sys_sampling_write(src, &[v]).is_ok() {
@@ -104,7 +104,10 @@ extern "C" fn sensor_main_body(r0: u32) -> ! {
 kernel::partition_trampoline!(sensor_main => sensor_main_body);
 extern "C" fn control_main_body(r0: u32) -> ! {
     let packed = r0;
-    let (src, dst) = (packed >> 16, packed & 0xFFFF);
+    let (src, dst) = (
+        plib::SamplingPortId::new(packed >> 16),
+        plib::SamplingPortId::new(packed & 0xFFFF),
+    );
     loop {
         let mut buf = [0u8; 1];
         let v = match plib::sys_sampling_read(dst, &mut buf) {
@@ -121,7 +124,7 @@ extern "C" fn control_main_body(r0: u32) -> ! {
 }
 kernel::partition_trampoline!(control_main => control_main_body);
 extern "C" fn display_main_body(r0: u32) -> ! {
-    let dst = r0 & 0xFFFF;
+    let dst = plib::SamplingPortId::new(r0 & 0xFFFF);
     let mut cyc: u32 = 0;
     loop {
         let mut buf = [0u8; 1];
