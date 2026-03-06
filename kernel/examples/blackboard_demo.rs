@@ -126,7 +126,7 @@ kernel::define_unified_harness!(DemoConfig, |tick, _k| {
 // ---------------------------------------------------------------------------
 extern "C" fn config_main_body(r0: u32) -> ! {
     let packed = r0;
-    let bb = packed & 0xFFFF;
+    let bb = plib::BlackboardId::new(packed & 0xFFFF);
 
     for round in 0..2u8 {
         let cfg = [round + 1, 10 + round];
@@ -156,7 +156,13 @@ kernel::partition_trampoline!(config_main => config_main_body);
 // ---------------------------------------------------------------------------
 // Worker: reads config from blackboard, acquires semaphore, signals event
 // ---------------------------------------------------------------------------
-fn worker(read_counter: &AtomicU32, sem_counter: &AtomicU32, bb: u32, sem: u32, evt: u32) -> ! {
+fn worker(
+    read_counter: &AtomicU32,
+    sem_counter: &AtomicU32,
+    bb: plib::BlackboardId,
+    sem: u32,
+    evt: u32,
+) -> ! {
     loop {
         let mut buf = [0u8; 4];
         if let Ok(sz) = plib::sys_bb_read(bb, &mut buf) {
@@ -167,9 +173,10 @@ fn worker(read_counter: &AtomicU32, sem_counter: &AtomicU32, bb: u32, sem: u32, 
                     DATA_ERRORS.fetch_add(1, Ordering::Release);
                 }
                 read_counter.fetch_add(1, Ordering::Release);
-                if plib::sys_sem_wait(sem).is_ok() {
+                // TODO: SemaphoreId call-site fix from ce7dd01; included here for build correctness
+                if plib::sys_sem_wait(plib::SemaphoreId::new(sem)).is_ok() {
                     sem_counter.fetch_add(1, Ordering::Release);
-                    if plib::sys_sem_signal(sem).is_err() {
+                    if plib::sys_sem_signal(plib::SemaphoreId::new(sem)).is_err() {
                         DATA_ERRORS.fetch_add(1, Ordering::Release);
                     }
                     if plib::sys_event_set(plib::PartitionId::new(0), plib::EventMask::new(evt))
@@ -189,7 +196,7 @@ extern "C" fn worker_a_body(r0: u32) -> ! {
     worker(
         &WORKER_A_READS,
         &WORKER_A_SEM,
-        p & 0xFFFF,
+        plib::BlackboardId::new(p & 0xFFFF),
         (p >> 16) & 0xFF,
         0x01,
     )
@@ -201,7 +208,7 @@ extern "C" fn worker_b_body(r0: u32) -> ! {
     worker(
         &WORKER_B_READS,
         &WORKER_B_SEM,
-        p & 0xFFFF,
+        plib::BlackboardId::new(p & 0xFFFF),
         (p >> 16) & 0xFF,
         0x02,
     )

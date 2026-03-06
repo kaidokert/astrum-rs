@@ -78,7 +78,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     let payload = PAYLOAD;
-    match plib::sys_bb_display(0, &payload) {
+    match plib::sys_bb_display(plib::BlackboardId::new(0), &payload) {
         Ok(rc) => DISPLAY_RC.store(rc, Ordering::Release),
         Err(_) => DISPLAY_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
@@ -91,14 +91,14 @@ extern "C" fn p1_main() -> ! {
     // Yield so P0 runs first and displays the payload.
     let _ = plib::sys_yield();
     let mut buf = [0u8; 4];
-    match plib::sys_bb_read(0, &mut buf) {
+    match plib::sys_bb_read(plib::BlackboardId::new(0), &mut buf) {
         Ok(rc) => {
             READ_DATA.store(u32::from_le_bytes(buf), Ordering::Release);
             READ_RC.store(rc, Ordering::Release);
         }
         Err(_) => READ_RC.store(0xFFFF_FFFF, Ordering::Release),
     }
-    match plib::sys_bb_clear(0) {
+    match plib::sys_bb_clear(plib::BlackboardId::new(0)) {
         Ok(rc) => CLEAR_RC.store(rc, Ordering::Release),
         Err(_) => CLEAR_RC.store(0xFFFF_FFFF, Ordering::Release),
     }

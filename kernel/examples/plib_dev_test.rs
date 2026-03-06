@@ -66,12 +66,13 @@ kernel::define_unified_harness!(TestConfig, |tick, k| {
 });
 
 extern "C" fn partition_main() -> ! {
-    match plib::sys_dev_open(0) {
+    let dev = plib::DeviceId::new(0);
+    match plib::sys_dev_open(dev) {
         Ok(rc) => OPEN_RC.store(rc, Ordering::Release),
         Err(_) => OPEN_RC.store(u32::MAX, Ordering::Release),
     }
     let payload = PAYLOAD;
-    match plib::sys_dev_write(0, &payload) {
+    match plib::sys_dev_write(dev, &payload) {
         Ok(rc) => WRITE_RC.store(rc, Ordering::Release),
         Err(_) => WRITE_RC.store(u32::MAX, Ordering::Release),
     }
@@ -80,14 +81,14 @@ extern "C" fn partition_main() -> ! {
         let _ = plib::sys_yield();
     }
     let mut buf = [0u8; 4];
-    match plib::sys_dev_read(0, &mut buf) {
+    match plib::sys_dev_read(dev, &mut buf) {
         Ok(rc) => {
             READ_DATA.store(u32::from_le_bytes(buf), Ordering::Release);
             READ_RC.store(rc, Ordering::Release);
         }
         Err(_) => READ_RC.store(u32::MAX, Ordering::Release),
     }
-    match plib::sys_dev_close(0) {
+    match plib::sys_dev_close(dev) {
         Ok(rc) => CLOSE_RC.store(rc, Ordering::Release),
         Err(_) => CLOSE_RC.store(u32::MAX, Ordering::Release),
     }

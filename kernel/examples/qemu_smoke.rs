@@ -85,7 +85,8 @@ kernel::define_unified_harness!(SmokeConfig, |tick, _k| {
 
 extern "C" fn p0_main() -> ! {
     // Signal first so the semaphore count is >0 before P1 runs.
-    let rc = plib::sys_sem_signal(0).unwrap_or(u32::MAX);
+    // TODO: SemaphoreId call-site fix from ce7dd01; included here for build correctness
+    let rc = plib::sys_sem_signal(plib::SemaphoreId::new(0)).unwrap_or(u32::MAX);
     SIG_RC.store(rc, Ordering::Release);
     // Yield voluntarily — exercises SYS_YIELD and triggers context switch.
     let rc = plib::sys_yield().unwrap_or(u32::MAX);
@@ -96,7 +97,8 @@ extern "C" fn p0_main() -> ! {
 }
 
 extern "C" fn p1_main() -> ! {
-    let rc = plib::sys_sem_wait(0).unwrap_or(u32::MAX);
+    // TODO: SemaphoreId call-site fix from ce7dd01; included here for build correctness
+    let rc = plib::sys_sem_wait(plib::SemaphoreId::new(0)).unwrap_or(u32::MAX);
     WAIT_RC.store(rc, Ordering::Release);
     loop {
         cortex_m::asm::nop();

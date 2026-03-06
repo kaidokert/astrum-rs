@@ -32,9 +32,9 @@ const NUM_PARTITIONS: usize = 2;
 const STACK_WORDS: usize = DemoConfig::STACK_WORDS;
 
 /// UART-A device ID (used by P1).
-const UART_A: u32 = 0;
+const UART_A: plib::DeviceId = plib::DeviceId::new(0);
 /// UART-B device ID (used by P2).
-const UART_B: u32 = 1;
+const UART_B: plib::DeviceId = plib::DeviceId::new(1);
 
 /// Timeout in ticks for blocking device reads.
 const READ_TIMEOUT: u16 = 50;
@@ -53,9 +53,9 @@ kernel::define_unified_harness!(DemoConfig);
 // P1: opens UART-A, writes message, yields, later reads response
 // ---------------------------------------------------------------------------
 extern "C" fn p1_main() -> ! {
-    hprintln!("[P1] opening UART-A (dev {})", UART_A);
+    hprintln!("[P1] opening UART-A (dev {:?})", UART_A);
     assert_or_fail(
-        plib::sys_dev_open(UART_A as u8).is_ok(),
+        plib::sys_dev_open(UART_A).is_ok(),
         "P1: DEV_OPEN UART-A failed",
     );
 
@@ -63,7 +63,7 @@ extern "C" fn p1_main() -> ! {
     // partition's MPU data region (required by validate_user_ptr).
     let hello_buf: [u8; 2] = [MSG_HELLO[0], MSG_HELLO[1]];
     hprintln!("[P1] writing {:?} to UART-A", &hello_buf);
-    let rc = plib::sys_dev_write(UART_A as u8, &hello_buf).unwrap_or(0);
+    let rc = plib::sys_dev_write(UART_A, &hello_buf).unwrap_or(0);
     assert_or_fail(rc == MSG_HELLO.len() as u32, "P1: DEV_WRITE short");
     hprintln!("[P1] wrote {} bytes to UART-A TX", rc);
 
@@ -73,7 +73,7 @@ extern "C" fn p1_main() -> ! {
     let mut buf = [0u8; 8];
     let mut received = 0usize;
     while received < MSG_REPLY.len() {
-        if let Ok(n) = plib::sys_dev_read_timed(UART_A as u8, &mut buf[received..], READ_TIMEOUT) {
+        if let Ok(n) = plib::sys_dev_read_timed(UART_A, &mut buf[received..], READ_TIMEOUT) {
             received += n as usize;
         }
     }
@@ -100,9 +100,9 @@ extern "C" fn p1_main() -> ! {
 // P2: opens UART-B, reads message from P1, writes response
 // ---------------------------------------------------------------------------
 extern "C" fn p2_main() -> ! {
-    hprintln!("[P2] opening UART-B (dev {})", UART_B);
+    hprintln!("[P2] opening UART-B (dev {:?})", UART_B);
     assert_or_fail(
-        plib::sys_dev_open(UART_B as u8).is_ok(),
+        plib::sys_dev_open(UART_B).is_ok(),
         "P2: DEV_OPEN UART-B failed",
     );
 
@@ -112,7 +112,7 @@ extern "C" fn p2_main() -> ! {
     let mut buf = [0u8; 8];
     let mut received = 0usize;
     while received < MSG_HELLO.len() {
-        if let Ok(n) = plib::sys_dev_read_timed(UART_B as u8, &mut buf[received..], READ_TIMEOUT) {
+        if let Ok(n) = plib::sys_dev_read_timed(UART_B, &mut buf[received..], READ_TIMEOUT) {
             received += n as usize;
         }
     }
@@ -129,7 +129,7 @@ extern "C" fn p2_main() -> ! {
     // Copy static data to the stack for pointer validation.
     let reply_buf: [u8; 2] = [MSG_REPLY[0], MSG_REPLY[1]];
     hprintln!("[P2] writing {:?} to UART-B", &reply_buf);
-    let rc = plib::sys_dev_write(UART_B as u8, &reply_buf).unwrap_or(0);
+    let rc = plib::sys_dev_write(UART_B, &reply_buf).unwrap_or(0);
     assert_or_fail(rc == MSG_REPLY.len() as u32, "P2: DEV_WRITE short");
     hprintln!("[P2] wrote {} bytes to UART-B TX", rc);
 

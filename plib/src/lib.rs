@@ -601,10 +601,10 @@ pub fn sys_msg_recv(buf: &mut [u8]) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "ipc-blackboard")]
-pub fn sys_bb_display(board_id: u32, data: &[u8]) -> Result<u32, SvcError> {
+pub fn sys_bb_display(board_id: BlackboardId, data: &[u8]) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_BB_DISPLAY,
-        board_id,
+        board_id.as_raw(),
         data.len() as u32,
         data.as_ptr() as u32
     ))
@@ -620,10 +620,10 @@ pub fn sys_bb_display(board_id: u32, data: &[u8]) -> Result<u32, SvcError> {
 /// `Ok(n)` with the number of bytes read, or `Err(SvcError)` if the
 /// syscall failed.
 #[cfg(feature = "ipc-blackboard")]
-pub fn sys_bb_read(board_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
+pub fn sys_bb_read(board_id: BlackboardId, buf: &mut [u8]) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_BB_READ,
-        board_id,
+        board_id.as_raw(),
         buf.len() as u32,
         buf.as_mut_ptr() as u32
     ))
@@ -635,8 +635,13 @@ pub fn sys_bb_read(board_id: u32, buf: &mut [u8]) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "ipc-blackboard")]
-pub fn sys_bb_clear(board_id: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_BB_CLEAR, board_id, 0u32, 0u32))
+pub fn sys_bb_clear(board_id: BlackboardId) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_BB_CLEAR,
+        board_id.as_raw(),
+        0u32,
+        0u32
+    ))
 }
 
 /// Open a device by its ID.
@@ -647,10 +652,10 @@ pub fn sys_bb_clear(board_id: u32) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_dev_open(device_id: u8) -> Result<u32, SvcError> {
+pub fn sys_dev_open(device_id: DeviceId) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_DEV_OPEN,
-        device_id as u32,
+        device_id.as_raw() as u32,
         0u32,
         0u32
     ))
@@ -664,10 +669,10 @@ pub fn sys_dev_open(device_id: u8) -> Result<u32, SvcError> {
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_dev_close(device_id: u8) -> Result<u32, SvcError> {
+pub fn sys_dev_close(device_id: DeviceId) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_DEV_CLOSE,
-        device_id as u32,
+        device_id.as_raw() as u32,
         0u32,
         0u32
     ))
@@ -682,8 +687,13 @@ pub fn sys_dev_close(device_id: u8) -> Result<u32, SvcError> {
 /// `Ok(value)` with a device-specific result, or `Err(SvcError)` if the
 /// syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_dev_ioctl(device_id: u8, cmd: u32, arg: u32) -> Result<u32, SvcError> {
-    decode_rc(rtos_traits::svc!(SYS_DEV_IOCTL, device_id as u32, cmd, arg))
+pub fn sys_dev_ioctl(device_id: DeviceId, cmd: u32, arg: u32) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_DEV_IOCTL,
+        device_id.as_raw() as u32,
+        cmd,
+        arg
+    ))
 }
 
 /// Read data from a device into `buf`.
@@ -691,13 +701,13 @@ pub fn sys_dev_ioctl(device_id: u8, cmd: u32, arg: u32) -> Result<u32, SvcError>
 /// ABI: r1 = device_id, r2 = buf_len, r3 = buf_ptr.
 /// Returns `Ok(n)` bytes read or `Err(SvcError)`.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_dev_read(device_id: u8, buf: &mut [u8]) -> Result<u32, SvcError> {
+pub fn sys_dev_read(device_id: DeviceId, buf: &mut [u8]) -> Result<u32, SvcError> {
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The buf pointer is valid for buf.len() bytes and the
     // kernel uses the length to bounds-check the write into user memory.
     decode_rc(rtos_traits::svc!(
         SYS_DEV_READ,
-        device_id as u32,
+        device_id.as_raw() as u32,
         buf.len() as u32,
         buf.as_mut_ptr() as u32
     ))
@@ -708,13 +718,13 @@ pub fn sys_dev_read(device_id: u8, buf: &mut [u8]) -> Result<u32, SvcError> {
 /// ABI: r1 = device_id, r2 = data_len, r3 = data_ptr.
 /// Returns `Ok(0)` on success or `Err(SvcError)`.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_dev_write(device_id: u8, data: &[u8]) -> Result<u32, SvcError> {
+pub fn sys_dev_write(device_id: DeviceId, data: &[u8]) -> Result<u32, SvcError> {
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The data pointer is valid for data.len() bytes and the
     // kernel uses the length to bounds-check the read from user memory.
     decode_rc(rtos_traits::svc!(
         SYS_DEV_WRITE,
-        device_id as u32,
+        device_id.as_raw() as u32,
         data.len() as u32,
         data.as_ptr() as u32
     ))
@@ -726,7 +736,7 @@ pub fn sys_dev_write(device_id: u8, data: &[u8]) -> Result<u32, SvcError> {
 /// Returns `Ok(n)` bytes read, `Err(OperationFailed)` if buf > 65 535 bytes.
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_read_timed(
-    device_id: u8,
+    device_id: DeviceId,
     buf: &mut [u8],
     timeout_ticks: u16,
 ) -> Result<u32, SvcError> {
@@ -739,7 +749,7 @@ pub fn sys_dev_read_timed(
     // packed r2 encodes the length so the kernel can bounds-check it.
     decode_rc(rtos_traits::svc!(
         SYS_DEV_READ_TIMED,
-        device_id as u32,
+        device_id.as_raw() as u32,
         r2,
         buf.as_mut_ptr() as u32
     ))
@@ -749,10 +759,10 @@ pub fn sys_dev_read_timed(
 ///
 /// ABI: r1 = device_id. Returns `Ok(status)` or `Err(SvcError)`.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_query_bottom_half(device_id: u8) -> Result<u32, SvcError> {
+pub fn sys_query_bottom_half(device_id: DeviceId) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_QUERY_BOTTOM_HALF,
-        device_id as u32,
+        device_id.as_raw() as u32,
         0u32,
         0u32
     ))
@@ -1136,39 +1146,39 @@ mod tests {
     #[cfg(feature = "ipc-blackboard")]
     #[test]
     fn bb_display_returns_ok_zero_on_host() {
-        assert_eq!(sys_bb_display(0, &[0xCA, 0xFE]), Ok(0));
+        assert_eq!(sys_bb_display(BlackboardId::new(0), &[0xCA, 0xFE]), Ok(0));
     }
 
     #[cfg(feature = "ipc-blackboard")]
     #[test]
     fn bb_display_empty_data_returns_ok_zero_on_host() {
-        assert_eq!(sys_bb_display(0, &[]), Ok(0));
+        assert_eq!(sys_bb_display(BlackboardId::new(0), &[]), Ok(0));
     }
 
     #[cfg(feature = "ipc-blackboard")]
     #[test]
     fn bb_read_returns_ok_zero_on_host() {
         let mut buf = [0u8; 16];
-        assert_eq!(sys_bb_read(0, &mut buf), Ok(0));
+        assert_eq!(sys_bb_read(BlackboardId::new(0), &mut buf), Ok(0));
     }
 
     #[cfg(feature = "ipc-blackboard")]
     #[test]
     fn bb_read_empty_buf_returns_ok_zero_on_host() {
         let mut buf = [0u8; 0];
-        assert_eq!(sys_bb_read(0, &mut buf), Ok(0));
+        assert_eq!(sys_bb_read(BlackboardId::new(0), &mut buf), Ok(0));
     }
 
     #[cfg(feature = "ipc-blackboard")]
     #[test]
     fn bb_clear_returns_ok_zero_on_host() {
-        assert_eq!(sys_bb_clear(0), Ok(0));
+        assert_eq!(sys_bb_clear(BlackboardId::new(0)), Ok(0));
     }
 
     #[cfg(feature = "ipc-blackboard")]
     #[test]
     fn bb_clear_max_board_id_returns_ok_zero_on_host() {
-        assert_eq!(sys_bb_clear(u32::MAX), Ok(0));
+        assert_eq!(sys_bb_clear(BlackboardId::new(u32::MAX)), Ok(0));
     }
 
     // ── Re-export verification tests ──────────────────────────────────
@@ -1326,19 +1336,19 @@ mod tests {
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_open_returns_ok_zero_on_host() {
-        assert_eq!(sys_dev_open(0), Ok(0));
+        assert_eq!(sys_dev_open(DeviceId::new(0)), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_close_returns_ok_zero_on_host() {
-        assert_eq!(sys_dev_close(0), Ok(0));
+        assert_eq!(sys_dev_close(DeviceId::new(0)), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_ioctl_returns_ok_zero_on_host() {
-        assert_eq!(sys_dev_ioctl(0, 1, 2), Ok(0));
+        assert_eq!(sys_dev_ioctl(DeviceId::new(0), 1, 2), Ok(0));
     }
 
     // TODO: dev_read / dev_write host tests are liveness-only smoke tests.
@@ -1351,40 +1361,40 @@ mod tests {
     #[test]
     fn dev_read_returns_ok_zero_on_host() {
         let mut buf = [0u8; 8];
-        assert_eq!(sys_dev_read(0, &mut buf), Ok(0));
+        assert_eq!(sys_dev_read(DeviceId::new(0), &mut buf), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_empty_buf_returns_ok_zero_on_host() {
         let mut buf = [0u8; 0];
-        assert_eq!(sys_dev_read(1, &mut buf), Ok(0));
+        assert_eq!(sys_dev_read(DeviceId::new(1), &mut buf), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_write_returns_ok_zero_on_host() {
-        assert_eq!(sys_dev_write(0, &[0xDE, 0xAD]), Ok(0));
+        assert_eq!(sys_dev_write(DeviceId::new(0), &[0xDE, 0xAD]), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_write_empty_data_returns_ok_zero_on_host() {
-        assert_eq!(sys_dev_write(1, &[]), Ok(0));
+        assert_eq!(sys_dev_write(DeviceId::new(1), &[]), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_returns_ok_zero_on_host() {
         let mut buf = [0u8; 8];
-        assert_eq!(sys_dev_read_timed(0, &mut buf, 100), Ok(0));
+        assert_eq!(sys_dev_read_timed(DeviceId::new(0), &mut buf, 100), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_empty_buf_returns_ok_zero_on_host() {
         let mut buf = [0u8; 0];
-        assert_eq!(sys_dev_read_timed(1, &mut buf, 50), Ok(0));
+        assert_eq!(sys_dev_read_timed(DeviceId::new(1), &mut buf, 50), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -1392,7 +1402,7 @@ mod tests {
     fn dev_read_timed_rejects_oversized_buf() {
         let mut big = vec![0u8; u16::MAX as usize + 1];
         assert_eq!(
-            sys_dev_read_timed(0, &mut big, 100),
+            sys_dev_read_timed(DeviceId::new(0), &mut big, 100),
             Err(SvcError::InvalidParameter)
         );
     }
@@ -1401,19 +1411,22 @@ mod tests {
     #[test]
     fn dev_read_timed_packing_boundary() {
         let mut buf = vec![0u8; u16::MAX as usize];
-        assert_eq!(sys_dev_read_timed(0, &mut buf, u16::MAX), Ok(0));
+        assert_eq!(
+            sys_dev_read_timed(DeviceId::new(0), &mut buf, u16::MAX),
+            Ok(0)
+        );
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn query_bottom_half_returns_ok_zero_on_host() {
-        assert_eq!(sys_query_bottom_half(0), Ok(0));
+        assert_eq!(sys_query_bottom_half(DeviceId::new(0)), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn query_bottom_half_max_device_id_returns_ok_zero_on_host() {
-        assert_eq!(sys_query_bottom_half(u8::MAX), Ok(0));
+        assert_eq!(sys_query_bottom_half(DeviceId::new(u8::MAX)), Ok(0));
     }
 
     #[cfg(feature = "dynamic-mpu")]
