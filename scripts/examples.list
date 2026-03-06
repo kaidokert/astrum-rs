@@ -19,7 +19,7 @@ EXAMPLES=(
     mpu_enforce_test
     mpu_cached_test
     callee_save_check
-    pendsv_basepri_test
+    pendsv_primask_test
 )
 
 CUSTOM_IVT_EXAMPLES=(

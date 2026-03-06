@@ -323,7 +323,7 @@ name = "callee_save_check"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
-name = "pendsv_basepri_test"
+name = "pendsv_primask_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
