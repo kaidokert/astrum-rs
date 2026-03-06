@@ -331,6 +331,10 @@ name = "pendsv_primask_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "pendsv_primask_leak_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "adversarial_mod_stub"
 required-features = ["qemu", "log-semihosting"]
 
