@@ -263,6 +263,10 @@ name = "mpu_dynamic_base_test"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
+name = "mpu_cached_dynamic_test"
+required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+
+[[example]]
 name = "plib_abi_test"
 required-features = ["qemu", "log-semihosting"]
 
