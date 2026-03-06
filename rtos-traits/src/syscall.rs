@@ -64,7 +64,7 @@ pub const SYS_DEV_IOCTL: u32 = 25;
 pub const SYS_BUF_WRITE: u32 = 26;
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_CLOSE: u32 = 29;
-/// Timed device read: r1=device_id, r2=timeout_ticks (0=non-blocking), r3=buf_ptr
+/// Timed device read: r1=device_id, r2=(timeout_ticks_hi16 << 16 | buf_len_lo16), r3=buf_ptr
 #[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_READ_TIMED: u32 = 30;
 /// Query bottom-half status: returns ticks_since_bottom_half in r0, stale flag in r1.
