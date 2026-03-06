@@ -433,17 +433,18 @@ core::arch::global_asm!(
     "movt r0, #0xFFFF",
     "cmp lr, r0",
     "bne .Lsvc_bad_exc_return",
-    // Defense-in-depth: ensure BASEPRI is 0 so Thread mode runs with
-    // SysTick (and all configurable interrupts) unblocked. If PendSV
-    // raised BASEPRI to mask SysTick during MPU programming and a
-    // partition issued SVC before PendSV's return path cleared it,
-    // Thread mode would run with SysTick blocked. On the normal path
-    // where BASEPRI is already 0 this is a harmless no-op (~2 cycles).
+    // Defense-in-depth: clear both PRIMASK and BASEPRI so Thread mode
+    // runs with all configurable interrupts unblocked. PendSV now uses
+    // PRIMASK (cpsid i / cpsie i) for its critical section; the BASEPRI
+    // clear is retained for belt-and-suspenders safety. On the normal
+    // path where both are already 0, these are harmless no-ops (~2 cycles
+    // each).
     //
-    // SAFETY: Writing 0 to BASEPRI disables priority masking without
-    // side-effects (ARMv7-M B5.2.3). r0 is used as scratch here; this
-    // is safe because `mrs r0, psp` on the very next instruction
+    // SAFETY: CPSIE I clears PRIMASK, enabling all configurable exceptions.
+    // Writing 0 to BASEPRI disables priority masking (ARMv7-M B5.2.3).
+    // r0 is used as scratch; `mrs r0, psp` on the very next instruction
     // overwrites r0 unconditionally, so no prior value is lost.
+    "cpsie i",
     "mov r0, #0",
     "msr BASEPRI, r0",
     "mrs r0, psp",
@@ -701,15 +702,6 @@ macro_rules! define_unified_kernel {
         #[allow(dead_code)]
         static CORE_PARTITION_SP_OFFSET: usize =
             ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, partition_sp);
-
-        /// SysTick priority value from KernelConfig, exported for PendSV assembly.
-        /// The PendSV handler (@impl_protected) uses this to set BASEPRI during
-        /// its critical section (Bug 14-numbat), masking SysTick and app IRQs.
-        #[no_mangle]
-        #[cfg_attr(not(test), link_section = ".rodata")]
-        #[allow(dead_code)]
-        static SYSTICK_PRIORITY: usize =
-            <$Config as $crate::config::KernelConfig>::SYSTICK_PRIORITY as usize;
 
         /// SVC dispatch hook that routes syscalls through the unified kernel.
         ///

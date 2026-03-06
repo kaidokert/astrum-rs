@@ -193,7 +193,7 @@ macro_rules! define_pendsv {
         );
     };
 
-    // Internal implementation: PendSV with BASEPRI critical section (Bug 14-numbat).
+    // Internal implementation: PendSV with PRIMASK critical section (Bug 14-numbat).
     // Used by dynamic-mode and harness callers that program MPU regions and need
     // the TOCTOU race protection around MPU + next_partition + context restore.
     (@impl_protected $mpu_call:literal) => {
@@ -201,14 +201,25 @@ macro_rules! define_pendsv {
         // SAFETY: This assembly implements the PendSV exception handler which
         // performs partition context switches. The operations are sound because:
         //
-        // 1. Single-core exclusivity + BASEPRI critical section: PendSV runs at
-        //    the lowest exception priority (0xFF). A BASEPRI critical section
-        //    (BASEPRI = SYSTICK_PRIORITY, loaded from symbol) masks SysTick and all app IRQs
-        //    around the MPU programming + next_partition read + context restore
-        //    sequence, eliminating the TOCTOU race where SysTick could change
+        // 1. Single-core exclusivity + PRIMASK critical section: PendSV runs at
+        //    the lowest exception priority (0xFF). PRIMASK (cpsid i / cpsie i)
+        //    masks all exceptions with configurable priority around the MPU
+        //    programming + next_partition read + context restore sequence,
+        //    eliminating the TOCTOU race where SysTick could change
         //    next_partition between MPU programming and context restore (Bug
-        //    14-numbat). PENDSVCLR is written to ICSR before clearing BASEPRI to
+        //    14-numbat). PENDSVCLR is written to ICSR before cpsie i to
         //    prevent spurious tail-chained PendSV from a masked SysTick tick.
+        //
+        //    PRIMASK equivalence: During PendSV (Handler mode, priority 0xFF),
+        //    PRIMASK and BASEPRI=SYSTICK_PRIORITY block the same set of
+        //    exceptions — SysTick and all app IRQs (priority >= 0x20). SVCall
+        //    (priority 0x00) is also masked by PRIMASK but cannot fire during
+        //    Handler mode (requires Thread→Handler transition). HardFault (-1)
+        //    and NMI (-2) are unaffected by PRIMASK. PRIMASK is simpler
+        //    (2 instructions vs 4), needs no linker symbol, and works on all
+        //    ARMv7-M hardware regardless of priority bit width — unlike BASEPRI
+        //    which truncates to 0x00 (no masking) on 3-bit priority hardware
+        //    such as LM3S6965/QEMU.
         //
         // 2. Boot sequence invariants: This handler assumes boot() has completed:
         //    - partition_sp[i] contains valid stack pointers for all partitions
@@ -241,7 +252,7 @@ macro_rules! define_pendsv {
         //
         // 6. MPU programming (dynamic mode only): When $mpu_call is non-empty,
         //    __pendsv_program_mpu is called AFTER saving the outgoing context
-        //    and BEFORE restoring the incoming context, all within the BASEPRI
+        //    and BEFORE restoring the incoming context, all within the PRIMASK
         //    critical section. This ensures MPU regions and the next_partition
         //    read are atomic with respect to SysTick, preventing the race where
         //    SysTick changes next_partition after MPU is already programmed.
@@ -277,15 +288,11 @@ macro_rules! define_pendsv {
             /* Load kernel base into r5 (safe now: context is saved) */
             ldr     r5, =__kernel_state_start
 
-            /* --- Begin BASEPRI critical section: mask SysTick ---
-             * Raise BASEPRI to SYSTICK_PRIORITY to prevent SysTick
-             * from preempting between MPU programming and next_partition
-             * read, eliminating the TOCTOU race (Bug 14-numbat).
-             * Value loaded from the SYSTICK_PRIORITY symbol exported by
-             * define_unified_kernel!, not hardcoded. */
-            ldr     r0, =SYSTICK_PRIORITY
-            ldr     r0, [r0]           /* r0 = KernelConfig::SYSTICK_PRIORITY */
-            msr     BASEPRI, r0
+            /* --- Begin PRIMASK critical section: mask all configurable exceptions ---
+             * CPSID I sets PRIMASK, preventing SysTick from preempting
+             * between MPU programming and next_partition read, eliminating
+             * the TOCTOU race (Bug 14-numbat). */
+            cpsid   i
 
             /* Dynamic mode: program MPU regions (empty string = no-op) */
             "#,
@@ -309,15 +316,14 @@ macro_rules! define_pendsv {
             mov     r0, r4
             bl      pendsv_context_restore
 
-            /* --- End BASEPRI critical section ---
+            /* --- End PRIMASK critical section ---
              * Clear any PendSV re-pended by masked SysTick, then unmask.
              * See notes/pendstclr-basepri-ordering.md for rationale.
              *
              * PENDSVCLR (ICSR bit 27) clears a spurious PendSV pended by
-             * SysTick while masked. The subtask named this "PENDSTCLR"
-             * but specified bit 27 / 0x08000000 which is PENDSVCLR.
-             * PENDSVCLR is correct here: we clear the *PendSV* pending
-             * bit, not the SysTick pending bit (PENDSTCLR = bit 25).
+             * SysTick while masked. PENDSVCLR is correct here: we clear
+             * the *PendSV* pending bit, not the SysTick pending bit
+             * (PENDSTCLR = bit 25).
              *
              * PENDSTCLR (bit 25) is intentionally NOT cleared here.
              * A SysTick pended during the critical section represents a
@@ -325,15 +331,12 @@ macro_rules! define_pendsv {
              * counter, advances the schedule, and expires timed waits.
              * Clearing it would lose a tick — causing timing drift and
              * missed deadlines, which is unacceptable in a hard-realtime
-             * RTOS. The cost of one redundant SysTick invocation (the
-             * schedule was just evaluated) is negligible compared to the
-             * correctness risk of a lost tick. */
+             * RTOS. */
             ldr     r0, =0xE000ED04     /* ICSR address */
             mov     r1, #0x08000000     /* PENDSVCLR = bit 27 */
             str     r1, [r0]
             dsb                         /* ensure PENDSVCLR write completes */
-            mov     r0, #0
-            msr     BASEPRI, r0         /* unmask SysTick */
+            cpsie   i                   /* unmask all configurable exceptions */
 
             /* pendsv_return_unprivileged does not return.
              * r0 clobber above is safe: pendsv_return_unprivileged takes
