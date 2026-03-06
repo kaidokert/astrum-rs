@@ -722,13 +722,33 @@ macro_rules! define_unified_kernel {
             fn _assert_np_is_u8(c: &C) { let _: u8 = c.next_partition; }
 
             // PendSV indexes partition_sp with `lsl r0, #2` (×4) and
-            // loads/stores with ldr/str (32-bit) — elements must be u32.
+            // loads/stores with ldr/str (32-bit) — elements must be u32, stride 4.
             #[allow(unused)]
-            fn _assert_sp_elem_is_u32(c: &C) { let _: u32 = c.partition_sp[0]; }
+            fn _assert_sp_elem_is_u32_stride_4(c: &C) {
+                let _: u32 = c.partition_sp[0];
+                // to_ne_bytes() returns [u8; size_of::<ElemType>()]; binding to
+                // [u8; 4] fails compilation if the actual element size != 4.
+                let _: [u8; 4] = c.partition_sp[0].to_ne_bytes();
+            }
 
             // partition_sp must be 4-byte aligned for word-sized ldr/str.
-            let sp = ::core::mem::offset_of!(C, partition_sp);
-            assert!(sp % 4 == 0, "partition_sp must be 4-byte aligned");
+            let csp = ::core::mem::offset_of!(C, partition_sp);
+            assert!(csp % 4 == 0, "partition_sp must be 4-byte aligned");
+
+            // All four offsets must be less than 4095 (Thumb2 ldr immediate range).
+            let kcp = ::core::mem::offset_of!(K, current_partition);
+            let kco = ::core::mem::offset_of!(K, core);
+            let cnp = ::core::mem::offset_of!(C, next_partition);
+            assert!(kcp < 4095, "KERNEL_CURRENT_PARTITION_OFFSET exceeds Thumb2 ldr range");
+            assert!(kco < 4095, "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
+            assert!(cnp < 4095, "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
+            assert!(csp < 4095, "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
+
+            // Field ordering: current_partition before core in Kernel.
+            assert!(kcp < kco, "current_partition must precede core in Kernel layout");
+
+            // Field ordering: next_partition before partition_sp in Core.
+            assert!(cnp < csp, "next_partition must precede partition_sp in Core layout");
         };
 
         /// SVC dispatch hook that routes syscalls through the unified kernel.
