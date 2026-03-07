@@ -743,6 +743,28 @@ pub fn validate_irq_priority(priority: u8, min_app_irq_priority: u8) -> Result<(
     }
 }
 
+/// Returns the effective group priority after masking a raw 8-bit priority
+/// value to the hardware's implemented priority bits.
+///
+/// Cortex-M implementations only use the top `impl_bits` bits of the 8-bit
+/// priority field.  For example, the LM3S6965 implements 3 bits, so only
+/// bits [7:5] matter and the effective priority is `raw_priority & 0xE0`.
+///
+/// # Parameters
+/// - `raw_priority`: The 8-bit priority value written to the NVIC/SCB.
+/// - `impl_bits`: Number of implemented priority bits (1..=8).
+///
+/// # Panics
+/// Panics (at compile time when used in `const` context) if `impl_bits`
+/// is 0 or greater than 8.
+pub const fn effective_group_priority(raw_priority: u8, impl_bits: u8) -> u8 {
+    // TODO(panic-free): convert to Result
+    assert!(impl_bits >= 1, "impl_bits must be at least 1");
+    assert!(impl_bits <= 8, "impl_bits must be at most 8");
+    let mask: u8 = 0xFF << (8 - impl_bits);
+    raw_priority & mask
+}
+
 /// Generates the four associated type aliases (`Core`, `Sync`, `Msg`,
 /// `Ports`) required by [`KernelConfig`].
 ///
@@ -3212,5 +3234,99 @@ mod tests {
     #[should_panic(expected = "IRQ default priority must be strictly higher")]
     fn assert_priority_order_panics_pendsv_below_irq_default() {
         assert_priority_order::<PendsvBelowDefault>();
+    }
+
+    // ============ effective_group_priority tests ============
+
+    // -- 3-bit hardware (LM3S6965): mask = 0xE0 --
+
+    #[test]
+    fn effective_group_priority_3bit_systick() {
+        // Verify the kernel's SYSTICK_PRIORITY through the effective mask
+        let systick = <DefaultPriority as KernelConfig>::SYSTICK_PRIORITY;
+        assert_eq!(effective_group_priority(systick, 3), 0x00);
+    }
+
+    #[test]
+    fn effective_group_priority_3bit_svcall() {
+        // Verify the kernel's SVCALL_PRIORITY through the effective mask
+        let svcall = <DefaultPriority as KernelConfig>::SVCALL_PRIORITY;
+        assert_eq!(effective_group_priority(svcall, 3), 0x00);
+    }
+
+    #[test]
+    fn effective_group_priority_3bit_pendsv() {
+        // 0xFF → bits [7:5] = 0b111 → effective 0xE0
+        assert_eq!(effective_group_priority(0xFF, 3), 0xE0);
+    }
+
+    #[test]
+    fn effective_group_priority_3bit_mid() {
+        // 0x60 → bits [7:5] = 0b011 → effective 0x60
+        assert_eq!(effective_group_priority(0x60, 3), 0x60);
+    }
+
+    #[test]
+    fn effective_group_priority_3bit_rounds_down() {
+        // 0x3F → bits [7:5] = 0b001 → effective 0x20
+        assert_eq!(effective_group_priority(0x3F, 3), 0x20);
+    }
+
+    // -- 4-bit hardware: mask = 0xF0 --
+
+    #[test]
+    fn effective_group_priority_4bit_systick() {
+        let systick = <DefaultPriority as KernelConfig>::SYSTICK_PRIORITY;
+        assert_eq!(effective_group_priority(systick, 4), 0x10);
+    }
+
+    #[test]
+    fn effective_group_priority_4bit_svcall() {
+        let svcall = <DefaultPriority as KernelConfig>::SVCALL_PRIORITY;
+        assert_eq!(effective_group_priority(svcall, 4), 0x00);
+    }
+
+    #[test]
+    fn effective_group_priority_4bit_ff() {
+        assert_eq!(effective_group_priority(0xFF, 4), 0xF0);
+    }
+
+    #[test]
+    fn effective_group_priority_4bit_mid() {
+        // 0x7A → bits [7:4] = 0b0111 → effective 0x70
+        assert_eq!(effective_group_priority(0x7A, 4), 0x70);
+    }
+
+    // -- 8-bit hardware: mask = 0xFF (identity) --
+
+    #[test]
+    fn effective_group_priority_8bit_identity() {
+        let systick = <DefaultPriority as KernelConfig>::SYSTICK_PRIORITY;
+        let svcall = <DefaultPriority as KernelConfig>::SVCALL_PRIORITY;
+        assert_eq!(effective_group_priority(systick, 8), systick);
+        assert_eq!(effective_group_priority(svcall, 8), svcall);
+        assert_eq!(effective_group_priority(0xFF, 8), 0xFF);
+        assert_eq!(effective_group_priority(0x37, 8), 0x37);
+    }
+
+    // -- edge / panic cases --
+
+    #[test]
+    fn effective_group_priority_1bit() {
+        // mask = 0x80; only bit 7 matters
+        assert_eq!(effective_group_priority(0xFF, 1), 0x80);
+        assert_eq!(effective_group_priority(0x7F, 1), 0x00);
+    }
+
+    #[test]
+    #[should_panic(expected = "impl_bits must be at least 1")]
+    fn effective_group_priority_panics_zero_bits() {
+        effective_group_priority(0x10, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "impl_bits must be at most 8")]
+    fn effective_group_priority_panics_nine_bits() {
+        effective_group_priority(0x10, 9);
     }
 }
