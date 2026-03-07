@@ -220,12 +220,6 @@ impl<const N: usize> ScheduleTable<N> {
         self.current_slot
     }
 
-    /// Advance to the next **partition** slot, skipping any intervening
-    /// `SystemWindow` entries.  Returns [`ScheduleEvent::PartitionSwitch`]
-    /// or [`ScheduleEvent::None`] if the table is empty/unstarted or
-    /// contains only system windows.  Bounded by the table length to
-    /// guarantee termination.  Returns the number of system windows
-    /// skipped as the second element.
     /// When `dynamic-mpu` is disabled there are no `SystemWindow` entries, so
     /// this simply delegates to [`force_advance`] with `skipped = 0`.
     #[cfg(not(feature = "dynamic-mpu"))]
@@ -233,6 +227,12 @@ impl<const N: usize> ScheduleTable<N> {
         (self.force_advance(), 0)
     }
 
+    /// Advance to the next **partition** slot, skipping any intervening
+    /// `SystemWindow` entries.  Returns [`ScheduleEvent::PartitionSwitch`]
+    /// or [`ScheduleEvent::None`] if the table is empty/unstarted or
+    /// contains only system windows.  Bounded by the table length to
+    /// guarantee termination.  Returns the number of system windows
+    /// skipped as the second element.
     #[cfg(feature = "dynamic-mpu")]
     pub fn force_advance_to_partition(&mut self) -> (ScheduleEvent, usize) {
         let len = self.entries.len();

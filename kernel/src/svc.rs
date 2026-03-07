@@ -660,7 +660,7 @@ macro_rules! define_unified_kernel {
     //
     // BOUNDS: This rule uses `Kernel<$Config>` which inherits its where clause from the
     // Kernel struct definition. The struct was updated to remove sub-struct-owned const
-    // bounds (S, SW, MS, MW, QS, QD, QM, QW, SP, SM, BS, BM, BW) - see commit b1e8222.
+    // bounds (S, SW, MS, MW, QS, QD, QM, QW, SP, SM, BS, BM, BW).
     // The macro itself does not need explicit where clauses; reduced bounds are achieved
     // through the struct definition.
     (@impl_named $name:ident, $Config:ty, |$k:ident| $yield_body:block) => {
@@ -1912,9 +1912,6 @@ where
                 }
             }),
             #[cfg(feature = "ipc-queuing")]
-            // TODO: reviewer false positive — kernel QueuingStatus handler already
-            // uses validated_ptr! + ptr::write to populate the full QueuingPortStatus
-            // struct via the r2 pointer; no regression exists.
             Some(SyscallId::QueuingStatus) => {
                 validated_ptr!(self, frame.r2, core::mem::size_of::<QueuingPortStatus>(), {
                     // SAFETY: (1) validated_ptr confirmed [r2, r2+size_of QueuingPortStatus)
@@ -2807,9 +2804,10 @@ where
     /// ticks. Updates `active_partition` and returns the schedule result.
     /// Called by the harness when a partition yields.
     pub fn yield_current_slot(&mut self) -> impl YieldResult {
-        let (result, _skipped) = self.schedule_mut().force_advance_to_partition();
+        #[allow(unused_variables)]
+        let (result, skipped) = self.schedule_mut().force_advance_to_partition();
         #[cfg(feature = "dynamic-mpu")]
-        if _skipped > 0 {
+        if skipped > 0 {
             self.ticks_since_bottom_half = 0;
             self.bottom_half_stale = false;
         }
@@ -3465,8 +3463,8 @@ mod tests {
         for _ in 0..sem_count {
             k.semaphores_mut().add(Semaphore::new(1, 2)).unwrap();
         }
-        // TODO: reviewer false positive – MutexPool::new(MS) pre-allocates all
-        // mutexes at full capacity in SyncPools::default(); there is no add() API.
+        // MutexPool is pre-allocated at full capacity by SyncPools::default();
+        // no add() API exists, so mtx_count is unused here.
         let _ = mtx_count;
         // Add message queues via facade method
         for _ in 0..msg_queue_count {
@@ -6032,7 +6030,7 @@ mod tests {
         // Data at 0x2000_2000..0x2000_3000 — above kernel data.
         let t = ptr_table_separate_regions(0x2000_0000, 0x800, 0x2000_2000, 0x1000);
         // Guard 2 (grant) must accept own-stack pointers before Guard 3 (SRAM
-        // rejection) fires.  This exercises the ordering fix from commit a8043b9.
+        // rejection) fires.  This exercises the guard ordering fix.
         assert!(validate_user_ptr(&t, 0, 0x2000_0000, 4)); // start of stack
         assert!(validate_user_ptr(&t, 0, 0x2000_0400, 16)); // middle of stack
         assert!(validate_user_ptr(&t, 0, 0x2000_07F0, 16)); // near end of stack
