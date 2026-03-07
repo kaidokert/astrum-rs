@@ -147,7 +147,7 @@ macro_rules! define_kernel_runtime {
 
     // Internal: emit PendSV for static mode
     (@pendsv_impl $Config:ty) => {
-        $crate::define_pendsv!();
+        $crate::define_pendsv!($Config);
     };
     // Internal: emit PendSV for dynamic mode
     (@pendsv_impl $Config:ty, dynamic: $strategy:ident) => {

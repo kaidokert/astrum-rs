@@ -715,10 +715,10 @@ macro_rules! define_unified_kernel {
 
         // Compile-time assertions for PendSV assembly invariants.
         //
-        // Placed in define_unified_kernel! (not define_pendsv!) because
-        // define_pendsv!() has no $Config type parameter; only the
-        // `dynamic:` arm receives $Config.  define_unified_kernel! is
-        // invoked once per configuration, which is the correct scope.
+        // These verify the exported ABI statics against offset_of! and
+        // check range/ordering/alignment constraints.  The define_pendsv!
+        // macro has its own @assert_offsets arm that duplicates the
+        // offset_of!-based checks (without access to the statics).
         const _: () = {
             type K = $crate::svc::Kernel<$Config>;
             type C = <$Config as $crate::config::KernelConfig>::Core;
@@ -769,12 +769,12 @@ macro_rules! define_unified_kernel {
             // partition_sp must be 4-byte aligned for word-sized ldr/str.
             assert!(CORE_PARTITION_SP_OFFSET % 4 == 0, "partition_sp must be 4-byte aligned");
 
-            // All offsets must be less than 4095 (Thumb2 ldr immediate range).
-            assert!(KERNEL_CURRENT_PARTITION_OFFSET < 4095, "KERNEL_CURRENT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(KERNEL_TICKS_DROPPED_OFFSET < 4095, "KERNEL_TICKS_DROPPED_OFFSET exceeds Thumb2 ldr range");
-            assert!(KERNEL_CORE_OFFSET < 4095, "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
-            assert!(CORE_NEXT_PARTITION_OFFSET < 4095, "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(CORE_PARTITION_SP_OFFSET < 4095, "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
+            // All offsets must be < 4096 (Thumb2 ldr 12-bit unsigned immediate: 0..=4095).
+            assert!(KERNEL_CURRENT_PARTITION_OFFSET < 4096, "KERNEL_CURRENT_PARTITION_OFFSET exceeds Thumb2 ldr range");
+            assert!(KERNEL_TICKS_DROPPED_OFFSET < 4096, "KERNEL_TICKS_DROPPED_OFFSET exceeds Thumb2 ldr range");
+            assert!(KERNEL_CORE_OFFSET < 4096, "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
+            assert!(CORE_NEXT_PARTITION_OFFSET < 4096, "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
+            assert!(CORE_PARTITION_SP_OFFSET < 4096, "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
 
             // Field ordering: current_partition before core in Kernel.
             assert!(KERNEL_CURRENT_PARTITION_OFFSET < KERNEL_CORE_OFFSET,
@@ -12532,52 +12532,39 @@ mod tests {
         assert_eq!(result, 0, "IrqAck should succeed for partition 0, IRQ 5");
     }
 
-    // ---- PendSV ABI constant verification ----
+    // ---- PendSV ABI constant verification (compile-time) ----
     //
-    // The define_unified_kernel! macro generates statics
-    // (KERNEL_CURRENT_PARTITION_OFFSET, etc.) and a const block that
-    // compile-time asserts those statics match offset_of!.  That const
-    // block fires in real (ARM) builds.  Here we verify the offset_of!
-    // values themselves for TestConfig to catch layout regressions.
-    //
-    // NOTE: We cannot expand define_unified_kernel! in host tests because
-    // state::with_kernel* is #[cfg(not(test))].  The macro-generated
-    // statics are verified at compile time by the const block in the
-    // macro, and at runtime via QEMU integration tests.
+    // Replaces the former pendsv_abi_offsets_match_expected_layout runtime test
+    // with const assertions that fire during compilation.  Verifies offset
+    // ranges, field ordering, alignment, and element stride for TestConfig.
 
-    #[test]
-    fn pendsv_abi_offsets_match_expected_layout() {
+    // Compile-time version of the former pendsv_abi_offsets_match_expected_layout
+    // runtime test.  These assertions fire during `cargo test` compilation,
+    // catching layout regressions without needing to run the binary.
+    //
+    // NOTE: Offset < 4096 range checks are omitted here because TestConfig
+    // embeds large stacks that push `core` past the Thumb2 ldr limit.
+    // The authoritative range checks live in define_pendsv!(@assert_offsets)
+    // and define_unified_kernel!, which are invoked with real embedded configs.
+    const _: () = {
         type K = Kernel<TestConfig>;
         type C = <TestConfig as KernelConfig>::Core;
 
-        // Verify the offset_of! expressions that define_unified_kernel!
-        // uses to initialize its statics produce consistent values.
-        let kcp = core::mem::offset_of!(K, current_partition);
-        let kco = core::mem::offset_of!(K, core);
-        let cnp = core::mem::offset_of!(C, next_partition);
-        let csp = core::mem::offset_of!(C, partition_sp);
-
-        // current_partition must precede core in Kernel layout.
-        assert!(
-            kcp < kco,
-            "current_partition ({kcp}) must precede core ({kco})"
-        );
-
-        // next_partition must precede partition_sp in Core layout.
-        assert!(
-            cnp < csp,
-            "next_partition ({cnp}) must precede partition_sp ({csp})"
-        );
+        // Field ordering: current_partition before core.
+        assert!(core::mem::offset_of!(K, current_partition) < core::mem::offset_of!(K, core));
+        // Field ordering: next_partition before partition_sp.
+        assert!(core::mem::offset_of!(C, next_partition) < core::mem::offset_of!(C, partition_sp));
 
         // partition_sp must be 4-byte aligned for word-sized ldr/str.
-        assert_eq!(csp % 4, 0, "partition_sp offset ({csp}) not 4-byte aligned");
+        assert!(core::mem::offset_of!(C, partition_sp) % 4 == 0);
 
-        // Verify these are the exact same values the macro would use.
-        assert_eq!(kcp, core::mem::offset_of!(K, current_partition));
-        assert_eq!(kco, core::mem::offset_of!(K, core));
-        assert_eq!(cnp, core::mem::offset_of!(C, next_partition));
-        assert_eq!(csp, core::mem::offset_of!(C, partition_sp));
-    }
+        // partition_sp element stride must be 4 (u32).
+        #[allow(unused)]
+        fn _assert_sp_elem_is_u32_stride_4(c: &C) {
+            let _: u32 = c.partition_sp[0];
+            let _: [u8; 4] = c.partition_sp[0].to_ne_bytes();
+        }
+    };
 
     /// Test module for `define_unified_kernel!` macro.
     ///
