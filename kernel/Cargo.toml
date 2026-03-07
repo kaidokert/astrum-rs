@@ -367,6 +367,10 @@ name = "tick_fairness_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "starvation_detect_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "dropped_tick_test"
 required-features = ["qemu", "log-semihosting"]
 
