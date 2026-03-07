@@ -59,7 +59,10 @@ kernel::define_unified_harness!(TestConfig, |tick, k| {
         }
     }
     if tick >= TIMEOUT_TICKS {
-        hprintln!("dropped_tick_test: FAIL (ticks_dropped=0 after {} ticks)", tick);
+        hprintln!(
+            "dropped_tick_test: FAIL (ticks_dropped=0 after {} ticks)",
+            tick
+        );
         kernel::kexit!(failure);
     }
 });
@@ -84,6 +87,7 @@ fn main() -> ! {
 
     let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("dropped_tick_test: Kernel::create");
 
+    // store_kernel and boot are provided by the define_unified_harness! macro.
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];

@@ -558,10 +558,10 @@ mod tests {
 
     // ============ Ticks-dropped detection tests ============
     //
-    // TODO: The _detect_dropped_ticks! macro reads ICSR PENDSTSET on ARM
+    // NOTE: The _detect_dropped_ticks! macro reads ICSR PENDSTSET on ARM
     // targets, which is cfg-gated out on host. Full macro-expansion and
-    // ICSR bit-check coverage requires an on-target or QEMU integration
-    // test — out of scope for unit tests.
+    // ICSR bit-check coverage is exercised by the QEMU integration test
+    // in examples/dropped_tick_test.rs.
 
     /// Verify that increment_ticks_dropped records a dropped tick and
     /// the counter reflects the correct value after multiple drops.
