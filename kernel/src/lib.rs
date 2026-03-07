@@ -1,7 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(incomplete_features)]
-// TODO: reviewer false positive – const slice::get requires these features on our
-// nightly (built 2026-02-24); remove once const_trait_impl / const_index stabilise.
+// TODO: remove once const_trait_impl / const_index stabilise on nightly.
 #![feature(const_index)]
 #![feature(const_trait_impl)]
 #![feature(generic_const_exprs)]
@@ -93,6 +92,7 @@ pub mod svc_msg;
 pub mod svc_queuing;
 #[cfg(feature = "ipc-sampling")]
 pub mod svc_sampling;
+pub mod svc_scheduler;
 pub mod svc_sleep;
 pub mod svc_sync;
 pub mod sync_pools;

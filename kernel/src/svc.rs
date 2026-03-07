@@ -5,6 +5,7 @@ use cortex_m::interrupt::Mutex;
 use crate::blackboard::BlackboardPool;
 use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
+#[allow(unused_imports)]
 use crate::invariants::assert_partition_state_consistency;
 
 // Re-export SvcError from shared traits crate for ABI isolation
@@ -2600,30 +2601,6 @@ where
     // Schedule advance methods
     // -------------------------------------------------------------------------
 
-    /// Transition the active partition from `Running` to `Ready`.
-    ///
-    /// If `active_partition` is `Some` and that partition is currently
-    /// `Running`, it is moved to `Ready`. Otherwise this is a no-op.
-    fn transition_outgoing_ready(&mut self) {
-        if let Some(old_pid) = self.active_partition {
-            let is_running = self
-                .partitions()
-                .get(old_pid as usize)
-                .map(|pcb| pcb.state() == PartitionState::Running)
-                .unwrap_or(false);
-            if is_running {
-                try_transition(self.partitions_mut(), old_pid, PartitionState::Ready);
-            }
-        }
-        debug_assert!(
-            {
-                assert_partition_state_consistency(self.partitions().as_slice());
-                true
-            },
-            "at-most-one-Running invariant violated after transition_outgoing_ready"
-        );
-    }
-
     /// Advance the schedule table by one tick. Returns a [`ScheduleEvent`]
     /// indicating whether a partition switch or system window occurred.
     /// Updates `active_partition` and `next_partition` on partition switches.
@@ -2758,24 +2735,6 @@ where
             return ScheduleEvent::None;
         }
         result
-    }
-
-    /// Start the schedule and return the initial partition ID.
-    ///
-    /// Calls `self.schedule_mut().start()` to initialize the schedule table's
-    /// internal state (resetting to the first slot). Returns the partition
-    /// ID of the first schedule entry, or `None` if the schedule is empty.
-    ///
-    /// This centralizes schedule startup in the Kernel, allowing the harness
-    /// to call `kernel.start_schedule()` instead of managing schedule state
-    /// separately.
-    pub fn start_schedule(&mut self) -> Option<u8> {
-        self.schedule_mut().start();
-        let first_pid = self.schedule().current_partition();
-        if let Some(pid) = first_pid {
-            self.active_partition = Some(pid);
-        }
-        first_pid
     }
 
     /// Returns an immutable reference to the tick counter.
