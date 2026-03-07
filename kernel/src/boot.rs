@@ -406,7 +406,7 @@ where
     }
 
     let first = crate::state::with_kernel_mut::<C, _, _>(|k| {
-        k.start_schedule().inspect(|&pid| k.set_next_partition(pid))
+        crate::svc_scheduler::start_schedule(k).inspect(|&pid| k.set_next_partition(pid))
     })
     .ok_or(BootError::NoReadyPartition)?;
     let _ = first;

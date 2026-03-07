@@ -5,8 +5,7 @@ use cortex_m::interrupt::Mutex;
 use crate::blackboard::BlackboardPool;
 use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
-#[allow(unused_imports)]
-use crate::invariants::assert_partition_state_consistency;
+use crate::svc_scheduler;
 
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
@@ -2655,7 +2654,7 @@ where
                 }
                 return ScheduleEvent::None;
             }
-            self.transition_outgoing_ready();
+            svc_scheduler::transition_outgoing_ready(self);
             // Reset starvation: the incoming partition is now running.
             if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
                 pcb.reset_starvation();
@@ -8388,10 +8387,16 @@ mod tests {
         assert_eq!(k.active_partition(), None);
         // Advance 4 ticks within slot 0 - no switch
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
         // 5th tick triggers switch to P1
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::PartitionSwitch(1)
+        );
         assert_eq!(k.active_partition(), Some(1));
     }
 
@@ -8404,19 +8409,28 @@ mod tests {
         assert_eq!(k.next_partition(), 0);
         // Advance 4 ticks within slot 0 - no switch, next_partition unchanged
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
             assert_eq!(k.next_partition(), 0);
         }
         // 5th tick triggers switch to P1, next_partition updated
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::PartitionSwitch(1)
+        );
         assert_eq!(k.next_partition(), 1);
         // Continue through P1's slot (3 ticks), then wrap to P0
         for _ in 0..2 {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
             assert_eq!(k.next_partition(), 1);
         }
         // 3rd tick of P1's slot triggers switch back to P0
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(0));
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::PartitionSwitch(0)
+        );
         assert_eq!(k.next_partition(), 0);
     }
 
@@ -8424,9 +8438,9 @@ mod tests {
     fn advance_schedule_tick_increments_tick_counter() {
         let mut k = kernel_with_schedule();
         assert_eq!(k.tick().get(), 0);
-        k.advance_schedule_tick();
+        svc_scheduler::advance_schedule_tick(&mut k);
         assert_eq!(k.tick().get(), 1);
-        k.advance_schedule_tick();
+        svc_scheduler::advance_schedule_tick(&mut k);
         assert_eq!(k.tick().get(), 2);
     }
 
@@ -8440,7 +8454,10 @@ mod tests {
 
         // Advance to boundary before P1's slot
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
         // Transition P1 to Waiting (Ready -> Running -> Waiting)
         let pcb1 = k.partitions_mut().get_mut(1).unwrap();
@@ -8448,7 +8465,10 @@ mod tests {
         pcb1.transition(PartitionState::Waiting).unwrap();
 
         // Tick that would switch to P1 returns None instead
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::None
+        );
         assert_eq!(k.active_partition(), initial_active);
         assert_eq!(k.next_partition(), initial_next);
     }
@@ -8470,7 +8490,10 @@ mod tests {
 
         // Advance to boundary before P1's slot (P0 has 5 ticks).
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
 
         // Transition P1 to Waiting (Ready -> Running -> Waiting).
@@ -8479,7 +8502,10 @@ mod tests {
         pcb1.transition(PartitionState::Waiting).unwrap();
 
         // 5th tick would switch to P1, but P1 is Waiting => skip.
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::None
+        );
         assert_eq!(k.active_partition(), Some(0));
         // P0 must still be Running — no Running→Ready transition fired.
         assert_eq!(
@@ -8500,7 +8526,10 @@ mod tests {
 
         // Advance to boundary before P1's slot (P0 has 5 ticks).
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
 
         // Transition P1 to Waiting.
@@ -8510,17 +8539,23 @@ mod tests {
         assert_eq!(pcb1.starvation_count(), 0);
 
         // First skip: starvation_count goes to 1.
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::None
+        );
         assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 1);
 
         // Advance through remaining P1 ticks + full P0 slot to reach
         // another P1 boundary. P1 has 3 ticks, then P0 has 5 ticks.
         // We already consumed 1 of P1's 3 ticks above.
         for _ in 0..INTER_P1_TICKS {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
         }
         // Next tick hits P1 boundary again.
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::None
+        );
         assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 2);
     }
 
@@ -8537,7 +8572,10 @@ mod tests {
 
         // Advance to boundary before P1's slot.
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
 
         // Transition P1 to Waiting so it gets skipped.
@@ -8546,7 +8584,10 @@ mod tests {
         pcb1.transition(PartitionState::Waiting).unwrap();
 
         // Skip P1 — starvation goes to 1.
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::None
+        );
         assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 1);
 
         // Now make P1 Ready again so it will run on the next cycle.
@@ -8555,11 +8596,14 @@ mod tests {
 
         // Advance through remaining P1 ticks + P0 slot to next P1 boundary.
         for _ in 0..INTER_P1_TICKS {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
         }
 
         // This tick switches to P1 (Ready) — starvation resets.
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::PartitionSwitch(1)
+        );
         assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
     }
 
@@ -8576,10 +8620,16 @@ mod tests {
         // Both partitions are Ready. Advance through a full cycle.
         // P0(5 ticks) -> P1(3 ticks).
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
         // Switch to P1.
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::PartitionSwitch(1)
+        );
         assert_eq!(k.partitions().get(0).unwrap().starvation_count(), 0);
         assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
     }
@@ -8598,7 +8648,10 @@ mod tests {
         // Transition P1 to Waiting so it gets skipped on every boundary.
         // Advance to boundary before P1's slot (P0 has 5 ticks).
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
         let pcb1 = k.partitions_mut().get_mut(1).unwrap();
         pcb1.transition(PartitionState::Running).unwrap();
@@ -8611,7 +8664,10 @@ mod tests {
         // ticks + full P0 slot to reach next P1 boundary.
         for skip in 1..=STARVATION_THRESHOLD {
             // Tick that hits P1 boundary — P1 is Waiting, so it gets skipped.
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
             let count = k.partitions().get(1).unwrap().starvation_count();
             assert_eq!(
                 count, skip,
@@ -8622,7 +8678,7 @@ mod tests {
                 assert!(!k.partitions().get(1).unwrap().is_starved());
                 // Advance through remaining P1 ticks (2) + full P0 slot (5).
                 for _ in 0..INTER_P1_TICKS {
-                    k.advance_schedule_tick();
+                    svc_scheduler::advance_schedule_tick(&mut k);
                 }
             }
         }
@@ -8692,10 +8748,16 @@ mod tests {
 
         // Advance to P1's slot boundary
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
         // Switch to P1 (Ready partition)
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::PartitionSwitch(1)
+        );
         assert_eq!(k.active_partition(), Some(1));
     }
 
@@ -8717,10 +8779,16 @@ mod tests {
 
         // Advance to the P1 slot boundary (P0 has 5 ticks).
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
         // 5th tick triggers switch to P1.
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::PartitionSwitch(1)
+        );
 
         // P0 should now be Ready, P1 should be Running.
         assert_eq!(
@@ -8804,7 +8872,7 @@ mod tests {
         for (i, b) in boundaries.iter().enumerate() {
             // Advance through interior ticks (no switch expected).
             for _ in 0..b.interior_ticks {
-                let ev = k.advance_schedule_tick();
+                let ev = svc_scheduler::advance_schedule_tick(&mut k);
                 assert!(
                     ev != ScheduleEvent::PartitionSwitch(b.incoming),
                     "unexpected early switch at boundary {i}"
@@ -8814,12 +8882,15 @@ mod tests {
             // On dynamic-mpu, the P1→P0 boundary has a SystemWindow tick first.
             #[cfg(feature = "dynamic-mpu")]
             if i == 1 {
-                assert_eq!(k.advance_schedule_tick(), ScheduleEvent::SystemWindow);
+                assert_eq!(
+                    svc_scheduler::advance_schedule_tick(&mut k),
+                    ScheduleEvent::SystemWindow
+                );
             }
 
             // The next tick triggers the partition switch.
             assert_eq!(
-                k.advance_schedule_tick(),
+                svc_scheduler::advance_schedule_tick(&mut k),
                 ScheduleEvent::PartitionSwitch(b.incoming),
                 "expected switch to P{} at boundary {i}",
                 b.incoming
@@ -8864,7 +8935,10 @@ mod tests {
 
         // Advance to 1 tick before P1's slot boundary (P0 has 5 ticks).
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
 
         // P0: Running → Waiting (simulates blocking syscall).
@@ -8881,7 +8955,7 @@ mod tests {
 
         // 5th tick triggers schedule boundary nominating P1 (Waiting).
         // Bug 06 guard should restore P0 to Running.
-        let ev = k.advance_schedule_tick();
+        let ev = svc_scheduler::advance_schedule_tick(&mut k);
         assert_eq!(ev, ScheduleEvent::None);
 
         // P0 must be restored to Running.
@@ -8938,7 +9012,10 @@ mod tests {
 
         // Advance through P0's slot (4 interior ticks).
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
         // Before P1's slot: transition P1 Ready -> Running -> Waiting.
         let pcb1 = k.partitions_mut().get_mut(1).unwrap();
@@ -8953,13 +9030,19 @@ mod tests {
         let prev_next = k.next_partition();
 
         // Tick 5 would switch to P1 — must be suppressed.
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::None
+        );
         assert_eq!(k.active_partition(), prev_active);
         assert_eq!(k.next_partition(), prev_next);
 
         // Remaining 2 ticks of P1's slot: still no switch.
         for _ in 0..2 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
             assert_eq!(k.active_partition(), prev_active);
         }
     }
@@ -8975,7 +9058,10 @@ mod tests {
 
         // Advance 4 ticks into P0's first slot.
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
         // Put P1 into Waiting before its slot.
         let pcb1 = k.partitions_mut().get_mut(1).unwrap();
@@ -8983,12 +9069,15 @@ mod tests {
         pcb1.transition(PartitionState::Waiting).unwrap();
 
         // Tick 5: P1's slot boundary — skipped because Waiting.
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::None
+        );
 
         // Advance through rest of P1's slot (2 ticks) + P0's next slot (5 ticks).
         // Total: 7 more ticks to reach P1's next slot boundary.
         for _ in 0..7 {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
         }
 
         // Unblock P1: Waiting -> Ready.
@@ -9015,7 +9104,7 @@ mod tests {
         // Tick 13: switch to P1
 
         // We've done 12 ticks. One more should switch to P1.
-        let event = k.advance_schedule_tick();
+        let event = svc_scheduler::advance_schedule_tick(&mut k);
         assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
         assert_eq!(k.active_partition(), Some(1));
     }
@@ -9091,7 +9180,7 @@ mod tests {
         //   tick 10:  boundary -> P0 slot (PartitionSwitch(0)) [wraps]
         let mut events = [ScheduleEvent::None; 10];
         for event in &mut events {
-            *event = k.advance_schedule_tick();
+            *event = svc_scheduler::advance_schedule_tick(&mut k);
             // active_partition must never point to a Waiting partition.
             if let Some(ap) = k.active_partition() {
                 assert!(ap != 1 && ap != 2, "active_partition was set to P{ap}");
@@ -9138,7 +9227,7 @@ mod tests {
         // Schedule: P0(5 ticks), P1(3 ticks), SystemWindow(1 tick)
         // Advance through P0's slot (5 ticks) - counter increments each tick
         for i in 1..=5 {
-            let event = k.advance_schedule_tick();
+            let event = svc_scheduler::advance_schedule_tick(&mut k);
             if i < 5 {
                 assert_eq!(event, ScheduleEvent::None);
             } else {
@@ -9148,7 +9237,7 @@ mod tests {
         }
         // Advance through P1's slot (3 ticks)
         for i in 6..=8 {
-            let event = k.advance_schedule_tick();
+            let event = svc_scheduler::advance_schedule_tick(&mut k);
             if i < 8 {
                 assert_eq!(event, ScheduleEvent::None);
             } else {
@@ -9162,7 +9251,7 @@ mod tests {
             }
         }
         // Continue advancing - counter should increment again from 0
-        let event = k.advance_schedule_tick();
+        let event = svc_scheduler::advance_schedule_tick(&mut k);
         assert_eq!(event, ScheduleEvent::PartitionSwitch(0));
         assert_eq!(k.ticks_since_bottom_half, 1);
     }
@@ -9185,7 +9274,7 @@ mod tests {
 
         // Advance ticks up to the threshold - flag should remain false
         for i in 1..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
             assert_eq!(k.ticks_since_bottom_half, i);
             assert!(
                 !k.is_bottom_half_stale(),
@@ -9195,7 +9284,7 @@ mod tests {
         }
 
         // Advance one more tick past the threshold - flag should become true
-        k.advance_schedule_tick();
+        svc_scheduler::advance_schedule_tick(&mut k);
         assert_eq!(
             k.ticks_since_bottom_half,
             TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS + 1
@@ -9206,7 +9295,7 @@ mod tests {
         );
 
         // Flag should remain true on subsequent ticks
-        k.advance_schedule_tick();
+        svc_scheduler::advance_schedule_tick(&mut k);
         assert!(k.is_bottom_half_stale());
     }
 
@@ -9224,7 +9313,7 @@ mod tests {
 
         // Advance past threshold to set the flag
         for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
         }
         assert!(
             k.is_bottom_half_stale(),
@@ -9240,7 +9329,7 @@ mod tests {
 
         // Advancing more ticks past threshold should set it again
         for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
         }
         assert!(
             k.is_bottom_half_stale(),
@@ -9288,7 +9377,7 @@ mod tests {
 
         // Advance past threshold to trigger stale flag
         for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
         }
         assert!(k.is_bottom_half_stale());
 
@@ -9316,7 +9405,7 @@ mod tests {
 
         // Advance past threshold to trigger stale flag
         for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
         }
         assert!(k.is_bottom_half_stale());
 
@@ -9384,8 +9473,8 @@ mod tests {
         assert_eq!(ef.r1, 0, "r1 should contain stale flag (false -> 0)");
 
         // Advance a few ticks and check again
-        k.advance_schedule_tick();
-        k.advance_schedule_tick();
+        svc_scheduler::advance_schedule_tick(&mut k);
+        svc_scheduler::advance_schedule_tick(&mut k);
         let mut ef2 = frame(crate::syscall::SYS_QUERY_BOTTOM_HALF, 0, 0);
         // SAFETY: `ef2` is a valid stack-local ExceptionFrame with initialized r0-r3
         // fields. `k` remains a valid Kernel. Single-threaded test execution.
@@ -9409,7 +9498,7 @@ mod tests {
 
         // Advance past the threshold to trigger the stale flag
         for _ in 0..=TestConfig::SYSTEM_WINDOW_MAX_GAP_TICKS {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
         }
         assert!(k.is_bottom_half_stale(), "flag should be set");
 
@@ -9430,8 +9519,8 @@ mod tests {
     fn yield_current_slot_advances_to_next_partition() {
         let mut k = kernel_with_schedule();
         // Consume 2 ticks in slot 0
-        k.advance_schedule_tick();
-        k.advance_schedule_tick();
+        svc_scheduler::advance_schedule_tick(&mut k);
+        svc_scheduler::advance_schedule_tick(&mut k);
         // Yield: skip remaining 3 ticks, advance to P1
         let result = k.yield_current_slot();
         assert_eq!(result.partition_id(), Some(1));
@@ -9584,7 +9673,7 @@ mod tests {
                 #[cfg(feature = "dynamic-mpu")]
                 const YIELD_CYCLE_TICKS: usize = 3 + 1 + 4;
                 for _ in 0..YIELD_CYCLE_TICKS {
-                    k.advance_schedule_tick();
+                    svc_scheduler::advance_schedule_tick(&mut k);
                 }
             }
         }
@@ -9662,7 +9751,7 @@ mod tests {
         k.active_partition = Some(0);
 
         // Call the helper directly.
-        k.transition_outgoing_ready();
+        svc_scheduler::transition_outgoing_ready(&mut k);
 
         // P0 should now be Ready.
         assert_eq!(
@@ -9679,7 +9768,7 @@ mod tests {
         assert_eq!(k.active_partition, None);
 
         // Call the helper — should not panic or change any state.
-        k.transition_outgoing_ready();
+        svc_scheduler::transition_outgoing_ready(&mut k);
 
         // Both partitions should remain in their initial state (Ready).
         assert_eq!(
@@ -9704,7 +9793,7 @@ mod tests {
         // With active_partition = None the transition is a no-op,
         // so both partitions remain Running and the debug_assert fires.
         k.active_partition = None;
-        k.transition_outgoing_ready();
+        svc_scheduler::transition_outgoing_ready(&mut k);
     }
 
     #[test]
@@ -9729,7 +9818,7 @@ mod tests {
         );
 
         // transition_outgoing_ready should be a no-op: P0 is Waiting, not Running.
-        k.transition_outgoing_ready();
+        svc_scheduler::transition_outgoing_ready(&mut k);
 
         // P0 must remain Waiting — not spuriously moved to Ready.
         assert_eq!(
@@ -9740,6 +9829,7 @@ mod tests {
 
     #[test]
     fn transition_outgoing_ready_at_major_frame_boundary() {
+        use crate::invariants::assert_partition_state_consistency;
         let mut k = kernel_with_schedule();
 
         // Schedule: P0(5 ticks) | P1(3 ticks). Major frame = 8 ticks.
@@ -9749,10 +9839,10 @@ mod tests {
 
         // Advance 5 ticks to exhaust P0's slot → switch to P1.
         for _ in 0..4 {
-            let ev = k.advance_schedule_tick();
+            let ev = svc_scheduler::advance_schedule_tick(&mut k);
             assert_eq!(ev.partition_id(), None);
         }
-        let ev = k.advance_schedule_tick();
+        let ev = svc_scheduler::advance_schedule_tick(&mut k);
         assert_eq!(ev.partition_id(), Some(1));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
@@ -9765,14 +9855,17 @@ mod tests {
 
         // Advance 3 ticks to exhaust P1's slot → wrap to slot 0 (P0).
         for _ in 0..2 {
-            let ev = k.advance_schedule_tick();
+            let ev = svc_scheduler::advance_schedule_tick(&mut k);
             assert_eq!(ev.partition_id(), None);
         }
         // With dynamic-mpu, the system window sits between P1 and P0.
         #[cfg(feature = "dynamic-mpu")]
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::SystemWindow);
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::SystemWindow
+        );
         // Next tick triggers major frame boundary wrap-around: P1 → P0.
-        let ev = k.advance_schedule_tick();
+        let ev = svc_scheduler::advance_schedule_tick(&mut k);
         assert_eq!(ev.partition_id(), Some(0));
 
         // P1 (outgoing) transitioned Running → Ready at major frame boundary.
@@ -9791,6 +9884,7 @@ mod tests {
 
     #[test]
     fn transition_after_yield_at_end_of_major_frame() {
+        use crate::invariants::assert_partition_state_consistency;
         let mut k = kernel_with_schedule();
 
         // Schedule: P0(5 ticks) | P1(3 ticks). Major frame = 8 ticks.
@@ -9798,7 +9892,7 @@ mod tests {
         k.set_next_partition(0);
         k.active_partition = Some(0);
         for _ in 0..5 {
-            k.advance_schedule_tick();
+            svc_scheduler::advance_schedule_tick(&mut k);
         }
         // P1 is now Running in the last slot before wrap-around.
         assert_eq!(
@@ -10069,7 +10163,7 @@ mod tests {
 
         // Advance 4 ticks — all within slot 0 (P0 has 5 ticks).
         for i in 0..4 {
-            let event = k.advance_schedule_tick();
+            let event = svc_scheduler::advance_schedule_tick(&mut k);
             assert_eq!(
                 event,
                 ScheduleEvent::None,
@@ -10081,7 +10175,7 @@ mod tests {
         // 5th tick exhausts slot 0 → schedule table would return
         // PartitionSwitch(1), but P1 is Waiting so advance_schedule_tick
         // must return None and skip the switch.
-        let event = k.advance_schedule_tick();
+        let event = svc_scheduler::advance_schedule_tick(&mut k);
         assert_eq!(
             event,
             ScheduleEvent::None,
@@ -10306,10 +10400,10 @@ mod tests {
         // add_system_window(1) under dynamic-mpu. If schedule layout
         // changes, these tick counts must be re-derived from the layout.
         for i in 0..2 {
-            let ev = k.advance_schedule_tick();
+            let ev = svc_scheduler::advance_schedule_tick(&mut k);
             assert_eq!(ev, ScheduleEvent::None, "tick {}: interior", i + 1);
         }
-        let ev = k.advance_schedule_tick();
+        let ev = svc_scheduler::advance_schedule_tick(&mut k);
         #[cfg(feature = "dynamic-mpu")]
         assert_eq!(
             ev,
@@ -10324,7 +10418,7 @@ mod tests {
         );
         #[cfg(feature = "dynamic-mpu")]
         {
-            let ev = k.advance_schedule_tick();
+            let ev = svc_scheduler::advance_schedule_tick(&mut k);
             assert_eq!(
                 ev,
                 ScheduleEvent::PartitionSwitch(0),
@@ -10434,7 +10528,7 @@ mod tests {
 
         let mut wrap_count = 0u32;
         for tick in 1..=major_frame * 2 {
-            let ev = k.advance_schedule_tick();
+            let ev = svc_scheduler::advance_schedule_tick(&mut k);
 
             // 1-based position within the current major frame.
             let offset = ((tick - 1) % major_frame) + 1;
@@ -11408,7 +11502,7 @@ mod tests {
 
         let mut h = KernelTestHarness::with_partitions(3).expect("harness setup");
         let k = h.kernel_mut();
-        k.start_schedule();
+        svc_scheduler::start_schedule(k);
         k.set_next_partition(0);
 
         // P0: Running → Waiting.
@@ -11428,10 +11522,10 @@ mod tests {
 
         // Advance 9 ticks (P0's slot = 10 ticks; boundary at tick 10).
         for _ in 0..9 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(svc_scheduler::advance_schedule_tick(k), ScheduleEvent::None);
         }
         // 10th tick: boundary nominates P1 (Waiting), guard restores P0.
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(svc_scheduler::advance_schedule_tick(k), ScheduleEvent::None);
 
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
@@ -11464,7 +11558,7 @@ mod tests {
 
         let mut h = KernelTestHarness::with_partitions(3).expect("harness setup");
         let k = h.kernel_mut();
-        k.start_schedule();
+        svc_scheduler::start_schedule(k);
         k.set_next_partition(0);
 
         // P0: Running → Waiting.
@@ -11548,7 +11642,7 @@ mod tests {
         assert_eq!(k.active_partition, None);
 
         // Start the schedule
-        let initial = k.start_schedule();
+        let initial = svc_scheduler::start_schedule(&mut k);
         assert_eq!(initial, Some(0)); // First entry is partition 0
         assert_eq!(k.active_partition, Some(0));
         assert_eq!(k.schedule().current_partition(), Some(0));
@@ -11563,7 +11657,7 @@ mod tests {
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
 
         // Start empty schedule returns None
-        let initial = k.start_schedule();
+        let initial = svc_scheduler::start_schedule(&mut k);
         assert_eq!(initial, None);
         assert_eq!(k.active_partition, None);
     }
@@ -11574,16 +11668,22 @@ mod tests {
         use crate::scheduler::ScheduleEvent;
         let mut k = kernel_unstarted_schedule();
         // Start the schedule
-        let initial = k.start_schedule();
+        let initial = svc_scheduler::start_schedule(&mut k);
         assert_eq!(initial, Some(0));
 
         // Now advance ticks - schedule should work normally
         // P0 has 5 ticks, so 4 advances should return None
         for _ in 0..4 {
-            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
         }
         // 5th tick triggers switch to P1
-        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::PartitionSwitch(1)
+        );
         assert_eq!(k.active_partition, Some(1));
     }
 
@@ -12113,7 +12213,7 @@ mod tests {
         // Upper bound: one full cycle is 8 ticks (+ 1 system window tick with
         // dynamic-mpu). Use 12 as a safe ceiling.
         for _ in 0..12 {
-            let ev = k.advance_schedule_tick();
+            let ev = svc_scheduler::advance_schedule_tick(&mut k);
             if ev == ScheduleEvent::PartitionSwitch(0) {
                 switched_to_p0 = true;
                 break;
@@ -12185,7 +12285,7 @@ mod tests {
         // slot. Advance until we see PartitionSwitch(1).
         let mut switched_to_p1 = false;
         for _ in 0..5 {
-            let ev = k.advance_schedule_tick();
+            let ev = svc_scheduler::advance_schedule_tick(&mut k);
             assert_partition_state_consistency(k.partitions().as_slice());
             // P0 must stay Waiting throughout — never demoted to Ready.
             assert_eq!(
@@ -12211,7 +12311,7 @@ mod tests {
         // tick on dynamic-mpu), the schedule wraps back to P0's slot.
         let mut p0_boundary_event = Option::<ScheduleEvent>::None;
         for _ in 0..6 {
-            let ev = k.advance_schedule_tick();
+            let ev = svc_scheduler::advance_schedule_tick(&mut k);
             assert_partition_state_consistency(k.partitions().as_slice());
             // P0 must stay Waiting the entire time.
             assert_eq!(

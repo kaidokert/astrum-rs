@@ -115,7 +115,7 @@ fn SysTick() {
     }
 
     with_kernel_mut(|k| {
-        let event = k.advance_schedule_tick();
+        let event = kernel::svc_scheduler::advance_schedule_tick(k);
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             if let Some(pcb) = k.partitions().get(pid as usize) {
                 if let Some(regions) = partition_dynamic_regions(pcb) {

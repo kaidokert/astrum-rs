@@ -129,7 +129,7 @@ kernel::define_pendsv!();
 #[exception]
 fn SysTick() {
     with_kernel_mut(|k| {
-        let event = k.advance_schedule_tick();
+        let event = kernel::svc_scheduler::advance_schedule_tick(k);
         let current_tick = k.tick().get();
         match event {
             ScheduleEvent::PartitionSwitch(pid) => {

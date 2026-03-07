@@ -44,7 +44,7 @@ fn SysTick() {
             }
         }
 
-        let event = k.advance_schedule_tick();
+        let event = kernel::svc_scheduler::advance_schedule_tick(k);
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             // (1) Verify outgoing partition is now Ready (not Running).
             if prev_pid != u32::MAX {

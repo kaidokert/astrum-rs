@@ -90,7 +90,7 @@ fn SysTick() {
     // TODO: with_kernel_mut refactoring is a DRY cleanup, technically out of
     // scope for the schedule audit. Consider splitting into a separate commit.
     with_kernel_mut(|k| {
-        let event = k.advance_schedule_tick();
+        let event = kernel::svc_scheduler::advance_schedule_tick(k);
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             // Transition incoming partition to Running so syscalls can block it
             let _ = try_transition(k.partitions_mut(), pid, PartitionState::Running);
@@ -181,7 +181,7 @@ fn main() -> ! {
     let _ = try_transition(k.partitions_mut(), 0, PartitionState::Running);
 
     // Start schedule and set next partition before storing kernel
-    let first_pid = k.start_schedule().expect("schedule start failed");
+    let first_pid = kernel::svc_scheduler::start_schedule(&mut k).expect("schedule start failed");
     k.set_next_partition(first_pid);
     hprintln!("blocking_deschedule: first_pid={}", first_pid);
 
