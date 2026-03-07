@@ -680,6 +680,13 @@ macro_rules! define_unified_kernel {
         static KERNEL_CURRENT_PARTITION_OFFSET: usize =
             ::core::mem::offset_of!($crate::svc::Kernel<$Config>, current_partition);
 
+        /// Offset of `ticks_dropped` field in `Kernel<C>`.
+        #[cfg_attr(not(test), no_mangle)]
+        #[cfg_attr(not(test), link_section = ".rodata")]
+        #[allow(dead_code)]
+        static KERNEL_TICKS_DROPPED_OFFSET: usize =
+            ::core::mem::offset_of!($crate::svc::Kernel<$Config>, ticks_dropped);
+
         /// Offset of `core` field in `Kernel<C>`.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
@@ -722,6 +729,10 @@ macro_rules! define_unified_kernel {
                 "KERNEL_CURRENT_PARTITION_OFFSET does not match struct layout"
             );
             assert!(
+                KERNEL_TICKS_DROPPED_OFFSET == ::core::mem::offset_of!(K, ticks_dropped),
+                "KERNEL_TICKS_DROPPED_OFFSET does not match struct layout"
+            );
+            assert!(
                 KERNEL_CORE_OFFSET == ::core::mem::offset_of!(K, core),
                 "KERNEL_CORE_OFFSET does not match struct layout"
             );
@@ -755,8 +766,9 @@ macro_rules! define_unified_kernel {
             // partition_sp must be 4-byte aligned for word-sized ldr/str.
             assert!(CORE_PARTITION_SP_OFFSET % 4 == 0, "partition_sp must be 4-byte aligned");
 
-            // All four offsets must be less than 4095 (Thumb2 ldr immediate range).
+            // All offsets must be less than 4095 (Thumb2 ldr immediate range).
             assert!(KERNEL_CURRENT_PARTITION_OFFSET < 4095, "KERNEL_CURRENT_PARTITION_OFFSET exceeds Thumb2 ldr range");
+            assert!(KERNEL_TICKS_DROPPED_OFFSET < 4095, "KERNEL_TICKS_DROPPED_OFFSET exceeds Thumb2 ldr range");
             assert!(KERNEL_CORE_OFFSET < 4095, "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
             assert!(CORE_NEXT_PARTITION_OFFSET < 4095, "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
             assert!(CORE_PARTITION_SP_OFFSET < 4095, "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
@@ -1032,6 +1044,10 @@ where
     /// harness so it can force-advance the schedule and call
     /// `set_next_partition()` before PendSV fires.
     pub yield_requested: bool,
+    /// Monotonic counter of SysTick ticks that were dropped (i.e. a tick
+    /// arrived while the previous one was still pending). Incremented by
+    /// the SysTick handler when it detects PENDSTSET was already set.
+    pub ticks_dropped: u32,
     #[cfg(feature = "dynamic-mpu")]
     pub buffers: crate::buffer_pool::BufferPool<{ C::BP }, { C::BZ }>,
     #[cfg(feature = "dynamic-mpu")]
@@ -1329,6 +1345,7 @@ where
             tick: TickCounter::new(),
             current_partition: 255, // sentinel for "no partition running yet"
             yield_requested: false,
+            ticks_dropped: 0,
             #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
             #[cfg(feature = "dynamic-mpu")]
@@ -1377,6 +1394,7 @@ where
             tick: TickCounter::new(),
             current_partition: 255, // sentinel for "no partition running yet"
             yield_requested: false,
+            ticks_dropped: 0,
             #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
             #[cfg(feature = "dynamic-mpu")]
@@ -2928,6 +2946,27 @@ where
         self.bottom_half_stale = false;
     }
 
+    /// Returns the current value of the ticks-dropped counter.
+    #[inline(always)]
+    pub fn ticks_dropped(&self) -> u32 {
+        self.ticks_dropped
+    }
+
+    /// Increments the ticks-dropped counter by 1 (saturating).
+    #[inline(always)]
+    pub fn increment_ticks_dropped(&mut self) {
+        self.ticks_dropped = self.ticks_dropped.saturating_add(1);
+    }
+
+    /// Atomically resets the ticks-dropped counter to zero, returning the
+    /// previous value.
+    #[inline(always)]
+    pub fn reset_ticks_dropped(&mut self) -> u32 {
+        let prev = self.ticks_dropped;
+        self.ticks_dropped = 0;
+        prev
+    }
+
     /// Safety-critical fallback: revoke expired buffer lending deadlines.
     ///
     /// When `bottom_half_stale` is true (system windows are too infrequent),
@@ -3389,6 +3428,7 @@ mod tests {
             tick: TickCounter::new(),
             current_partition: 0,
             yield_requested: false,
+            ticks_dropped: 0,
             #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
             #[cfg(feature = "dynamic-mpu")]
@@ -8752,6 +8792,51 @@ mod tests {
         assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
         assert_eq!(k.partitions().get(0).unwrap().starvation_count(), 0);
         assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
+    }
+
+    /// ticks_dropped starts at zero on a new kernel.
+    #[test]
+    fn ticks_dropped_initially_zero() {
+        let k = kernel_with_schedule();
+        assert_eq!(k.ticks_dropped(), 0);
+    }
+
+    /// increment_ticks_dropped increases the counter by one.
+    #[test]
+    fn increment_ticks_dropped_adds_one() {
+        let mut k = kernel_with_schedule();
+        k.increment_ticks_dropped();
+        assert_eq!(k.ticks_dropped(), 1);
+        k.increment_ticks_dropped();
+        assert_eq!(k.ticks_dropped(), 2);
+    }
+
+    /// increment_ticks_dropped saturates at u32::MAX.
+    #[test]
+    fn increment_ticks_dropped_saturates() {
+        let mut k = kernel_with_schedule();
+        k.ticks_dropped = u32::MAX;
+        k.increment_ticks_dropped();
+        assert_eq!(k.ticks_dropped(), u32::MAX);
+    }
+
+    /// reset_ticks_dropped returns previous value and zeroes the counter.
+    #[test]
+    fn reset_ticks_dropped_returns_prev_and_zeroes() {
+        let mut k = kernel_with_schedule();
+        k.increment_ticks_dropped();
+        k.increment_ticks_dropped();
+        k.increment_ticks_dropped();
+        assert_eq!(k.reset_ticks_dropped(), 3);
+        assert_eq!(k.ticks_dropped(), 0);
+    }
+
+    /// reset_ticks_dropped returns zero when counter is already zero.
+    #[test]
+    fn reset_ticks_dropped_when_already_zero() {
+        let mut k = kernel_with_schedule();
+        assert_eq!(k.reset_ticks_dropped(), 0);
+        assert_eq!(k.ticks_dropped(), 0);
     }
 
     /// Tests advance_schedule_tick switches to Ready partitions normally.

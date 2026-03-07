@@ -55,12 +55,16 @@ pub const PENDSTCLR_BIT: u32 = 1 << 25;
 /// Combined PENDSVCLR | PENDSTCLR for clearing both pending bits.
 pub const PENDSV_SYSTICK_CLEAR: u32 = PENDSVCLR_BIT | PENDSTCLR_BIT;
 
+/// PENDSTSET: bit 26 of ICSR. Writing 1 sets SysTick pending.
+pub const PENDSTSET_BIT: u32 = 1 << 26;
+
 // Compile-time validation against ARMv7-M specification values.
 const _: () = {
     assert!(ICSR_ADDR == 0xE000_ED04);
     assert!(PENDSVCLR_BIT == 0x0800_0000);
     assert!(PENDSTCLR_BIT == 0x0200_0000);
     assert!(PENDSV_SYSTICK_CLEAR == 0x0A00_0000);
+    assert!(PENDSTSET_BIT == 0x0400_0000);
 };
 
 /// Emit the PendSV context-switch handler. See module docs for modes.
@@ -295,6 +299,7 @@ mod tests {
         type C = <TestPendsvCfg as KernelConfig>::Core;
 
         let kcp = core::mem::offset_of!(K, current_partition);
+        let ktd = core::mem::offset_of!(K, ticks_dropped);
         let kco = core::mem::offset_of!(K, core);
         let cnp = core::mem::offset_of!(C, next_partition);
         let csp = core::mem::offset_of!(C, partition_sp);
@@ -303,6 +308,10 @@ mod tests {
         assert!(
             kcp < 4095,
             "KERNEL_CURRENT_PARTITION_OFFSET={kcp} exceeds Thumb2 ldr range"
+        );
+        assert!(
+            ktd < 4095,
+            "KERNEL_TICKS_DROPPED_OFFSET={ktd} exceeds Thumb2 ldr range"
         );
         assert!(
             kco < 4095,
@@ -339,7 +348,7 @@ mod tests {
 
     #[test]
     fn icsr_constants_match_armv7m_spec() {
-        use super::{ICSR_ADDR, PENDSTCLR_BIT, PENDSVCLR_BIT, PENDSV_SYSTICK_CLEAR};
+        use super::{ICSR_ADDR, PENDSTCLR_BIT, PENDSTSET_BIT, PENDSVCLR_BIT, PENDSV_SYSTICK_CLEAR};
 
         // ICSR is at SCS base (0xE000_E000) + offset 0xD04.
         assert_eq!(ICSR_ADDR, 0xE000_ED04);
@@ -356,8 +365,14 @@ mod tests {
         assert_eq!(PENDSV_SYSTICK_CLEAR, PENDSVCLR_BIT | PENDSTCLR_BIT);
         assert_eq!(PENDSV_SYSTICK_CLEAR, 0x0A00_0000);
 
-        // Bits must not overlap.
-        assert_eq!(PENDSVCLR_BIT & PENDSTCLR_BIT, 0);
+        // PENDSTSET is bit 26 (write-1-to-set).
+        assert_eq!(PENDSTSET_BIT, 0x0400_0000);
+
+        // No bit overlaps among CLR/SET constants.
+        assert_eq!(
+            (PENDSVCLR_BIT | PENDSTCLR_BIT | PENDSTSET_BIT).count_ones(),
+            3
+        );
     }
 
     #[test]
