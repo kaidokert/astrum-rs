@@ -81,6 +81,11 @@ pub struct WindowDescriptor {
     pub size: u32,
     pub permissions: u32,
     pub owner: u8,
+    pub rbar: u32,
+}
+fn slot_rbar(base: u32, slot_index: usize) -> u32 {
+    let r = DYNAMIC_REGION_BASE as u32 + slot_index as u32;
+    crate::mpu::build_rbar(base, r).unwrap_or(r | (1 << 4))
 }
 
 /// Number of dynamic region slots (R4 through R7).
@@ -320,6 +325,7 @@ impl DynamicStrategy {
                                 size,
                                 permissions: rasr,
                                 owner: part.id(),
+                                rbar: slot_rbar(base, wired),
                             });
                         });
                         let _ = seen.push(key);
@@ -353,6 +359,7 @@ impl DynamicStrategy {
                         size,
                         permissions: rasr,
                         owner: part.id(),
+                        rbar: slot_rbar(base, desc_idx),
                     });
                     desc_idx += 1;
                 }
@@ -457,6 +464,7 @@ impl MpuStrategy for DynamicStrategy {
                 size,
                 permissions: rasr,
                 owner: partition_id,
+                rbar: slot_rbar(base, ram_slot),
             });
             *self.peripheral_reserved.borrow(cs).borrow_mut() = peripheral_reserved;
         });
@@ -486,6 +494,7 @@ impl MpuStrategy for DynamicStrategy {
                         size,
                         permissions,
                         owner,
+                        rbar: slot_rbar(base, idx),
                     });
                     return Ok(DYNAMIC_REGION_BASE + idx as u8);
                 }
@@ -1077,6 +1086,7 @@ mod tests {
                 size: 256,
                 permissions: 0xDEAD,
                 owner: 1,
+                rbar: 0,
             }),
         );
 
@@ -1121,6 +1131,7 @@ mod tests {
                 size: 64,
                 permissions: 0xBEEF,
                 owner: 2,
+                rbar: 0,
             }),
         );
 
@@ -1748,12 +1759,14 @@ mod tests {
                 size: 4096,
                 permissions: 0xAB,
                 owner: 0,
+                rbar: 0,
             }),
             Some(WindowDescriptor {
                 base: 0x4001_0000,
                 size: 256,
                 permissions: 0xCD,
                 owner: 0,
+                rbar: 0,
             }),
         ];
         ds.cache_peripherals(0, descs);
@@ -1779,6 +1792,7 @@ mod tests {
                 size: 4096,
                 permissions: 0x11,
                 owner: 1,
+                rbar: 0,
             }),
             None,
         ];
@@ -1791,12 +1805,14 @@ mod tests {
                 size: 512,
                 permissions: 0x22,
                 owner: 1,
+                rbar: 0,
             }),
             Some(WindowDescriptor {
                 base: 0x4003_0000,
                 size: 1024,
                 permissions: 0x33,
                 owner: 1,
+                rbar: 0,
             }),
         ];
         ds.cache_peripherals(1, second);
@@ -1850,7 +1866,8 @@ mod tests {
                 base: 0x4000_0000,
                 size: 4096,
                 permissions: rasr_4k,
-                owner: 0
+                owner: 0,
+                rbar: build_rbar(0x4000_0000, 4).unwrap(),
             })
         );
         assert_eq!(cached0[1], None);
@@ -1862,7 +1879,8 @@ mod tests {
                 base: 0x4001_0000,
                 size: 256,
                 permissions: rasr_256,
-                owner: 1
+                owner: 1,
+                rbar: build_rbar(0x4001_0000, 4).unwrap(),
             })
         );
         assert_eq!(cached1[1], None);
@@ -1914,7 +1932,8 @@ mod tests {
                 base: 0x4000_0000,
                 size: 4096,
                 permissions: rasr,
-                owner: 0
+                owner: 0,
+                rbar: build_rbar(0x4000_0000, 4).unwrap(),
             })
         );
         assert_eq!(cached0[1], None);
@@ -1926,7 +1945,8 @@ mod tests {
                 base: 0x4000_0000,
                 size: 4096,
                 permissions: rasr,
-                owner: 1
+                owner: 1,
+                rbar: build_rbar(0x4000_0000, 4).unwrap(),
             })
         );
         assert_eq!(cached1[1], None);
@@ -1990,6 +2010,7 @@ mod tests {
             size,
             permissions: periph_rasr(size),
             owner,
+            rbar: 0,
         }
     }
 
