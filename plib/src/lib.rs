@@ -32,7 +32,9 @@ pub use rtos_traits::buf_syscall;
 // ── Re-exported syscall constants (from rtos-traits) ──────────────────
 
 // Control
-pub use rtos_traits::syscall::{SYS_GET_PARTITION_ID, SYS_GET_TIME, SYS_IRQ_ACK, SYS_YIELD};
+pub use rtos_traits::syscall::{
+    SYS_GET_PARTITION_ID, SYS_GET_TIME, SYS_IRQ_ACK, SYS_SLEEP_TICKS, SYS_YIELD,
+};
 // Events
 pub use rtos_traits::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT};
 // Sync
@@ -323,6 +325,20 @@ pub fn sys_event_clear(mask: EventMask) -> Result<EventMask, SvcError> {
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
 pub fn sys_irq_ack(irq_num: u8) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(SYS_IRQ_ACK, irq_num as u32, 0u32, 0u32))
+}
+
+/// Sleep (block) the calling partition for the given number of ticks.
+///
+/// ABI: r1 = ticks.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+// Note: svc!(ID, $a, $b, $c) maps $a→r1; ticks lands in r1 per ABI.
+pub fn sys_sleep_ticks(ticks: u16) -> Result<u32, SvcError> {
+    // SAFETY: svc! triggers a supervisor call whose handler validates all
+    // arguments.  ticks is a plain u16 widened to u32 with no pointer semantics.
+    decode_rc(rtos_traits::svc!(SYS_SLEEP_TICKS, ticks as u32, 0u32, 0u32))
 }
 
 /// Yield the calling partition's remaining time slice.
@@ -985,6 +1001,21 @@ mod tests {
     }
 
     #[test]
+    fn sleep_ticks_returns_ok_zero_on_host() {
+        assert_eq!(sys_sleep_ticks(100), Ok(0));
+    }
+
+    #[test]
+    fn sleep_ticks_zero_returns_ok_on_host() {
+        assert_eq!(sys_sleep_ticks(0), Ok(0));
+    }
+
+    #[test]
+    fn sleep_ticks_max_returns_ok_on_host() {
+        assert_eq!(sys_sleep_ticks(u16::MAX), Ok(0));
+    }
+
+    #[test]
     fn yield_returns_ok_zero_on_host() {
         assert_eq!(sys_yield(), Ok(0));
     }
@@ -1293,6 +1324,7 @@ mod tests {
         assert_eq!(crate::SYS_GET_PARTITION_ID, src::SYS_GET_PARTITION_ID);
         assert_eq!(crate::SYS_GET_TIME, src::SYS_GET_TIME);
         assert_eq!(crate::SYS_IRQ_ACK, src::SYS_IRQ_ACK);
+        assert_eq!(crate::SYS_SLEEP_TICKS, src::SYS_SLEEP_TICKS);
         // Events
         assert_eq!(crate::SYS_EVT_WAIT, src::SYS_EVT_WAIT);
         assert_eq!(crate::SYS_EVT_SET, src::SYS_EVT_SET);

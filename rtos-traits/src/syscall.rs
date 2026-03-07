@@ -34,6 +34,8 @@ pub const SYS_DEBUG_PRINT: u32 = 31;
 pub const SYS_DEBUG_EXIT: u32 = 32;
 /// IRQ acknowledge: r1=irq_number. Re-enables the masked IRQ after partition handles it.
 pub const SYS_IRQ_ACK: u32 = 38;
+/// Sleep for a number of ticks: r1=ticks (u16). Blocks the calling partition.
+pub const SYS_SLEEP_TICKS: u32 = 39;
 
 // ── Feature-gated syscall numbers ─────────────────────────────────────
 
@@ -123,6 +125,7 @@ mod tests {
         ("SYS_DEBUG_PRINT", SYS_DEBUG_PRINT, 31),
         ("SYS_DEBUG_EXIT", SYS_DEBUG_EXIT, 32),
         ("SYS_IRQ_ACK", SYS_IRQ_ACK, 38),
+        ("SYS_SLEEP_TICKS", SYS_SLEEP_TICKS, 39),
     ];
 
     #[test]
@@ -143,7 +146,7 @@ mod tests {
 
     #[test]
     fn base_constant_count() {
-        assert_eq!(BASE_SYSCALLS.len(), 25);
+        assert_eq!(BASE_SYSCALLS.len(), 26);
     }
 
     /// Dynamic-MPU syscall constants: (name, actual, expected).
