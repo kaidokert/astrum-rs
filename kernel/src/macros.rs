@@ -271,6 +271,32 @@ macro_rules! __make_irq_binding {
     ($irq:expr, ($pid:expr, $evt:expr, $clear:expr)) => {
         $crate::irq_dispatch::IrqBinding::with_clear_model($irq, $pid, $evt, $clear)
     };
+    ($irq:expr, ($pid:expr, $evt:expr, clear: WriteRegister($addr:expr, $value:expr))) => {
+        $crate::irq_dispatch::IrqBinding::with_clear_model(
+            $irq,
+            $pid,
+            $evt,
+            $crate::irq_dispatch::IrqClearModel::KernelClears(
+                $crate::irq_dispatch::ClearStrategy::WriteRegister {
+                    addr: $addr,
+                    value: $value,
+                },
+            ),
+        )
+    };
+    ($irq:expr, ($pid:expr, $evt:expr, clear: ClearBit($addr:expr, $bit:expr))) => {
+        $crate::irq_dispatch::IrqBinding::with_clear_model(
+            $irq,
+            $pid,
+            $evt,
+            $crate::irq_dispatch::IrqClearModel::KernelClears(
+                $crate::irq_dispatch::ClearStrategy::ClearBit {
+                    addr: $addr,
+                    bit: $bit,
+                },
+            ),
+        )
+    };
 }
 
 /// Emit a `const` reference for `handler:` bindings to suppress `dead_code`
@@ -289,6 +315,10 @@ macro_rules! __ref_handler_if_custom {
     (($pid:expr, $evt:expr)) => {};
     // 3-tuple with explicit clear model: no custom handler.
     (($pid:expr, $evt:expr, $clear:expr)) => {};
+    // clear: WriteRegister keyword form: no custom handler.
+    (($pid:expr, $evt:expr, clear: WriteRegister($addr:expr, $value:expr))) => {};
+    // clear: ClearBit keyword form: no custom handler.
+    (($pid:expr, $evt:expr, clear: ClearBit($addr:expr, $bit:expr))) => {};
 }
 
 /// Select the IVT handler for a binding: the default dispatch handler for
@@ -309,6 +339,14 @@ macro_rules! __make_irq_handler {
     };
     // 3-tuple with explicit clear model: standard dispatch
     (($pid:expr, $evt:expr, $clear:expr), $default:path) => {
+        $default as unsafe extern "C" fn()
+    };
+    // clear: WriteRegister keyword form: standard dispatch
+    (($pid:expr, $evt:expr, clear: WriteRegister($addr:expr, $value:expr)), $default:path) => {
+        $default as unsafe extern "C" fn()
+    };
+    // clear: ClearBit keyword form: standard dispatch
+    (($pid:expr, $evt:expr, clear: ClearBit($addr:expr, $bit:expr)), $default:path) => {
         $default as unsafe extern "C" fn()
     };
 }
@@ -815,6 +853,79 @@ mod tests {
         assert_eq!(a.0, 0);
         assert_eq!(b.0, 255);
         assert_ne!(a, b);
+    }
+
+    // ---- clear: keyword form tests ----
+
+    #[test]
+    fn make_irq_binding_clear_write_register_keyword() {
+        let b = __make_irq_binding!(10, (0, 0x02, clear: WriteRegister(0x4000_1000, 0xAB)));
+        assert_eq!(b.irq_num, 10);
+        assert_eq!(b.partition_id, 0);
+        assert_eq!(b.event_bits, 0x02);
+        assert_eq!(
+            b.clear_model,
+            crate::irq_dispatch::IrqClearModel::KernelClears(
+                crate::irq_dispatch::ClearStrategy::WriteRegister {
+                    addr: 0x4000_1000,
+                    value: 0xAB
+                },
+            ),
+        );
+    }
+
+    #[test]
+    fn make_irq_binding_clear_clearbit_keyword() {
+        let b = __make_irq_binding!(20, (1, 0x08, clear: ClearBit(0x4000_2000, 5)));
+        assert_eq!(b.irq_num, 20);
+        assert_eq!(b.partition_id, 1);
+        assert_eq!(b.event_bits, 0x08);
+        assert_eq!(
+            b.clear_model,
+            crate::irq_dispatch::IrqClearModel::KernelClears(
+                crate::irq_dispatch::ClearStrategy::ClearBit {
+                    addr: 0x4000_2000,
+                    bit: 5
+                },
+            ),
+        );
+    }
+
+    #[test]
+    fn make_irq_handler_clear_keyword_returns_default() {
+        let h1 = __make_irq_handler!(
+            (0, 0x01, clear: WriteRegister(0x100, 1)),
+            test_default_dispatch
+        );
+        let h2 = __make_irq_handler!(
+            (0, 0x01, clear: ClearBit(0x200, 3)),
+            test_default_dispatch
+        );
+        assert_eq!(
+            h1 as *const () as usize,
+            test_default_dispatch as *const () as usize
+        );
+        assert_eq!(
+            h2 as *const () as usize,
+            test_default_dispatch as *const () as usize
+        );
+    }
+
+    // Mixed: 2-tuple, legacy 3-tuple, and clear: keyword forms together.
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 80,
+            41 => (0, 0x01),
+            51 => (1, 0x04, clear: WriteRegister(0x100, 0xFF)),
+            55 => (0, 0x02, clear: ClearBit(0x4000_0004, 7)),
+            61 => (0, 0x10, crate::irq_dispatch::IrqClearModel::KernelClears(
+                crate::irq_dispatch::ClearStrategy::ClearBit { addr: 0x200, bit: 2 },
+            )),
+        );
+    };
+
+    #[test]
+    fn bind_interrupts_clear_keyword_and_mixed_accepted() {
+        // 2-tuple, clear: keyword, and legacy 3-tuple forms compile together.
     }
 
     // ---- const_assert! tests ----
