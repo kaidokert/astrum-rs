@@ -1283,7 +1283,7 @@ mod tests {
     #[test]
     fn svc_error_round_trip_exhaustive() {
         use SvcError::*;
-        let variants: [SvcError; 12] = [
+        let variants: [SvcError; 13] = [
             InvalidSyscall,
             InvalidResource,
             WaitQueueFull,
@@ -1296,13 +1296,14 @@ mod tests {
             NotSupported,
             PermissionDenied,
             InvalidParameter,
+            TimedOut,
         ];
         for v in variants {
             // Compile-time exhaustiveness guard (no wildcard).
             match v {
                 InvalidSyscall | InvalidResource | WaitQueueFull | TransitionFailed
                 | InvalidPartition | OperationFailed | InvalidPointer | NotImplemented
-                | BufferFull | NotSupported | PermissionDenied | InvalidParameter => {}
+                | BufferFull | NotSupported | PermissionDenied | InvalidParameter | TimedOut => {}
             }
             let code = v.to_u32();
             assert!(SvcError::is_error(code), "{v:?} must have error bit set");
