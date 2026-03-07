@@ -404,6 +404,8 @@ macro_rules! define_unified_harness {
 
             // Single critical section for both systick_handler and user hook to preserve atomicity
             $crate::state::with_kernel_mut::<$Config, _, _>(|_systick_kernel| {
+                // Detect dropped ticks before processing the current tick
+                $crate::_detect_dropped_ticks!(_systick_kernel);
                 // Delegate to standalone systick_handler
                 $crate::tick::systick_handler::<$Config>(_systick_kernel);
 
