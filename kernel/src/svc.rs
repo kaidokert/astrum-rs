@@ -2022,37 +2022,19 @@ where
                 }
             }
             #[cfg(feature = "dynamic-mpu")]
-            Some(SyscallId::BufferAlloc) => {
-                use crate::buffer_pool::BorrowMode;
-                let m = if frame.r1 == 0 {
-                    BorrowMode::Read
-                } else {
-                    BorrowMode::Write
-                };
-                let max_ticks = frame.r2;
-                match self.buffers.alloc(self.current_partition, m) {
-                    Some(slot) => {
-                        if max_ticks > 0 {
-                            let deadline = self.tick.get().wrapping_add(max_ticks as u64);
-                            // set_deadline cannot fail here: slot is valid and
-                            // just-allocated (non-free), so we ignore the result.
-                            let _ = self.buffers.set_deadline(slot, Some(deadline));
-                        }
-                        slot as u32
-                    }
-                    None => SvcError::OperationFailed.to_u32(),
-                }
-            }
+            Some(SyscallId::BufferAlloc) => crate::svc_buf::handle_buf_alloc(
+                &mut self.buffers,
+                self.current_partition,
+                frame.r1,
+                frame.r2,
+                self.tick.get(),
+            ),
             #[cfg(feature = "dynamic-mpu")]
-            Some(SyscallId::BufferRelease) => {
-                match self
-                    .buffers
-                    .release(frame.r1 as usize, self.current_partition)
-                {
-                    Ok(()) => 0,
-                    Err(e) => e.to_svc_error().to_u32(),
-                }
-            }
+            Some(SyscallId::BufferRelease) => crate::svc_buf::handle_buf_release(
+                &mut self.buffers,
+                frame.r1 as usize,
+                self.current_partition,
+            ),
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferLend) => {
                 let slot = frame.r1 as usize;
@@ -2137,50 +2119,30 @@ where
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferWrite) => {
                 validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
-                    use crate::buffer_pool::BorrowState;
-                    let slot_idx = frame.r1 as usize;
-                    let len = frame.r2 as usize;
-                    let data_ptr = frame.r3 as *const u8;
-                    match self.buffers.get_mut(slot_idx) {
-                        Some(slot)
-                            if slot.state()
-                                == (BorrowState::BorrowedWrite {
-                                    owner: self.current_partition,
-                                }) =>
-                        {
-                            let buf = slot.data_mut();
-                            match buf.get_mut(..len) {
-                                Some(dst) => {
-                                    // SAFETY: validated_ptr confirmed [r3, r3+r2)
-                                    // lies within the calling partition's MPU data
-                                    // region.
-                                    let src = unsafe { core::slice::from_raw_parts(data_ptr, len) };
-                                    dst.copy_from_slice(src);
-                                    len as u32
-                                }
-                                None => SvcError::OperationFailed.to_u32(),
-                            }
-                        }
-                        Some(_) => SvcError::PermissionDenied.to_u32(),
-                        None => SvcError::InvalidResource.to_u32(),
+                    // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2) is in caller's MPU region.
+                    unsafe {
+                        crate::svc_buf::handle_buf_write(
+                            &mut self.buffers,
+                            frame.r1 as usize,
+                            self.current_partition,
+                            frame.r3 as *const u8,
+                            frame.r2 as usize,
+                        )
                     }
                 })
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferRead) => {
                 validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
-                    let slot_idx = frame.r1 as usize;
-                    let len = frame.r2 as usize;
-                    let dst_ptr = frame.r3 as *mut u8;
-                    // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2)
-                    // lies within the calling partition's MPU region.
-                    let dst = unsafe { core::slice::from_raw_parts_mut(dst_ptr, len) };
-                    match self
-                        .buffers
-                        .read_from_slot(slot_idx, self.current_partition, dst)
-                    {
-                        Ok(n) => n as u32,
-                        Err(e) => e.to_svc_error().to_u32(),
+                    // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2) is in caller's MPU region.
+                    unsafe {
+                        crate::svc_buf::handle_buf_read(
+                            &mut self.buffers,
+                            frame.r1 as usize,
+                            self.current_partition,
+                            frame.r3 as *mut u8,
+                            frame.r2 as usize,
+                        )
                     }
                 })
             }
@@ -2385,19 +2347,7 @@ where
             Some(SyscallId::IrqAck) => {
                 let irq_num = arg1 as u8;
                 let caller_id = self.current_partition;
-                let result = crate::irq_ack::irq_ack_inner(self.irq_bindings, caller_id, irq_num);
-                #[cfg(target_arch = "arm")]
-                if result == 0 {
-                    // SAFETY: irq_num was validated by irq_ack_inner (binding found).
-                    // Clear any stale pending bit before unmasking: if the IRQ
-                    // fired while masked, the pending flag would cause an
-                    // immediate spurious interrupt on unmask.
-                    unsafe {
-                        cortex_m::peripheral::NVIC::unpend(crate::irq_dispatch::IrqNr(irq_num));
-                        cortex_m::peripheral::NVIC::unmask(crate::irq_dispatch::IrqNr(irq_num));
-                    }
-                }
-                result
+                crate::svc_irq::handle_irq_ack(self.irq_bindings, caller_id, irq_num)
             }
             #[allow(unreachable_patterns)]
             Some(_) => SvcError::InvalidSyscall.to_u32(),

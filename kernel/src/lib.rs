@@ -82,8 +82,11 @@ pub mod state;
 pub mod svc;
 #[cfg(feature = "ipc-blackboard")]
 pub mod svc_blackboard;
+#[cfg(feature = "dynamic-mpu")]
+pub mod svc_buf;
 pub mod svc_debug;
 pub mod svc_events;
+pub mod svc_irq;
 #[cfg(feature = "ipc-message")]
 pub mod svc_msg;
 #[cfg(feature = "ipc-queuing")]
