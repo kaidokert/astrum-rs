@@ -61,11 +61,16 @@ macro_rules! _detect_dropped_ticks {
 macro_rules! _unified_handle_tick {
     ($kernel:expr) => {{
         // Defense-in-depth: verify kernel storage alignment at every tick
-        // (debug builds only; see TODO(panic-free) in invariants.rs).
+        // (debug builds only). On misalignment, skip the tick gracefully
+        // instead of panicking in handler mode.
         #[cfg(debug_assertions)]
         {
             let addr = $kernel as *const _ as usize;
-            $crate::invariants::assert_storage_alignment(addr, $crate::state::KERNEL_ALIGNMENT);
+            if $crate::invariants::check_storage_alignment(addr, $crate::state::KERNEL_ALIGNMENT)
+                .is_err()
+            {
+                return;
+            }
         }
         $crate::_detect_dropped_ticks!($kernel);
         let event = $crate::svc_scheduler::advance_schedule_tick(&mut $kernel);
@@ -82,11 +87,16 @@ macro_rules! _unified_handle_tick {
 macro_rules! _unified_handle_tick {
     ($kernel:expr, $tick:expr, $strategy:expr) => {{
         // Defense-in-depth: verify kernel storage alignment at every tick
-        // (debug builds only; see TODO(panic-free) in invariants.rs).
+        // (debug builds only). On misalignment, skip the tick gracefully
+        // instead of panicking in handler mode.
         #[cfg(debug_assertions)]
         {
             let addr = $kernel as *const _ as usize;
-            $crate::invariants::assert_storage_alignment(addr, $crate::state::KERNEL_ALIGNMENT);
+            if $crate::invariants::check_storage_alignment(addr, $crate::state::KERNEL_ALIGNMENT)
+                .is_err()
+            {
+                return;
+            }
         }
         $crate::_detect_dropped_ticks!($kernel);
         let event = $crate::svc_scheduler::advance_schedule_tick(&mut $kernel);

@@ -266,27 +266,56 @@ pub fn assert_next_partition_not_waiting(
 ) {
 }
 
-/// Assert that `address` is aligned to `required_alignment`.
-///
-/// Provides defense-in-depth for kernel storage placement. The linker and
-/// init code guarantee alignment at boot, but this catch-all detects pointer
-/// corruption at dispatch time in debug builds. Uses `usize` for portability
-/// across 32-bit Cortex-M targets and 64-bit host-side test builds.
-///
-/// # Panics
-///
-/// Panics if `address % required_alignment != 0`.
-// TODO(panic-free): convert to Result so callers in handler mode
-// (SysTick via `_unified_handle_tick!`) can degrade gracefully instead
-// of issuing an unrecoverable panic.
+/// Invariant violation errors returned instead of panicking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvariantError {
+    /// Storage address misaligned: `address % required_alignment == offset`.
+    StorageMisaligned {
+        address: usize,
+        offset: usize,
+        required_alignment: usize,
+    },
+}
+
+/// Check that `address` is aligned to `required_alignment`.
 #[cfg(any(debug_assertions, test))]
-pub fn assert_storage_alignment(address: usize, required_alignment: usize) {
+pub fn check_storage_alignment(
+    address: usize,
+    required_alignment: usize,
+) -> Result<(), InvariantError> {
     let offset = address % required_alignment;
     if offset != 0 {
+        return Err(InvariantError::StorageMisaligned {
+            address,
+            offset,
+            required_alignment,
+        });
+    }
+    Ok(())
+}
+
+/// No-op for release builds.
+#[cfg(not(any(debug_assertions, test)))]
+#[inline(always)]
+pub fn check_storage_alignment(
+    _address: usize,
+    _required_alignment: usize,
+) -> Result<(), InvariantError> {
+    Ok(())
+}
+
+/// Panicking wrapper for callers that cannot yet propagate `Result`.
+#[cfg(any(debug_assertions, test))]
+pub fn assert_storage_alignment(address: usize, required_alignment: usize) {
+    if let Err(InvariantError::StorageMisaligned {
+        address: a,
+        offset: o,
+        required_alignment: r,
+    }) = check_storage_alignment(address, required_alignment)
+    {
         panic!(
-            "invariant violation: storage address 0x{:08x} misaligned by {} bytes \
-             (required {} byte alignment)",
-            address, offset, required_alignment
+            "invariant violation: storage address 0x{a:08x} misaligned by {o} bytes \
+             (required {r} byte alignment)"
         );
     }
 }
@@ -1040,7 +1069,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // assert_storage_alignment
+    // check_storage_alignment / assert_storage_alignment
     // ------------------------------------------------------------------
 
     #[test]
@@ -1078,6 +1107,19 @@ mod tests {
     fn storage_alignment_half_aligned_panics() {
         // Aligned to 2048 but not to 4096.
         assert_storage_alignment(0x2000_0800, 4096);
+    }
+
+    #[test]
+    fn check_storage_alignment_returns_err_on_misaligned() {
+        let err = check_storage_alignment(0x2000_0100, 4096).unwrap_err();
+        assert_eq!(
+            err,
+            InvariantError::StorageMisaligned {
+                address: 0x2000_0100,
+                offset: 256,
+                required_alignment: 4096,
+            }
+        );
     }
 
     // -- assert_waiting_implies_yield_requested --
