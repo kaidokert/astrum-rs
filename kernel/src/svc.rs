@@ -2597,74 +2597,16 @@ where
         self.core.stack_mut(index)
     }
 
-    // -------------------------------------------------------------------------
-    // Schedule advance methods
-    // -------------------------------------------------------------------------
-
-    /// Advance the schedule table by one tick. Returns a [`ScheduleEvent`]
-    /// indicating whether a partition switch or system window occurred.
-    /// Updates `active_partition` and `next_partition` on partition switches.
-    /// With `dynamic-mpu`, also tracks `ticks_since_bottom_half`.
-    pub fn advance_schedule_tick(&mut self) -> ScheduleEvent {
-        self.tick.increment();
-        #[cfg(feature = "dynamic-mpu")]
-        {
+    #[cfg(feature = "dynamic-mpu")]
+    pub(crate) fn mpu_tick_bookkeeping(&mut self, system_window: bool) {
+        if system_window {
+            self.ticks_since_bottom_half = 0;
+            self.bottom_half_stale = false;
+        } else {
             self.ticks_since_bottom_half = self.ticks_since_bottom_half.saturating_add(1);
             if self.ticks_since_bottom_half > C::SYSTEM_WINDOW_MAX_GAP_TICKS {
                 self.bottom_half_stale = true;
             }
-        }
-        let event = self.schedule_mut().advance_tick();
-        match event {
-            ScheduleEvent::PartitionSwitch(pid) => {
-                // Check if target partition is ready to run.
-                // If Waiting (blocked on IPC), skip the switch entirely.
-                let is_waiting = self
-                    .partitions()
-                    .get(pid as usize)
-                    .map(|pcb| pcb.state() == PartitionState::Waiting)
-                    .unwrap_or(false);
-                if is_waiting {
-                    // Track starvation: the target partition was skipped.
-                    if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
-                        pcb.increment_starvation();
-                        if pcb.is_starved() {
-                            crate::klog!(
-                                "partition {} starved (count={})",
-                                pid,
-                                pcb.starvation_count()
-                            );
-                        }
-                    }
-                    // Bug 06: restore active partition to Running if it is Waiting.
-                    if let Some(ap) = self.active_partition {
-                        if self
-                            .partitions()
-                            .get(ap as usize)
-                            .is_some_and(|p| p.state() == PartitionState::Waiting)
-                            && try_transition(self.partitions_mut(), ap, PartitionState::Ready)
-                        {
-                            self.set_next_partition(ap);
-                        }
-                    }
-                    return ScheduleEvent::None;
-                }
-                self.transition_outgoing_ready();
-                // Reset starvation: the incoming partition is now running.
-                if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
-                    pcb.reset_starvation();
-                }
-                self.active_partition = Some(pid);
-                self.set_next_partition(pid);
-                event
-            }
-            #[cfg(feature = "dynamic-mpu")]
-            ScheduleEvent::SystemWindow => {
-                self.ticks_since_bottom_half = 0;
-                self.bottom_half_stale = false;
-                event
-            }
-            _ => event,
         }
     }
 

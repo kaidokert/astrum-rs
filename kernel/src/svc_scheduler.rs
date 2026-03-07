@@ -80,4 +80,56 @@ where
         }
         first_pid
     }
+
+    pub fn advance_schedule_tick(&mut self) -> crate::scheduler::ScheduleEvent {
+        use crate::scheduler::ScheduleEvent;
+        self.tick.increment();
+        #[cfg(feature = "dynamic-mpu")]
+        self.mpu_tick_bookkeeping(false);
+        let event = self.schedule_mut().advance_tick();
+        match event {
+            ScheduleEvent::PartitionSwitch(pid) => {
+                let target_waiting = self
+                    .partitions()
+                    .get(pid as usize)
+                    .is_some_and(|pcb| pcb.state() == PartitionState::Waiting);
+                if target_waiting {
+                    if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
+                        pcb.increment_starvation();
+                        if pcb.is_starved() {
+                            crate::klog!(
+                                "partition {} starved (count={})",
+                                pid,
+                                pcb.starvation_count()
+                            );
+                        }
+                    }
+                    if let Some(ap) = self.active_partition {
+                        if self
+                            .partitions()
+                            .get(ap as usize)
+                            .is_some_and(|p| p.state() == PartitionState::Waiting)
+                            && try_transition(self.partitions_mut(), ap, PartitionState::Ready)
+                        {
+                            self.set_next_partition(ap);
+                        }
+                    }
+                    return ScheduleEvent::None;
+                }
+                self.transition_outgoing_ready();
+                if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
+                    pcb.reset_starvation();
+                }
+                self.active_partition = Some(pid);
+                self.set_next_partition(pid);
+                event
+            }
+            #[cfg(feature = "dynamic-mpu")]
+            ScheduleEvent::SystemWindow => {
+                self.mpu_tick_bookkeeping(true);
+                event
+            }
+            _ => event,
+        }
+    }
 }
