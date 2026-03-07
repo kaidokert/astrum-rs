@@ -21,6 +21,7 @@ EXAMPLES=(
     callee_save_check
     pendsv_primask_test
     pendsv_primask_leak_test
+    svcall_primask_clear_test
     mpu_precompute_test
     mpu_periph_precompute_test
     all_syscalls_smoke_test
