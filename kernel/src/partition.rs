@@ -10,6 +10,10 @@ use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
 pub const SENTINEL_DATA_PERMISSIONS: u32 =
     (AP_FULL_ACCESS << RASR_AP_SHIFT) | (1 << 18) | (1 << 17);
 
+/// Number of consecutive scheduling rounds a partition may be skipped
+/// before the scheduler treats it as starved.
+pub const STARVATION_THRESHOLD: u8 = 3;
+
 /// Wrapper for a reference to a debug buffer trait object.
 ///
 /// This wrapper provides Clone, Debug, PartialEq, and Eq implementations
@@ -123,6 +127,8 @@ pub struct PartitionControlBlock {
     /// Tick at which the partition should wake from `SYS_SLEEP`.
     /// Zero means "not sleeping".
     sleep_until: u64,
+    /// Counts consecutive scheduling rounds where this partition was skipped.
+    starvation_count: u8,
 }
 
 impl PartitionControlBlock {
@@ -151,6 +157,7 @@ impl PartitionControlBlock {
             cached_periph_regions: [(0, 0); 3],
             cache_sealed: false,
             sleep_until: 0,
+            starvation_count: 0,
         }
     }
 
@@ -365,6 +372,27 @@ impl PartitionControlBlock {
     /// Sets the tick at which this partition should wake from sleep.
     pub fn set_sleep_until(&mut self, tick: u64) {
         self.sleep_until = tick;
+    }
+
+    /// Returns the current starvation count.
+    pub fn starvation_count(&self) -> u8 {
+        self.starvation_count
+    }
+
+    /// Increments the starvation counter (saturating at `u8::MAX`).
+    pub fn increment_starvation(&mut self) {
+        self.starvation_count = self.starvation_count.saturating_add(1);
+    }
+
+    /// Resets the starvation counter to zero.
+    pub fn reset_starvation(&mut self) {
+        self.starvation_count = 0;
+    }
+
+    /// Returns `true` when the partition has been skipped at least
+    /// [`STARVATION_THRESHOLD`] consecutive rounds.
+    pub fn is_starved(&self) -> bool {
+        self.starvation_count >= STARVATION_THRESHOLD
     }
 
     /// Returns the pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
@@ -2429,5 +2457,65 @@ mod tests {
         // base 0x100 is not aligned to size 4096 (0x1000)
         let r = MpuRegion::new(0x100, 4096, 0);
         assert!(!r.is_mappable());
+    }
+
+    #[test]
+    fn starvation_count_initialized_to_zero() {
+        let pcb = make_pcb();
+        assert_eq!(pcb.starvation_count(), 0);
+        assert!(!pcb.is_starved());
+    }
+
+    #[test]
+    fn increment_starvation_increases_count() {
+        let mut pcb = make_pcb();
+        pcb.increment_starvation();
+        assert_eq!(pcb.starvation_count(), 1);
+        pcb.increment_starvation();
+        assert_eq!(pcb.starvation_count(), 2);
+    }
+
+    #[test]
+    fn reset_starvation_clears_count() {
+        let mut pcb = make_pcb();
+        pcb.increment_starvation();
+        pcb.increment_starvation();
+        assert_eq!(pcb.starvation_count(), 2);
+        pcb.reset_starvation();
+        assert_eq!(pcb.starvation_count(), 0);
+    }
+
+    #[test]
+    fn is_starved_at_threshold_boundary() {
+        let mut pcb = make_pcb();
+        // Below threshold
+        for _ in 0..STARVATION_THRESHOLD - 1 {
+            pcb.increment_starvation();
+        }
+        assert_eq!(pcb.starvation_count(), STARVATION_THRESHOLD - 1);
+        assert!(!pcb.is_starved());
+
+        // At threshold
+        pcb.increment_starvation();
+        assert_eq!(pcb.starvation_count(), STARVATION_THRESHOLD);
+        assert!(pcb.is_starved());
+
+        // Above threshold
+        pcb.increment_starvation();
+        assert!(pcb.is_starved());
+    }
+
+    #[test]
+    fn starvation_threshold_constant_is_3() {
+        assert_eq!(STARVATION_THRESHOLD, 3);
+    }
+
+    #[test]
+    fn increment_starvation_saturates() {
+        let mut pcb = make_pcb();
+        for _ in 0..=u8::MAX as u16 {
+            pcb.increment_starvation();
+        }
+        assert_eq!(pcb.starvation_count(), u8::MAX);
     }
 }
