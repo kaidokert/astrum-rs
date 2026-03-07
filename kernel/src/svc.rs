@@ -2807,23 +2807,16 @@ where
     /// ticks. Updates `active_partition` and returns the schedule result.
     /// Called by the harness when a partition yields.
     pub fn yield_current_slot(&mut self) -> impl YieldResult {
+        #[cfg(not(feature = "dynamic-mpu"))]
         let result = self.schedule_mut().force_advance();
-        // TODO: The loop below is a brute-force skip of SystemWindow slots;
-        // ideally force_advance itself would be schedulable-aware.
-        // Dynamic-MPU: skip system-window slots — yield advances to the
-        // next *partition* slot.  Bounded by schedule-table length.
         #[cfg(feature = "dynamic-mpu")]
         let result = {
-            let mut r = result;
-            for _ in 0..self.schedule().len() {
-                if !matches!(r, ScheduleEvent::SystemWindow) {
-                    break;
-                }
+            let (event, skipped) = self.schedule_mut().force_advance_to_partition();
+            if skipped > 0 {
                 self.ticks_since_bottom_half = 0;
                 self.bottom_half_stale = false;
-                r = self.schedule_mut().force_advance();
             }
-            r
+            event
         };
         if let Some(pid) = result.partition_id() {
             let is_waiting = self
@@ -2870,6 +2863,9 @@ where
             // schedule or SystemWindow slot). If the active partition is
             // Waiting, restore it to Running so it remains schedulable.
             // Transition chain: Waiting → Ready → Running (no direct path).
+            // TODO: active_partition is intentionally left unchanged here — the
+            // schedule advanced past system-only windows but no partition was
+            // found, so we keep the current partition active.
             if let Some(ap) = self.active_partition {
                 if try_transition(self.partitions_mut(), ap, PartitionState::Ready) {
                     let _ = try_transition(self.partitions_mut(), ap, PartitionState::Running);

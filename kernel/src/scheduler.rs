@@ -220,6 +220,27 @@ impl<const N: usize> ScheduleTable<N> {
         self.current_slot
     }
 
+    /// Advance to the next **partition** slot, skipping any intervening
+    /// `SystemWindow` entries.  Returns [`ScheduleEvent::PartitionSwitch`]
+    /// or [`ScheduleEvent::None`] if the table is empty/unstarted or
+    /// contains only system windows.  Bounded by the table length to
+    /// guarantee termination.  Returns the number of system windows
+    /// skipped as the second element.
+    #[cfg(feature = "dynamic-mpu")]
+    pub fn force_advance_to_partition(&mut self) -> (ScheduleEvent, usize) {
+        let len = self.entries.len();
+        let mut skipped = 0usize;
+        for _ in 0..len {
+            let event = self.force_advance();
+            if matches!(event, ScheduleEvent::SystemWindow) {
+                skipped += 1;
+                continue;
+            }
+            return (event, skipped);
+        }
+        (ScheduleEvent::None, skipped)
+    }
+
     /// Immediately advance to the next schedule slot, forfeiting any
     /// remaining ticks in the current slot.  Returns a [`ScheduleEvent`]
     /// describing the new slot, or [`ScheduleEvent::None`] if not started
@@ -229,6 +250,8 @@ impl<const N: usize> ScheduleTable<N> {
             return ScheduleEvent::None;
         }
         let idx = self.step_to_next_slot();
+        // TODO(panic-free): idx comes from step_to_next_slot which wraps
+        // current_slot within [0, entries.len()); safe after the is_empty guard.
         let entry = &self.entries[idx];
         #[cfg(feature = "dynamic-mpu")]
         if entry.is_system_window {
@@ -805,6 +828,69 @@ mod tests {
             // All system windows -> max gap = 0
             let t = table_with_windows(&[(None, 2), (None, 3)]);
             assert_eq!(t.max_ticks_without_system_window(), 0);
+        }
+
+        #[test]
+        fn force_advance_to_partition_normal() {
+            // No system windows: behaves like force_advance.
+            let mut t = table(&[(0, 5), (1, 3)]);
+            let (event, skipped) = t.force_advance_to_partition();
+            assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
+            assert_eq!(skipped, 0);
+            // ticks_remaining should be reloaded to 3
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
+        }
+
+        #[test]
+        fn force_advance_to_partition_skips_system_window() {
+            // [P0:3, SYS:2, P1:4] — should skip the system window.
+            let mut t = table_with_windows(&[(Some(0), 3), (None, 2), (Some(1), 4)]);
+            let (event, skipped) = t.force_advance_to_partition();
+            assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
+            assert_eq!(skipped, 1);
+            // Verify we're in P1's slot with correct ticks_remaining (4)
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
+        }
+
+        #[test]
+        fn force_advance_to_partition_all_system_windows() {
+            // All system windows: returns None after bounded scan.
+            let mut t = table_with_windows(&[(None, 2), (None, 3)]);
+            let (event, skipped) = t.force_advance_to_partition();
+            assert_eq!(event, ScheduleEvent::None);
+            assert_eq!(skipped, 2);
+        }
+
+        #[test]
+        fn force_advance_to_partition_skips_consecutive_system_windows() {
+            // [P0:2, SYS:1, SYS:1, P1:3] — must skip two consecutive windows.
+            let mut t = table_with_windows(&[(Some(0), 2), (None, 1), (None, 1), (Some(1), 3)]);
+            let (event, skipped) = t.force_advance_to_partition();
+            assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
+            assert_eq!(skipped, 2);
+            // Verify ticks_remaining is 3 (P1's duration)
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
+        }
+
+        #[test]
+        fn force_advance_to_partition_single_partition_returns_immediately() {
+            // [P0:5] — single partition, no system windows. Returns immediately.
+            let mut t = table_with_windows(&[(Some(0), 5)]);
+            let (event, skipped) = t.force_advance_to_partition();
+            assert_eq!(event, ScheduleEvent::PartitionSwitch(0));
+            assert_eq!(skipped, 0);
+            // Verify ticks_remaining is reloaded to 5
+            for _ in 0..4 {
+                assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            }
+            assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
         }
     }
 }
