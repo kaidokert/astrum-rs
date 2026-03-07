@@ -1,0 +1,196 @@
+use crate::partition::{PartitionState, PartitionTable};
+use crate::queuing::{QueuingError, QueuingPortPool, RecvQueuingOutcome, SendQueuingOutcome};
+use crate::svc::{try_transition, SvcError};
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum QueuingOutcome {
+    Done(u32),
+    Deschedule,
+}
+
+/// Map a [`QueuingError`] to its SVC return code, preserving diagnostic
+/// granularity across the syscall boundary.
+pub fn queuing_error_to_svc(e: QueuingError) -> u32 {
+    match e {
+        QueuingError::InvalidPort => SvcError::InvalidResource.to_u32(),
+        QueuingError::WaitQueueFull => SvcError::WaitQueueFull.to_u32(),
+        QueuingError::QueueFull
+        | QueuingError::QueueEmpty
+        | QueuingError::DirectionViolation
+        | QueuingError::MessageTooLarge
+        | QueuingError::PoolFull => SvcError::OperationFailed.to_u32(),
+    }
+}
+
+/// # Safety
+/// `ptr` must be valid for `len` bytes (validated by caller).
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn handle_queuing_send<
+    const N: usize,
+    const S: usize,
+    const D: usize,
+    const M: usize,
+    const W: usize,
+>(
+    pool: &mut QueuingPortPool<S, D, M, W>,
+    pt: &mut PartitionTable<N>,
+    port_id: usize,
+    ptr: *const u8,
+    len: usize,
+    pid: u8,
+    timeout: u64,
+    tick: u64,
+) -> QueuingOutcome {
+    // SAFETY: Caller guarantees [ptr, ptr+len) is valid, partition-owned memory.
+    let data = unsafe { core::slice::from_raw_parts(ptr, len) };
+    match pool.send_routed(port_id, pid, data, timeout, tick) {
+        Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
+            if let Some(wpid) = w {
+                try_transition(pt, wpid, PartitionState::Ready);
+            }
+            QueuingOutcome::Done(0)
+        }
+        Ok(SendQueuingOutcome::SenderBlocked { .. }) => {
+            try_transition(pt, pid, PartitionState::Waiting);
+            QueuingOutcome::Deschedule
+        }
+        Err(e) => QueuingOutcome::Done(queuing_error_to_svc(e)),
+    }
+}
+
+/// # Safety
+/// `ptr` must be valid for `buf_len` bytes (validated by caller).
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn handle_queuing_recv<
+    const N: usize,
+    const S: usize,
+    const D: usize,
+    const M: usize,
+    const W: usize,
+>(
+    pool: &mut QueuingPortPool<S, D, M, W>,
+    pt: &mut PartitionTable<N>,
+    port_id: usize,
+    ptr: *mut u8,
+    buf_len: usize,
+    pid: u8,
+    timeout: u64,
+    tick: u64,
+) -> QueuingOutcome {
+    // SAFETY: Caller guarantees [ptr, ptr+buf_len) is valid, partition-owned memory.
+    let buf = unsafe { core::slice::from_raw_parts_mut(ptr, buf_len) };
+    match pool.receive_queuing_message(port_id, pid, buf, timeout, tick) {
+        Ok(RecvQueuingOutcome::Received {
+            msg_len,
+            wake_sender: w,
+        }) => {
+            if let Some(wpid) = w {
+                try_transition(pt, wpid, PartitionState::Ready);
+            }
+            QueuingOutcome::Done(msg_len as u32)
+        }
+        Ok(RecvQueuingOutcome::ReceiverBlocked { .. }) => {
+            try_transition(pt, pid, PartitionState::Waiting);
+            QueuingOutcome::Deschedule
+        }
+        Err(e) => QueuingOutcome::Done(queuing_error_to_svc(e)),
+    }
+}
+
+#[cfg(test)]
+#[rustfmt::skip]
+mod tests {
+    use super::*;
+    use crate::queuing::QueuingPortPool;
+    use crate::sampling::PortDirection;
+    use crate::partition::{MpuRegion, PartitionControlBlock};
+
+    type Pool = QueuingPortPool<4, 4, 16, 4>;
+    type Pt = PartitionTable<4>;
+    const OK: QueuingOutcome = QueuingOutcome::Done(0);
+
+    fn setup() -> (Pool, Pt) {
+        let mut pool = Pool::new();
+        let s = pool.create_port(PortDirection::Source).unwrap();
+        let d = pool.create_port(PortDirection::Destination).unwrap();
+        pool.connect_ports(s, d).unwrap();
+        let mut pt = Pt::new();
+        pt.add(PartitionControlBlock::new(0, 0x0800_0000, 0x2000_0000, 0x2000_0400, MpuRegion::new(0x2000_0000, 4096, 0))).unwrap();
+        pt.get_mut(0).unwrap().transition(PartitionState::Running).unwrap();
+        (pool, pt)
+    }
+
+    macro_rules! snd {($p:expr,$t:expr,$id:expr,$d:expr,$to:expr) => {
+        // SAFETY: pointers are stack-local slices valid for call duration.
+        unsafe { handle_queuing_send($p,$t,$id,($d).as_ptr(),($d).len(),0,$to,1) }
+    }}
+    macro_rules! rcv {($p:expr,$t:expr,$id:expr,$b:expr,$to:expr) => {
+        // SAFETY: pointers are stack-local slices valid for call duration.
+        unsafe { handle_queuing_recv($p,$t,$id,($b).as_mut_ptr(),($b).len(),0,$to,1) }
+    }}
+
+    #[test]
+    fn send_recv_roundtrip() {
+        let (mut p, mut t) = setup();
+        assert_eq!(snd!(&mut p, &mut t, 0, [0xDE, 0xAD, 0xBE], 0), OK);
+        assert_eq!(p.get(1).unwrap().nb_messages(), 1);
+        let mut buf = [0u8; 16];
+        assert_eq!(rcv!(&mut p, &mut t, 1, buf, 0), QueuingOutcome::Done(3));
+        assert_eq!(&buf[..3], &[0xDE, 0xAD, 0xBE]);
+    }
+
+    #[test]
+    fn nonblocking_empty_returns_error() {
+        let (mut p, mut t) = setup();
+        let mut buf = [0u8; 16];
+        let eop = QueuingOutcome::Done(SvcError::OperationFailed.to_u32());
+        assert_eq!(rcv!(&mut p, &mut t, 1, buf, 0), eop);
+    }
+
+    #[test]
+    fn nonblocking_full_returns_error() {
+        let (mut p, mut t) = setup();
+        let eop = QueuingOutcome::Done(SvcError::OperationFailed.to_u32());
+        for i in 0..4u8 { assert_eq!(snd!(&mut p, &mut t, 0, [i], 0), OK); }
+        assert_eq!(p.get(1).unwrap().nb_messages(), 4);
+        assert_eq!(snd!(&mut p, &mut t, 0, [0xFF], 0), eop);
+    }
+
+    #[test]
+    fn invalid_port_and_direction_errors() {
+        let (mut p, mut t) = setup();
+        let inv = QueuingOutcome::Done(SvcError::InvalidResource.to_u32());
+        let eop = QueuingOutcome::Done(SvcError::OperationFailed.to_u32());
+        let mut buf = [0u8; 16];
+        assert_eq!(snd!(&mut p, &mut t, 99, [1u8], 0), inv);
+        assert_eq!(rcv!(&mut p, &mut t, 99, buf, 0), inv);
+        assert_eq!(snd!(&mut p, &mut t, 1, [1u8], 0), eop); // direction violation
+    }
+
+    #[test]
+    fn blocking_send_returns_deschedule() {
+        let (mut p, mut t) = setup();
+        for i in 0..4u8 { assert_eq!(snd!(&mut p, &mut t, 0, [i], 0), OK); }
+        assert_eq!(snd!(&mut p, &mut t, 0, [0xFF], 50), QueuingOutcome::Deschedule);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+    }
+
+    #[test]
+    fn blocking_recv_returns_deschedule() {
+        let (mut p, mut t) = setup();
+        let mut buf = [0u8; 16];
+        assert_eq!(rcv!(&mut p, &mut t, 1, buf, 50), QueuingOutcome::Deschedule);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+    }
+
+    #[test]
+    fn error_mapping() {
+        assert_eq!(queuing_error_to_svc(QueuingError::InvalidPort), SvcError::InvalidResource.to_u32());
+        assert_eq!(queuing_error_to_svc(QueuingError::DirectionViolation), SvcError::OperationFailed.to_u32());
+        assert_eq!(queuing_error_to_svc(QueuingError::MessageTooLarge), SvcError::OperationFailed.to_u32());
+        assert_eq!(queuing_error_to_svc(QueuingError::QueueFull), SvcError::OperationFailed.to_u32());
+        assert_eq!(queuing_error_to_svc(QueuingError::QueueEmpty), SvcError::OperationFailed.to_u32());
+        assert_eq!(queuing_error_to_svc(QueuingError::WaitQueueFull), SvcError::WaitQueueFull.to_u32());
+        assert_eq!(queuing_error_to_svc(QueuingError::PoolFull), SvcError::OperationFailed.to_u32());
+    }
+}
