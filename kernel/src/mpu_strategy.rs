@@ -94,8 +94,15 @@ const DYNAMIC_SLOT_COUNT: usize = 4;
 /// First hardware MPU region number used by the dynamic strategy.
 const DYNAMIC_REGION_BASE: u8 = 4;
 
-/// Per-partition peripheral descriptor cache (up to 2 descriptors per partition).
-type PeripheralCache = [Option<[Option<WindowDescriptor>; 2]>; DYNAMIC_SLOT_COUNT];
+/// Construct a disabled (RBAR, RASR) pair for the given MPU region number.
+///
+/// RBAR selects the region with the VALID bit set; RASR = 0 disables it.
+const fn disabled_pair(region: u8) -> (u32, u32) {
+    (region as u32 | (1 << 4), 0)
+}
+
+/// Per-partition pre-computed (RBAR, RASR) pairs for peripheral regions R4-R5.
+type PeripheralCache = [[(u32, u32); 2]; DYNAMIC_SLOT_COUNT];
 
 /// Dynamic MPU strategy — manages regions R4-R7 at runtime.
 ///
@@ -112,9 +119,7 @@ pub struct DynamicStrategy {
     /// slots with peripheral descriptors so `compute_region_values` emits
     /// them during PendSV context switches.
     peripheral_reserved: Mutex<RefCell<usize>>,
-    /// Per-partition cache of peripheral descriptors (up to 2 per partition).
-    /// Indexed by `partition_id`; avoids re-wiring peripherals on every
-    /// context switch.
+    /// Pre-computed (RBAR, RASR) pairs for R4-R5, indexed by partition_id.
     peripheral_cache: Mutex<RefCell<PeripheralCache>>,
 }
 
@@ -127,10 +132,14 @@ impl Default for DynamicStrategy {
 impl DynamicStrategy {
     /// Create a new strategy with all slots empty.
     pub const fn new() -> Self {
+        const DISABLED: [(u32, u32); 2] = [
+            disabled_pair(DYNAMIC_REGION_BASE),
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+        ];
         Self {
             slots: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
             peripheral_reserved: Mutex::new(RefCell::new(0)),
-            peripheral_cache: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
+            peripheral_cache: Mutex::new(RefCell::new([DISABLED; DYNAMIC_SLOT_COUNT])),
         }
     }
 
@@ -219,64 +228,38 @@ impl DynamicStrategy {
         })
     }
 
-    /// Store peripheral descriptors for a partition in the cache.
+    /// Store pre-computed (RBAR, RASR) pairs for a partition's peripherals.
     ///
     /// `partition_id` indexes into the cache (max `DYNAMIC_SLOT_COUNT - 1`).
     /// Out-of-range IDs are silently ignored.
     pub fn cache_peripherals(&self, partition_id: u8, descriptors: [Option<WindowDescriptor>; 2]) {
         let idx = partition_id as usize;
-        if idx >= DYNAMIC_SLOT_COUNT {
-            return;
-        }
+        let pairs = core::array::from_fn(|i| {
+            let rid = DYNAMIC_REGION_BASE + i as u8;
+            match &descriptors[i] {
+                Some(d) => crate::mpu::build_rbar(d.base, rid as u32)
+                    .map(|rbar| (rbar, d.permissions))
+                    .unwrap_or(disabled_pair(rid)),
+                None => disabled_pair(rid),
+            }
+        });
         with_cs(|cs| {
-            self.peripheral_cache.borrow(cs).borrow_mut()[idx] = Some(descriptors);
+            if let Some(entry) = self.peripheral_cache.borrow(cs).borrow_mut().get_mut(idx) {
+                *entry = pairs;
+            }
         });
     }
 
-    /// Retrieve cached peripheral descriptors for a partition.
-    ///
-    /// Returns `[None, None]` if no entry has been cached for `partition_id`
-    /// or if the ID is out of range.
-    pub fn cached_peripherals(&self, partition_id: u8) -> [Option<WindowDescriptor>; 2] {
+    /// Return pre-computed (RBAR, RASR) pairs for `partition_id`'s peripherals.
+    pub fn cached_peripheral_regions(&self, partition_id: u8) -> [(u32, u32); 2] {
         let idx = partition_id as usize;
         if idx >= DYNAMIC_SLOT_COUNT {
-            return [None; 2];
+            return [
+                disabled_pair(DYNAMIC_REGION_BASE),
+                disabled_pair(DYNAMIC_REGION_BASE + 1),
+            ];
         }
-        with_cs(|cs| {
-            self.peripheral_cache
-                .borrow(cs)
-                .borrow()
-                .get(idx)
-                .copied()
-                .flatten()
-                .unwrap_or([None; 2])
-        })
-    }
-
-    /// Return (RBAR, RASR) register pairs for the cached peripheral
-    /// descriptors of `partition_id`, targeting MPU regions R4 and R5.
-    ///
-    /// Cached descriptors (populated by [`wire_boot_peripherals`]) are
-    /// converted via [`crate::mpu::build_rbar`]; uncached or absent
-    /// entries yield a proper disabled pair (RBAR with VALID bit +
-    /// region number, RASR = 0) so the MPU explicitly targets R4/R5
-    /// instead of overwriting whatever is in MPU_RNR.
-    pub fn cached_peripheral_regions(&self, partition_id: u8) -> [(u32, u32); 2] {
-        let descs = self.cached_peripherals(partition_id);
-        let mut out = [(0u32, 0u32); 2];
-        for (slot_out, (i, slot)) in out.iter_mut().zip(descs.iter().enumerate()) {
-            let region_id = DYNAMIC_REGION_BASE as u32 + i as u32;
-            // Disabled pair: RBAR with VALID bit (bit 4) + region number,
-            // RASR = 0.  Constructed directly so this path is infallible.
-            let disabled = (region_id | (1 << 4), 0u32);
-            *slot_out = match slot {
-                Some(desc) => crate::mpu::build_rbar(desc.base, region_id)
-                    .map(|rbar| (rbar, desc.permissions))
-                    .unwrap_or(disabled),
-                None => disabled,
-            };
-        }
-        out
+        with_cs(|cs| self.peripheral_cache.borrow(cs).borrow()[idx])
     }
 
     /// Populate dynamic slots with deduplicated peripheral regions from
@@ -366,10 +349,11 @@ impl DynamicStrategy {
             }
             self.cache_peripherals(part.id(), part_descs);
 
-            // Verify cached descriptors match the source PCB data.
+            // Verify the stored (RBAR, RASR) pairs in the production cache
+            // match the expected values for each peripheral region.
             #[cfg(debug_assertions)]
             {
-                let cached = self.cached_peripherals(part.id());
+                let cached = self.cached_peripheral_regions(part.id());
                 for (ci, region) in part
                     .peripheral_regions()
                     .iter()
@@ -377,22 +361,27 @@ impl DynamicStrategy {
                     .take(cached.len())
                     .enumerate()
                 {
-                    if let Some(Some(desc)) = cached.get(ci) {
+                    let (rbar, rasr) = cached[ci];
+                    let expected_rbar = crate::mpu::build_rbar(
+                        region.base(),
+                        DYNAMIC_REGION_BASE as u32 + ci as u32,
+                    );
+                    if let Some(expected) = expected_rbar {
                         debug_assert_eq!(
-                            desc.base,
-                            region.base(),
-                            "cache-PCB base mismatch: partition {} descriptor {}",
-                            part.id(),
-                            ci
-                        );
-                        debug_assert_eq!(
-                            desc.size,
-                            region.size(),
-                            "cache-PCB size mismatch: partition {} descriptor {}",
+                            rbar,
+                            expected,
+                            "cache-PCB RBAR mismatch: partition {} descriptor {}",
                             part.id(),
                             ci
                         );
                     }
+                    debug_assert_ne!(
+                        rasr,
+                        0,
+                        "cache-PCB RASR must be non-zero (enabled): partition {} descriptor {}",
+                        part.id(),
+                        ci
+                    );
                 }
             }
         }
@@ -1770,17 +1759,21 @@ mod tests {
             }),
         ];
         ds.cache_peripherals(0, descs);
-        let got = ds.cached_peripherals(0);
-        assert_eq!(got, descs);
+        let got = ds.cached_peripheral_regions(0);
+        assert_eq!(got[0], (build_rbar(0x4000_0000, 4).unwrap(), 0xAB));
+        assert_eq!(got[1], (build_rbar(0x4001_0000, 5).unwrap(), 0xCD));
     }
 
     #[test]
-    fn peripheral_cache_uncached_returns_none_none() {
+    fn peripheral_cache_uncached_returns_disabled() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.cached_peripherals(0), [None, None]);
-        assert_eq!(ds.cached_peripherals(3), [None, None]);
-        // Out-of-range partition IDs also return [None, None].
-        assert_eq!(ds.cached_peripherals(255), [None, None]);
+        let disabled_r4 = disabled_pair(DYNAMIC_REGION_BASE);
+        let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
+        let disabled = [disabled_r4, disabled_r5];
+        assert_eq!(ds.cached_peripheral_regions(0), disabled);
+        assert_eq!(ds.cached_peripheral_regions(3), disabled);
+        // Out-of-range partition IDs also return disabled pairs.
+        assert_eq!(ds.cached_peripheral_regions(255), disabled);
     }
 
     #[test]
@@ -1797,7 +1790,9 @@ mod tests {
             None,
         ];
         ds.cache_peripherals(1, first);
-        assert_eq!(ds.cached_peripherals(1), first);
+        let got1 = ds.cached_peripheral_regions(1);
+        assert_eq!(got1[0], (build_rbar(0x4000_0000, 4).unwrap(), 0x11));
+        assert_eq!(got1[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
 
         let second = [
             Some(WindowDescriptor {
@@ -1816,7 +1811,9 @@ mod tests {
             }),
         ];
         ds.cache_peripherals(1, second);
-        assert_eq!(ds.cached_peripherals(1), second);
+        let got2 = ds.cached_peripheral_regions(1);
+        assert_eq!(got2[0], (build_rbar(0x4002_0000, 4).unwrap(), 0x22));
+        assert_eq!(got2[1], (build_rbar(0x4003_0000, 5).unwrap(), 0x33));
     }
 
     // ------------------------------------------------------------------
@@ -1859,39 +1856,39 @@ mod tests {
             (true, false, true),
         );
 
-        let cached0 = ds.cached_peripherals(0);
+        let cached0 = ds.cached_peripheral_regions(0);
         assert_eq!(
             cached0[0],
-            Some(WindowDescriptor {
-                base: 0x4000_0000,
-                size: 4096,
-                permissions: rasr_4k,
-                owner: 0,
-                rbar: build_rbar(0x4000_0000, 4).unwrap(),
-            })
+            (build_rbar(0x4000_0000, 4).unwrap(), rasr_4k),
+            "partition 0 R4 must hold 4KiB peripheral"
         );
-        assert_eq!(cached0[1], None);
+        assert_eq!(
+            cached0[1],
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+            "partition 0 R5 must be disabled"
+        );
 
-        let cached1 = ds.cached_peripherals(1);
+        let cached1 = ds.cached_peripheral_regions(1);
         assert_eq!(
             cached1[0],
-            Some(WindowDescriptor {
-                base: 0x4001_0000,
-                size: 256,
-                permissions: rasr_256,
-                owner: 1,
-                rbar: build_rbar(0x4001_0000, 4).unwrap(),
-            })
+            (build_rbar(0x4001_0000, 4).unwrap(), rasr_256),
+            "partition 1 R4 must hold 256B peripheral"
         );
-        assert_eq!(cached1[1], None);
+        assert_eq!(
+            cached1[1],
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+            "partition 1 R5 must be disabled"
+        );
     }
 
     #[test]
-    fn wire_boot_peripherals_no_peripherals_cached_as_none() {
+    fn wire_boot_peripherals_no_peripherals_cached_as_disabled() {
         let ds = DynamicStrategy::new();
         let pcb = make_pcb(0x0, 0x2000_0000, 4096); // no peripheral regions
         ds.wire_boot_peripherals(&[pcb]);
-        assert_eq!(ds.cached_peripherals(0), [None, None]);
+        let cached = ds.cached_peripheral_regions(0);
+        assert_eq!(cached[0], disabled_pair(DYNAMIC_REGION_BASE));
+        assert_eq!(cached[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
     }
 
     #[test]
@@ -1924,32 +1921,22 @@ mod tests {
             true,
             (true, false, true),
         );
+        let expected_r4 = (build_rbar(0x4000_0000, 4).unwrap(), rasr);
+        let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
 
-        let cached0 = ds.cached_peripherals(0);
+        let cached0 = ds.cached_peripheral_regions(0);
         assert_eq!(
-            cached0[0],
-            Some(WindowDescriptor {
-                base: 0x4000_0000,
-                size: 4096,
-                permissions: rasr,
-                owner: 0,
-                rbar: build_rbar(0x4000_0000, 4).unwrap(),
-            })
+            cached0[0], expected_r4,
+            "partition 0 R4 must hold shared peripheral"
         );
-        assert_eq!(cached0[1], None);
+        assert_eq!(cached0[1], disabled_r5, "partition 0 R5 must be disabled");
 
-        let cached1 = ds.cached_peripherals(1);
+        let cached1 = ds.cached_peripheral_regions(1);
         assert_eq!(
-            cached1[0],
-            Some(WindowDescriptor {
-                base: 0x4000_0000,
-                size: 4096,
-                permissions: rasr,
-                owner: 1,
-                rbar: build_rbar(0x4000_0000, 4).unwrap(),
-            })
+            cached1[0], expected_r4,
+            "partition 1 R4 must hold shared peripheral"
         );
-        assert_eq!(cached1[1], None);
+        assert_eq!(cached1[1], disabled_r5, "partition 1 R5 must be disabled");
     }
 
     #[test]
@@ -1979,14 +1966,22 @@ mod tests {
         let wired = ds.wire_boot_peripherals(&[pcb0, pcb1]);
         assert_eq!(wired, 2);
 
-        // Explicitly verify base/size of cached descriptors match PCB regions.
-        let cached0 = ds.cached_peripherals(0);
-        assert_eq!(cached0[0].unwrap().base, 0x4000_0000);
-        assert_eq!(cached0[0].unwrap().size, 4096);
+        // Verify cached (RBAR, RASR) pairs encode correct base addresses.
+        let cached0 = ds.cached_peripheral_regions(0);
+        assert_eq!(
+            cached0[0].0,
+            build_rbar(0x4000_0000, 4).unwrap(),
+            "partition 0 R4 RBAR must encode 0x4000_0000"
+        );
+        assert_ne!(cached0[0].1, 0, "partition 0 R4 must be enabled");
 
-        let cached1 = ds.cached_peripherals(1);
-        assert_eq!(cached1[0].unwrap().base, 0x4001_0000);
-        assert_eq!(cached1[0].unwrap().size, 256);
+        let cached1 = ds.cached_peripheral_regions(1);
+        assert_eq!(
+            cached1[0].0,
+            build_rbar(0x4001_0000, 4).unwrap(),
+            "partition 1 R4 RBAR must encode 0x4001_0000"
+        );
+        assert_ne!(cached1[0].1, 0, "partition 1 R4 must be enabled");
     }
 
     // ------------------------------------------------------------------
@@ -2023,7 +2018,7 @@ mod tests {
             r[0],
             (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096))
         );
-        assert_eq!(r[1], (build_rbar(0, 5).unwrap(), 0));
+        assert_eq!(r[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
     }
 
     #[test]
@@ -2052,13 +2047,12 @@ mod tests {
     #[test]
     fn cached_peripheral_regions_uncached_returns_disabled() {
         let ds = DynamicStrategy::new();
-        let disabled_r4 = (build_rbar(0, 4).unwrap(), 0);
-        let disabled_r5 = (build_rbar(0, 5).unwrap(), 0);
-        assert_eq!(ds.cached_peripheral_regions(0), [disabled_r4, disabled_r5],);
-        assert_eq!(
-            ds.cached_peripheral_regions(255),
-            [disabled_r4, disabled_r5],
-        );
+        let disabled = [
+            disabled_pair(DYNAMIC_REGION_BASE),
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+        ];
+        assert_eq!(ds.cached_peripheral_regions(0), disabled);
+        assert_eq!(ds.cached_peripheral_regions(255), disabled);
     }
 
     /// Verify that the dynamic-mode cache path (`cached_peripheral_regions`)
@@ -2225,8 +2219,8 @@ mod tests {
         // (it belongs to partition 0's peripheral reservation), so
         // compute_region_values still emits partition 0's peripheral in R4.
         // The cache, keyed by pid=1 (no peripherals), must return disabled.
-        let disabled_r4 = (4u32 | (1 << 4), 0u32);
-        let disabled_r5 = (5u32 | (1 << 4), 0u32);
+        let disabled_r4 = disabled_pair(DYNAMIC_REGION_BASE);
+        let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
         assert_eq!(
             cached_p1[0], disabled_r4,
             "cache R4 must be disabled for non-peripheral partition 1"
@@ -2291,15 +2285,15 @@ mod tests {
         ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
         assert_eq!(ds.wire_boot_peripherals(&[pcb0, pcb1]), 1);
 
-        let desc0 = ds.cached_peripherals(0)[0].expect("p0 must have cached peripheral");
-        let desc1 = ds.cached_peripherals(1)[0].expect("p1 must have cached peripheral");
+        let cached0 = ds.cached_peripheral_regions(0);
+        let cached1 = ds.cached_peripheral_regions(1);
         assert_eq!(
-            desc0.permissions, desc1.permissions,
-            "RASR must match despite different perms"
+            cached0[0].1, cached1[0].1,
+            "RASR must match despite different MpuRegion.permissions"
         );
 
         // Verify fixed Shareable Device attributes.
-        let rasr = desc0.permissions;
+        let rasr = cached0[0].1;
         assert_eq!(rasr & 1, 1, "region must be enabled");
         assert_eq!((rasr >> 24) & 0x7, AP_FULL_ACCESS, "AP must be full-access");
         assert_eq!((rasr >> 28) & 1, 1, "XN must be set");
