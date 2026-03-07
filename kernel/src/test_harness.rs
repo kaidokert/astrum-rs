@@ -1698,10 +1698,19 @@ mod tests {
     #[test]
     #[cfg(feature = "dynamic-mpu")]
     fn two_peripheral_partitions_cached_peripheral_regions() {
-        use crate::mpu::partition_dynamic_regions;
+        use crate::mpu::precompute_mpu_cache;
         use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
 
-        let h = KernelTestHarness::with_two_peripheral_partitions().expect("harness setup");
+        let mut h = KernelTestHarness::with_two_peripheral_partitions().expect("harness setup");
+        // Seal the MPU cache so cached_dynamic_region() is available.
+        for pid in 0..2usize {
+            let pcb = h
+                .kernel_mut()
+                .partitions_mut()
+                .get_mut(pid)
+                .expect("partition");
+            precompute_mpu_cache(pcb).expect("precompute_mpu_cache");
+        }
         let strategy = DynamicStrategy::new();
 
         // Configure each partition's dynamic region with 2 peripheral-reserved slots.
@@ -1711,9 +1720,9 @@ mod tests {
                 .partitions()
                 .get(pid as usize)
                 .expect("partition");
-            let regions = partition_dynamic_regions(pcb).expect("dynamic regions");
+            let dyn_region = pcb.cached_dynamic_region();
             strategy
-                .configure_partition(pid, &regions, 2)
+                .configure_partition(pid, &[dyn_region], 2)
                 .expect("configure_partition");
         }
 

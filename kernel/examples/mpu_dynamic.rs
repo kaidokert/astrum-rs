@@ -27,7 +27,7 @@ use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    mpu::{self, partition_dynamic_regions, RBAR_ADDR_MASK},
+    mpu::{self, RBAR_ADDR_MASK},
     mpu_strategy::{DynamicStrategy, MpuStrategy},
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
@@ -118,9 +118,10 @@ fn SysTick() {
         let event = kernel::svc_scheduler::advance_schedule_tick(k);
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             if let Some(pcb) = k.partitions().get(pid as usize) {
-                if let Some(regions) = partition_dynamic_regions(pcb) {
-                    let _ = STRATEGY.configure_partition(pid, &regions, 0);
-                }
+                let dyn_region = pcb.cached_dynamic_region();
+                STRATEGY
+                    .configure_partition(pid, &[dyn_region], 0)
+                    .expect("configure_partition");
             }
             // SAFETY: single-core exclusive write.
             unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) };
@@ -172,6 +173,14 @@ fn main() -> ! {
     let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
         .expect("kernel creation");
     store_kernel(k);
+
+    // Seal the MPU cache so cached_dynamic_region() returns valid data.
+    with_kernel_mut(|k| {
+        for pid in 0..NP {
+            let pcb = k.partitions_mut().get_mut(pid).expect("partition");
+            mpu::precompute_mpu_cache(pcb).expect("precompute_mpu_cache");
+        }
+    });
 
     // Initialize partition stacks
     // SAFETY: before interrupts; single-core exclusive.
