@@ -239,6 +239,95 @@ impl<const W: usize> DeviceWaitQueue<W> {
     }
 }
 
+/// Sorted sleep timer queue for O(1) amortised wakeup.
+///
+/// Entries are kept sorted by expiry tick (ascending). [`drain_expired`]
+/// pops from the front while expired, giving O(k) drain where k is
+/// the number of expired entries. Insertion is O(N) due to maintaining
+/// sorted order, but insertions happen per-syscall (rare), not per-tick.
+///
+/// [`drain_expired`]: SleepQueue::drain_expired
+#[derive(Debug)]
+pub struct SleepQueue<const W: usize> {
+    inner: heapless::Vec<(u8, u64), W>,
+}
+
+impl<const W: usize> Default for SleepQueue<W> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const W: usize> SleepQueue<W> {
+    /// Create an empty sleep queue.
+    pub const fn new() -> Self {
+        Self {
+            inner: heapless::Vec::new(),
+        }
+    }
+
+    /// Insert a sleep entry, maintaining sorted order by expiry tick.
+    ///
+    /// Returns `Err(WaitQueueFull)` if the queue has reached capacity.
+    pub fn push(&mut self, pid: u8, expiry: u64) -> Result<(), WaitQueueFull> {
+        if self.inner.is_full() {
+            return Err(WaitQueueFull);
+        }
+        // Append and bubble into sorted position (insertion sort).
+        let _ = self.inner.push((pid, expiry));
+        let mut i = self.inner.len() - 1;
+        while i > 0 && self.inner[i - 1].1 > expiry {
+            self.inner.swap(i, i - 1);
+            i -= 1;
+        }
+        Ok(())
+    }
+
+    /// Remove all entries whose expiry tick has been reached, appending
+    /// their partition IDs to `out`.
+    ///
+    /// Because entries are sorted by expiry tick, this pops from the front
+    /// until a non-expired entry is found, giving O(k) where k is the
+    /// number of expired entries.
+    ///
+    /// If `out` is full, draining stops and remaining expired entries stay
+    /// in the queue for retry on the next tick.
+    pub fn drain_expired<const E: usize>(
+        &mut self,
+        current_tick: u64,
+        out: &mut heapless::Vec<u8, E>,
+    ) {
+        let mut drained = 0usize;
+        for &(pid, expiry) in self.inner.iter() {
+            if current_tick >= expiry {
+                if out.push(pid).is_err() {
+                    break;
+                }
+                drained += 1;
+            } else {
+                break; // Sorted: no more expired entries past this point.
+            }
+        }
+        if drained > 0 {
+            let new_len = self.inner.len() - drained;
+            for i in 0..new_len {
+                self.inner[i] = self.inner[i + drained];
+            }
+            self.inner.truncate(new_len);
+        }
+    }
+
+    /// Returns `true` if the queue contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the number of entries currently in the queue.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,5 +753,90 @@ mod tests {
             q.block_reader(1, 200).unwrap();
             assert_eq!(q.block_reader(2, 300), Err(WaitQueueFull));
         }
+    }
+
+    // ---- SleepQueue tests ----
+
+    #[test]
+    fn sleep_queue_new_is_empty() {
+        let q = SleepQueue::<4>::new();
+        assert!(q.is_empty());
+        assert_eq!(q.len(), 0);
+    }
+
+    #[test]
+    fn sleep_queue_push_maintains_sorted_order() {
+        let mut q = SleepQueue::<4>::new();
+        q.push(1, 300).unwrap();
+        q.push(2, 100).unwrap();
+        q.push(3, 200).unwrap();
+        // Drain all: should come out in expiry order (100, 200, 300).
+        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(300, &mut out);
+        assert_eq!(out.as_slice(), &[2, 3, 1]);
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn sleep_queue_drain_expired_stops_at_non_expired() {
+        let mut q = SleepQueue::<4>::new();
+        q.push(1, 50).unwrap();
+        q.push(2, 100).unwrap();
+        q.push(3, 200).unwrap();
+        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(100, &mut out);
+        assert_eq!(out.as_slice(), &[1, 2]);
+        assert_eq!(q.len(), 1);
+    }
+
+    #[test]
+    fn sleep_queue_drain_expired_none() {
+        let mut q = SleepQueue::<4>::new();
+        q.push(1, 100).unwrap();
+        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(50, &mut out);
+        assert!(out.is_empty());
+        assert_eq!(q.len(), 1);
+    }
+
+    #[test]
+    fn sleep_queue_drain_expired_empty_queue() {
+        let mut q = SleepQueue::<4>::new();
+        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(1000, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn sleep_queue_capacity_error() {
+        let mut q = SleepQueue::<2>::new();
+        q.push(1, 100).unwrap();
+        q.push(2, 200).unwrap();
+        assert_eq!(q.push(3, 300), Err(WaitQueueFull));
+    }
+
+    #[test]
+    fn sleep_queue_drain_stops_when_out_full() {
+        let mut q = SleepQueue::<4>::new();
+        q.push(1, 10).unwrap();
+        q.push(2, 20).unwrap();
+        q.push(3, 30).unwrap();
+        // Output buffer only has room for 2.
+        let mut out: heapless::Vec<u8, 2> = heapless::Vec::new();
+        q.drain_expired(100, &mut out);
+        assert_eq!(out.as_slice(), &[1, 2]);
+        // Pid 3 remains in queue for retry next tick.
+        assert_eq!(q.len(), 1);
+    }
+
+    #[test]
+    fn sleep_queue_equal_expiry_preserves_push_order() {
+        let mut q = SleepQueue::<4>::new();
+        q.push(1, 100).unwrap();
+        q.push(2, 100).unwrap();
+        q.push(3, 100).unwrap();
+        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(100, &mut out);
+        assert_eq!(out.as_slice(), &[1, 2, 3]);
     }
 }

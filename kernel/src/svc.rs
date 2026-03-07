@@ -1082,6 +1082,10 @@ where
     /// Port primitives sub-struct (will replace individual fields).
     pub ports: C::Ports,
     pub irq_bindings: &'static [crate::irq_dispatch::IrqBinding], // IrqAck dispatch table
+    /// Sorted sleep timer queue for O(1) amortised wakeup of sleeping
+    /// partitions. Entries are inserted by `SYS_SLEEP` and drained each
+    /// tick in [`expire_timed_waits`](Self::expire_timed_waits).
+    pub sleep_queue: crate::waitqueue::SleepQueue<{ C::N }>,
 }
 
 /// Helper function to align an address down to an 8-byte boundary.
@@ -1350,6 +1354,7 @@ where
             msg: C::Msg::default(),
             ports: C::Ports::default(),
             irq_bindings,
+            sleep_queue: crate::waitqueue::SleepQueue::new(),
         })
     }
 
@@ -1397,6 +1402,7 @@ where
             msg: C::Msg::default(),
             ports: C::Ports::default(),
             irq_bindings: &[],
+            sleep_queue: crate::waitqueue::SleepQueue::new(),
         }
     }
 
@@ -1602,7 +1608,18 @@ where
         for &pid in expired.iter() {
             try_transition(self.core.partitions_mut(), pid, PartitionState::Ready);
         }
-        if !expired.is_empty() {
+        // Drain expired sleep timers from the sorted sleep queue.
+        let mut sleep_expired: heapless::Vec<u8, E> = heapless::Vec::new();
+        self.sleep_queue
+            .drain_expired(current_tick, &mut sleep_expired);
+        for &pid in sleep_expired.iter() {
+            if try_transition(self.core.partitions_mut(), pid, PartitionState::Ready) {
+                if let Some(pcb) = self.core.partitions_mut().get_mut(pid as usize) {
+                    pcb.set_sleep_until(0);
+                }
+            }
+        }
+        if !expired.is_empty() || !sleep_expired.is_empty() {
             self.yield_requested = true;
         }
     }
@@ -3357,6 +3374,7 @@ mod tests {
             msg: <TestConfig as KernelConfig>::Msg::default(),
             ports: <TestConfig as KernelConfig>::Ports::default(),
             irq_bindings: &[],
+            sleep_queue: crate::waitqueue::SleepQueue::new(),
         };
         // Add semaphores via facade method
         for _ in 0..sem_count {
@@ -7583,6 +7601,79 @@ mod tests {
             PartitionState::Ready
         );
         assert!(k.dev_wait_queue().is_empty());
+    }
+
+    // --- sleep timer expiry tests ---
+
+    #[test]
+    fn expire_timed_waits_wakes_sleeping_partition() {
+        let mut k = kernel(0, 0, 0);
+        // Partition 0: enqueue sleep until tick 100, transition to Waiting.
+        k.partitions_mut().get_mut(0).unwrap().set_sleep_until(100);
+        k.sleep_queue.push(0, 100).unwrap();
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+
+        // Before expiry: stays Waiting.
+        k.expire_timed_waits::<8>(99);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(k.partitions().get(0).unwrap().sleep_until(), 100);
+
+        // At expiry: transitions Waiting→Ready, sleep_until cleared.
+        k.expire_timed_waits::<8>(100);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Ready
+        );
+        assert_eq!(k.partitions().get(0).unwrap().sleep_until(), 0);
+        assert!(k.yield_requested);
+    }
+
+    #[test]
+    fn expire_timed_waits_sleep_no_false_wake() {
+        let mut k = kernel(0, 0, 0);
+        // Partition in Waiting with no sleep queue entry should not be affected.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+
+        k.expire_timed_waits::<8>(1000);
+        // Partition stays Waiting — no entry in sleep queue.
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+    }
+
+    #[test]
+    fn expire_timed_waits_sleep_transition_fail_preserves_sleep_until() {
+        let mut k = kernel(0, 0, 0);
+        // Partition 0 starts Running. Transition to Ready so that the
+        // Ready→Ready transition in expire_timed_waits will fail.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Ready)
+            .unwrap();
+        k.partitions_mut().get_mut(0).unwrap().set_sleep_until(50);
+        k.sleep_queue.push(0, 50).unwrap();
+        // Partition is Ready, so try_transition(Ready→Ready) is invalid.
+        // sleep_until must NOT be cleared when the transition fails.
+        k.expire_timed_waits::<8>(50);
+        assert_eq!(k.partitions().get(0).unwrap().sleep_until(), 50);
+        assert!(k.sleep_queue.is_empty());
     }
 
     // --- sync_tick dispatch integration tests ---

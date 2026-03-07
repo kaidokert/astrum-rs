@@ -120,6 +120,9 @@ pub struct PartitionControlBlock {
     /// Guard: set true after [`precompute_mpu_cache`] to catch post-boot
     /// mutations that would silently invalidate the cached MPU registers.
     cache_sealed: bool,
+    /// Tick at which the partition should wake from `SYS_SLEEP`.
+    /// Zero means "not sleeping".
+    sleep_until: u64,
 }
 
 impl PartitionControlBlock {
@@ -147,6 +150,7 @@ impl PartitionControlBlock {
             cached_base_regions: [(0, 0); 4],
             cached_periph_regions: [(0, 0); 3],
             cache_sealed: false,
+            sleep_until: 0,
         }
     }
 
@@ -350,6 +354,17 @@ impl PartitionControlBlock {
     /// Clears the debug pending flag after kernel drains the debug ring buffer.
     pub fn clear_debug_pending(&mut self) {
         self.debug_pending = false;
+    }
+
+    /// Returns the tick at which this partition should wake from sleep.
+    /// Zero means "not sleeping".
+    pub fn sleep_until(&self) -> u64 {
+        self.sleep_until
+    }
+
+    /// Sets the tick at which this partition should wake from sleep.
+    pub fn set_sleep_until(&mut self, tick: u64) {
+        self.sleep_until = tick;
     }
 
     /// Returns the pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
@@ -784,6 +799,21 @@ mod tests {
         // Clear resets it
         pcb.clear_debug_pending();
         assert!(!pcb.debug_pending());
+    }
+
+    #[test]
+    fn sleep_until_defaults_to_zero() {
+        let pcb = make_pcb();
+        assert_eq!(pcb.sleep_until(), 0);
+    }
+
+    #[test]
+    fn sleep_until_set_and_clear() {
+        let mut pcb = make_pcb();
+        pcb.set_sleep_until(500);
+        assert_eq!(pcb.sleep_until(), 500);
+        pcb.set_sleep_until(0);
+        assert_eq!(pcb.sleep_until(), 0);
     }
 
     #[test]
