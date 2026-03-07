@@ -218,6 +218,9 @@ impl<const S: usize, const M: usize> SamplingPortPool<S, M> {
         let port = self.get(port_id).ok_or(SamplingError::InvalidPort)?;
         let (data, _ts) = port.read_data()?;
         let size = data.len();
+        if buf.len() < size {
+            return Err(SamplingError::MessageTooLarge);
+        }
         buf[..size].copy_from_slice(data);
         let validity = port.validity(current_tick);
         Ok((size, validity))

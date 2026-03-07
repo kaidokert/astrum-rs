@@ -1823,19 +1823,23 @@ where
             }
             #[cfg(feature = "ipc-sampling")]
             Some(SyscallId::SamplingRead) => validated_ptr!(self, frame.r3, C::SM, {
-                // SAFETY: (1) validated_ptr confirmed [r3, r3+SM) lies within
-                // the calling partition's MPU data region. (2) Slice length is
-                // C::SM, a KernelConfig constant. (3) The partition owns this
-                // memory as enforced by MPU isolation.
-                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::SM) };
                 let tick = self.tick.get();
-                match self
-                    .ports
-                    .sampling_mut()
-                    .read_sampling_message(frame.r1 as usize, b, tick)
-                {
-                    Ok((sz, _)) => sz as u32,
-                    Err(_) => SvcError::InvalidResource.to_u32(),
+                // SAFETY: validated_ptr! confirmed [r3, r3+SM) is in-bounds.
+                let r = unsafe {
+                    crate::svc_sampling::handle_sampling_read(
+                        self.ports.sampling_mut(),
+                        frame.r1 as usize,
+                        frame.r3 as *mut u8,
+                        C::SM,
+                        tick,
+                    )
+                };
+                match r {
+                    Ok((sz, v)) => {
+                        frame.r1 = v as u32;
+                        sz
+                    }
+                    Err(code) => code,
                 }
             }),
             #[cfg(feature = "ipc-queuing")]
