@@ -2002,24 +2002,20 @@ where
             }
             Some(SyscallId::GetTime) => self.tick.get() as u32,
             Some(SyscallId::SleepTicks) => {
-                let ticks = arg1;
-                if ticks == 0 {
-                    0
-                } else {
-                    let expiry = self.tick.get() + ticks as u64;
-                    let pid = self.current_partition;
-                    if self.sleep_queue.push(pid, expiry).is_err() {
-                        SvcError::WaitQueueFull.to_u32()
-                    } else if !try_transition(self.partitions_mut(), pid, PartitionState::Waiting) {
-                        SvcError::TransitionFailed.to_u32()
-                    } else {
-                        if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
-                            pcb.set_sleep_until(expiry);
-                        }
-                        frame.r0 = 0;
-                        self.trigger_deschedule()
-                    }
+                // NOTE: self.core.partitions_mut() is intentional – split borrow
+                // needed because self.sleep_queue is also mutably borrowed.
+                let outcome = crate::svc_sleep::handle_sleep_ticks(
+                    &mut self.sleep_queue,
+                    self.core.partitions_mut(),
+                    self.current_partition,
+                    arg1,
+                    self.tick.get(),
+                );
+                let (r, deschedule) = outcome.into_svc_return();
+                if deschedule {
+                    self.trigger_deschedule();
                 }
+                r
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferAlloc) => crate::svc_buf::handle_buf_alloc(

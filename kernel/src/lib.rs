@@ -93,6 +93,7 @@ pub mod svc_msg;
 pub mod svc_queuing;
 #[cfg(feature = "ipc-sampling")]
 pub mod svc_sampling;
+pub mod svc_sleep;
 pub mod svc_sync;
 pub mod sync_pools;
 pub mod syscall;
