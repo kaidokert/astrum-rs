@@ -1,6 +1,8 @@
 use crate::partition::{PartitionState, PartitionTable};
-use crate::queuing::{QueuingError, QueuingPortPool, RecvQueuingOutcome, SendQueuingOutcome};
-use crate::svc::{try_transition, SvcError};
+use crate::queuing::{
+    QueuingError, QueuingPortPool, QueuingPortStatus, RecvQueuingOutcome, SendQueuingOutcome,
+};
+use crate::svc::{try_transition, unpack_packed_r2, SvcError};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum QueuingOutcome {
@@ -95,6 +97,62 @@ pub unsafe fn handle_queuing_recv<
         }
         Err(e) => QueuingOutcome::Done(queuing_error_to_svc(e)),
     }
+}
+
+pub fn handle_queuing_status<const S: usize, const D: usize, const M: usize, const W: usize>(
+    pool: &QueuingPortPool<S, D, M, W>,
+    port_id: usize,
+) -> Result<QueuingPortStatus, u32> {
+    pool.get_queuing_port_status(port_id)
+        .map_err(|_| SvcError::InvalidResource.to_u32())
+}
+
+/// # Safety
+/// `ptr` must be valid for the low-16 length encoded in `packed_r2`.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn handle_queuing_send_timed<
+    const N: usize,
+    const S: usize,
+    const D: usize,
+    const M: usize,
+    const W: usize,
+>(
+    pool: &mut QueuingPortPool<S, D, M, W>,
+    pt: &mut PartitionTable<N>,
+    port_id: usize,
+    ptr: *const u8,
+    packed_r2: u32,
+    pid: u8,
+    tick: u64,
+) -> QueuingOutcome {
+    let (to, len) = unpack_packed_r2(packed_r2);
+    // SAFETY: Caller guarantees [ptr, ptr+len) is valid, partition-owned memory.
+    unsafe { handle_queuing_send(pool, pt, port_id, ptr, len as usize, pid, to as u64, tick) }
+}
+
+/// # Safety
+/// `ptr` must be valid for `min(low16(packed_r2), max_msg)` bytes.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn handle_queuing_recv_timed<
+    const N: usize,
+    const S: usize,
+    const D: usize,
+    const M: usize,
+    const W: usize,
+>(
+    pool: &mut QueuingPortPool<S, D, M, W>,
+    pt: &mut PartitionTable<N>,
+    port_id: usize,
+    ptr: *mut u8,
+    packed_r2: u32,
+    max_msg: usize,
+    pid: u8,
+    tick: u64,
+) -> QueuingOutcome {
+    let (to, bl) = unpack_packed_r2(packed_r2);
+    let rlen = core::cmp::min(bl as usize, max_msg);
+    // SAFETY: Caller guarantees [ptr, ptr+rlen) is valid, partition-owned memory.
+    unsafe { handle_queuing_recv(pool, pt, port_id, ptr, rlen, pid, to as u64, tick) }
 }
 
 #[cfg(test)]
@@ -192,5 +250,71 @@ mod tests {
         assert_eq!(queuing_error_to_svc(QueuingError::QueueEmpty), SvcError::OperationFailed.to_u32());
         assert_eq!(queuing_error_to_svc(QueuingError::WaitQueueFull), SvcError::WaitQueueFull.to_u32());
         assert_eq!(queuing_error_to_svc(QueuingError::PoolFull), SvcError::OperationFailed.to_u32());
+    }
+
+    fn pack_r2(timeout: u16, len: u16) -> u32 { ((timeout as u32) << 16) | (len as u32) }
+    macro_rules! snd_t {($p:expr,$t:expr,$id:expr,$d:expr,$pr2:expr) => {
+        // SAFETY: pointers are stack-local slices valid for call duration.
+        unsafe { handle_queuing_send_timed($p,$t,$id,($d).as_ptr(),$pr2,0,1) }
+    }}
+    macro_rules! rcv_t {($p:expr,$t:expr,$id:expr,$b:expr,$pr2:expr,$mx:expr) => {
+        // SAFETY: pointers are stack-local slices valid for call duration.
+        unsafe { handle_queuing_recv_timed($p,$t,$id,($b).as_mut_ptr(),$pr2,$mx,0,1) }
+    }}
+
+    #[test]
+    fn status_valid_port() {
+        let (p, _t) = setup();
+        let s = handle_queuing_status(&p, 0).unwrap();
+        assert_eq!(s.nb_messages, 0);
+    }
+
+    #[test]
+    fn status_invalid_port() {
+        let (p, _t) = setup();
+        assert_eq!(handle_queuing_status(&p, 99), Err(SvcError::InvalidResource.to_u32()));
+    }
+    #[test]
+    fn send_timed_roundtrip() {
+        let (mut p, mut t) = setup();
+        assert_eq!(snd_t!(&mut p, &mut t, 0, [0xAB, 0xCD, 0xEF], pack_r2(10, 3)), OK);
+        let mut buf = [0u8; 16];
+        assert_eq!(rcv!(&mut p, &mut t, 1, buf, 0), QueuingOutcome::Done(3));
+        assert_eq!(&buf[..3], [0xAB, 0xCD, 0xEF]);
+    }
+    #[test]
+    fn send_timed_timeout_zero_full() {
+        let (mut p, mut t) = setup();
+        let eop = QueuingOutcome::Done(SvcError::OperationFailed.to_u32());
+        for i in 0..4u8 { assert_eq!(snd!(&mut p, &mut t, 0, [i], 0), OK); }
+        assert_eq!(snd_t!(&mut p, &mut t, 0, [0xFF], pack_r2(0, 1)), eop);
+    }
+    #[test]
+    fn send_timed_error() {
+        let (mut p, mut t) = setup();
+        let inv = QueuingOutcome::Done(SvcError::InvalidResource.to_u32());
+        assert_eq!(snd_t!(&mut p, &mut t, 99, [1u8], pack_r2(0, 1)), inv);
+    }
+    #[test]
+    fn recv_timed_roundtrip() {
+        let (mut p, mut t) = setup();
+        assert_eq!(snd!(&mut p, &mut t, 0, [0xFE, 0xED], 0), OK);
+        let mut buf = [0u8; 16];
+        assert_eq!(rcv_t!(&mut p, &mut t, 1, buf, pack_r2(10, 16), 16), QueuingOutcome::Done(2));
+        assert_eq!(&buf[..2], [0xFE, 0xED]);
+    }
+    #[test]
+    fn recv_timed_timeout_zero_empty() {
+        let (mut p, mut t) = setup();
+        let eop = QueuingOutcome::Done(SvcError::OperationFailed.to_u32());
+        let mut buf = [0u8; 16];
+        assert_eq!(rcv_t!(&mut p, &mut t, 1, buf, pack_r2(0, 16), 16), eop);
+    }
+    #[test]
+    fn recv_timed_error() {
+        let (mut p, mut t) = setup();
+        let mut buf = [0u8; 16];
+        let inv = QueuingOutcome::Done(SvcError::InvalidResource.to_u32());
+        assert_eq!(rcv_t!(&mut p, &mut t, 99, buf, pack_r2(0, 16), 16), inv);
     }
 }
