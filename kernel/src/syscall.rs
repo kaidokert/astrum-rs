@@ -7,7 +7,7 @@ pub use rtos_traits::syscall::{
     SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK,
     SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND,
     SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE,
-    SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_YIELD,
+    SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_YIELD,
 };
 
 // Dynamic-MPU syscall numbers — defined in rtos-traits, re-exported here.
@@ -50,6 +50,7 @@ pub enum SyscallId {
     DebugPrint,
     DebugExit,
     IrqAck,
+    SleepTicks,
     #[cfg(feature = "dynamic-mpu")]
     BufferAlloc,
     #[cfg(feature = "dynamic-mpu")]
@@ -117,6 +118,7 @@ impl SyscallId {
             SYS_DEBUG_PRINT => Some(Self::DebugPrint),
             SYS_DEBUG_EXIT => Some(Self::DebugExit),
             SYS_IRQ_ACK => Some(Self::IrqAck),
+            SYS_SLEEP_TICKS => Some(Self::SleepTicks),
             #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_ALLOC => Some(Self::BufferAlloc),
             #[cfg(feature = "dynamic-mpu")]
@@ -181,6 +183,7 @@ impl SyscallId {
             Self::DebugPrint => SYS_DEBUG_PRINT,
             Self::DebugExit => SYS_DEBUG_EXIT,
             Self::IrqAck => SYS_IRQ_ACK,
+            Self::SleepTicks => SYS_SLEEP_TICKS,
             #[cfg(feature = "dynamic-mpu")]
             Self::BufferAlloc => SYS_BUF_ALLOC,
             #[cfg(feature = "dynamic-mpu")]
@@ -248,6 +251,7 @@ mod tests {
         (SYS_DEBUG_PRINT, SyscallId::DebugPrint),
         (SYS_DEBUG_EXIT, SyscallId::DebugExit),
         (SYS_IRQ_ACK, SyscallId::IrqAck),
+        (SYS_SLEEP_TICKS, SyscallId::SleepTicks),
         #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_ALLOC, SyscallId::BufferAlloc),
         #[cfg(feature = "dynamic-mpu")]
@@ -303,10 +307,9 @@ mod tests {
     fn from_u32_rejects_invalid() {
         // 1 is now valid (GetPartitionId).
         assert_eq!(SyscallId::from_u32(1), Some(SyscallId::GetPartitionId));
-        // Just above the defined range depends on features:
-        // - Without dynamic-mpu: 39 is invalid (after SYS_IRQ_ACK=38)
-        // - With dynamic-mpu: 39 is invalid (after SYS_IRQ_ACK=38)
-        assert_eq!(SyscallId::from_u32(39), None);
+        // 39 is now SYS_SLEEP_TICKS.
+        assert_eq!(SyscallId::from_u32(39), Some(SyscallId::SleepTicks));
+        assert_eq!(SyscallId::from_u32(40), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -315,15 +318,15 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        // Base: 25, +14 for dynamic-mpu, +1 for partition-debug
+        // Base: 26, +14 for dynamic-mpu, +1 for partition-debug
         #[cfg(all(not(feature = "dynamic-mpu"), not(feature = "partition-debug")))]
-        assert_eq!(ALL_VARIANTS.len(), 25);
-        #[cfg(all(feature = "dynamic-mpu", not(feature = "partition-debug")))]
-        assert_eq!(ALL_VARIANTS.len(), 39);
-        #[cfg(all(not(feature = "dynamic-mpu"), feature = "partition-debug"))]
         assert_eq!(ALL_VARIANTS.len(), 26);
-        #[cfg(all(feature = "dynamic-mpu", feature = "partition-debug"))]
+        #[cfg(all(feature = "dynamic-mpu", not(feature = "partition-debug")))]
         assert_eq!(ALL_VARIANTS.len(), 40);
+        #[cfg(all(not(feature = "dynamic-mpu"), feature = "partition-debug"))]
+        assert_eq!(ALL_VARIANTS.len(), 27);
+        #[cfg(all(feature = "dynamic-mpu", feature = "partition-debug"))]
+        assert_eq!(ALL_VARIANTS.len(), 41);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);

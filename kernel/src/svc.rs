@@ -1992,6 +1992,26 @@ where
                 }
             }
             Some(SyscallId::GetTime) => self.tick.get() as u32,
+            Some(SyscallId::SleepTicks) => {
+                let ticks = arg1;
+                if ticks == 0 {
+                    0
+                } else {
+                    let expiry = self.tick.get() + ticks as u64;
+                    let pid = self.current_partition;
+                    if self.sleep_queue.push(pid, expiry).is_err() {
+                        SvcError::WaitQueueFull.to_u32()
+                    } else if !try_transition(self.partitions_mut(), pid, PartitionState::Waiting) {
+                        SvcError::TransitionFailed.to_u32()
+                    } else {
+                        if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
+                            pcb.set_sleep_until(expiry);
+                        }
+                        frame.r0 = 0;
+                        self.trigger_deschedule()
+                    }
+                }
+            }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferAlloc) => {
                 use crate::buffer_pool::BorrowMode;
@@ -7674,6 +7694,57 @@ mod tests {
         k.expire_timed_waits::<8>(50);
         assert_eq!(k.partitions().get(0).unwrap().sleep_until(), 50);
         assert!(k.sleep_queue.is_empty());
+    }
+
+    // --- SYS_SLEEP_TICKS dispatch tests ---
+
+    #[test]
+    fn sleep_ticks_zero_returns_immediately() {
+        let mut k = kernel(0, 0, 0);
+        k.sync_tick(50);
+        let mut ef = frame(crate::syscall::SYS_SLEEP_TICKS, 0, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
+        assert_eq!(k.partitions().get(0).unwrap().sleep_until(), 0);
+        assert!(k.sleep_queue.is_empty());
+        assert!(!k.yield_requested);
+    }
+
+    #[test]
+    fn sleep_ticks_nonzero_blocks_partition() {
+        let mut k = kernel(0, 0, 0);
+        k.sync_tick(100);
+        let mut ef = frame(crate::syscall::SYS_SLEEP_TICKS, 50, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0);
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Waiting
+        );
+        assert_eq!(k.partitions().get(0).unwrap().sleep_until(), 150);
+        assert!(!k.sleep_queue.is_empty());
+        assert!(k.yield_requested);
+    }
+
+    #[test]
+    fn sleep_ticks_queue_full_returns_error() {
+        let mut k = kernel(0, 0, 0);
+        k.sync_tick(10);
+        // Fill the sleep queue to capacity (N = 4).
+        for i in 0..4u8 {
+            let _ = k.sleep_queue.push(i, 1000 + i as u64);
+        }
+        let mut ef = frame(crate::syscall::SYS_SLEEP_TICKS, 50, 0);
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::WaitQueueFull.to_u32());
+        assert_eq!(
+            k.partitions().get(0).unwrap().state(),
+            PartitionState::Running
+        );
     }
 
     // --- sync_tick dispatch integration tests ---
