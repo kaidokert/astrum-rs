@@ -2763,6 +2763,13 @@ where
                     // Track starvation: the target partition was skipped.
                     if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
                         pcb.increment_starvation();
+                        if pcb.is_starved() {
+                            crate::klog!(
+                                "partition {} starved (count={})",
+                                pid,
+                                pcb.starvation_count()
+                            );
+                        }
                     }
                     // Bug 06: restore active partition to Running if it is Waiting.
                     if let Some(ap) = self.active_partition {
@@ -8792,6 +8799,57 @@ mod tests {
         assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
         assert_eq!(k.partitions().get(0).unwrap().starvation_count(), 0);
         assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
+    }
+
+    /// Starvation count reaches STARVATION_THRESHOLD after exactly 3 skips.
+    #[test]
+    fn advance_schedule_tick_starvation_reaches_threshold() {
+        use crate::partition::STARVATION_THRESHOLD;
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+
+        // Bootstrap P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Transition P1 to Waiting so it gets skipped on every boundary.
+        // Advance to boundary before P1's slot (P0 has 5 ticks).
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(pcb1.starvation_count(), 0);
+        assert!(!pcb1.is_starved());
+
+        // Skip P1 three times (STARVATION_THRESHOLD == 3).
+        // Each cycle: hit P1 boundary (skip) -> advance through P1's remaining
+        // ticks + full P0 slot to reach next P1 boundary.
+        for skip in 1..=STARVATION_THRESHOLD {
+            // Tick that hits P1 boundary — P1 is Waiting, so it gets skipped.
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+            let count = k.partitions().get(1).unwrap().starvation_count();
+            assert_eq!(
+                count, skip,
+                "after skip #{skip}, expected count={skip}, got {count}"
+            );
+
+            if skip < STARVATION_THRESHOLD {
+                assert!(!k.partitions().get(1).unwrap().is_starved());
+                // Advance through remaining P1 ticks (2) + full P0 slot (5).
+                for _ in 0..7 {
+                    k.advance_schedule_tick();
+                }
+            }
+        }
+
+        // After exactly STARVATION_THRESHOLD skips, is_starved() must be true.
+        assert!(k.partitions().get(1).unwrap().is_starved());
+        assert_eq!(
+            k.partitions().get(1).unwrap().starvation_count(),
+            STARVATION_THRESHOLD
+        );
     }
 
     /// ticks_dropped starts at zero on a new kernel.
