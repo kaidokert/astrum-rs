@@ -2835,6 +2835,13 @@ where
                 // Track starvation: the target partition was skipped.
                 if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
                     pcb.increment_starvation();
+                    if pcb.is_starved() {
+                        crate::klog!(
+                            "partition {} starved (count={})",
+                            pid,
+                            pcb.starvation_count()
+                        );
+                    }
                 }
                 // Bug 06: restore active partition to Running if it is Waiting.
                 // Note: `is_waiting` checks `pid` (next scheduled), not `ap`
@@ -9758,6 +9765,56 @@ mod tests {
         let result = k.yield_current_slot();
         assert_eq!(result.partition_id(), None);
         assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 1);
+    }
+
+    /// Starvation count reaches STARVATION_THRESHOLD via yield_current_slot.
+    #[test]
+    fn yield_current_slot_starvation_reaches_threshold() {
+        use crate::partition::STARVATION_THRESHOLD;
+        let mut k = kernel_with_schedule();
+
+        // Make P0 the active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Transition P1 to Waiting so it gets skipped on every yield.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(pcb1.starvation_count(), 0);
+        assert!(!pcb1.is_starved());
+
+        // Skip P1 STARVATION_THRESHOLD times via yield.
+        // Each iteration: yield from P0 (force_advance → P1, skipped),
+        // then tick through P1 slot (3) + P0 slot (5) - 1 to land back on
+        // P0's last tick, so the next yield targets P1 again.
+        for skip in 1..=STARVATION_THRESHOLD {
+            let result = k.yield_current_slot();
+            assert_eq!(result.partition_id(), None);
+            let count = k.partitions().get(1).unwrap().starvation_count();
+            assert_eq!(
+                count, skip,
+                "after skip #{skip}, expected count={skip}, got {count}"
+            );
+
+            if skip < STARVATION_THRESHOLD {
+                assert!(!k.partitions().get(1).unwrap().is_starved());
+                // Advance through P1 slot (3 ticks) to reach P0 boundary.
+                // Then advance through P0 slot (4 ticks) staying within P0
+                // so the next yield targets P1 again.
+                // Total: 3 (P1) + 4 (P0, leaving 1 tick) = 7 ticks.
+                for _ in 0..7 {
+                    k.advance_schedule_tick();
+                }
+            }
+        }
+
+        // After exactly STARVATION_THRESHOLD skips, is_starved() must be true.
+        assert!(k.partitions().get(1).unwrap().is_starved());
+        assert_eq!(
+            k.partitions().get(1).unwrap().starvation_count(),
+            STARVATION_THRESHOLD
+        );
     }
 
     /// yield_current_slot resets starvation count on the incoming partition
