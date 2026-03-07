@@ -405,7 +405,7 @@ pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) -> Result<(), &'sta
 /// [`partition_mpu_regions`].  Regions before this index (background,
 /// code, stack guard) are static; the region at this index (data RW)
 /// is the one forwarded to [`DynamicStrategy::configure_partition`].
-const DYNAMIC_REGION_START: usize = 2;
+pub(crate) const DYNAMIC_REGION_START: usize = 2;
 
 /// Number of dynamic regions extracted from [`partition_mpu_regions`].
 const DYNAMIC_REGION_COUNT: usize = 1;
@@ -1993,5 +1993,37 @@ mod tests {
         );
 
         assert!(pcb.cache_sealed(), "cache must be sealed after precompute");
+    }
+
+    // ------------------------------------------------------------------
+    // cached_dynamic_region
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn cached_dynamic_region_matches_partition_dynamic_regions() {
+        let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        precompute_mpu_cache(&mut pcb).unwrap();
+
+        let cached = pcb.cached_dynamic_region();
+        let dynamic = partition_dynamic_regions(&pcb).unwrap();
+        assert_eq!(
+            cached, dynamic[0],
+            "cached_dynamic_region must match partition_dynamic_regions"
+        );
+    }
+
+    #[test]
+    fn cached_dynamic_region_sentinel_returns_deny_all() {
+        // 100 is not a power-of-two → partition_mpu_regions returns None →
+        // precompute fills with deny_all_regions.
+        let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 100);
+        precompute_mpu_cache(&mut pcb).unwrap();
+
+        let cached = pcb.cached_dynamic_region();
+        let expected = deny_all_regions()[DYNAMIC_REGION_START];
+        assert_eq!(
+            cached, expected,
+            "sentinel PCB must return deny-all data region"
+        );
     }
 }

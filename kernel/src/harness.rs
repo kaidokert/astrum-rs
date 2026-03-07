@@ -261,16 +261,15 @@ macro_rules! define_unified_harness {
                     $crate::mpu::write_cached_base_regions(mpu, pcb);
                     $crate::mpu::write_cached_periph_regions(mpu, pcb);
                 }
-                let strategy_result = if let Some(regions) = $crate::mpu::partition_dynamic_regions(pcb) {
+                let strategy_result = {
+                    let dyn_region = pcb.cached_dynamic_region();
                     let periph_reserved = if pcb.peripheral_regions().is_empty() { 0 } else { 2 };
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
-                        &HARNESS_STRATEGY, pid, &regions, periph_reserved,
+                        &HARNESS_STRATEGY, pid, &[dyn_region], periph_reserved,
                     )
                     // TODO: preserves only a static string; consider logging the
                     // underlying strategy error once we have a boot-time log sink.
                     .map_err(|_| "failed to configure boot MPU")
-                } else {
-                    Ok(())
                 };
                 if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
                     $crate::mpu::mpu_enable(mpu);
@@ -359,11 +358,10 @@ macro_rules! define_unified_harness {
                     // Update dynamic strategy: reconfigure the partition's
                     // private-RAM slot and peripheral reservation count.
                     let periph_reserved = if pcb.peripheral_regions().is_empty() { 0 } else { 2 };
-                    if let Some(dyn_regions) = $crate::mpu::partition_dynamic_regions(pcb) {
-                        let _ = $crate::mpu_strategy::MpuStrategy::configure_partition(
-                            &HARNESS_STRATEGY, pid, &dyn_regions, periph_reserved,
-                        );
-                    }
+                    let dyn_region = pcb.cached_dynamic_region();
+                    let _ = $crate::mpu_strategy::MpuStrategy::configure_partition(
+                        &HARNESS_STRATEGY, pid, &[dyn_region], periph_reserved,
+                    );
                 }
 
                 // Return pid for dynamic-mode peripheral cache lookup.

@@ -400,6 +400,15 @@ impl PartitionControlBlock {
         &self.cached_base_regions
     }
 
+    /// Returns the pre-computed (RBAR, RASR) pair for the dynamic data region (R2).
+    ///
+    /// This is equivalent to `cached_base_regions()[DYNAMIC_REGION_START]` and
+    /// avoids the cost of recomputing MPU registers via `partition_dynamic_regions`.
+    pub fn cached_dynamic_region(&self) -> (u32, u32) {
+        debug_assert!(self.cache_sealed());
+        self.cached_base_regions[crate::mpu::DYNAMIC_REGION_START]
+    }
+
     /// Sets the pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
     pub fn set_cached_base_regions(
         &mut self,
