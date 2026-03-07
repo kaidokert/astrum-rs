@@ -28,6 +28,14 @@ pub struct SavedContext {
     pub r11: u32,
 }
 
+// SavedContext must be exactly 32 bytes (8 × u32) per architecture.md.
+// Checked here (not in define_unified_kernel!) because SavedContext is a
+// fixed architecture-defined struct independent of any kernel configuration.
+crate::const_assert!(
+    core::mem::size_of::<SavedContext>() == 32,
+    "SavedContext must be exactly 32 bytes (8 x u32)"
+);
+
 /// Number of u32 words in a SavedContext (r4-r11).
 pub const SAVED_CONTEXT_WORDS: usize = 8;
 

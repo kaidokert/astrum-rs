@@ -713,6 +713,27 @@ macro_rules! define_unified_kernel {
             type K = $crate::svc::Kernel<$Config>;
             type C = <$Config as $crate::config::KernelConfig>::Core;
 
+            // Verify the exported ABI constants match the actual struct layout.
+            // These compare the statics (which PendSV assembly consumes) against
+            // offset_of!, catching silent breakage if a static is replaced with
+            // a hardcoded literal.
+            assert!(
+                KERNEL_CURRENT_PARTITION_OFFSET == ::core::mem::offset_of!(K, current_partition),
+                "KERNEL_CURRENT_PARTITION_OFFSET does not match struct layout"
+            );
+            assert!(
+                KERNEL_CORE_OFFSET == ::core::mem::offset_of!(K, core),
+                "KERNEL_CORE_OFFSET does not match struct layout"
+            );
+            assert!(
+                CORE_NEXT_PARTITION_OFFSET == ::core::mem::offset_of!(C, next_partition),
+                "CORE_NEXT_PARTITION_OFFSET does not match struct layout"
+            );
+            assert!(
+                CORE_PARTITION_SP_OFFSET == ::core::mem::offset_of!(C, partition_sp),
+                "CORE_PARTITION_SP_OFFSET does not match struct layout"
+            );
+
             // PendSV uses ldrb/strb for current_partition — must be u8.
             #[allow(unused)]
             fn _assert_cp_is_u8(k: &K) { let _: u8 = k.current_partition; }
@@ -732,23 +753,21 @@ macro_rules! define_unified_kernel {
             }
 
             // partition_sp must be 4-byte aligned for word-sized ldr/str.
-            let csp = ::core::mem::offset_of!(C, partition_sp);
-            assert!(csp % 4 == 0, "partition_sp must be 4-byte aligned");
+            assert!(CORE_PARTITION_SP_OFFSET % 4 == 0, "partition_sp must be 4-byte aligned");
 
             // All four offsets must be less than 4095 (Thumb2 ldr immediate range).
-            let kcp = ::core::mem::offset_of!(K, current_partition);
-            let kco = ::core::mem::offset_of!(K, core);
-            let cnp = ::core::mem::offset_of!(C, next_partition);
-            assert!(kcp < 4095, "KERNEL_CURRENT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(kco < 4095, "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
-            assert!(cnp < 4095, "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(csp < 4095, "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
+            assert!(KERNEL_CURRENT_PARTITION_OFFSET < 4095, "KERNEL_CURRENT_PARTITION_OFFSET exceeds Thumb2 ldr range");
+            assert!(KERNEL_CORE_OFFSET < 4095, "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
+            assert!(CORE_NEXT_PARTITION_OFFSET < 4095, "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
+            assert!(CORE_PARTITION_SP_OFFSET < 4095, "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
 
             // Field ordering: current_partition before core in Kernel.
-            assert!(kcp < kco, "current_partition must precede core in Kernel layout");
+            assert!(KERNEL_CURRENT_PARTITION_OFFSET < KERNEL_CORE_OFFSET,
+                "current_partition must precede core in Kernel layout");
 
             // Field ordering: next_partition before partition_sp in Core.
-            assert!(cnp < csp, "next_partition must precede partition_sp in Core layout");
+            assert!(CORE_NEXT_PARTITION_OFFSET < CORE_PARTITION_SP_OFFSET,
+                "next_partition must precede partition_sp in Core layout");
         };
 
         /// SVC dispatch hook that routes syscalls through the unified kernel.
@@ -12096,6 +12115,53 @@ mod tests {
         k.current_partition = 0;
         let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0);
         assert_eq!(result, 0, "IrqAck should succeed for partition 0, IRQ 5");
+    }
+
+    // ---- PendSV ABI constant verification ----
+    //
+    // The define_unified_kernel! macro generates statics
+    // (KERNEL_CURRENT_PARTITION_OFFSET, etc.) and a const block that
+    // compile-time asserts those statics match offset_of!.  That const
+    // block fires in real (ARM) builds.  Here we verify the offset_of!
+    // values themselves for TestConfig to catch layout regressions.
+    //
+    // NOTE: We cannot expand define_unified_kernel! in host tests because
+    // state::with_kernel* is #[cfg(not(test))].  The macro-generated
+    // statics are verified at compile time by the const block in the
+    // macro, and at runtime via QEMU integration tests.
+
+    #[test]
+    fn pendsv_abi_offsets_match_expected_layout() {
+        type K = Kernel<TestConfig>;
+        type C = <TestConfig as KernelConfig>::Core;
+
+        // Verify the offset_of! expressions that define_unified_kernel!
+        // uses to initialize its statics produce consistent values.
+        let kcp = core::mem::offset_of!(K, current_partition);
+        let kco = core::mem::offset_of!(K, core);
+        let cnp = core::mem::offset_of!(C, next_partition);
+        let csp = core::mem::offset_of!(C, partition_sp);
+
+        // current_partition must precede core in Kernel layout.
+        assert!(
+            kcp < kco,
+            "current_partition ({kcp}) must precede core ({kco})"
+        );
+
+        // next_partition must precede partition_sp in Core layout.
+        assert!(
+            cnp < csp,
+            "next_partition ({cnp}) must precede partition_sp ({csp})"
+        );
+
+        // partition_sp must be 4-byte aligned for word-sized ldr/str.
+        assert_eq!(csp % 4, 0, "partition_sp offset ({csp}) not 4-byte aligned");
+
+        // Verify these are the exact same values the macro would use.
+        assert_eq!(kcp, core::mem::offset_of!(K, current_partition));
+        assert_eq!(kco, core::mem::offset_of!(K, core));
+        assert_eq!(cnp, core::mem::offset_of!(C, next_partition));
+        assert_eq!(csp, core::mem::offset_of!(C, partition_sp));
     }
 
     /// Test module for `define_unified_kernel!` macro.

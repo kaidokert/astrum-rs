@@ -5,6 +5,25 @@
 //! real partitions) can call `kernel::svc!` / `kernel::partition_trampoline!`
 //! instead of duplicating inline-asm boilerplate.
 
+/// Compile-time assertion. Fails the build if `$cond` evaluates to false.
+///
+/// Use this instead of `const { assert!(...) }` when you need a standalone
+/// item-position assertion outside an existing `const` block.
+///
+/// ```ignore
+/// kernel::const_assert!(core::mem::size_of::<u32>() == 4);
+/// kernel::const_assert!(2 + 2 == 4, "math is broken");
+/// ```
+#[macro_export]
+macro_rules! const_assert {
+    ($cond:expr $(,)?) => {
+        const _: () = assert!($cond);
+    };
+    ($cond:expr, $msg:expr $(,)?) => {
+        const _: () = assert!($cond, $msg);
+    };
+}
+
 /// Issue an SVC #0 system call, passing a syscall ID in `r0` and up to
 /// three arguments in `r1`–`r3`.  Returns the value the kernel placed in
 /// `r0` after dispatch.
@@ -796,5 +815,19 @@ mod tests {
         assert_eq!(a.0, 0);
         assert_eq!(b.0, 255);
         assert_ne!(a, b);
+    }
+
+    // ---- const_assert! tests ----
+
+    // Exercise both const_assert! forms at item position.
+    const_assert!(true);
+    const_assert!(core::mem::size_of::<u32>() == 4, "u32 must be 4 bytes");
+
+    #[test]
+    fn const_assert_compiles_with_true_condition() {
+        // The const_assert! invocations above compile, confirming the
+        // macro produces valid `const _: () = assert!(...)` items.
+        const_assert!(1 + 1 == 2);
+        const_assert!(42 > 0, "positive");
     }
 }
