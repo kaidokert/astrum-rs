@@ -80,6 +80,8 @@ pub mod semaphore;
 pub mod split_isr;
 pub mod state;
 pub mod svc;
+#[cfg(feature = "ipc-blackboard")]
+pub mod svc_blackboard;
 pub mod sync_pools;
 pub mod syscall;
 pub mod systick;
