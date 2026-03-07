@@ -2807,6 +2807,10 @@ where
                 .map(|pcb| pcb.state() == PartitionState::Waiting)
                 .unwrap_or(false);
             if is_waiting {
+                // Track starvation: the target partition was skipped.
+                if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
+                    pcb.increment_starvation();
+                }
                 // Bug 06: restore active partition to Running if it is Waiting.
                 // Note: `is_waiting` checks `pid` (next scheduled), not `ap`
                 // (active partition) — they can differ in multi-partition
@@ -2824,6 +2828,10 @@ where
                 return ScheduleEvent::None;
             }
             self.transition_outgoing_ready();
+            // Reset starvation: the incoming partition is now running.
+            if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
+                pcb.reset_starvation();
+            }
             self.active_partition = Some(pid);
         } else {
             // Bug 05: force_advance returned no partition (empty/unstarted
@@ -9584,6 +9592,52 @@ mod tests {
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running
         );
+    }
+
+    /// yield_current_slot increments starvation count when skipping a
+    /// Waiting partition.
+    #[test]
+    fn yield_current_slot_increments_starvation_on_skip() {
+        let mut k = kernel_with_schedule();
+
+        // Make P0 the active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Transition P1 to Waiting (Ready -> Running -> Waiting).
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(pcb1.starvation_count(), 0);
+
+        // Yield from P0: force_advance targets P1, but P1 is Waiting =>
+        // skipped, starvation incremented.
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), None);
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 1);
+    }
+
+    /// yield_current_slot resets starvation count on the incoming partition
+    /// when the yield succeeds (target is Ready).
+    #[test]
+    fn yield_current_slot_resets_starvation_on_success() {
+        let mut k = kernel_with_schedule();
+
+        // Make P0 the active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Artificially give P1 a non-zero starvation count.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.increment_starvation();
+        pcb1.increment_starvation();
+        assert_eq!(pcb1.starvation_count(), 2);
+
+        // Yield from P0: force_advance targets P1 which is Ready =>
+        // switch succeeds, starvation resets to 0.
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), Some(1));
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
     }
 
     /// Tests that yield_current_slot transitions the outgoing partition
