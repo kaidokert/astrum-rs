@@ -2354,60 +2354,21 @@ where
                     }
                 })
             }
-            // Debug syscalls: only available with log-semihosting feature.
-            // Otherwise these are recognized but return NotImplemented.
             Some(SyscallId::DebugPrint) => {
-                #[cfg(feature = "log-semihosting")]
-                {
-                    // SAFETY: caller ensures r1 points to a valid string of length r2
-                    // within the partition's memory region. Semihosting is available
-                    // when log-semihosting feature is enabled.
-                    let ptr = frame.r1 as *const u8;
-                    let len = frame.r2 as usize;
-                    if len > 0 && !ptr.is_null() {
-                        // SAFETY: caller ensures r1 points to valid memory of length r2
-                        // within the partition's region. Bounds checked above (len > 0, non-null).
-                        let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
-                        if let Ok(s) = core::str::from_utf8(slice) {
-                            cortex_m_semihosting::hprint!("{}", s);
-                        }
-                    }
-                    0
-                }
-                #[cfg(not(feature = "log-semihosting"))]
-                {
-                    SvcError::NotImplemented.to_u32()
+                let (ptr, len) = (frame.r1, frame.r2 as usize);
+                if !validate_user_ptr(self.partitions(), self.current_partition, ptr, len) {
+                    SvcError::InvalidPointer.to_u32()
+                } else {
+                    // SAFETY: validate_user_ptr confirmed [ptr, ptr+len) in partition memory.
+                    let data = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
+                    crate::svc_debug::handle_debug_print(data)
                 }
             }
-            Some(SyscallId::DebugExit) => {
-                #[cfg(feature = "qemu")]
-                {
-                    // The kexit! macro expands to identical infinite loops when semihosting
-                    // is disabled, but different exit codes when enabled.
-                    #[allow(clippy::if_same_then_else)]
-                    if frame.r1 == 0 {
-                        crate::kexit!(success);
-                    } else {
-                        crate::kexit!(failure);
-                    }
-                    // Note: kexit! does not return when semihosting is enabled.
-                    #[allow(unreachable_code)]
-                    0
-                }
-                #[cfg(not(feature = "qemu"))]
-                {
-                    SvcError::NotImplemented.to_u32()
-                }
-            }
+            Some(SyscallId::DebugExit) => crate::svc_debug::handle_debug_exit(frame.r1),
             #[cfg(feature = "partition-debug")]
             Some(SyscallId::DebugNotify) => {
                 let pid = self.current_partition as usize;
-                if let Some(pcb) = self.partitions_mut().get_mut(pid) {
-                    pcb.signal_debug_pending();
-                    0
-                } else {
-                    SvcError::InvalidPartition.to_u32()
-                }
+                crate::svc_debug::handle_debug_notify(self.partitions_mut(), pid)
             }
             #[cfg(feature = "partition-debug")]
             Some(SyscallId::DebugWrite) => {
@@ -2416,23 +2377,9 @@ where
                     SvcError::InvalidPointer.to_u32()
                 } else {
                     let pid = self.current_partition as usize;
-                    match self.partitions_mut().get_mut(pid) {
-                        None => SvcError::InvalidPartition.to_u32(),
-                        Some(pcb) => match pcb.debug_buffer() {
-                            None => SvcError::NotSupported.to_u32(),
-                            Some(buf) => {
-                                // SAFETY: validate_user_ptr confirmed [ptr, ptr+len) in partition memory.
-                                let data =
-                                    unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
-                                let written = buf.write(data);
-                                if written == len {
-                                    len as u32
-                                } else {
-                                    SvcError::BufferFull.to_u32()
-                                }
-                            }
-                        },
-                    }
+                    // SAFETY: validate_user_ptr confirmed [ptr, ptr+len) in partition memory.
+                    let data = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
+                    crate::svc_debug::handle_debug_write(self.partitions_mut(), pid, data)
                 }
             }
             Some(SyscallId::IrqAck) => {
@@ -12226,7 +12173,7 @@ mod tests {
 
     #[cfg(feature = "partition-debug")]
     #[test]
-    fn debug_write_returns_buffer_full_on_overflow() {
+    fn debug_write_returns_zero_on_overflow() {
         use crate::debug::DebugRingBuffer;
         use crate::syscall::SYS_DEBUG_WRITE;
 
@@ -12239,12 +12186,12 @@ mod tests {
             .unwrap()
             .set_debug_buffer(&BUF);
 
-        // Try to write more than the buffer can hold.
+        // Try to write more than the buffer can hold — returns 0 (no bytes written).
         let ptr = debug_test_buf(2);
         let mut ef = frame(SYS_DEBUG_WRITE, ptr as u32, 32);
         unsafe { k.dispatch(&mut ef) };
 
-        assert_eq!(ef.r0, SvcError::BufferFull.to_u32());
+        assert_eq!(ef.r0, 0);
     }
 
     /// Full state lifecycle round-trip: Running→Waiting→Ready→Running via

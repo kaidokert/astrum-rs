@@ -82,6 +82,7 @@ pub mod state;
 pub mod svc;
 #[cfg(feature = "ipc-blackboard")]
 pub mod svc_blackboard;
+pub mod svc_debug;
 pub mod svc_events;
 #[cfg(feature = "ipc-message")]
 pub mod svc_msg;
