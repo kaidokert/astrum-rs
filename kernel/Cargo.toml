@@ -363,6 +363,10 @@ name = "svcall_primask_clear_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "tick_fairness_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "adversarial_mod_stub"
 required-features = ["qemu", "log-semihosting"]
 
