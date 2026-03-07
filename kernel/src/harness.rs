@@ -33,6 +33,28 @@
 // The canonical definitions live in boot.rs.
 pub use crate::boot::{BootError, Never};
 
+/// Shared helper: detect dropped SysTick interrupts by reading the ICSR
+/// PENDSTSET bit before the current tick is processed.  Factored out of
+/// `_unified_handle_tick!` to avoid duplicating the detection logic across
+/// both cfg arms.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _detect_dropped_ticks {
+    ($kernel:expr) => {
+        #[cfg(target_arch = "arm")]
+        {
+            // SAFETY: Reading the ICSR register at this fixed MMIO address is
+            // side-effect-free. (ICSR is R/W — some bits trigger effects when
+            // *written* — but a volatile read is safe.)
+            let icsr = unsafe { core::ptr::read_volatile($crate::pendsv::ICSR_ADDR as *const u32) };
+            // PENDSTSET_BIT is a bitmask (1 << 26), not a bit index.
+            if icsr & $crate::pendsv::PENDSTSET_BIT != 0 {
+                $kernel.increment_ticks_dropped();
+            }
+        }
+    };
+}
+
 #[cfg(not(feature = "dynamic-mpu"))]
 #[macro_export]
 #[doc(hidden)]
@@ -45,6 +67,7 @@ macro_rules! _unified_handle_tick {
             let addr = $kernel as *const _ as usize;
             $crate::invariants::assert_storage_alignment(addr, $crate::state::KERNEL_ALIGNMENT);
         }
+        $crate::_detect_dropped_ticks!($kernel);
         let event = $kernel.advance_schedule_tick();
         if let Some(pid) = event {
             $kernel.set_next_partition(pid);
@@ -65,6 +88,7 @@ macro_rules! _unified_handle_tick {
             let addr = $kernel as *const _ as usize;
             $crate::invariants::assert_storage_alignment(addr, $crate::state::KERNEL_ALIGNMENT);
         }
+        $crate::_detect_dropped_ticks!($kernel);
         let event = $kernel.advance_schedule_tick();
         $crate::_unified_handle_tick_event!($kernel, event, $tick, $strategy);
         #[cfg(feature = "dynamic-mpu")]
@@ -529,6 +553,40 @@ mod tests {
     // used in the macro resolve correctly at const-eval time.
     const _: () = assert!(!GateTestDefault::MPU_ENFORCE);
     const _: () = assert!(GateTestEnforced::MPU_ENFORCE);
+
+    // ============ Ticks-dropped detection tests ============
+    //
+    // TODO: The _detect_dropped_ticks! macro reads ICSR PENDSTSET on ARM
+    // targets, which is cfg-gated out on host. Full macro-expansion and
+    // ICSR bit-check coverage requires an on-target or QEMU integration
+    // test — out of scope for unit tests.
+
+    /// Verify that increment_ticks_dropped records a dropped tick and
+    /// the counter reflects the correct value after multiple drops.
+    #[test]
+    fn ticks_dropped_detection_logic() {
+        use crate::svc::Kernel;
+        use crate::{
+            compose_kernel_config, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+        };
+
+        compose_kernel_config!(TdTestCfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+
+        let mut k = Kernel::<TdTestCfg>::default();
+        assert_eq!(k.ticks_dropped(), 0, "counter must start at zero");
+
+        // Simulate three dropped-tick detections.
+        k.increment_ticks_dropped();
+        assert_eq!(k.ticks_dropped(), 1);
+        k.increment_ticks_dropped();
+        k.increment_ticks_dropped();
+        assert_eq!(k.ticks_dropped(), 3);
+
+        // Reset returns previous value and zeroes the counter.
+        let prev = k.reset_ticks_dropped();
+        assert_eq!(prev, 3);
+        assert_eq!(k.ticks_dropped(), 0);
+    }
 
     // ============ Cached-region equivalence tests ============
     //
