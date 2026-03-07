@@ -2807,17 +2807,12 @@ where
     /// ticks. Updates `active_partition` and returns the schedule result.
     /// Called by the harness when a partition yields.
     pub fn yield_current_slot(&mut self) -> impl YieldResult {
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let result = self.schedule_mut().force_advance();
+        let (result, _skipped) = self.schedule_mut().force_advance_to_partition();
         #[cfg(feature = "dynamic-mpu")]
-        let result = {
-            let (event, skipped) = self.schedule_mut().force_advance_to_partition();
-            if skipped > 0 {
-                self.ticks_since_bottom_half = 0;
-                self.bottom_half_stale = false;
-            }
-            event
-        };
+        if _skipped > 0 {
+            self.ticks_since_bottom_half = 0;
+            self.bottom_half_stale = false;
+        }
         if let Some(pid) = result.partition_id() {
             let is_waiting = self
                 .partitions()
@@ -2863,7 +2858,7 @@ where
             // schedule or SystemWindow slot). If the active partition is
             // Waiting, restore it to Running so it remains schedulable.
             // Transition chain: Waiting → Ready → Running (no direct path).
-            // TODO: active_partition is intentionally left unchanged here — the
+            // active_partition is intentionally left unchanged here — the
             // schedule advanced past system-only windows but no partition was
             // found, so we keep the current partition active.
             if let Some(ap) = self.active_partition {
@@ -8520,6 +8515,15 @@ mod tests {
     // Schedule advance and accessor tests
     // -------------------------------------------------------------------------
 
+    /// Number of ticks to advance from the first P1 boundary tick through
+    /// the rest of P1's slot and the full P0 slot to reach the next P1
+    /// boundary.  Under `dynamic-mpu` the schedule inserts an extra
+    /// SystemWindow(1) between P1 and P0.
+    #[cfg(not(feature = "dynamic-mpu"))]
+    const INTER_P1_TICKS: usize = 2 + 5;
+    #[cfg(feature = "dynamic-mpu")]
+    const INTER_P1_TICKS: usize = 2 + 1 + 5;
+
     /// Helper to create a Kernel with a started schedule and partitions.
     fn kernel_with_schedule() -> Kernel<TestConfig> {
         // Create 2-slot schedule: P0 for 5 ticks, P1 for 3 ticks
@@ -8556,8 +8560,8 @@ mod tests {
             crate::virtual_device::DeviceRegistry::new(),
         )
         .unwrap();
-        // TODO: reviewer false positive – mutexes are pre-allocated at pool
-        // capacity by SyncPools::default(); no add() method exists.
+        // Mutexes are pre-allocated at pool capacity by SyncPools::default();
+        // no add() method exists.
         let _ = &mut k;
         k
     }
@@ -8729,11 +8733,7 @@ mod tests {
         // Advance through remaining P1 ticks + full P0 slot to reach
         // another P1 boundary. P1 has 3 ticks, then P0 has 5 ticks.
         // We already consumed 1 of P1's 3 ticks above.
-        for _ in 0..2 {
-            k.advance_schedule_tick();
-        }
-        // Now in P0's slot — advance through it.
-        for _ in 0..5 {
+        for _ in 0..INTER_P1_TICKS {
             k.advance_schedule_tick();
         }
         // Next tick hits P1 boundary again.
@@ -8771,10 +8771,7 @@ mod tests {
         pcb1.transition(PartitionState::Ready).unwrap();
 
         // Advance through remaining P1 ticks + P0 slot to next P1 boundary.
-        for _ in 0..2 {
-            k.advance_schedule_tick();
-        }
-        for _ in 0..5 {
+        for _ in 0..INTER_P1_TICKS {
             k.advance_schedule_tick();
         }
 
@@ -8841,7 +8838,7 @@ mod tests {
             if skip < STARVATION_THRESHOLD {
                 assert!(!k.partitions().get(1).unwrap().is_starved());
                 // Advance through remaining P1 ticks (2) + full P0 slot (5).
-                for _ in 0..7 {
+                for _ in 0..INTER_P1_TICKS {
                     k.advance_schedule_tick();
                 }
             }
@@ -9798,8 +9795,12 @@ mod tests {
                 // Advance through P1 slot (3 ticks) to reach P0 boundary.
                 // Then advance through P0 slot (4 ticks) staying within P0
                 // so the next yield targets P1 again.
-                // Total: 3 (P1) + 4 (P0, leaving 1 tick) = 7 ticks.
-                for _ in 0..7 {
+                // Under dynamic-mpu, also skip SW:1 between P1 and P0.
+                #[cfg(not(feature = "dynamic-mpu"))]
+                const YIELD_CYCLE_TICKS: usize = 3 + 4;
+                #[cfg(feature = "dynamic-mpu")]
+                const YIELD_CYCLE_TICKS: usize = 3 + 1 + 4;
+                for _ in 0..YIELD_CYCLE_TICKS {
                     k.advance_schedule_tick();
                 }
             }

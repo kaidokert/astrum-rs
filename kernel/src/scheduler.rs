@@ -226,6 +226,13 @@ impl<const N: usize> ScheduleTable<N> {
     /// contains only system windows.  Bounded by the table length to
     /// guarantee termination.  Returns the number of system windows
     /// skipped as the second element.
+    /// When `dynamic-mpu` is disabled there are no `SystemWindow` entries, so
+    /// this simply delegates to [`force_advance`] with `skipped = 0`.
+    #[cfg(not(feature = "dynamic-mpu"))]
+    pub fn force_advance_to_partition(&mut self) -> (ScheduleEvent, usize) {
+        (self.force_advance(), 0)
+    }
+
     #[cfg(feature = "dynamic-mpu")]
     pub fn force_advance_to_partition(&mut self) -> (ScheduleEvent, usize) {
         let len = self.entries.len();
