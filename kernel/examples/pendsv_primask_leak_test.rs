@@ -1,6 +1,6 @@
-//! Regression guard for Bug 14-numbat: asserts PRIMASK==0 in Thread mode.
-//! Two partitions read PRIMASK every iteration and abort if non-zero.
-//! Fast SysTick drives many PendSV switches; a leaked `cpsid i` is caught.
+//! Regression guard for Bug 14-numbat: asserts PRIMASK==0 and BASEPRI==0 in Thread mode.
+//! Two partitions read both registers every iteration and abort if non-zero.
+//! Fast SysTick drives many PendSV switches; a leaked mask is caught.
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
@@ -58,6 +58,10 @@ kernel::define_unified_harness!(Config, |tick, _k| {
     }
 });
 
+// TODO: consolidate read_primask to use cortex_m::register::primask instead of
+// inline asm, matching the read_basepri pattern, once the legacy unsafe block is
+// cleaned up project-wide.
+
 /// Read PRIMASK register.  Returns 0 when interrupts are enabled.
 #[inline(always)]
 fn read_primask() -> u32 {
@@ -76,17 +80,43 @@ fn read_primask() -> u32 {
     }
 }
 
+/// Read BASEPRI register.  Returns 0 when no priority masking is active.
+#[inline(always)]
+fn read_basepri() -> u32 {
+    #[cfg(target_arch = "arm")]
+    {
+        cortex_m::register::basepri::read() as u32
+    }
+    #[cfg(not(target_arch = "arm"))]
+    {
+        0 // host-build stub for clippy / check
+    }
+}
+
+/// Report a register leak and terminate the simulation.
+fn fail_leak(id: usize, reg: &str, val: u32) -> ! {
+    hprintln!("p{}: {} leak detected ({}={})", id, reg, reg, val);
+    debug::exit(debug::EXIT_FAILURE);
+    loop {
+        #[cfg(target_arch = "arm")]
+        cortex_m::asm::nop();
+        #[cfg(not(target_arch = "arm"))]
+        core::hint::spin_loop();
+    }
+}
+
 fn partition_task(id: usize) -> ! {
     loop {
         let pm = read_primask();
         if pm != 0 {
-            hprintln!("p{}: PRIMASK leak detected (PRIMASK={})", id, pm);
-            debug::exit(debug::EXIT_FAILURE);
-            loop {
-                cortex_m::asm::nop();
-            }
+            fail_leak(id, "PRIMASK", pm);
+        }
+        let bp = read_basepri();
+        if bp != 0 {
+            fail_leak(id, "BASEPRI", bp);
         }
         PARTITION_COUNTS[id].fetch_add(1, Ordering::Release);
+        #[cfg(target_arch = "arm")]
         cortex_m::asm::nop();
     }
 }
