@@ -357,7 +357,9 @@ impl YieldResult for ScheduleEvent {
         false
     }
 }
-use crate::message::{MessagePool, RecvOutcome, SendOutcome};
+use crate::message::MessagePool;
+#[cfg(test)]
+use crate::message::{RecvOutcome, SendOutcome};
 use crate::mutex::MutexPool;
 use crate::partition::{ConfigError, PartitionConfig, PartitionState, PartitionTable};
 use crate::queuing::{
@@ -1760,46 +1762,43 @@ where
             }
             #[cfg(feature = "ipc-message")]
             Some(SyscallId::MsgSend) => validated_ptr!(self, arg3, C::QM, {
-                // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
-                // the calling partition's MPU data region. (2) Slice length is
-                // C::QM, a KernelConfig constant. (3) The partition owns this
-                // memory as enforced by MPU isolation.
-                let data = unsafe { core::slice::from_raw_parts(arg3 as *const u8, C::QM) };
-                match self
-                    .msg
-                    .messages_mut()
-                    .send(arg1 as usize, arg2 as usize, data)
-                {
-                    Ok(outcome) => match apply_send_outcome(self.partitions_mut(), outcome) {
-                        Ok(Some(_blocked)) => {
-                            self.trigger_deschedule();
-                            0
-                        }
-                        Ok(None) => 0,
-                        Err(e) => e.to_u32(),
-                    },
-                    Err(_) => SvcError::InvalidResource.to_u32(),
+                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
+                // the calling partition's MPU data region.
+                let (r, blk) = unsafe {
+                    crate::svc_msg::handle_msg_send(
+                        self.msg.messages_mut(),
+                        self.core.partitions_mut(),
+                        arg1 as usize,
+                        arg2 as usize,
+                        arg3 as *const u8,
+                        C::QM,
+                    )
                 }
+                .into_svc_return();
+                if blk {
+                    self.trigger_deschedule();
+                }
+                r
             }),
             #[cfg(feature = "ipc-message")]
             Some(SyscallId::MsgRecv) => validated_ptr!(self, arg3, C::QM, {
-                // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
-                // the calling partition's MPU data region. (2) Slice length is
-                // C::QM, a KernelConfig constant. (3) The partition owns this
-                // memory as enforced by MPU isolation.
-                let buf = unsafe { core::slice::from_raw_parts_mut(arg3 as *mut u8, C::QM) };
-                match self
-                    .msg
-                    .messages_mut()
-                    .recv(arg1 as usize, arg2 as usize, buf)
-                {
-                    Ok(outcome) => match apply_recv_outcome(self, outcome) {
-                        Ok(Some(_blocked)) => 0,
-                        Ok(None) => 0,
-                        Err(e) => e.to_u32(),
-                    },
-                    Err(_) => SvcError::InvalidResource.to_u32(),
+                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
+                // the calling partition's MPU data region.
+                let (r, blk) = unsafe {
+                    crate::svc_msg::handle_msg_recv(
+                        self.msg.messages_mut(),
+                        self.core.partitions_mut(),
+                        arg1 as usize,
+                        arg2 as usize,
+                        arg3 as *mut u8,
+                        C::QM,
+                    )
                 }
+                .into_svc_return();
+                if blk {
+                    self.trigger_deschedule();
+                }
+                r
             }),
             #[cfg(feature = "ipc-sampling")]
             Some(SyscallId::SamplingWrite) => {
@@ -3073,9 +3072,7 @@ pub fn try_transition<const N: usize>(
         .is_some()
 }
 
-/// Apply a `SendOutcome` by transitioning partition states as needed.
-/// Returns `Some(blocked_pid)` if a sender blocked, `None` otherwise.
-/// Returns `Err(SvcError::TransitionFailed)` if a partition transition fails.
+#[cfg(test)]
 fn apply_send_outcome<const N: usize>(
     partitions: &mut PartitionTable<N>,
     outcome: SendOutcome,
@@ -3101,12 +3098,7 @@ fn apply_send_outcome<const N: usize>(
     }
 }
 
-/// Apply a `RecvOutcome` by transitioning partition states as needed.
-/// Returns `Ok(Some(blocked_pid))` if a receiver blocked, `Ok(None)` otherwise.
-/// Returns `Err(SvcError::TransitionFailed)` if a partition transition fails.
-///
-/// When a receiver blocks, this function calls `trigger_deschedule()` on the
-/// kernel to pend PendSV and set `yield_requested`.
+#[cfg(test)]
 fn apply_recv_outcome<C: KernelConfig>(
     kernel: &mut Kernel<C>,
     outcome: RecvOutcome,
