@@ -1964,4 +1964,34 @@ mod tests {
         // Second call must fail because the cache is already sealed.
         assert!(precompute_mpu_cache(&mut pcb).is_err());
     }
+
+    /// `precompute_mpu_cache` on a PCB whose data region size is not a
+    /// power-of-two must still succeed: `partition_mpu_regions` returns
+    /// `None`, and the fallback fills `cached_base_regions[0]` with the
+    /// background deny-all region (non-zero RBAR/RASR) instead of
+    /// leaving uninitialized zeros.
+    #[test]
+    fn precompute_mpu_cache_deny_all_fallback() {
+        // 100 is not a power-of-two → partition_mpu_regions returns None.
+        let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 100);
+
+        assert!(precompute_mpu_cache(&mut pcb).is_ok());
+
+        let (rbar, rasr) = pcb.cached_base_regions()[0];
+        assert_ne!(
+            (rbar, rasr),
+            (0, 0),
+            "region 0 must be the deny-all background, not zeros"
+        );
+
+        // Cross-check against the canonical deny-all output.
+        let expected = deny_all_regions();
+        assert_eq!(
+            *pcb.cached_base_regions(),
+            expected,
+            "cached base regions must match deny_all_regions()"
+        );
+
+        assert!(pcb.cache_sealed(), "cache must be sealed after precompute");
+    }
 }
