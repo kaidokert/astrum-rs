@@ -69,7 +69,7 @@ where
         BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     >,
 {
-    crate::state::with_kernel_mut::<C, _, _>(|kernel| {
+    let _ = crate::state::with_kernel_mut::<C, _, _>(|kernel| {
         let woken =
             signal_partition_inner(kernel.partitions_mut(), partition_id as usize, event_bits);
         if woken {

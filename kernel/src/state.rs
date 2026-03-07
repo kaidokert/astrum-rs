@@ -101,6 +101,7 @@
 
 use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::addr_of_mut;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::KernelConfig;
 use crate::svc::Kernel;
@@ -179,6 +180,9 @@ fn check_kernel_alignment(ptr: *const u8) -> Result<(), usize> {
 /// access. Reading before initialization is undefined behavior.
 #[link_section = ".kernel_state"]
 pub static mut UNIFIED_KERNEL_STORAGE: MaybeUninit<KernelStorageBuffer> = MaybeUninit::uninit();
+
+/// Set once by [`init_kernel_state_at`] after successful initialization.
+static KERNEL_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Minimum alignment required by the ARMv7-M MPU for kernel state region.
 ///
@@ -292,7 +296,10 @@ where
 /// Initialize kernel at `ptr`. Panics if misaligned.
 /// # Safety
 /// `ptr` must be valid, writable, and sized for `Kernel<C>`.
-pub unsafe fn init_kernel_state_at<C: KernelConfig>(ptr: *mut Kernel<C>, kernel: Kernel<C>)
+pub unsafe fn init_kernel_state_at<C: KernelConfig>(
+    ptr: *mut Kernel<C>,
+    kernel: Kernel<C>,
+) -> Result<(), &'static str>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -303,12 +310,8 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    if let Err(offset) = check_kernel_alignment(ptr as *const u8) {
-        // TODO(panic-free): convert to Result
-        panic!(
-            "UNIFIED_KERNEL_STORAGE misaligned: offset {} from required {} byte alignment",
-            offset, KERNEL_ALIGNMENT
-        );
+    if check_kernel_alignment(ptr as *const u8).is_err() {
+        return Err("UNIFIED_KERNEL_STORAGE misaligned");
     }
     // Belt-and-suspenders: catch cases where Kernel<C> requires more alignment than
     // KERNEL_ALIGNMENT. The check above validates against KERNEL_ALIGNMENT, but Kernel<C>
@@ -322,6 +325,8 @@ where
     // SAFETY: The caller guarantees that ptr is valid, writable, and has sufficient
     // size for Kernel<C>. The alignment check above ensures ptr is KERNEL_ALIGNMENT-aligned.
     ptr.write(kernel);
+    KERNEL_INITIALIZED.store(true, Ordering::Release);
+    Ok(())
 }
 
 /// Initialize kernel state storage with a configured kernel instance.
@@ -341,7 +346,7 @@ where
 ///   [`KERNEL_ALIGNMENT`] (4096 bytes). The panic message includes the actual
 ///   alignment offset.
 #[allow(dead_code)]
-pub unsafe fn init_kernel_state<C: KernelConfig>(kernel: Kernel<C>)
+pub unsafe fn init_kernel_state<C: KernelConfig>(kernel: Kernel<C>) -> Result<(), &'static str>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -375,7 +380,7 @@ where
     let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>;
 
     // SAFETY: ptr points to UNIFIED_KERNEL_STORAGE with sufficient size and alignment.
-    init_kernel_state_at(ptr, kernel);
+    init_kernel_state_at(ptr, kernel)
 }
 
 /// Get a raw pointer to the kernel state storage.
@@ -444,7 +449,7 @@ where
 /// Calling this function before `init_kernel_state()` has been called results
 /// in **Undefined Behavior** (dereferencing an uninitialized pointer).
 #[cfg(not(test))]
-pub fn with_kernel<C, F, R>(f: F) -> R
+pub fn with_kernel<C, F, R>(f: F) -> Result<R, &'static str>
 where
     C: KernelConfig,
     F: FnOnce(&Kernel<C>) -> R,
@@ -457,24 +462,17 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    cortex_m::interrupt::free(|_cs| {
-        // SAFETY: Access is safe because:
-        // 1. We are inside a critical section (interrupt::free), which masks all
-        //    configurable interrupts on single-core Cortex-M, preventing concurrent
-        //    access from exception handlers.
-        // 2. The system boot sequence guarantees that init_kernel_state() is called
-        //    exactly once before interrupts are enabled, so UNIFIED_KERNEL_STORAGE
-        //    contains a valid, initialized Kernel<C> instance.
-        // 3. The pointer cast is valid because init_kernel_state() wrote a Kernel<C>
-        //    to this location, and the storage has sufficient size and alignment.
-        // 4. Creating a shared reference is safe because the critical section
-        //    ensures no mutable references can exist concurrently.
+    if !KERNEL_INITIALIZED.load(Ordering::Acquire) {
+        return Err("kernel not initialized");
+    }
+    Ok(cortex_m::interrupt::free(|_cs| {
+        // SAFETY: KERNEL_INITIALIZED (Acquire) guarantees init_kernel_state()
+        // completed (Release). Critical section prevents concurrent access.
         let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *const Kernel<C>;
-        // SAFETY: Invariants 1-4 documented above ensure ptr is valid and initialized,
-        // and the critical section prevents concurrent access.
+        // SAFETY: ptr valid per KERNEL_INITIALIZED; critical section is exclusive.
         let kernel = unsafe { &*ptr };
         f(kernel)
-    })
+    }))
 }
 
 /// Access the unified kernel state mutably within a critical section.
@@ -510,7 +508,7 @@ where
 /// Calling this function before `init_kernel_state()` has been called results
 /// in **Undefined Behavior** (dereferencing an uninitialized pointer).
 #[cfg(not(test))]
-pub fn with_kernel_mut<C, F, R>(f: F) -> R
+pub fn with_kernel_mut<C, F, R>(f: F) -> Result<R, &'static str>
 where
     C: KernelConfig,
     F: FnOnce(&mut Kernel<C>) -> R,
@@ -523,24 +521,17 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    cortex_m::interrupt::free(|_cs| {
-        // SAFETY: Access is safe because:
-        // 1. We are inside a critical section (interrupt::free), which masks all
-        //    configurable interrupts on single-core Cortex-M, preventing concurrent
-        //    access from exception handlers.
-        // 2. The system boot sequence guarantees that init_kernel_state() is called
-        //    exactly once before interrupts are enabled, so UNIFIED_KERNEL_STORAGE
-        //    contains a valid, initialized Kernel<C> instance.
-        // 3. The pointer cast is valid because init_kernel_state() wrote a Kernel<C>
-        //    to this location, and the storage has sufficient size and alignment.
-        // 4. Creating a mutable reference is safe because the critical section
-        //    ensures no other references (shared or mutable) can exist concurrently.
+    if !KERNEL_INITIALIZED.load(Ordering::Acquire) {
+        return Err("kernel not initialized");
+    }
+    Ok(cortex_m::interrupt::free(|_cs| {
+        // SAFETY: KERNEL_INITIALIZED (Acquire) guarantees init_kernel_state()
+        // completed (Release). Critical section prevents concurrent access.
         let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>;
-        // SAFETY: Invariants 1-4 documented above ensure ptr is valid and initialized,
-        // and the critical section prevents concurrent mutable access.
+        // SAFETY: ptr valid per KERNEL_INITIALIZED; critical section is exclusive.
         let kernel = unsafe { &mut *ptr };
         f(kernel)
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -656,14 +647,12 @@ mod tests {
         let ptr = storage.data.as_mut_ptr() as *mut Kernel<TestConfig>;
         let kernel = create_test_kernel();
         // SAFETY: ptr points to aligned, sufficiently-sized storage.
-        unsafe {
-            init_kernel_state_at(ptr, kernel);
-        }
+        let result = unsafe { init_kernel_state_at(ptr, kernel) };
+        assert!(result.is_ok(), "expected Ok for aligned pointer");
     }
 
     #[test]
-    #[should_panic(expected = "offset 512 from required 4096 byte alignment")]
-    fn init_kernel_state_at_panics_with_misaligned_pointer() {
+    fn init_kernel_state_at_returns_err_with_misaligned_pointer() {
         #[repr(C, align(4096))]
         struct AlignedStorage {
             data: MaybeUninit<[u8; MAX_KERNEL_SIZE + 4096]>,
@@ -675,10 +664,10 @@ mod tests {
         // SAFETY: aligned_ptr has MAX_KERNEL_SIZE + 4096 bytes; offset 512 is in bounds.
         let misaligned_ptr = unsafe { aligned_ptr.add(512) } as *mut Kernel<TestConfig>;
         let kernel = create_test_kernel();
-        // SAFETY: Testing panic on misaligned pointer; memory is valid but misaligned.
-        unsafe {
-            init_kernel_state_at(misaligned_ptr, kernel);
-        }
+        // SAFETY: Testing error on misaligned pointer; memory is valid but misaligned.
+        let result = unsafe { init_kernel_state_at(misaligned_ptr, kernel) };
+        assert!(result.is_err(), "expected Err for misaligned pointer");
+        assert_eq!(result.unwrap_err(), "UNIFIED_KERNEL_STORAGE misaligned");
     }
 
     /// Summary test: exercises check_kernel_alignment with an aligned pointer (Ok)

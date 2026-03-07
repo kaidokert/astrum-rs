@@ -232,7 +232,7 @@ macro_rules! define_unified_harness {
                     .ok_or("boot: next_partition PID missing from partition table")?;
                 $crate::mpu::apply_partition_mpu_cached(mpu, pcb);
                 Ok(())
-            })
+            })?
         }
 
         /// Boot-time MPU initialisation hook called from `boot::boot()`
@@ -282,7 +282,7 @@ macro_rules! define_unified_harness {
                     k.partitions().as_slice(),
                 );
                 Ok(())
-            })
+            })?
         }
 
         $crate::define_unified_kernel!($Config, |k| {
@@ -327,7 +327,7 @@ macro_rules! define_unified_harness {
             }
 
             #[cfg_attr(not(feature = "dynamic-mpu"), allow(unused_variables))]
-            let pid = $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+            let pid = match $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
                 let pcb = match k.partitions().get(pid as usize) {
                     Some(pcb) => pcb,
@@ -367,7 +367,10 @@ macro_rules! define_unified_harness {
                 // Return pid for dynamic-mode peripheral cache lookup.
                 // In static mode this is unused.
                 pid
-            });
+            }) {
+                Ok(pid) => pid,
+                Err(_) => return,
+            };
 
             // Dynamic mode: write R4-R7 strategy regions, then
             // override R4-R5 with cached peripheral regions and re-enable.
@@ -401,7 +404,7 @@ macro_rules! define_unified_harness {
             $crate::klog!("[SysTick] #{}", _systick_tick);
 
             // Single critical section for both systick_handler and user hook to preserve atomicity
-            $crate::state::with_kernel_mut::<$Config, _, _>(|_systick_kernel| {
+            let _ = $crate::state::with_kernel_mut::<$Config, _, _>(|_systick_kernel| {
                 // Detect dropped ticks before processing the current tick
                 $crate::_detect_dropped_ticks!(_systick_kernel);
                 // Delegate to standalone systick_handler

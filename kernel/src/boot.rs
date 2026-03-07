@@ -62,6 +62,8 @@ pub enum BootError {
     MpuCachePopulationFailed { partition_index: usize },
     /// Boot-time MPU initialization failed.
     BootMpuInitFailed { reason: &'static str },
+    /// Kernel state not initialized when boot() was called.
+    KernelNotInitialized,
 }
 
 impl core::fmt::Display for BootError {
@@ -135,6 +137,9 @@ impl core::fmt::Display for BootError {
             }
             Self::BootMpuInitFailed { reason } => {
                 write!(f, "boot MPU init failed: {reason}")
+            }
+            Self::KernelNotInitialized => {
+                write!(f, "kernel state not initialized")
             }
         }
     }
@@ -367,7 +372,8 @@ where
             );
         }
         Ok::<(), BootError>(())
-    })?;
+    })
+    .map_err(|_| BootError::KernelNotInitialized)??;
 
     const { crate::config::assert_priority_order::<C>() }
     const { crate::config::assert_systick_reload::<C>() }
@@ -408,6 +414,7 @@ where
     let first = crate::state::with_kernel_mut::<C, _, _>(|k| {
         crate::svc_scheduler::start_schedule(k).inspect(|&pid| k.set_next_partition(pid))
     })
+    .map_err(|_| BootError::KernelNotInitialized)?
     .ok_or(BootError::NoReadyPartition)?;
     let _ = first;
 

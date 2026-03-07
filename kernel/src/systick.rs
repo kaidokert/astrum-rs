@@ -111,7 +111,7 @@ where
         BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     >,
 {
-    crate::state::with_kernel_mut::<C, _, _>(|kernel| {
+    let _ = crate::state::with_kernel_mut::<C, _, _>(|kernel| {
         crate::tick::systick_handler::<C>(kernel);
     });
 }

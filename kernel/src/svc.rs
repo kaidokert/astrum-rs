@@ -793,7 +793,7 @@ macro_rules! define_unified_kernel {
         /// pointer from the process stack (PSP).
         unsafe extern "C" fn dispatch_hook(f: &mut $crate::context::ExceptionFrame) {
             // Delegate to state module for unified kernel storage.
-            $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+            let _ = $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 // SAFETY: `f` is a valid exception frame pointer from PSP.
                 unsafe { k.dispatch(f) }
                 if k.yield_requested {
@@ -814,7 +814,9 @@ macro_rules! define_unified_kernel {
         /// interrupts or starting the scheduler.
         fn store_kernel(k: $crate::svc::Kernel<$Config>) {
             // SAFETY: Called once during init before interrupts enabled.
-            unsafe { $crate::state::init_kernel_state(k) };
+            if let Err(e) = unsafe { $crate::state::init_kernel_state(k) } {
+                panic!("{}", e);
+            }
             $crate::svc::set_dispatch_hook(dispatch_hook);
         }
 
@@ -829,13 +831,13 @@ macro_rules! define_unified_kernel {
         // C-ABI shims that return raw pointers to kernel state (issue #3).
         #[inline]
         fn with_kernel<T, F: FnOnce(&$crate::svc::Kernel<$Config>) -> T>(f: F) -> Option<T> {
-            Some($crate::state::with_kernel::<$Config, _, _>(f))
+            $crate::state::with_kernel::<$Config, _, _>(f).ok()
         }
 
         /// Mutable variant of [`with_kernel`] for accessors that need `&mut`.
         #[inline]
         fn with_kernel_mut<T, F: FnOnce(&mut $crate::svc::Kernel<$Config>) -> T>(f: F) -> Option<T> {
-            Some($crate::state::with_kernel_mut::<$Config, _, _>(f))
+            $crate::state::with_kernel_mut::<$Config, _, _>(f).ok()
         }
 
         /// Returns the current partition index from the Kernel struct.

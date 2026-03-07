@@ -506,7 +506,7 @@ macro_rules! bind_interrupts {
                 priority,
                 <$Config as $crate::config::KernelConfig>::MIN_APP_IRQ_PRIORITY,
             )?;
-            $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+            let _ = $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 k.store_irq_bindings(&__IRQ_BINDINGS);
             });
             $(
@@ -572,7 +572,7 @@ macro_rules! define_systick {
         #[cfg(target_arch = "arm")]
         #[cortex_m_rt::exception]
         fn SysTick() {
-            $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+            let _ = $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 $crate::tick::systick_handler::<$Config>(k);
             });
         }
