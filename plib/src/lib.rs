@@ -125,8 +125,9 @@ macro_rules! define_partition_debug {
                 "define_partition_debug!: SIZE must be a power of 2"
             );
         };
-        // TODO: Linkage is currently private. If partition harness or kernel needs
-        // to discover this buffer via linker symbols, add #[no_mangle] and pub.
+        /// NOTE: Linkage is intentionally private. Each partition owns its debug
+        /// buffer; the kernel accesses it via a typed reference passed at init,
+        /// not through linker symbols.
         #[allow(dead_code)]
         static $name: $crate::__DebugRingBuffer<$size> = $crate::__DebugRingBuffer::new();
     };
@@ -145,8 +146,8 @@ macro_rules! define_partition_debug {
 /// # Truncation Behavior
 /// Messages that exceed the buffer size are silently truncated. This is intentional
 /// for best-effort debug logging where partial output is preferable to panicking.
-// TODO: Consider making the default size configurable via KernelConfig trait
-// for system-wide stack budget control.
+/// NOTE: The 128-byte default is a fixed-size design choice balancing message
+/// length against stack usage. Per-call overrides use `dprint!(buf, @size N, ...)`.
 #[cfg(feature = "partition-debug")]
 #[macro_export]
 macro_rules! dprint {
@@ -1398,12 +1399,10 @@ mod tests {
         assert_eq!(sys_dev_ioctl(DeviceId::new(0), 1, 2), Ok(0));
     }
 
-    // TODO: dev_read / dev_write host tests are liveness-only smoke tests.
-    // The host stub always returns Ok(0) without populating buffers or
-    // verifying written data, so data-integrity assertions are not feasible
-    // here.  Integration tests on target hardware should cover payload
-    // correctness.
-
+    /// dev_read / dev_write host tests are liveness-only smoke tests.
+    /// The host stub always returns Ok(0) without populating buffers or
+    /// verifying written data.  Data-integrity verification is covered by
+    /// QEMU integration tests (e.g. plib_dev_read_timed_test.rs).
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_returns_ok_zero_on_host() {
@@ -1474,6 +1473,20 @@ mod tests {
     #[test]
     fn query_bottom_half_max_device_id_returns_ok_zero_on_host() {
         assert_eq!(sys_query_bottom_half(DeviceId::new(u8::MAX)), Ok(0));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn query_bottom_half_with_stale_returns_ok_zero_pair_on_host() {
+        let result = sys_query_bottom_half_with_stale(DeviceId::new(0));
+        assert_eq!(result, Ok((0, 0)));
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn query_bottom_half_with_stale_max_device_id_on_host() {
+        let result = sys_query_bottom_half_with_stale(DeviceId::new(u8::MAX));
+        assert_eq!(result, Ok((0, 0)));
     }
 
     #[cfg(feature = "dynamic-mpu")]
@@ -1591,11 +1604,10 @@ mod tests {
         assert_eq!(pack(0xFF, true), 0xFF | lend_flags::WRITABLE);
     }
 
-    // TODO: Host stub returns 0 unconditionally so we cannot verify that
-    // sys_buf_lend propagates the kernel's region_id return value, or that
-    // the packed r2 reaches the SVC handler.  Register-level verification
-    // requires an on-target (QEMU) integration test.
-
+    /// Host stub returns 0 unconditionally so we cannot verify that
+    /// sys_buf_lend propagates the kernel's region_id return value, or that
+    /// the packed r2 reaches the SVC handler.  Register-level verification
+    /// is covered by the plib_buf_lend_test.rs QEMU integration test.
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_readonly_returns_ok_on_host() {
@@ -1650,5 +1662,32 @@ mod tests {
     #[test]
     fn debug_exit_nonzero_code_returns_ok_zero_on_host() {
         assert_eq!(sys_debug_exit(1), Ok(0));
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn debug_write_writes_to_ring_buffer_on_host() {
+        let buf: DebugRingBuffer<64> = DebugRingBuffer::new();
+        let msg = b"hello";
+        let result = debug_write(&buf, 1, msg);
+        assert_eq!(result, Ok(()));
+        // 4-byte header + 5-byte payload = 9 bytes written
+        assert_eq!(buf.available(), 9);
+        // Drain and verify the payload is present in the framed record
+        let mut out = [0u8; 64];
+        let n = buf.drain(&mut out, 64);
+        assert_eq!(n, 9);
+        // Payload follows the 4-byte header
+        assert_eq!(&out[4..9], msg);
+    }
+
+    #[cfg(feature = "partition-debug")]
+    #[test]
+    fn debug_write_empty_msg_returns_ok_on_host() {
+        let buf: DebugRingBuffer<64> = DebugRingBuffer::new();
+        let result = debug_write(&buf, 0, b"");
+        assert_eq!(result, Ok(()));
+        // 4-byte header only
+        assert_eq!(buf.available(), 4);
     }
 }
