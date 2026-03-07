@@ -2433,7 +2433,11 @@ where
                 #[cfg(target_arch = "arm")]
                 if result == 0 {
                     // SAFETY: irq_num was validated by irq_ack_inner (binding found).
+                    // Clear any stale pending bit before unmasking: if the IRQ
+                    // fired while masked, the pending flag would cause an
+                    // immediate spurious interrupt on unmask.
                     unsafe {
+                        cortex_m::peripheral::NVIC::unpend(crate::irq_dispatch::IrqNr(irq_num));
                         cortex_m::peripheral::NVIC::unmask(crate::irq_dispatch::IrqNr(irq_num));
                     }
                 }
@@ -12169,6 +12173,10 @@ mod tests {
         k.current_partition = 0;
         let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0);
         assert_eq!(result, 0);
+        // On ARM, the success path calls NVIC::unpend() then NVIC::unmask()
+        // (in that order) to clear any stale pending bit before re-enabling
+        // the IRQ. Host tests verify dispatch logic only; the actual NVIC
+        // calls are gated behind #[cfg(target_arch = "arm")].
     }
 
     #[test]
