@@ -101,12 +101,10 @@ fn main() -> ! {
     // Unmask unbound IRQ 10 so its IVT handler fires (lookup_binding → None).
     #[cfg(target_arch = "arm")]
     // SAFETY: IRQ 10 is a valid external interrupt on LM3S6965 (the QEMU
-    // target has 70 external IRQs, 0..69).  set_priority is called before
-    // any BASEPRI critical section, so it cannot break priority masking.
-    // Unmasking an unbound IRQ is intentional: the kernel's IVT handler
-    // must tolerate an empty binding-table slot and treat it as a no-op.
-    // TODO: reviewer false positive – the // SAFETY: comment is on line 104
-    // above; it was not removed by the cleanup.
+    // target has 70 external IRQs, 0..69).  Priority is set at boot time
+    // before interrupts are unmasked.  Unmasking an unbound IRQ is
+    // intentional: the kernel's IVT handler must tolerate an empty
+    // binding-table slot and treat it as a no-op.
     unsafe {
         p.NVIC.set_priority(kernel::irq_dispatch::IrqNr(10), 0xC0);
         cortex_m::peripheral::NVIC::unmask(kernel::irq_dispatch::IrqNr(10));
