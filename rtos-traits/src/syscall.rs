@@ -170,6 +170,15 @@ mod tests {
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
+    fn sys_dev_read_timed_number_is_stable() {
+        assert_eq!(
+            SYS_DEV_READ_TIMED, 30,
+            "SYS_DEV_READ_TIMED ABI number must not change"
+        );
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
     fn dynamic_mpu_constants_values_unique_no_overlap() {
         assert_eq!(DYN_SYSCALLS.len(), 14);
         for &(name, actual, expected) in DYN_SYSCALLS {
