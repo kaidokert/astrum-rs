@@ -2742,6 +2742,10 @@ where
                     .map(|pcb| pcb.state() == PartitionState::Waiting)
                     .unwrap_or(false);
                 if is_waiting {
+                    // Track starvation: the target partition was skipped.
+                    if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
+                        pcb.increment_starvation();
+                    }
                     // Bug 06: restore active partition to Running if it is Waiting.
                     if let Some(ap) = self.active_partition {
                         if self
@@ -2756,6 +2760,10 @@ where
                     return ScheduleEvent::None;
                 }
                 self.transition_outgoing_ready();
+                // Reset starvation: the incoming partition is now running.
+                if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
+                    pcb.reset_starvation();
+                }
                 self.active_partition = Some(pid);
                 self.set_next_partition(pid);
                 event
@@ -8633,6 +8641,109 @@ mod tests {
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running
         );
+    }
+
+    /// Starvation count increases by 1 each time a Waiting partition is skipped.
+    #[test]
+    fn advance_schedule_tick_increments_starvation_on_skip() {
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+
+        // Bootstrap P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Advance to boundary before P1's slot (P0 has 5 ticks).
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+
+        // Transition P1 to Waiting.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(pcb1.starvation_count(), 0);
+
+        // First skip: starvation_count goes to 1.
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 1);
+
+        // Advance through remaining P1 ticks + full P0 slot to reach
+        // another P1 boundary. P1 has 3 ticks, then P0 has 5 ticks.
+        // We already consumed 1 of P1's 3 ticks above.
+        for _ in 0..2 {
+            k.advance_schedule_tick();
+        }
+        // Now in P0's slot — advance through it.
+        for _ in 0..5 {
+            k.advance_schedule_tick();
+        }
+        // Next tick hits P1 boundary again.
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 2);
+    }
+
+    /// Starvation count resets to 0 when a partition starts running after
+    /// being previously skipped.
+    #[test]
+    fn advance_schedule_tick_resets_starvation_on_run() {
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+
+        // Bootstrap P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Advance to boundary before P1's slot.
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+
+        // Transition P1 to Waiting so it gets skipped.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // Skip P1 — starvation goes to 1.
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 1);
+
+        // Now make P1 Ready again so it will run on the next cycle.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Ready).unwrap();
+
+        // Advance through remaining P1 ticks + P0 slot to next P1 boundary.
+        for _ in 0..2 {
+            k.advance_schedule_tick();
+        }
+        for _ in 0..5 {
+            k.advance_schedule_tick();
+        }
+
+        // This tick switches to P1 (Ready) — starvation resets.
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
+    }
+
+    /// Starvation count stays 0 for partitions that are never skipped.
+    #[test]
+    fn advance_schedule_tick_starvation_stays_zero_when_not_skipped() {
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_schedule();
+
+        // Bootstrap P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Both partitions are Ready. Advance through a full cycle.
+        // P0(5 ticks) -> P1(3 ticks).
+        for _ in 0..4 {
+            assert_eq!(k.advance_schedule_tick(), ScheduleEvent::None);
+        }
+        // Switch to P1.
+        assert_eq!(k.advance_schedule_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(k.partitions().get(0).unwrap().starvation_count(), 0);
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
     }
 
     /// Tests advance_schedule_tick switches to Ready partitions normally.
