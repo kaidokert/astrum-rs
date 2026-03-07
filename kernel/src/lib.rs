@@ -82,6 +82,7 @@ pub mod state;
 pub mod svc;
 #[cfg(feature = "ipc-blackboard")]
 pub mod svc_blackboard;
+pub mod svc_sync;
 pub mod sync_pools;
 pub mod syscall;
 pub mod systick;

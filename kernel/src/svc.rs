@@ -357,7 +357,7 @@ impl YieldResult for ScheduleEvent {
     }
 }
 use crate::message::{MessagePool, RecvOutcome, SendOutcome};
-use crate::mutex::{MutexError, MutexPool};
+use crate::mutex::MutexPool;
 use crate::partition::{ConfigError, PartitionConfig, PartitionState, PartitionTable};
 use crate::queuing::{
     QueuingError, QueuingPortPool, QueuingPortStatus, RecvQueuingOutcome, SendQueuingOutcome,
@@ -1711,57 +1711,46 @@ where
             }
             Some(SyscallId::SemWait) => {
                 let pt = self.core.partitions_mut();
-                match self.sync.semaphores_mut().wait(pt, arg1 as usize, caller) {
-                    Ok(true) => 1,
-                    Ok(false) => {
-                        self.trigger_deschedule();
-                        0
-                    }
-                    Err(_) => SvcError::InvalidResource.to_u32(),
+                let (r, block) = crate::svc_sync::handle_sem_wait(
+                    self.sync.semaphores_mut(),
+                    pt,
+                    arg1 as usize,
+                    caller,
+                );
+                if block {
+                    self.trigger_deschedule();
                 }
+                r
             }
             Some(SyscallId::SemSignal) => {
                 let pt = self.core.partitions_mut();
-                match self.sync.semaphores_mut().signal(pt, frame.r1 as usize) {
-                    Ok(()) => 0,
-                    Err(_) => SvcError::InvalidResource.to_u32(),
-                }
+                crate::svc_sync::handle_sem_signal(
+                    self.sync.semaphores_mut(),
+                    pt,
+                    frame.r1 as usize,
+                )
             }
             Some(SyscallId::MutexLock) => {
                 let pt = self.core.partitions_mut();
-                match self.sync.mutexes_mut().lock(pt, arg1 as usize, caller) {
-                    Ok(true) => 1,
-                    Ok(false) => {
-                        self.trigger_deschedule();
-                        0
-                    }
-                    Err(e) => match e {
-                        MutexError::InvalidMutex => SvcError::InvalidResource.to_u32(),
-                        MutexError::InvalidPartition => SvcError::InvalidPartition.to_u32(),
-                        MutexError::WaitQueueFull => SvcError::WaitQueueFull.to_u32(),
-                        MutexError::AlreadyOwned => SvcError::OperationFailed.to_u32(),
-                        MutexError::NotOwner => SvcError::OperationFailed.to_u32(),
-                        MutexError::Transition(_) => SvcError::TransitionFailed.to_u32(),
-                    },
+                let (r, block) = crate::svc_sync::handle_mtx_lock(
+                    self.sync.mutexes_mut(),
+                    pt,
+                    arg1 as usize,
+                    caller,
+                );
+                if block {
+                    self.trigger_deschedule();
                 }
+                r
             }
             Some(SyscallId::MutexUnlock) => {
                 let pt = self.core.partitions_mut();
-                match self
-                    .sync
-                    .mutexes_mut()
-                    .unlock(pt, frame.r1 as usize, caller)
-                {
-                    Ok(()) => 0,
-                    Err(e) => match e {
-                        MutexError::InvalidMutex => SvcError::InvalidResource.to_u32(),
-                        MutexError::InvalidPartition => SvcError::InvalidPartition.to_u32(),
-                        MutexError::WaitQueueFull => SvcError::WaitQueueFull.to_u32(),
-                        MutexError::AlreadyOwned => SvcError::OperationFailed.to_u32(),
-                        MutexError::NotOwner => SvcError::OperationFailed.to_u32(),
-                        MutexError::Transition(_) => SvcError::TransitionFailed.to_u32(),
-                    },
-                }
+                crate::svc_sync::handle_mtx_unlock(
+                    self.sync.mutexes_mut(),
+                    pt,
+                    frame.r1 as usize,
+                    caller,
+                )
             }
             #[cfg(feature = "ipc-message")]
             Some(SyscallId::MsgSend) => validated_ptr!(self, arg3, C::QM, {
