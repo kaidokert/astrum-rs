@@ -105,7 +105,14 @@ macro_rules! _unified_handle_tick {
 macro_rules! _unified_run_system_window {
     ($kernel:expr, $tick:expr, $strategy:expr) => {{
         let bh = $crate::run_bottom_half!($kernel, $tick, $strategy);
-        if bh.has_rx_data {
+        let has_rx = match bh {
+            Ok(b) => b.has_rx_data,
+            Err(e) => {
+                $crate::klog!("BUG: {}", e);
+                false
+            }
+        };
+        if has_rx {
             if let Some(woken) = $kernel.dev_wait_queue.wake_one_reader() {
                 $crate::svc::try_transition(
                     $kernel.partitions_mut(),

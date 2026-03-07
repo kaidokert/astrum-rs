@@ -264,7 +264,14 @@ where
         }
         ScheduleEvent::SystemWindow => {
             let bh = crate::run_bottom_half!(kernel, current_tick, &kernel.dynamic_strategy);
-            if bh.has_rx_data {
+            let has_rx = match bh {
+                Ok(b) => b.has_rx_data,
+                Err(e) => {
+                    crate::klog!("BUG: {}", e);
+                    false
+                }
+            };
+            if has_rx {
                 if let Some(woken) = kernel.dev_wait_queue.wake_one_reader() {
                     crate::svc::try_transition(
                         kernel.partitions_mut(),
@@ -301,30 +308,27 @@ impl Drop for BottomHalfGuard<'_> {
     }
 }
 
-/// Wraps `run_bottom_half` with guard flag. Panics on nested calls.
-// TODO(panic-free): Return Result instead of panicking on nested invocation.
-// This is currently acceptable because nested invocation indicates a kernel
-// logic bug that should never occur in correct code, but ideally should be
-// handled without panic per the panic-free policy.
+/// Wraps `run_bottom_half` with guard flag. Returns `Err` on nested calls.
 #[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 macro_rules! run_bottom_half {
     ($kernel:expr, $current_tick:expr, $strategy:expr) => {{
         if $kernel.in_bottom_half {
-            panic!("nested bottom-half invocation detected");
+            Err("nested bottom-half invocation detected")
+        } else {
+            $kernel.in_bottom_half = true;
+            let _guard = $crate::tick::BottomHalfGuard {
+                flag: &mut $kernel.in_bottom_half,
+            };
+            Ok($crate::tick::run_bottom_half(
+                &mut $kernel.uart_pair,
+                &mut $kernel.isr_ring,
+                &mut $kernel.buffers,
+                &mut $kernel.hw_uart,
+                $current_tick,
+                $strategy,
+            ))
         }
-        $kernel.in_bottom_half = true;
-        let _guard = $crate::tick::BottomHalfGuard {
-            flag: &mut $kernel.in_bottom_half,
-        };
-        $crate::tick::run_bottom_half(
-            &mut $kernel.uart_pair,
-            &mut $kernel.isr_ring,
-            &mut $kernel.buffers,
-            &mut $kernel.hw_uart,
-            $current_tick,
-            $strategy,
-        )
     }};
 }
 
@@ -688,7 +692,8 @@ mod tests {
             let mut mock = MockKernelForRecursion::new();
             assert!(!mock.in_bottom_half, "flag should start false");
 
-            let result = crate::run_bottom_half!(mock, 0, &mock.dynamic_strategy);
+            let result = crate::run_bottom_half!(mock, 0, &mock.dynamic_strategy)
+                .expect("single invocation should succeed");
 
             assert!(
                 !mock.in_bottom_half,
@@ -699,20 +704,20 @@ mod tests {
             assert_eq!(result.b_to_a, 0);
         }
 
-        /// Tests that nested bottom-half invocation is detected and panics.
-        ///
-        /// This simulates the scenario where a bug in the scheduler or interrupt
-        /// handling causes `run_bottom_half!` to be invoked while already inside
-        /// a bottom-half context (e.g., SysTick fires during system window).
+        /// Tests that nested bottom-half invocation returns Err instead of panicking.
         #[test]
-        #[should_panic(expected = "nested bottom-half invocation detected")]
-        fn bottom_half_nested_invocation_panics() {
+        fn bottom_half_nested_invocation_returns_err() {
             let mut mock = MockKernelForRecursion::new();
             // Simulate being already inside bottom-half processing
             mock.in_bottom_half = true;
 
-            // This should panic because we're attempting re-entry
-            let _ = crate::run_bottom_half!(mock, 0, &mock.dynamic_strategy);
+            let result = crate::run_bottom_half!(mock, 0, &mock.dynamic_strategy);
+            assert_eq!(
+                result.unwrap_err(),
+                "nested bottom-half invocation detected"
+            );
+            // Flag should remain set (guard was never created)
+            assert!(mock.in_bottom_half, "flag should remain set on nested call");
         }
     }
 }
