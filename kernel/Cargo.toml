@@ -339,6 +339,10 @@ name = "plib_query_bh_test"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
+name = "plib_sleep_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "callee_save_check"
 required-features = ["qemu", "log-semihosting"]
 
