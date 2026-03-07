@@ -328,6 +328,7 @@ macro_rules! validated_ptr_dynamic {
     };
 }
 
+#[cfg(test)]
 use crate::events;
 use crate::scheduler::ScheduleEvent;
 
@@ -975,12 +976,16 @@ pub fn dispatch_syscall<const N: usize>(
     partitions: &mut PartitionTable<N>,
     caller: usize,
 ) {
+    use crate::svc_events as ev;
     frame.r0 = match SyscallId::from_u32(frame.r0) {
         Some(SyscallId::Yield) => handle_yield(),
         Some(SyscallId::GetPartitionId) => caller as u32,
-        Some(SyscallId::EventWait) => events::event_wait(partitions, caller, frame.r2),
-        Some(SyscallId::EventSet) => events::event_set(partitions, frame.r1 as usize, frame.r2),
-        Some(SyscallId::EventClear) => events::event_clear(partitions, caller, frame.r2),
+        // TODO: dispatch_syscall cannot trigger descheduling; blocking
+        // state is silently dropped here. Callers needing full EventWait
+        // semantics should use Kernel::dispatch (handle_svc) instead.
+        Some(SyscallId::EventWait) => ev::handle_event_wait(partitions, caller, frame.r2).0,
+        Some(SyscallId::EventSet) => ev::handle_event_set(partitions, frame.r1 as usize, frame.r2),
+        Some(SyscallId::EventClear) => ev::handle_event_clear(partitions, caller, frame.r2),
         Some(SyscallId::IrqAck) => SvcError::InvalidResource.to_u32(),
         Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
@@ -1674,6 +1679,7 @@ where
     /// writable `QueuingPortStatus`. The caller is responsible for ensuring
     /// this; in production the MPU enforces partition isolation.
     pub unsafe fn dispatch(&mut self, frame: &mut ExceptionFrame) {
+        use crate::svc_events as ev;
         // SAFETY: Snapshot all argument registers before the match writes
         // frame.r0 with the return value.  This prevents any theoretical
         // compiler reordering between reads of r1/r2/r3 and the r0 write,
@@ -1697,17 +1703,17 @@ where
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::GetPartitionId) => caller as u32,
             Some(SyscallId::EventWait) => {
-                let result = events::event_wait(self.partitions_mut(), caller, arg2);
-                if result == 0 {
+                let (result, block) = ev::handle_event_wait(self.partitions_mut(), caller, arg2);
+                if block {
                     self.trigger_deschedule();
                 }
                 result
             }
             Some(SyscallId::EventSet) => {
-                events::event_set(self.partitions_mut(), frame.r1 as usize, frame.r2)
+                ev::handle_event_set(self.partitions_mut(), arg1 as usize, arg2)
             }
             Some(SyscallId::EventClear) => {
-                events::event_clear(self.partitions_mut(), caller, frame.r2)
+                ev::handle_event_clear(self.partitions_mut(), caller, arg2)
             }
             Some(SyscallId::SemWait) => {
                 let pt = self.core.partitions_mut();
