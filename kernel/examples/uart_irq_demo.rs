@@ -41,6 +41,7 @@ kernel::compose_kernel_config!(
 /// Ring buffer: 4 slots, 1 byte payload (one UART data byte each).
 static RING: StaticIsrRing<4, 1> = StaticIsrRing::new();
 static POP_COUNT: AtomicU32 = AtomicU32::new(0);
+static PUSH_FAIL: AtomicU32 = AtomicU32::new(0);
 
 #[allow(dead_code)]
 unsafe extern "C" fn uart0_rx_isr() {
@@ -50,7 +51,9 @@ unsafe extern "C" fn uart0_rx_isr() {
     let dr_val = unsafe { core::ptr::read_volatile(UART0_DR as *const u32) };
     let byte = (dr_val & 0xFF) as u8;
     // SAFETY: single-core Cortex-M ISR — sole producer; see StaticIsrRing docs.
-    let _ = unsafe { RING.push_from_isr(UART0_IRQ, &[byte]) };
+    if unsafe { RING.push_from_isr(UART0_IRQ, &[byte]) }.is_err() {
+        PUSH_FAIL.fetch_add(1, Ordering::Relaxed);
+    }
     #[cfg(target_arch = "arm")]
     kernel::irq_dispatch::signal_partition_from_isr::<Cfg>(0, 0x01);
     #[cfg(target_arch = "arm")]
@@ -73,9 +76,15 @@ kernel::define_unified_harness!(Cfg, |tick, _k| {
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(UART0_IRQ));
         hprintln!("uart_demo: pended UART0 IRQ (tick {})", tick);
     }
-    if tick >= 10 && POP_COUNT.load(Ordering::Acquire) >= 2 {
-        hprintln!("uart_demo: PASS");
-        debug::exit(debug::EXIT_SUCCESS);
+    if tick >= 10 {
+        if PUSH_FAIL.load(Ordering::Relaxed) > 0 {
+            hprintln!("uart_demo: FAIL push_fail");
+            debug::exit(debug::EXIT_FAILURE);
+        }
+        if POP_COUNT.load(Ordering::Acquire) >= 2 {
+            hprintln!("uart_demo: PASS");
+            debug::exit(debug::EXIT_SUCCESS);
+        }
     }
     if tick >= 16 {
         hprintln!(
