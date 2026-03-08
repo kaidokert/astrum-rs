@@ -42,6 +42,9 @@ pub enum SvcError {
     InvalidParameter,
     /// A timed operation expired before the resource became available.
     TimedOut,
+    /// A buffer slot index is out of range or the slot has no valid base
+    /// address (e.g. the address lookup failed after a successful lend).
+    InvalidBuffer,
 }
 
 impl SvcError {
@@ -75,6 +78,7 @@ impl SvcError {
             0xFFFF_FFF5 => Some(Self::PermissionDenied),
             0xFFFF_FFF4 => Some(Self::InvalidParameter),
             0xFFFF_FFF3 => Some(Self::TimedOut),
+            0xFFFF_FFF2 => Some(Self::InvalidBuffer),
             _ => None,
         }
     }
@@ -98,6 +102,7 @@ impl SvcError {
             Self::PermissionDenied => 0xFFFF_FFF5,
             Self::InvalidParameter => 0xFFFF_FFF4,
             Self::TimedOut => 0xFFFF_FFF3,
+            Self::InvalidBuffer => 0xFFFF_FFF2,
         }
     }
 }
@@ -137,7 +142,7 @@ mod tests {
     /// This function uses a wildcard-free match so the compiler will emit
     /// an error when a new variant is added, forcing the test suite to be
     /// updated.
-    const fn all_variants() -> [SvcError; 13] {
+    const fn all_variants() -> [SvcError; 14] {
         use SvcError::*;
         [
             InvalidSyscall,
@@ -153,6 +158,7 @@ mod tests {
             PermissionDenied,
             InvalidParameter,
             TimedOut,
+            InvalidBuffer,
         ]
     }
 
@@ -229,7 +235,8 @@ mod tests {
                 | SvcError::NotSupported
                 | SvcError::PermissionDenied
                 | SvcError::InvalidParameter
-                | SvcError::TimedOut => {}
+                | SvcError::TimedOut
+                | SvcError::InvalidBuffer => {}
             }
         }
         // If a variant is added to the enum but not to all_variants(),

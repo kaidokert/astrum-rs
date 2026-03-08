@@ -2030,24 +2030,28 @@ where
                             writable,
                             &self.dynamic_strategy,
                         ) {
-                            Ok(region_id) => {
-                                frame.r1 = self.buffers.slot_base_address(slot).unwrap_or(0);
-                                let deadline_ticks = frame.r3;
-                                if deadline_ticks > 0
-                                    && deadline_ticks != LEGACY_TEST_FRAME_R3_SENTINEL
-                                {
-                                    let deadline =
-                                        self.tick.get().wrapping_add(deadline_ticks as u64);
-                                    if let Err(e) = self.buffers.set_deadline(slot, Some(deadline))
+                            Ok(region_id) => match self.buffers.slot_base_address(slot) {
+                                Some(base_addr) => {
+                                    frame.r1 = region_id as u32;
+                                    let deadline_ticks = frame.r3;
+                                    if deadline_ticks > 0
+                                        && deadline_ticks != LEGACY_TEST_FRAME_R3_SENTINEL
                                     {
-                                        e.to_svc_error().to_u32()
+                                        let deadline =
+                                            self.tick.get().wrapping_add(deadline_ticks as u64);
+                                        if let Err(e) =
+                                            self.buffers.set_deadline(slot, Some(deadline))
+                                        {
+                                            e.to_svc_error().to_u32()
+                                        } else {
+                                            base_addr
+                                        }
                                     } else {
-                                        region_id as u32
+                                        base_addr
                                     }
-                                } else {
-                                    region_id as u32
                                 }
-                            }
+                                None => SvcError::InvalidBuffer.to_u32(),
+                            },
                             Err(e) => e.to_svc_error().to_u32(),
                         }
                     }
@@ -3303,6 +3307,13 @@ mod tests {
         let mut ef = frame(r0, r1, r2);
         dispatch_checked(k, &mut ef);
         ef.r0
+    }
+
+    /// Dispatch a 3-register SVC and return `(r0, r1)`.
+    fn dispatch_r01(k: &mut Kernel<TestConfig>, r0: u32, r1: u32, r2: u32) -> (u32, u32) {
+        let mut ef = frame(r0, r1, r2);
+        dispatch_checked(k, &mut ef);
+        (ef.r0, ef.r1)
     }
 
     /// Dispatch a 4-register SVC and return `r0`.
@@ -4695,49 +4706,54 @@ mod tests {
         let eop = SvcError::OperationFailed.to_u32();
         let epart = SvcError::InvalidPartition.to_u32();
         let mut k = kernel(0, 0, 0);
-        macro_rules! svc {
-            ($r0:expr, $r1:expr, $r2:expr) => {{
-                let mut ef = frame($r0, $r1, $r2);
-                // SAFETY: See module-level SAFETY docs for test dispatch.
-                unsafe { k.dispatch(&mut ef) };
-                ef.r0
-            }};
-        }
         // Allocate a writable buffer (mode=1) as partition 0
-        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
-        // Lend to partition 1 and verify r1 contains the slot's base address
+        // Lend to partition 1 and verify r0=base_addr, r1=region_id
         let expected_addr = k.buffers().slot_base_address(slot as usize).unwrap();
         {
-            let mut ef = frame(SYS_BUF_LEND, slot, 1);
-            unsafe { k.dispatch(&mut ef) };
-            assert!(ef.r0 < 0x8000_0000, "lend should return region_id");
+            let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
             assert_eq!(
-                ef.r1, expected_addr,
-                "r1 should contain buffer base address"
+                base_addr, expected_addr,
+                "r0 should contain buffer base address"
             );
+            // TODO: reviewer asked for `< 0x8000_0000` but host-test addresses
+            // are truncated 64-bit pointers and may have bit 31 set; use
+            // from_u32 to confirm the value is not a known SvcError instead.
+            assert!(
+                SvcError::from_u32(base_addr).is_none(),
+                "r0 must not be a known SvcError"
+            );
+            k.dynamic_strategy
+                .slot(region_id as u8)
+                .expect("r1 region_id must be a valid dynamic MPU slot");
         }
         // Revoke from partition 1
-        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1), 0);
         // Error: revoke when not lent → OperationFailed (NotLent)
-        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), eop);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1), eop);
         // Error: invalid partition (only 2 exist); r2 bits[7:0]=99
-        assert_eq!(svc!(SYS_BUF_LEND, slot, 99), epart);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_LEND, slot, 99), epart);
         // r2=0x100 → target=0 (self), flags=WRITABLE → SelfLend → OperationFailed
-        assert_eq!(svc!(SYS_BUF_LEND, slot, 256), eop);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_LEND, slot, 256), eop);
         // r2=0x101 → target=1, flags=WRITABLE → writable lend succeeds
-        let writable_region = svc!(SYS_BUF_LEND, slot, 257);
-        assert!(
-            writable_region < 0x8000_0000,
-            "writable lend should succeed"
-        );
+        {
+            let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 257);
+            assert!(
+                base_addr < 0x8000_0000,
+                "writable lend r0 must be a valid address"
+            );
+            k.dynamic_strategy
+                .slot(region_id as u8)
+                .expect("writable lend r1 must be a valid dynamic MPU slot");
+        }
         // Revoke the writable lend before further tests
-        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 1), 0);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1), 0);
         // Error: self-lend (partition 0 lending to itself) → OperationFailed
-        assert_eq!(svc!(SYS_BUF_LEND, slot, 0), eop);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_LEND, slot, 0), eop);
         // Error: invalid partition in BufferRevoke
-        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 99), epart);
-        assert_eq!(svc!(SYS_BUF_REVOKE, slot, 256), epart);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 99), epart);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 256), epart);
     }
 
     /// SYS_BUF_LEND must reject r2 values with reserved bits 9-15 set.
@@ -4747,29 +4763,26 @@ mod tests {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND};
         let eop = SvcError::OperationFailed.to_u32();
         let mut k = kernel(0, 0, 0);
-        macro_rules! svc {
-            ($r0:expr, $r1:expr, $r2:expr) => {{
-                let mut ef = frame($r0, $r1, $r2);
-                // SAFETY: test-only kernel with no real hardware; dispatch is safe to call.
-                unsafe { k.dispatch(&mut ef) };
-                ef.r0
-            }};
-        }
-        let slot = svc!(SYS_BUF_ALLOC, 1, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
 
         // (1) bit 9 set alone → target=1, reserved bit 9 set
-        assert_eq!(svc!(SYS_BUF_LEND, slot, 0x0201), eop);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_LEND, slot, 0x0201), eop);
 
         // (2) all reserved bits set (0xFE00) → target=1
-        assert_eq!(svc!(SYS_BUF_LEND, slot, 0xFE01), eop);
+        assert_eq!(dispatch_r0(&mut k, SYS_BUF_LEND, slot, 0xFE01), eop);
 
         // (3) valid WRITABLE flag (0x100) with target=1 still works
-        let region = svc!(SYS_BUF_LEND, slot, 0x0101);
-        assert!(
-            region < 0x8000_0000,
-            "writable lend with no reserved bits should succeed"
-        );
+        {
+            let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 0x0101);
+            assert!(
+                base_addr < 0x8000_0000,
+                "writable lend with no reserved bits should succeed"
+            );
+            k.dynamic_strategy
+                .slot(region_id as u8)
+                .expect("r1 must be a valid dynamic MPU slot");
+        }
     }
 
     /// SYS_BUF_LEND r3 deadline-ticks: r3=0 → no deadline, r3>0 → deadline
@@ -4781,42 +4794,45 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.sync_tick(100);
         // Allocate a writable buffer as partition 0 (no alloc deadline: r2=0)
-        let slot = {
-            let mut ef = frame(SYS_BUF_ALLOC, 1, 0);
-            unsafe { k.dispatch(&mut ef) };
-            assert!(ef.r0 < 0x8000_0000, "alloc should succeed");
-            ef.r0 as usize
-        };
+        let slot_r0 = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
+        assert!(slot_r0 < 0x8000_0000, "alloc should succeed");
+        let slot = slot_r0 as usize;
 
         // (1) r3=0 → lend sets no deadline
         {
             let mut ef = frame4(SYS_BUF_LEND, slot as u32, 1, 0);
-            unsafe { k.dispatch(&mut ef) };
+            dispatch_checked(&mut k, &mut ef);
             assert!(ef.r0 < 0x8000_0000, "lend should succeed");
+            k.dynamic_strategy
+                .slot(ef.r1 as u8)
+                .expect("r1 must be a valid dynamic MPU slot");
             assert_eq!(
                 k.buffers().deadline(slot),
                 None,
                 "r3=0 must not set deadline"
             );
             // Revoke so we can re-lend
-            let mut ef = frame(SYS_BUF_REVOKE, slot as u32, 1);
-            unsafe { k.dispatch(&mut ef) };
-            assert_eq!(ef.r0, 0, "revoke should succeed");
+            assert_eq!(
+                dispatch_r0(&mut k, SYS_BUF_REVOKE, slot as u32, 1),
+                0,
+                "revoke should succeed"
+            );
         }
 
         // (2) r3=500 → deadline = tick(100) + 500 = 600
         {
             let mut ef = frame4(SYS_BUF_LEND, slot as u32, 1, 500);
-            unsafe { k.dispatch(&mut ef) };
+            dispatch_checked(&mut k, &mut ef);
             assert!(ef.r0 < 0x8000_0000, "lend should succeed");
+            k.dynamic_strategy
+                .slot(ef.r1 as u8)
+                .expect("r1 must be a valid dynamic MPU slot");
             assert_eq!(
                 k.buffers().deadline(slot),
                 Some(600),
                 "deadline should be current_tick(100) + 500"
             );
-            let mut ef = frame(SYS_BUF_REVOKE, slot as u32, 1);
-            unsafe { k.dispatch(&mut ef) };
-            assert_eq!(ef.r0, 0);
+            assert_eq!(dispatch_r0(&mut k, SYS_BUF_REVOKE, slot as u32, 1), 0);
         }
 
         // (3) Lend deadline overrides prior alloc-time deadline.
@@ -4825,8 +4841,11 @@ mod tests {
         assert_eq!(k.buffers().deadline(slot), Some(9999));
         {
             let mut ef = frame4(SYS_BUF_LEND, slot as u32, 1, 200);
-            unsafe { k.dispatch(&mut ef) };
+            dispatch_checked(&mut k, &mut ef);
             assert!(ef.r0 < 0x8000_0000, "lend should succeed");
+            k.dynamic_strategy
+                .slot(ef.r1 as u8)
+                .expect("r1 must be a valid dynamic MPU slot");
             assert_eq!(
                 k.buffers().deadline(slot),
                 Some(300),
@@ -4856,8 +4875,8 @@ mod tests {
         // Self-transfer → OperationFailed
         assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 0), eop);
         // Transfer while lent → OperationFailed (AlreadyLent)
-        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
-        assert!(region < 0x8000_0000, "lend should succeed");
+        let (_, rid) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!((4..=7).contains(&rid), "lend should succeed");
         assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 1), eop);
         // Invalid partition ID → InvalidPartition
         assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 99), epart);
@@ -4879,8 +4898,8 @@ mod tests {
         let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(!SvcError::is_error(slot), "alloc should succeed");
         // P0 lends to P1
-        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
-        assert!(!SvcError::is_error(region), "lend should succeed");
+        let (_, rid) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!((4..=7).contains(&rid), "lend should succeed");
 
         // P2 tries to revoke P0→P1 lend — must get PermissionDenied
         k.current_partition = 2;
@@ -4920,8 +4939,8 @@ mod tests {
         let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(!SvcError::is_error(slot), "alloc should succeed");
         // P0 lends to P1
-        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
-        assert!(!SvcError::is_error(region), "lend should succeed");
+        let (_, rid) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!((4..=7).contains(&rid), "lend should succeed");
 
         // P1 tries to re-lend the same slot to P2 — must get PermissionDenied
         k.current_partition = 1;
@@ -4956,8 +4975,8 @@ mod tests {
         // P0 allocates and lends to P1
         let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
-        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
-        assert!(region < 0x8000_0000, "lend should succeed");
+        let (_, rid) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!((4..=7).contains(&rid), "lend should succeed");
 
         // Switch to lendee P1
         k.current_partition = 1;
@@ -5011,8 +5030,8 @@ mod tests {
         // P0 allocates and lends to P1
         let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
-        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
-        assert!(region < 0x8000_0000, "lend should succeed");
+        let (_, rid) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!((4..=7).contains(&rid), "lend should succeed");
 
         // Switch to lendee P1
         k.current_partition = 1;
@@ -5058,8 +5077,8 @@ mod tests {
         // P0 allocates and lends to P1
         let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
-        let region = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
-        assert!(region < 0x8000_0000, "lend should succeed");
+        let (_, rid) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!((4..=7).contains(&rid), "lend should succeed");
 
         // Switch to lendee P1
         k.current_partition = 1;
@@ -5198,10 +5217,10 @@ mod tests {
         let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
         // Lend read-only: r2 = 1 (target=1, no WRITABLE flag)
-        let region_id = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
+        let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
         assert!(
-            region_id < 0x8000_0000,
-            "lend should return valid region_id"
+            base_addr < 0x8000_0000,
+            "r0 should contain valid base address"
         );
         let desc = k
             .dynamic_strategy
@@ -5229,10 +5248,10 @@ mod tests {
         let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
         // Lend writable: r2 = target(1) | WRITABLE(0x100)
-        let region_id = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1 | 0x100);
+        let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1 | 0x100);
         assert!(
-            region_id < 0x8000_0000,
-            "writable lend should return valid region_id"
+            base_addr < 0x8000_0000,
+            "r0 should contain valid base address"
         );
         let desc = k
             .dynamic_strategy
@@ -5261,10 +5280,10 @@ mod tests {
         let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 0, 0);
         assert!(slot < 0x8000_0000, "alloc BorrowedRead should succeed");
         // Lend read-only to partition 1
-        let region_id = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
+        let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
         assert!(
-            region_id < 0x8000_0000,
-            "read-only lend of BorrowedRead should return valid region_id"
+            base_addr < 0x8000_0000,
+            "r0 should contain valid base address"
         );
         let desc = k
             .dynamic_strategy
@@ -5320,10 +5339,8 @@ mod tests {
             "write should return 32 bytes"
         );
         // Lend to partition 1
-        assert!(
-            dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1) < 0x8000_0000,
-            "lend should succeed"
-        );
+        let (_, rid) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!((4..=7).contains(&rid), "lend should succeed");
         // Clear the user buffer, then read back as owner while lent
         // SAFETY: ptr valid for 4096 bytes (mmap via low32_buf), zeroing 32.
         unsafe { core::ptr::write_bytes(ptr, 0, 32) };
@@ -5346,8 +5363,8 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
         assert!(slot < 0x8000_0000, "alloc should succeed");
-        let region_id = dispatch_r0(&mut k, SYS_BUF_LEND, slot, 1);
-        assert!(region_id < 0x8000_0000, "lend should succeed");
+        let (_, rid) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!((4..=7).contains(&rid), "lend should succeed");
         // Release while lent must fail
         assert_eq!(
             dispatch_r0(&mut k, SYS_BUF_RELEASE, slot, 0),
