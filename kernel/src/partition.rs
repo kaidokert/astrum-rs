@@ -486,6 +486,9 @@ impl PartitionControlBlock {
                 | (PartitionState::Waiting, PartitionState::Ready)
         );
         if ok {
+            if to == PartitionState::Waiting {
+                self.reset_starvation();
+            }
             self.state = to;
             Ok(())
         } else {
@@ -2609,5 +2612,50 @@ mod tests {
         pcb.set_sleep_until(9999);
         assert_eq!(pcb.starvation_count(), 0);
         assert!(!pcb.is_starved());
+    }
+
+    #[test]
+    fn starvation_resets_on_running_to_waiting() {
+        let mut pcb = make_pcb();
+        // Ready → Running
+        pcb.transition(PartitionState::Running).unwrap();
+        // Accumulate starvation while running
+        pcb.increment_starvation();
+        pcb.increment_starvation();
+        assert_eq!(pcb.starvation_count(), 2);
+        // Running → Waiting must clear starvation
+        pcb.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(pcb.starvation_count(), 0);
+    }
+
+    #[test]
+    fn starvation_persists_through_ready_to_running() {
+        let mut pcb = make_pcb();
+        // Accumulate starvation while Ready
+        pcb.increment_starvation();
+        pcb.increment_starvation();
+        pcb.increment_starvation();
+        assert_eq!(pcb.starvation_count(), 3);
+        // Ready → Running must NOT clear starvation
+        pcb.transition(PartitionState::Running).unwrap();
+        assert_eq!(pcb.starvation_count(), 3);
+    }
+
+    #[test]
+    fn round_trip_ready_running_waiting_ready_resets_starvation() {
+        let mut pcb = make_pcb();
+        // Accumulate starvation in Ready
+        pcb.increment_starvation();
+        pcb.increment_starvation();
+        assert_eq!(pcb.starvation_count(), 2);
+        // Ready → Running (starvation preserved)
+        pcb.transition(PartitionState::Running).unwrap();
+        assert_eq!(pcb.starvation_count(), 2);
+        // Running → Waiting (starvation cleared)
+        pcb.transition(PartitionState::Waiting).unwrap();
+        assert_eq!(pcb.starvation_count(), 0);
+        // Waiting → Ready (starvation still 0)
+        pcb.transition(PartitionState::Ready).unwrap();
+        assert_eq!(pcb.starvation_count(), 0);
     }
 }
