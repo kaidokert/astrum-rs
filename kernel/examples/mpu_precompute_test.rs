@@ -143,7 +143,8 @@ fn main() -> ! {
                 .promote_sentinel_mpu(base, REGION_SZ, 0)
                 .expect("promote sentinel");
         }
-    });
+    })
+    .expect("with_kernel_mut");
     let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_entry, 0), (p1_entry, 0)];
     match boot::boot::<TestConfig>(&parts, &mut p).expect("boot") {}
 }

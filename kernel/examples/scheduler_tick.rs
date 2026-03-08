@@ -28,7 +28,7 @@ const MAX_SWITCHES: u32 = 6;
 
 #[exception]
 fn SysTick() {
-    kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {
+    if let Err(e) = kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {
         // Read previous active partition's state before advancing the tick.
         // On the first switch prev_pid is u32::MAX (no previous partition).
         let prev_pid = ACTIVE_PID.load(Ordering::Acquire);
@@ -77,7 +77,10 @@ fn SysTick() {
             hprintln!("switch -> partition {}", pid);
             SWITCH_COUNT.fetch_add(1, Ordering::Release);
         }
-    });
+    }) {
+        hprintln!("FAIL: SysTick with_kernel_mut failed: {}", e);
+        FAIL_COUNT.fetch_add(1, Ordering::Release);
+    }
 }
 
 #[entry]
