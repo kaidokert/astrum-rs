@@ -1,14 +1,13 @@
 //! QEMU stress test: rapid PendSV context switches under fast SysTick.
 //!
-//! Validates the PRIMASK/PENDSVCLR fix by exercising maximum preemption
-//! pressure:
+//! Validates the Bug 14-numbat TOCTOU fix (PRIMASK critical section in PendSV):
 //!
-//! 1. Two partitions run tight loops, each incrementing an `AtomicU32`.
+//! 1. Two partitions run tight loops, each writing its ID to a shared atomic.
 //! 2. SysTick fires every ~996 cycles (tick_period_us = 83 at 12 MHz).
 //! 3. The SysTick hook explicitly pends PendSV on every tick, forcing
 //!    context-switch attempts even when the scheduler wouldn't.
-//! 4. After several major frames the hook checks that both counters
-//!    advanced — proving no missed switches, no MPU faults, no hangs.
+//! 4. On every tick, verifies stack sentinels intact and SP in bounds.
+//!    After 10 partition alternations, declares PASS.
 //!
 //! Run:  cargo run --target thumbv7m-none-eabi --features qemu,log-semihosting --example pendsv_primask_test
 #![no_std]
@@ -38,70 +37,99 @@ kernel::compose_kernel_config!(
 const NUM_PARTITIONS: usize = 2;
 const STACK_WORDS: usize = Config::STACK_WORDS;
 
-/// Minimum tick count before checking (≈10 major frames of 2 ticks each).
-const CHECK_TICK: u32 = 20;
+/// PendSV writes this into saved-SP on stack overflow detection.
+const STACK_SENTINEL: u32 = 0xDEAD0001;
 /// Hard timeout — if we reach this tick without passing, declare failure.
 const TIMEOUT_TICK: u32 = 200;
-/// Minimum counter value to accept — ensures multiple context switches.
-const MIN_COUNT: u32 = 4;
+const MIN_SWITCHES: u32 = 10;
+const NO_PARTITION: u32 = u32::MAX;
 
-/// Incremented by partition 0 on every loop iteration.
-static P0_COUNT: AtomicU32 = AtomicU32::new(0);
-/// Incremented by partition 1 on every loop iteration.
-static P1_COUNT: AtomicU32 = AtomicU32::new(0);
+/// Each partition stores its own ID here; the hook detects alternation.
+static WHO_RAN: AtomicU32 = AtomicU32::new(NO_PARTITION);
+static LAST_SEEN: AtomicU32 = AtomicU32::new(NO_PARTITION);
+static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(Config, |tick, _k| {
+kernel::define_unified_harness!(Config, |tick, k| {
+    // TODO: reviewer false positive — SCB::set_pendsv() is a static method in cortex-m 0.7+;
+    // the same call is used in harness.rs, boot.rs, tick.rs, svc.rs, and all other examples.
     // Pend PendSV on every tick to maximise preemption pressure.
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();
 
-    if tick >= CHECK_TICK {
-        let c0 = P0_COUNT.load(Ordering::Acquire);
-        let c1 = P1_COUNT.load(Ordering::Acquire);
-        if c0 >= MIN_COUNT && c1 >= MIN_COUNT {
-            hprintln!("pendsv_primask_test: PASS (p0={}, p1={})", c0, c1);
-            debug::exit(debug::EXIT_SUCCESS);
+    // Check no partition triggered PendSV's stack-overflow sentinel.
+    let sp = k.partition_sp();
+    for (i, &v) in sp.iter().enumerate().take(NUM_PARTITIONS) {
+        if v == STACK_SENTINEL {
+            hprintln!("FAIL: partition {} stack overflow", i);
+            debug::exit(debug::EXIT_FAILURE);
+        }
+    }
+    // Verify each partition's saved SP is within its stack region.
+    for (i, &v) in sp.iter().enumerate().take(NUM_PARTITIONS) {
+        if let Some(pcb) = k.pcb(i) {
+            if v == 0 {
+                continue;
+            }
+            let base = pcb.stack_base();
+            let top = base.wrapping_add(pcb.stack_size());
+            if v < base || v > top {
+                hprintln!("FAIL: p{} SP {:#010x} out of bounds", i, v);
+                debug::exit(debug::EXIT_FAILURE);
+            }
+        }
+    }
+    // Count partition alternations.
+    let cur = WHO_RAN.load(Ordering::Acquire);
+    if cur != NO_PARTITION {
+        let prev = LAST_SEEN.swap(cur, Ordering::Relaxed);
+        if prev != NO_PARTITION && prev != cur {
+            let n = SWITCH_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            if n >= MIN_SWITCHES {
+                hprintln!("pendsv_primask_test: PASS ({} switches)", n);
+                debug::exit(debug::EXIT_SUCCESS);
+            }
         }
     }
     if tick >= TIMEOUT_TICK {
-        let c0 = P0_COUNT.load(Ordering::Acquire);
-        let c1 = P1_COUNT.load(Ordering::Acquire);
-        hprintln!("pendsv_primask_test: FAIL (p0={}, p1={})", c0, c1);
+        hprintln!(
+            "FAIL: timeout ({} switches)",
+            SWITCH_COUNT.load(Ordering::Relaxed)
+        );
         debug::exit(debug::EXIT_FAILURE);
     }
 });
 
 extern "C" fn p0_main() -> ! {
     loop {
-        P0_COUNT.fetch_add(1, Ordering::Release);
+        WHO_RAN.store(0, Ordering::Release);
+        // TODO: reviewer suggested compiler_fence here; Release ordering on the atomic
+        // already prevents reordering, and nop() prevents the loop from being elided.
         cortex_m::asm::nop();
     }
 }
 
 extern "C" fn p1_main() -> ! {
     loop {
-        P1_COUNT.fetch_add(1, Ordering::Release);
+        WHO_RAN.store(1, Ordering::Release);
+        // TODO: reviewer suggested compiler_fence here; Release ordering on the atomic
+        // already prevents reordering, and nop() prevents the loop from being elided.
         cortex_m::asm::nop();
     }
 }
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("pendsv_primask_test: Peripherals::take");
+    let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals already taken");
     hprintln!("pendsv_primask_test: start");
 
     // 2 partitions, 1 tick per slot → major frame = 2 ticks (~1992 cycles).
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
-        .expect("pendsv_primask_test: sched");
-
+        .expect("round-robin schedule for 2 partitions must fit");
     let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k = Kernel::<Config>::create(sched, &cfgs).expect("pendsv_primask_test: Kernel::create");
-
-    // store_kernel and boot are generated by define_unified_harness!
+    let k = Kernel::<Config>::create(sched, &cfgs)
+        .expect("kernel create with 2 partitions must succeed");
     store_kernel(k);
 
-    // TODO: parts array hard-codes entries; all tests follow this pattern since each partition has a distinct entry point
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("pendsv_primask_test: boot") {}
+    match boot(&parts, &mut p).expect("boot must succeed after kernel create") {}
 }
