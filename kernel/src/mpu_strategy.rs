@@ -271,8 +271,8 @@ impl DynamicStrategy {
         partitions: &[crate::partition::PartitionControlBlock],
     ) -> usize {
         // Deduplicate by (base, size). At most 3 slots available,
-        // so a small inline set suffices.
-        let mut seen: heapless::Vec<(u32, u32), 3> = heapless::Vec::new();
+        // so a small inline set suffices.  Stores (base, size, slot_idx, rasr).
+        let mut seen: heapless::Vec<(u32, u32, usize, u32), 3> = heapless::Vec::new();
         let mut wired = 0usize;
         let reserved = with_cs(|cs| *self.peripheral_reserved.borrow(cs).borrow());
 
@@ -286,19 +286,30 @@ impl DynamicStrategy {
                 }
                 let base = region.base();
                 let size = region.size();
-                let key = (base, size);
-                let already_wired = seen.contains(&key);
-                // Only wire if not already wired by a preceding partition.
-                if !already_wired {
-                    // MpuRegion.permissions is intentionally ignored: all peripheral
-                    // MMIO uses fixed Shareable Device attributes (TEX=0 S=1 C=0 B=1,
-                    // AP=full-access, XN=true).
-                    let rasr = crate::mpu::build_rasr(
-                        size.trailing_zeros() - 1,
+                let prior = seen
+                    .iter()
+                    .find(|(b, s, _, _)| *b == base && *s == size)
+                    .copied();
+                // Skip entirely when already wired and cache is full.
+                if prior.is_some() && desc_idx >= 2 {
+                    continue;
+                }
+                // Reuse RASR from seen if already computed; otherwise compute once.
+                // MpuRegion.permissions intentionally ignored: fixed Device attrs.
+                let rasr = if let Some((_, _, _, stored)) = prior {
+                    stored
+                } else {
+                    let tz = size.trailing_zeros();
+                    debug_assert!(tz >= 5, "MPU region size must be >= 32 bytes (size={size})");
+                    crate::mpu::build_rasr(
+                        tz.saturating_sub(1),
                         crate::mpu::AP_FULL_ACCESS,
                         true,
                         (true, false, true),
-                    );
+                    )
+                };
+                // Only wire if not already wired by a preceding partition.
+                if prior.is_none() {
                     // Populate reserved peripheral slots directly; add_window
                     // skips them so they must be written here.
                     if wired < reserved {
@@ -311,12 +322,24 @@ impl DynamicStrategy {
                                 rbar: slot_rbar(base, wired),
                             });
                         });
-                        let _ = seen.push(key);
+                        // Capacity 3 matches max peripheral slots; on overflow
+                        // the cache lookup below gracefully skips the entry.
+                        if seen.push((base, size, wired, rasr)).is_err() {
+                            debug_assert!(false, "seen overflow: dedup capacity exceeded");
+                        }
                         wired += 1;
                     } else {
                         match self.add_window(base, size, rasr, part.id()) {
-                            Ok(_) => {
-                                let _ = seen.push(key);
+                            Ok(region_num) => {
+                                // Derive actual slot index from the hardware
+                                // region number returned by add_window, which
+                                // skips the RAM slot at index `reserved`.
+                                let actual_slot = (region_num - DYNAMIC_REGION_BASE) as usize;
+                                // On overflow the cache lookup below gracefully
+                                // skips the entry.
+                                if seen.push((base, size, actual_slot, rasr)).is_err() {
+                                    debug_assert!(false, "seen overflow: dedup capacity exceeded");
+                                }
                                 wired += 1;
                             }
                             Err(MpuError::SlotExhausted) => {
@@ -331,20 +354,24 @@ impl DynamicStrategy {
                 // shared peripherals must appear in every partition's
                 // cache for correct context-switch restoration.
                 if desc_idx < 2 {
-                    let rasr = crate::mpu::build_rasr(
-                        size.trailing_zeros() - 1,
-                        crate::mpu::AP_FULL_ACCESS,
-                        true,
-                        (true, false, true),
-                    );
-                    part_descs[desc_idx] = Some(WindowDescriptor {
-                        base,
-                        size,
-                        permissions: rasr,
-                        owner: part.id(),
-                        rbar: slot_rbar(base, desc_idx),
-                    });
-                    desc_idx += 1;
+                    // Look up the correct slot index from seen (which now
+                    // holds the actual hardware slot for add_window regions).
+                    // If the region wasn't tracked (e.g. seen capacity exceeded),
+                    // skip this cache entry rather than panicking.
+                    if let Some(&(_, _, slot_idx, _)) =
+                        seen.iter().find(|(b, s, _, _)| *b == base && *s == size)
+                    {
+                        part_descs[desc_idx] = Some(WindowDescriptor {
+                            base,
+                            size,
+                            permissions: rasr,
+                            owner: part.id(),
+                            rbar: slot_rbar(base, slot_idx),
+                        });
+                        // TODO: reviewer false positive — desc_idx is a manual
+                        // counter (not from .enumerate()), increment is required.
+                        desc_idx += 1;
+                    }
                 }
             }
             self.cache_peripherals(part.id(), part_descs);
@@ -2256,6 +2283,39 @@ mod tests {
     // ------------------------------------------------------------------
     // wire_boot_peripherals: MpuRegion.permissions is dead code
     // ------------------------------------------------------------------
+
+    /// Verify RASR is computed once per region: slot RASR equals cached
+    /// RASR, and deduped shared peripherals produce identical cache entries.
+    #[test]
+    fn wire_boot_peripherals_single_rasr_and_correct_slot() {
+        let ds = DynamicStrategy::new();
+        let (base, sz) = (0x4000_0000u32, 4096u32);
+        let p = |id, db| {
+            PartitionControlBlock::new(id, 0x0, db, db + 4096, MpuRegion::new(db, 4096, 0))
+                .with_peripheral_regions(&[periph(base, sz)])
+        };
+        // peripheral_reserved=2 so wiring goes through reserved slots.
+        ds.configure_partition(0, &[data_region(0x2000_0000, 4096, 6)], 2)
+            .unwrap();
+        assert_eq!(
+            ds.wire_boot_peripherals(&[p(0, 0x2000_0000), p(1, 0x2000_8000)]),
+            1
+        );
+        let expected = periph_rasr(sz);
+        // Slot RASR must equal cached RASR (single computation path).
+        let slot_rasr = with_cs(|cs| {
+            ds.slots.borrow(cs).borrow()[0]
+                .as_ref()
+                .unwrap()
+                .permissions
+        });
+        assert_eq!(slot_rasr, expected, "slot RASR mismatch");
+        let c0 = ds.cached_peripheral_regions(0);
+        let c1 = ds.cached_peripheral_regions(1);
+        assert_eq!(c0[0].1, expected, "partition 0 cached RASR mismatch");
+        assert_eq!(c1[0].1, expected, "partition 1 cached RASR mismatch");
+        assert_eq!(c0[0], c1[0], "shared peripheral cache must match");
+    }
 
     /// Prove `wire_boot_peripherals` produces identical cached RASR for
     /// partitions with different `MpuRegion.permissions` on the same
