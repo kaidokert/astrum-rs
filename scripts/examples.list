@@ -22,6 +22,7 @@ EXAMPLES=(
     pendsv_primask_test
     pendsv_primask_leak_test
     svcall_primask_clear_test
+    svcall_basepri_clear_test
     tick_fairness_test
     mpu_precompute_test
     mpu_periph_precompute_test

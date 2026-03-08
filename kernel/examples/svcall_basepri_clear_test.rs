@@ -1,14 +1,13 @@
-//! Defense-in-depth: verifies SVCall entry clears PRIMASK and BASEPRI.
+//! Defense-in-depth: verifies SVCall entry clears BASEPRI.
 //!
-//! TODO: verification is indirect — we check register state after SVC return in the partition,
-//! not strictly on SVCall handler entry. Partition progress (COUNTS) implies PendSV is not
-//! blocked, which validates the architectural goal.
+//! A verifying dispatch hook reads BASEPRI from Handler mode (privileged,
+//! not RAZ per ARMv7-M ARM B5.2.3) and flags a violation if non-zero.
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
@@ -31,49 +30,76 @@ const STACK_WORDS: usize = Config::STACK_WORDS;
 const CHECK_TICK: u32 = 20;
 const TIMEOUT_TICK: u32 = 200;
 const MIN_COUNT: u32 = 4;
+
 static COUNTS: [AtomicU32; NUM_PARTITIONS] = [AtomicU32::new(0), AtomicU32::new(0)];
+
+/// Set by the dispatch hook if BASEPRI is non-zero on SVCall entry
+/// (meaning the assembly clear failed).
+static BASEPRI_VIOLATION: AtomicBool = AtomicBool::new(false);
 
 kernel::define_unified_harness!(Config, |tick, _k| {
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();
 
-    let c: [u32; 2] =
-        core::array::from_fn(|i| COUNTS.get(i).map_or(0, |c| c.load(Ordering::Acquire)));
-    if tick >= CHECK_TICK && c.iter().all(|&v| v >= MIN_COUNT) {
-        hprintln!("svcall_basepri_clear_test: PASS ({:?})", c);
-        debug::exit(debug::EXIT_SUCCESS);
-    }
-    if tick >= TIMEOUT_TICK {
-        hprintln!("svcall_basepri_clear_test: FAIL timeout ({:?})", c);
-        debug::exit(debug::EXIT_FAILURE);
+    if tick >= CHECK_TICK {
+        let c: [u32; 2] =
+            core::array::from_fn(|i| COUNTS.get(i).map_or(0, |c| c.load(Ordering::Acquire)));
+        if c.iter().all(|&v| v >= MIN_COUNT) {
+            if BASEPRI_VIOLATION.load(Ordering::Acquire) {
+                hprintln!("svcall_basepri_clear_test: FAIL basepri leak ({:?})", c);
+                debug::exit(debug::EXIT_FAILURE);
+            }
+            hprintln!("svcall_basepri_clear_test: PASS ({:?})", c);
+            debug::exit(debug::EXIT_SUCCESS);
+        }
+        if tick >= TIMEOUT_TICK {
+            hprintln!("svcall_basepri_clear_test: FAIL timeout ({:?})", c);
+            debug::exit(debug::EXIT_FAILURE);
+        }
     }
 });
 
-#[inline(always)]
-fn primask_is_active() -> bool {
+// TODO: verifying_dispatch_hook duplicates the yield-handling state machine from the
+// macro-generated dispatch_hook (yield_requested / yield_current_slot / set_next_partition /
+// drain_debug_auto).  The same pattern exists in svcall_primask_clear_test.  A stable
+// kernel API (e.g. `Kernel::dispatch_and_yield`) would eliminate this DRY violation and
+// the associated panic-in-Handler risk.  Deferred: requires kernel API change.
+/// Verifying SVC dispatch hook: reads BASEPRI from Handler mode (privileged,
+/// real value — not RAZ per ARMv7-M ARM B5.2.3) to check the assembly
+/// defense-in-depth clear actually worked, then delegates to the kernel dispatch.
+///
+/// # Safety
+///
+/// Must be called from SVCall exception context with a valid `ExceptionFrame`.
+/// The caller must ensure `f` points to the hardware-stacked exception frame on
+/// the process stack, and that kernel state has been initialised via `store_kernel`.
+unsafe extern "C" fn verifying_dispatch_hook(f: &mut kernel::context::ExceptionFrame) {
     #[cfg(target_arch = "arm")]
     {
-        cortex_m::register::primask::read().is_active()
+        if cortex_m::register::basepri::read() != 0 {
+            BASEPRI_VIOLATION.store(true, Ordering::Release);
+        }
     }
-    #[cfg(not(target_arch = "arm"))]
-    {
-        false
-    }
+
+    // Delegate to the real kernel dispatch, replicating the yield handling
+    // from the macro-generated dispatch_hook.
+    let _ = kernel::state::with_kernel_mut::<Config, _, _>(|k| {
+        // SAFETY: `f` is the hardware-stacked SVCall exception frame from the
+        // process stack, and we are in SVCall Handler mode — same invariants as
+        // the macro-generated dispatch_hook.
+        unsafe { k.dispatch(f) }
+        if k.yield_requested {
+            k.yield_requested = false;
+            use kernel::svc::YieldResult;
+            let result = k.yield_current_slot();
+            if let Some(pid) = result.partition_id() {
+                k.set_next_partition(pid);
+            }
+            k.drain_debug_auto();
+        }
+    });
 }
 
-#[inline(always)]
-fn basepri_value() -> u8 {
-    #[cfg(target_arch = "arm")]
-    {
-        cortex_m::register::basepri::read()
-    }
-    #[cfg(not(target_arch = "arm"))]
-    {
-        0
-    }
-}
-
-// TODO: unify error reporting — fail_halt vs .expect() in main; low priority for test code
 fn fail_halt(msg: &str) -> ! {
     hprintln!("{}", msg);
     debug::exit(debug::EXIT_FAILURE);
@@ -91,11 +117,9 @@ fn partition_task(id: usize) -> ! {
         if plib::sys_yield().is_err() {
             fail_halt("sys_yield failed");
         }
-        if primask_is_active() {
-            fail_halt("PRIMASK set after SVC return");
-        }
-        if basepri_value() != 0 {
-            fail_halt("BASEPRI non-zero after SVC return");
+        // Check handler-side verification (privileged read, not RAZ).
+        if BASEPRI_VIOLATION.load(Ordering::Acquire) {
+            fail_halt("BASEPRI non-zero in SVCall handler");
         }
         counter.fetch_add(1, Ordering::Release);
     }
@@ -117,6 +141,9 @@ fn main() -> ! {
     let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
     let k = Kernel::<Config>::create(sched, &cfgs).expect("basepri: kernel");
     store_kernel(k);
+    // Override dispatch with our verifying wrapper that reads BASEPRI
+    // from Handler mode before delegating.
+    kernel::svc::set_dispatch_hook(verifying_dispatch_hook);
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
     match boot(&parts, &mut p).expect("basepri: boot") {}
 }
