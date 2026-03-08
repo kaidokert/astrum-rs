@@ -1061,6 +1061,73 @@ mod tests {
         }
     }
 
+    // ---- signal_partition_inner edge-case tests ----
+
+    #[test]
+    fn signal_oob_partition_exactly_at_n() {
+        // target == N is one-past-the-end; must return false and not panic.
+        let mut t = tbl(); // N = 4, 2 partitions added
+        let woke = signal_partition_inner(&mut t, 4, 0b0001);
+        assert!(!woke, "target == N must return false");
+    }
+
+    #[test]
+    fn signal_partition_n_minus_1_boundary_wakes() {
+        // Fill all N slots, put the last one (index N-1 = 3) into Waiting,
+        // then signal it — verifies the boundary index is reachable.
+        let mut t: PartitionTable<4> = PartitionTable::new();
+        for i in 0..4u8 {
+            t.add(pcb(i)).unwrap();
+        }
+        t.get_mut(3)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        events::event_wait(&mut t, 3, 0b0010);
+        assert_eq!(t.get(3).unwrap().state(), PartitionState::Waiting);
+
+        let woke = signal_partition_inner(&mut t, 3, 0b0010);
+        assert!(woke, "partition at N-1 must wake when bits match");
+        assert_eq!(t.get(3).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn signal_zero_event_bits_is_noop() {
+        // Signaling with event_bits == 0 must not wake and must not
+        // change the partition's existing event flags.
+        let mut t = tbl();
+        // Put partition 0 into Waiting on bit 0.
+        events::event_wait(&mut t, 0, 0b0001);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(t.get(0).unwrap().event_flags(), 0);
+
+        let woke = signal_partition_inner(&mut t, 0, 0);
+        assert!(!woke, "zero event_bits must not wake");
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+        assert_eq!(t.get(0).unwrap().event_flags(), 0, "flags must stay zero");
+    }
+
+    #[test]
+    fn signal_already_signaled_partition_idempotent() {
+        // First signal wakes; second signal with same bits must return
+        // false (partition is now Ready, not Waiting).
+        let mut t = tbl();
+        events::event_wait(&mut t, 0, 0b0001);
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
+
+        let woke1 = signal_partition_inner(&mut t, 0, 0b0001);
+        assert!(woke1, "first signal must wake");
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+        assert_eq!(t.get(0).unwrap().event_flags(), 0b0001);
+
+        // Second signal — partition is Ready, not Waiting.
+        let woke2 = signal_partition_inner(&mut t, 0, 0b0001);
+        assert!(!woke2, "second signal must not report woken");
+        assert_eq!(t.get(0).unwrap().state(), PartitionState::Ready);
+        // Flags remain OR'd (idempotent for same bits).
+        assert_eq!(t.get(0).unwrap().event_flags(), 0b0001);
+    }
+
     #[test]
     fn clear_bit_shift_values() {
         // Verify the wrapping_shl computation matches expectations
