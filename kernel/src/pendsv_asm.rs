@@ -89,23 +89,54 @@ pendsv_context_save:
     mrs     r3, psp
     stmdb   r3!, {{r4-r11}}     /* r3 now points to saved context */
 
-    /* Compute address of partition_sp[idx]:
-     * addr = __kernel_state_start + KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET + (idx * 4)
-     */
+    /* Compute &partition_sp[idx] once, used by both normal and overflow paths.
+     * SAFETY: idx (r0) was validated by the PendSV caller against partition_count.
+     * __kernel_state_start + KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET gives
+     * the base of the partition_sp array; adding idx*4 gives the element address.
+     * The stack overflow check compares the post-push PSP (r3) against the
+     * partition's stack_limit. If PSP < stack_limit, the stack has overflowed
+     * and we enter a fatal fault loop (skipping context restore) rather than
+     * storing a corrupted SP that would crash on the next restore. */
+    lsl     r0, r0, #2          /* r0 = idx * 4 (used for both arrays) */
     ldr     r1, =__kernel_state_start
     ldr     r2, =KERNEL_CORE_OFFSET
-    ldr     r2, [r2]            /* r2 = core offset */
-    add     r1, r1, r2          /* r1 = &kernel.core */
+    ldr     r2, [r2]
+    add     r1, r1, r2          /* r1 = &kernel.core (preserved) */
 
+    /* Compute partition_sp element address (shared by both paths) */
     ldr     r2, =CORE_PARTITION_SP_OFFSET
-    ldr     r2, [r2]            /* r2 = partition_sp offset within core */
-    add     r1, r1, r2          /* r1 = &kernel.core.partition_sp[0] */
+    ldr     r2, [r2]
+    add     r2, r1, r2          /* r2 = &partition_sp[0] */
 
-    /* idx * 4 for u32 array element offset */
-    lsl     r2, r0, #2          /* r2 = idx * 4 */
-    str     r3, [r1, r2]        /* partition_sp[idx] = new SP */
-
+    /* Stack overflow pre-check: PSP vs partition_stack_limits[idx] */
+    push    {{r2}}              /* save &partition_sp[0] across check */
+    ldr     r2, =CORE_PARTITION_STACK_LIMIT_OFFSET
+    ldr     r2, [r2]
+    add     r2, r1, r2          /* r2 = &partition_stack_limits[0] */
+    ldr     r2, [r2, r0]        /* r2 = partition_stack_limits[idx] */
+    cmp     r3, r2
+    blo     .Lstack_overflow
+    pop     {{r2}}              /* r2 = &partition_sp[0] */
+    str     r3, [r2, r0]        /* partition_sp[idx] = new SP */
     bx      lr
+
+    /* Stack overflow detected: the outgoing partition's PSP is below its
+     * stack_limit. Store a sentinel value and enter a fatal fault loop.
+     * We do NOT return to the PendSV handler because context restore would
+     * attempt to load from the corrupted stack, causing an unpredictable
+     * crash. The fault loop keeps the system debuggable. */
+    .global __pendsv_stack_overflow
+    .type __pendsv_stack_overflow, %function
+    .thumb_func
+__pendsv_stack_overflow:
+.Lstack_overflow:
+    pop     {{r2}}              /* r2 = &partition_sp[0] */
+    ldr     r3, =0xDEAD0001
+    str     r3, [r2, r0]        /* partition_sp[idx] = sentinel */
+    b       .Lstack_overflow_fault
+.Lstack_overflow_fault:
+    b       .Lstack_overflow_fault  /* fatal: loop forever */
+    .size __pendsv_stack_overflow, . - __pendsv_stack_overflow
     .size pendsv_context_save, . - pendsv_context_save
 
     /* ================================================================

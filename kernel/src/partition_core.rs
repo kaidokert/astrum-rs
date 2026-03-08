@@ -131,6 +131,8 @@ where
     pub next_partition: u8,
     /// Per-partition saved stack pointers. Public for `offset_of!` in PendSV assembly.
     pub partition_sp: [u32; N],
+    /// Per-partition stack limits for PendSV overflow pre-check (mirrors PCB stack_limit).
+    pub partition_stack_limits: [u32; N],
     /// Per-partition stack storage, aligned for MPU region base requirements.
     stacks: [S; N],
     /// Currently active partition index, if any.
@@ -162,6 +164,7 @@ where
             current_partition: 0,
             next_partition: 0,
             partition_sp: [0u32; N],
+            partition_stack_limits: [0u32; N],
             stacks: [S::ZERO; N],
             active_partition: None,
             tick: TickCounter::new(),
@@ -230,6 +233,19 @@ where
         } else {
             false
         }
+    }
+
+    /// Copies the stack_limit from the PCB at `index` into the mirrored
+    /// `partition_stack_limits[index]` array used by PendSV assembly.
+    pub fn sync_stack_limit(&mut self, index: usize) -> bool {
+        if let Some(pcb) = self.partitions.get(index) {
+            let limit = pcb.stack_limit();
+            if let Some(slot) = self.partition_stack_limits.get_mut(index) {
+                *slot = limit;
+                return true;
+            }
+        }
+        false
     }
 
     /// Returns a reference to all partition stacks.
@@ -404,6 +420,9 @@ where
     }
     fn partition_slice_mut(&mut self) -> &mut [PartitionControlBlock] {
         self.partitions.as_slice_mut()
+    }
+    fn partition_stack_limits_mut(&mut self) -> &mut [u32] {
+        &mut self.partition_stack_limits
     }
 }
 

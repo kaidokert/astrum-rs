@@ -715,6 +715,12 @@ macro_rules! define_unified_kernel {
         static CORE_PARTITION_SP_OFFSET: usize =
             ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, partition_sp);
 
+        #[cfg_attr(not(test), no_mangle)]
+        #[cfg_attr(not(test), link_section = ".rodata")]
+        #[allow(dead_code)]
+        static CORE_PARTITION_STACK_LIMIT_OFFSET: usize =
+            ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, partition_stack_limits);
+
         // Compile-time assertions for PendSV assembly invariants.
         //
         // These verify the exported ABI statics against offset_of! and
@@ -749,7 +755,6 @@ macro_rules! define_unified_kernel {
                 CORE_PARTITION_SP_OFFSET == ::core::mem::offset_of!(C, partition_sp),
                 "CORE_PARTITION_SP_OFFSET does not match struct layout"
             );
-
             // PendSV uses ldrb/strb for current_partition — must be u8.
             #[allow(unused)]
             fn _assert_cp_is_u8(k: &K) { let _: u8 = k.current_partition; }
@@ -777,6 +782,7 @@ macro_rules! define_unified_kernel {
             assert!(KERNEL_CORE_OFFSET < 4096, "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
             assert!(CORE_NEXT_PARTITION_OFFSET < 4096, "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
             assert!(CORE_PARTITION_SP_OFFSET < 4096, "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
+            assert!(CORE_PARTITION_STACK_LIMIT_OFFSET < 4096, "CORE_PARTITION_STACK_LIMIT_OFFSET exceeds Thumb2 ldr range");
 
             // Field ordering: current_partition before core in Kernel.
             assert!(KERNEL_CURRENT_PARTITION_OFFSET < KERNEL_CORE_OFFSET,
@@ -2542,6 +2548,20 @@ where
         } else {
             false
         }
+    }
+
+    /// Syncs the PCB stack_limit into the mirrored `partition_stack_limits`
+    /// array for PendSV overflow pre-check.
+    #[inline(always)]
+    pub fn sync_stack_limit(&mut self, index: usize) -> bool {
+        if let Some(pcb) = self.core.partition_slice().get(index) {
+            let limit = pcb.stack_limit();
+            if let Some(slot) = self.core.partition_stack_limits_mut().get_mut(index) {
+                *slot = limit;
+                return true;
+            }
+        }
+        false
     }
 
     /// Updates the PCB MPU data region base for a partition.

@@ -139,6 +139,8 @@ macro_rules! define_pendsv {
                 "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
             assert!(::core::mem::offset_of!(C, partition_sp) < 4096,
                 "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
+            assert!(::core::mem::offset_of!(C, partition_stack_limits) < 4096,
+                "CORE_PARTITION_STACK_LIMIT_OFFSET exceeds Thumb2 ldr range");
 
             // Field ordering: current_partition before core in Kernel.
             assert!(::core::mem::offset_of!(K, current_partition) < ::core::mem::offset_of!(K, core),
@@ -325,6 +327,14 @@ macro_rules! define_pendsv_dynamic {
     ($strategy:ident, $Config:ty) => { $crate::define_pendsv!(dynamic: $strategy, $Config); };
 }
 
+/// Offset of `stack_limit` within `PartitionControlBlock`.
+pub const PCB_STACK_LIMIT_OFFSET: usize =
+    core::mem::offset_of!(crate::partition::PartitionControlBlock, stack_limit);
+crate::const_assert!(
+    PCB_STACK_LIMIT_OFFSET < 4096,
+    "PCB stack_limit offset exceeds Thumb2 ldr range"
+);
+
 #[cfg(test)]
 mod tests {
     use crate::mpu::{partition_mpu_regions_or_deny_all, precompute_mpu_cache};
@@ -357,6 +367,13 @@ mod tests {
             (PENDSVCLR_BIT | PENDSTCLR_BIT | PENDSTSET_BIT).count_ones(),
             3
         );
+    }
+
+    #[test]
+    fn pcb_stack_limit_offset_matches_offset_of() {
+        let actual = core::mem::offset_of!(PartitionControlBlock, stack_limit);
+        assert_eq!(super::PCB_STACK_LIMIT_OFFSET, actual);
+        assert!(actual < 4096);
     }
 
     #[test]

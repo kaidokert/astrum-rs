@@ -336,6 +336,9 @@ where
             if !k.fix_stack_region(i, base, size) {
                 return Err(BootError::StackRegionError { partition_index: i });
             }
+            // Mirror PCB stack_limit into the PartitionCore array for PendSV
+            // overflow pre-check (must run after fix_stack_region updates it).
+            k.sync_stack_limit(i);
             // Only fix MPU data region for sentinel (size==0) partitions;
             // user-configured partitions keep their original base.
             match k.partitions_mut().get_mut(i) {

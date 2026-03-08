@@ -155,6 +155,8 @@ pub trait CoreOps {
     fn partition_slice(&self) -> &[crate::partition::PartitionControlBlock];
     /// Returns a mutable slice of all partition control blocks.
     fn partition_slice_mut(&mut self) -> &mut [crate::partition::PartitionControlBlock];
+    /// Returns a mutable reference to the mirrored stack limits array.
+    fn partition_stack_limits_mut(&mut self) -> &mut [u32];
 }
 
 /// Trait for synchronization primitive sub-structs (semaphores, mutexes).
