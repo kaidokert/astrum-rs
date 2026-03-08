@@ -47,8 +47,7 @@ where
 {
     if let Some(old_pid) = kernel.active_partition {
         let is_running = kernel
-            .partitions()
-            .get(old_pid as usize)
+            .pcb(old_pid as usize)
             .map(|pcb| pcb.state() == PartitionState::Running)
             .unwrap_or(false);
         if is_running {
@@ -134,11 +133,10 @@ where
     match event {
         ScheduleEvent::PartitionSwitch(pid) => {
             let target_waiting = kernel
-                .partitions()
-                .get(pid as usize)
+                .pcb(pid as usize)
                 .is_some_and(|pcb| pcb.state() == PartitionState::Waiting);
             if target_waiting {
-                if let Some(pcb) = kernel.partitions_mut().get_mut(pid as usize) {
+                if let Some(pcb) = kernel.pcb_mut(pid as usize) {
                     pcb.increment_starvation();
                     if pcb.is_starved() {
                         crate::klog!(
@@ -150,8 +148,7 @@ where
                 }
                 if let Some(ap) = kernel.active_partition {
                     if kernel
-                        .partitions()
-                        .get(ap as usize)
+                        .pcb(ap as usize)
                         .is_some_and(|p| p.state() == PartitionState::Waiting)
                         && try_transition(kernel.partitions_mut(), ap, PartitionState::Ready)
                     {
@@ -161,7 +158,7 @@ where
                 return ScheduleEvent::None;
             }
             transition_outgoing_ready(kernel);
-            if let Some(pcb) = kernel.partitions_mut().get_mut(pid as usize) {
+            if let Some(pcb) = kernel.pcb_mut(pid as usize) {
                 pcb.reset_starvation();
             }
             kernel.active_partition = Some(pid);

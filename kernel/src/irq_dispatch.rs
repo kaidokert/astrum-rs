@@ -70,6 +70,7 @@ where
     >,
 {
     let _ = crate::state::with_kernel_mut::<C, _, _>(|kernel| {
+        // TODO: partitions_mut() required here — signal_partition_inner needs the full table, not a single pcb_mut()
         let woken =
             signal_partition_inner(kernel.partitions_mut(), partition_id as usize, event_bits);
         if woken {

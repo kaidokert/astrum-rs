@@ -273,6 +273,7 @@ where
             };
             if has_rx {
                 if let Some(woken) = kernel.dev_wait_queue.wake_one_reader() {
+                    // TODO: partitions_mut() required here — try_transition needs the full table, not a single pcb_mut()
                     crate::svc::try_transition(
                         kernel.partitions_mut(),
                         woken,
