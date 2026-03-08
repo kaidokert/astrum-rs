@@ -129,6 +129,9 @@ pub struct PartitionControlBlock {
     sleep_until: u64,
     /// Counts consecutive scheduling rounds where this partition was skipped.
     starvation_count: u8,
+    /// Lowest valid PSP address for this partition (== stack_base).
+    /// Used by PendSV for stack overflow pre-check.
+    pub(crate) stack_limit: u32,
 }
 
 impl PartitionControlBlock {
@@ -158,6 +161,7 @@ impl PartitionControlBlock {
             cache_sealed: false,
             sleep_until: 0,
             starvation_count: 0,
+            stack_limit: stack_base,
         }
     }
 
@@ -195,6 +199,13 @@ impl PartitionControlBlock {
 
     pub fn stack_base(&self) -> u32 {
         self.stack_base
+    }
+
+    /// Lowest valid PSP address for this partition.
+    /// Used by PendSV for stack overflow pre-check.
+    #[allow(dead_code, reason = "pre-provisioned for PendSV stack overflow check")]
+    pub(crate) fn stack_limit(&self) -> u32 {
+        self.stack_limit
     }
 
     pub fn stack_size(&self) -> u32 {
@@ -282,6 +293,7 @@ impl PartitionControlBlock {
         // Only update stack fields; preserve mpu_region (data region) unchanged
         self.stack_base = base;
         self.stack_size = size;
+        self.stack_limit = base;
 
         Ok(())
     }
@@ -2140,6 +2152,49 @@ mod tests {
     #[should_panic(expected = "stack size in bytes overflows u32")]
     fn sentinel_array_rejects_overflow() {
         let _ = PartitionConfig::sentinel_array::<1>(usize::MAX);
+    }
+
+    // ------------------------------------------------------------------
+    // stack_limit
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn stack_limit_equals_stack_base_after_new() {
+        let pcb = make_pcb();
+        assert_eq!(pcb.stack_limit(), pcb.stack_base());
+        assert_eq!(pcb.stack_limit(), 0x2000_0000);
+    }
+
+    #[test]
+    fn stack_limit_matches_explicit_stack_base() {
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_1000, // stack_base
+            0x2000_1400, // stack_pointer
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        );
+        assert_eq!(pcb.stack_limit(), 0x2000_1000);
+    }
+
+    #[test]
+    fn stack_limit_less_than_initial_stack_pointer() {
+        let pcb = make_pcb();
+        // stack_base=0x2000_0000, stack_pointer=0x2000_0400
+        assert!(
+            pcb.stack_limit() < pcb.stack_pointer(),
+            "stack_limit ({:#x}) must be < stack_pointer ({:#x})",
+            pcb.stack_limit(),
+            pcb.stack_pointer()
+        );
+    }
+
+    #[test]
+    fn fix_stack_region_updates_stack_limit() {
+        let mut pcb = make_pcb();
+        pcb.fix_stack_region(0x2001_0000, 2048).unwrap();
+        assert_eq!(pcb.stack_limit(), 0x2001_0000);
+        assert_eq!(pcb.stack_limit(), pcb.stack_base());
     }
 
     // ------------------------------------------------------------------
