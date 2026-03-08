@@ -7,7 +7,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 kernel::compose_kernel_config!(Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 kernel::define_unified_harness!(Config, |tick, k| {
-    if tick >= 10 && k.partition_sp().get(0) == Some(&0xDEAD0001) {
+    if tick >= 10 && k.partition_sp().first() == Some(&0xDEAD0001) {
         hprintln!("pendsv_stack_overflow_test: PASS");
         debug::exit(debug::EXIT_SUCCESS);
     }
