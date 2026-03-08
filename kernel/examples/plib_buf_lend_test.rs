@@ -76,7 +76,7 @@ extern "C" fn p0_main() -> ! {
     let payload = PAYLOAD;
     let wr = plib::sys_buf_write(slot, &payload).unwrap_or(SYSCALL_FAILED);
     WRITE_RC.store(wr, Ordering::Release);
-    let lr = plib::sys_buf_lend(slot, 1, false).unwrap_or(SYSCALL_FAILED);
+    let (lr, _base) = plib::sys_buf_lend(slot, 1, false).unwrap_or((SYSCALL_FAILED, 0));
     LEND_RC.store(lr, Ordering::Release);
     if lr < MAX_MPU_REGION {
         LENT.store(1, Ordering::Release);

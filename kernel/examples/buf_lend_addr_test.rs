@@ -11,7 +11,7 @@ use kernel::{
     partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    syscall, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(
@@ -51,13 +51,18 @@ extern "C" fn p0_main() -> ! {
     if buf_syscall::buf_write(slot, &data).is_err() {
         fail();
     }
-    // Use svc_r01! (raw inline asm) to capture both r0 and r1 from the SVC.
-    let r2 = buf_syscall::pack_lend_r2(1, true);
-    let (r0, r1) = kernel::svc_r01!(syscall::SYS_BUF_LEND, slot as u32, r2, 0u32);
-    if r0 & 0x8000_0000 != 0 || r1 == 0 {
+    let slot_id = plib::BufferSlotId::new(slot as u8);
+    let (_region_id, base_addr) = match plib::sys_buf_lend(slot_id, 1, true) {
+        Ok(pair) => pair,
+        Err(_) => fail(),
+    };
+    // Verify the returned address is in SRAM (>= 0x2000_0000).
+    // P1's subsequent read from this address (checking for 0xAA) serves as
+    // the definitive verification that base_addr matches the actual slot base.
+    if base_addr < 0x2000_0000 {
         fail();
     }
-    ADDR.store(r1, Ordering::Release);
+    ADDR.store(base_addr, Ordering::Release);
     while P1_OK.load(Ordering::Acquire) != PASS {
         cortex_m::asm::nop();
     }

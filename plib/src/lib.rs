@@ -884,16 +884,22 @@ pub fn sys_buf_write(slot: BufferSlotId, data: &[u8]) -> Result<u32, SvcError> {
 ///
 /// # Returns
 ///
-/// `Ok(region_id)` with the MPU region assigned to the target, or
-/// `Err(SvcError)` if the syscall failed.
+/// `Ok((region_id, base_addr))` with the MPU region assigned to the target
+/// and the physical base address of the buffer slot, or `Err(SvcError)` if
+/// the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_buf_lend(slot: BufferSlotId, target: u8, writable: bool) -> Result<u32, SvcError> {
+pub fn sys_buf_lend(
+    slot: BufferSlotId,
+    target: u8,
+    writable: bool,
+) -> Result<(u32, u32), SvcError> {
     let flags: u32 = if writable { lend_flags::WRITABLE } else { 0 };
     let r2 = (target as u32) | flags;
-    // SAFETY: svc! triggers a supervisor call whose handler validates all
+    // SAFETY: svc_r01! triggers a supervisor call whose handler validates all
     // arguments.  The slot and packed r2 contain only small integer values;
     // no pointers are passed.
-    decode_rc(rtos_traits::svc!(
+    // TODO: svc_r01! is defined in rtos-traits/src/macros.rs (pre-existing macro, not new to this change).
+    rtos_traits::api::decode_rc_r01(rtos_traits::svc_r01!(
         SYS_BUF_LEND,
         slot.as_raw() as u32,
         r2,
@@ -1637,20 +1643,20 @@ mod tests {
         assert_eq!(pack(0xFF, true), 0xFF | lend_flags::WRITABLE);
     }
 
-    /// Host stub returns 0 unconditionally so we cannot verify that
-    /// sys_buf_lend propagates the kernel's region_id return value, or that
+    /// Host stub returns (0, 0) unconditionally so we cannot verify that
+    /// sys_buf_lend propagates the kernel's region_id / base_addr, or that
     /// the packed r2 reaches the SVC handler.  Register-level verification
     /// is covered by the plib_buf_lend_test.rs QEMU integration test.
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_readonly_returns_ok_on_host() {
-        assert_eq!(sys_buf_lend(BufferSlotId::new(0), 1, false), Ok(0));
+        assert_eq!(sys_buf_lend(BufferSlotId::new(0), 1, false), Ok((0, 0)));
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_writable_returns_ok_on_host() {
-        assert_eq!(sys_buf_lend(BufferSlotId::new(2), 3, true), Ok(0));
+        assert_eq!(sys_buf_lend(BufferSlotId::new(2), 3, true), Ok((0, 0)));
     }
 
     #[cfg(feature = "dynamic-mpu")]

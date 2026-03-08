@@ -117,6 +117,19 @@ pub fn decode_rc(rc: u32) -> Result<u32, SvcError> {
     }
 }
 
+/// Like [`decode_rc`] but preserves a second return register (`r1`).
+///
+/// On success returns `Ok((r0, r1))`; on error returns the decoded
+/// [`SvcError`] from `r0`.
+#[inline(always)]
+pub fn decode_rc_r01(r0r1: (u32, u32)) -> Result<(u32, u32), SvcError> {
+    if SvcError::is_error(r0r1.0) {
+        Err(SvcError::from_u32(r0r1.0).unwrap_or(SvcError::InvalidSyscall))
+    } else {
+        Ok(r0r1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// Return an array of all [`SvcError`] variants.
@@ -221,5 +234,24 @@ mod tests {
         }
         // If a variant is added to the enum but not to all_variants(),
         // this match will fail to compile.
+    }
+
+    #[test]
+    fn decode_rc_r01_success_preserves_both() {
+        assert_eq!(decode_rc_r01((5, 0x2000_0000)), Ok((5, 0x2000_0000)));
+    }
+
+    #[test]
+    fn decode_rc_r01_success_zero_pair() {
+        assert_eq!(decode_rc_r01((0, 0)), Ok((0, 0)));
+    }
+
+    #[test]
+    fn decode_rc_r01_error_discards_r1() {
+        let code = SvcError::InvalidResource.to_u32();
+        assert_eq!(
+            decode_rc_r01((code, 0x1234)),
+            Err(SvcError::InvalidResource)
+        );
     }
 }
