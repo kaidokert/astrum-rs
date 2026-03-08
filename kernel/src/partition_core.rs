@@ -187,6 +187,14 @@ where
     pub fn partition_count(&self) -> usize {
         self.partitions.len()
     }
+    /// Returns a slice of all partition control blocks.
+    pub fn partition_slice(&self) -> &[PartitionControlBlock] {
+        self.partitions.as_slice()
+    }
+    /// Returns a mutable slice of all partition control blocks.
+    pub fn partition_slice_mut(&mut self) -> &mut [PartitionControlBlock] {
+        self.partitions.as_slice_mut()
+    }
     pub fn schedule(&self) -> &ScheduleTable<SCHED> {
         &self.schedule
     }
@@ -390,6 +398,12 @@ where
         self.stacks
             .get(index)
             .map(|s| s.as_u32_slice().as_ptr() as u32)
+    }
+    fn partition_slice(&self) -> &[PartitionControlBlock] {
+        self.partitions.as_slice()
+    }
+    fn partition_slice_mut(&mut self) -> &mut [PartitionControlBlock] {
+        self.partitions.as_slice_mut()
     }
 }
 
@@ -745,5 +759,62 @@ mod tests {
         check_tier!(AlignedStack1K, "AlignedStack1K");
         check_tier!(AlignedStack2K, "AlignedStack2K");
         check_tier!(AlignedStack4K, "AlignedStack4K");
+    }
+
+    #[test]
+    fn partition_slice_length_matches_partition_count() {
+        let mut core: TestCore<4, 4> = TestCore::new();
+        assert_eq!(core.partition_slice().len(), 0);
+        assert_eq!(core.partition_slice().len(), core.partition_count());
+
+        core.partitions_mut().add(test_pcb(0)).unwrap();
+        assert_eq!(core.partition_slice().len(), 1);
+        assert_eq!(core.partition_slice().len(), core.partition_count());
+
+        core.partitions_mut().add(test_pcb(1)).unwrap();
+        core.partitions_mut().add(test_pcb(2)).unwrap();
+        assert_eq!(core.partition_slice().len(), 3);
+        assert_eq!(core.partition_slice().len(), core.partition_count());
+    }
+
+    #[test]
+    fn partition_slice_returns_correct_pcbs() {
+        let mut core: TestCore<4, 4> = TestCore::new();
+        core.partitions_mut().add(test_pcb(0)).unwrap();
+        core.partitions_mut().add(test_pcb(1)).unwrap();
+        core.partitions_mut().add(test_pcb(2)).unwrap();
+
+        let slice = core.partition_slice();
+        assert_eq!(slice[0].id(), 0);
+        assert_eq!(slice[1].id(), 1);
+        assert_eq!(slice[2].id(), 2);
+    }
+
+    #[test]
+    fn partition_slice_mut_allows_mutation() {
+        let mut core: TestCore<4, 4> = TestCore::new();
+        core.partitions_mut().add(test_pcb(0)).unwrap();
+        core.partitions_mut().add(test_pcb(1)).unwrap();
+
+        assert_eq!(core.partition_slice()[0].event_flags(), 0);
+        core.partition_slice_mut()[0].set_event_flags(0xAB);
+        assert_eq!(core.partition_slice()[0].event_flags(), 0xAB);
+
+        // Verify mutation didn't affect other partitions
+        assert_eq!(core.partition_slice()[1].event_flags(), 0);
+    }
+
+    #[test]
+    fn partition_slice_matches_partitions_as_slice() {
+        let mut core: TestCore<4, 4> = TestCore::new();
+        core.partitions_mut().add(test_pcb(0)).unwrap();
+        core.partitions_mut().add(test_pcb(1)).unwrap();
+
+        let via_accessor = core.partition_slice();
+        let via_table = core.partitions().as_slice();
+        assert_eq!(via_accessor.len(), via_table.len());
+        for (a, b) in via_accessor.iter().zip(via_table.iter()) {
+            assert_eq!(a.id(), b.id());
+        }
     }
 }

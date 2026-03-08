@@ -2457,6 +2457,18 @@ where
         self.partitions().len()
     }
 
+    /// Returns a slice of all partition control blocks.
+    #[inline(always)]
+    pub fn partition_slice(&self) -> &[PartitionControlBlock] {
+        CoreOps::partition_slice(&self.core)
+    }
+
+    /// Returns a mutable slice of all partition control blocks.
+    #[inline(always)]
+    pub fn partition_slice_mut(&mut self) -> &mut [PartitionControlBlock] {
+        CoreOps::partition_slice_mut(&mut self.core)
+    }
+
     /// Returns an immutable reference to the schedule table.
     #[inline(always)]
     pub fn schedule(&self) -> &ScheduleTable<{ C::SCHED }> {

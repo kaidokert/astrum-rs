@@ -801,6 +801,11 @@ impl<const N: usize> PartitionTable<N> {
     pub fn as_slice(&self) -> &[PartitionControlBlock] {
         &self.partitions
     }
+
+    /// Returns a mutable slice of all partition control blocks.
+    pub fn as_slice_mut(&mut self) -> &mut [PartitionControlBlock] {
+        &mut self.partitions
+    }
 }
 
 #[cfg(test)]

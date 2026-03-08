@@ -151,6 +151,10 @@ pub trait CoreOps {
     fn stack_mut(&mut self, index: usize) -> Option<&mut [u32]>;
     /// Returns the base address of a partition's stack storage array.
     fn stack_base(&self, index: usize) -> Option<u32>;
+    /// Returns a slice of all partition control blocks.
+    fn partition_slice(&self) -> &[crate::partition::PartitionControlBlock];
+    /// Returns a mutable slice of all partition control blocks.
+    fn partition_slice_mut(&mut self) -> &mut [crate::partition::PartitionControlBlock];
 }
 
 /// Trait for synchronization primitive sub-structs (semaphores, mutexes).
