@@ -681,21 +681,21 @@ macro_rules! define_unified_kernel {
         /// Offset of `current_partition` field in `Kernel<C>`.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
-        #[allow(dead_code)]
+        #[used]
         static KERNEL_CURRENT_PARTITION_OFFSET: usize =
             ::core::mem::offset_of!($crate::svc::Kernel<$Config>, current_partition);
 
         /// Offset of `ticks_dropped` field in `Kernel<C>`.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
-        #[allow(dead_code)]
+        #[used]
         static KERNEL_TICKS_DROPPED_OFFSET: usize =
             ::core::mem::offset_of!($crate::svc::Kernel<$Config>, ticks_dropped);
 
         /// Offset of `core` field in `Kernel<C>`.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
-        #[allow(dead_code)]
+        #[used]
         static KERNEL_CORE_OFFSET: usize =
             ::core::mem::offset_of!($crate::svc::Kernel<$Config>, core);
 
@@ -703,7 +703,7 @@ macro_rules! define_unified_kernel {
         /// To get the absolute offset from kernel base, add KERNEL_CORE_OFFSET.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
-        #[allow(dead_code)]
+        #[used]
         static CORE_NEXT_PARTITION_OFFSET: usize =
             ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, next_partition);
 
@@ -711,13 +711,13 @@ macro_rules! define_unified_kernel {
         /// To get the absolute offset from kernel base, add KERNEL_CORE_OFFSET.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
-        #[allow(dead_code)]
+        #[used]
         static CORE_PARTITION_SP_OFFSET: usize =
             ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, partition_sp);
 
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
-        #[allow(dead_code)]
+        #[used]
         static CORE_PARTITION_STACK_LIMIT_OFFSET: usize =
             ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, partition_stack_limits);
 
