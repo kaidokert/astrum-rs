@@ -133,8 +133,6 @@ where
     pub partition_sp: [u32; N],
     /// Per-partition stack limits for PendSV overflow pre-check (mirrors PCB stack_limit).
     pub partition_stack_limits: [u32; N],
-    /// Per-partition stack storage, aligned for MPU region base requirements.
-    stacks: [S; N],
     /// Currently active partition index, if any.
     active_partition: Option<u8>,
     /// Monotonic tick counter.
@@ -143,6 +141,10 @@ where
     /// harness so it can force-advance the schedule and call
     /// `set_next_partition()` before PendSV fires.
     yield_requested: bool,
+    /// Per-partition stack storage, aligned for MPU region base requirements.
+    /// Placed last so that `offset_of!(PartitionCore, stacks)` equals the
+    /// size of the metadata region that PendSV assembly may address.
+    pub stacks: [S; N],
 }
 
 impl<const N: usize, const SCHED: usize, S: StackStorage> PartitionCore<N, SCHED, S>
@@ -155,6 +157,17 @@ where
         "StackStorage: ALIGNMENT must equal SIZE_BYTES"
     );
 
+    /// Static enforcement that `stacks` is the last field in `PartitionCore`.
+    /// Required by `define_pendsv!(@assert_offsets)` which uses
+    /// `offset_of!(C, stacks)` as the metadata region size.
+    pub const STACKS_IS_LAST_FIELD: bool = {
+        let stacks = core::mem::offset_of!(Self, stacks);
+        stacks > core::mem::offset_of!(Self, partition_stack_limits)
+            && stacks > core::mem::offset_of!(Self, active_partition)
+            && stacks > core::mem::offset_of!(Self, tick)
+            && stacks > core::mem::offset_of!(Self, yield_requested)
+    };
+
     pub fn new() -> Self {
         #[allow(clippy::let_unit_value)]
         let _ = Self::_ASSERT_ALIGNMENT_EQ_SIZE;
@@ -165,10 +178,10 @@ where
             next_partition: 0,
             partition_sp: [0u32; N],
             partition_stack_limits: [0u32; N],
-            stacks: [S::ZERO; N],
             active_partition: None,
             tick: TickCounter::new(),
             yield_requested: false,
+            stacks: [S::ZERO; N],
         }
     }
 

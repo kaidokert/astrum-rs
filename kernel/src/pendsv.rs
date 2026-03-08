@@ -147,6 +147,29 @@ macro_rules! define_pendsv {
             assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, partition_stack_limits) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
                 "KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET exceeds Thumb2 ldr range");
 
+            // Guard: the Core metadata region (everything before the bulk
+            // `stacks` array) must fit within Thumb2 LDR range from the kernel
+            // base.  `stacks` is placed last in PartitionCore (#[repr(C)]), so
+            // `offset_of!(C, stacks)` equals the metadata size.  Any new field
+            // added before `stacks` is automatically covered by this guard.
+            //
+            // TODO: refactor PartitionCore to extract metadata fields into a
+            // dedicated `CoreMetadata` struct so this guard can use
+            // `size_of::<CoreMetadata>()` instead of `offset_of!(C, stacks)`.
+            // This would decouple the assertion from field ordering. Deferred
+            // because it is a cross-cutting architectural change.
+
+            // Static enforcement: `stacks` must be the last field so that
+            // `offset_of!(C, stacks)` equals the metadata region size.
+            assert!(C::STACKS_IS_LAST_FIELD,
+                "PartitionCore layout violated: `stacks` must be the last field (#[repr(C)])");
+
+            assert!(
+                ::core::mem::offset_of!(K, core)
+                    + ::core::mem::offset_of!(C, stacks)
+                    < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
+                "Core metadata region exceeds Thumb2 ldr range: reduce partition count");
+
             // Field ordering: current_partition before core in Kernel.
             assert!(::core::mem::offset_of!(K, current_partition) < ::core::mem::offset_of!(K, core),
                 "current_partition must precede core in Kernel layout");
@@ -418,5 +441,39 @@ mod tests {
         let base = pcb.cached_base_regions();
         assert!(base[0].0 != 0 || base[0].1 != 0, "R0 must be non-zero");
         assert_eq!(*base, expected);
+    }
+
+    /// Verifies that a large partition config produces a Core metadata
+    /// region that exceeds the Thumb2 LDR offset limit, proving the
+    /// compile-time guard in `define_pendsv!(@assert_offsets)` is necessary.
+    // TODO: add a compile-fail test (e.g. trybuild) that instantiates
+    // `define_pendsv!` with an oversized config and asserts it fails to
+    // compile. Deferred because trybuild infrastructure is not yet set up.
+    ///
+    /// Uses an independent computation (offset of last PendSV-accessed
+    /// array + array size) rather than mirroring the guard's
+    /// `offset_of!(C, stacks)` logic.
+    #[test]
+    fn core_metadata_guard_catches_large_partition_config() {
+        use crate::partition_core::{AlignedStack1K, PartitionCore};
+
+        // 255 partitions: partition_sp[255] and partition_stack_limits[255]
+        // each occupy 1020 bytes, plus PartitionTable, ScheduleTable, and
+        // scalar fields.
+        type BigCore = PartitionCore<255, 4, AlignedStack1K>;
+
+        // Independent check: the end of the last PendSV-accessed array
+        // (partition_stack_limits) must exceed the Thumb2 LDR limit.
+        // This proves the guard is necessary without using offset_of!(stacks).
+        let stack_limits_end = core::mem::offset_of!(BigCore, partition_stack_limits)
+            + core::mem::size_of::<[u32; 255]>();
+
+        assert!(
+            stack_limits_end > super::THUMB2_LDR_MAX_OFFSET,
+            "BigCore partition_stack_limits end ({} bytes) must exceed \
+             THUMB2_LDR_MAX_OFFSET ({}) to prove the guard is necessary",
+            stack_limits_end,
+            super::THUMB2_LDR_MAX_OFFSET
+        );
     }
 }
