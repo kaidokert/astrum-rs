@@ -520,7 +520,7 @@ pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
 /// This macro generates:
 /// - `unsafe extern "C" fn dispatch_hook(f: &mut ExceptionFrame)` — the SVC dispatch hook
 /// - `fn store_kernel(k: Kernel<$Config>)` — stores the kernel and installs the hook
-/// - PendSV accessors: `get_current_partition`, `get_next_partition`, `get_partition_sp_ptr`
+/// - PendSV accessors: `get_partition_sp_ptr`, `get_partition_sp`, `set_partition_sp`
 ///
 /// # Where Bounds
 ///
@@ -848,30 +848,6 @@ macro_rules! define_unified_kernel {
             $crate::state::with_kernel_mut::<$Config, _, _>(f).ok()
         }
 
-        /// Returns the current partition index from the Kernel struct.
-        ///
-        /// Called by the Rust shim from PendSV assembly to read context-switch
-        /// state. Uses `interrupt::free` to safely access kernel state.
-        ///
-        /// Returns `u32::MAX` if the kernel is not initialized.
-        #[cfg_attr(not(test), no_mangle)]
-        #[allow(dead_code)] // Called from assembly, not Rust
-        extern "C" fn get_current_partition() -> u32 {
-            with_kernel(|k| k.current_partition as u32).unwrap_or(u32::MAX)
-        }
-
-        /// Returns the next partition index from the Kernel struct.
-        ///
-        /// Called by the Rust shim from PendSV assembly to read context-switch
-        /// state. Uses `interrupt::free` to safely access kernel state.
-        ///
-        /// Returns `u32::MAX` if the kernel is not initialized.
-        #[cfg_attr(not(test), no_mangle)]
-        #[allow(dead_code)] // Called from assembly, not Rust
-        extern "C" fn get_next_partition() -> u32 {
-            with_kernel(|k| k.next_partition() as u32).unwrap_or(u32::MAX)
-        }
-
         /// Returns a pointer to the partition_sp array in the Kernel struct.
         ///
         /// Called by the Rust shim from PendSV assembly to read/write saved
@@ -916,18 +892,6 @@ macro_rules! define_unified_kernel {
             with_kernel_mut(|k| { let _ = k.set_sp(idx as usize, sp); });
         }
 
-        /// Sets the current partition index in the Kernel struct.
-        ///
-        /// Called by PendSV assembly after context switch to update the
-        /// kernel's current partition. Uses `interrupt::free` to safely
-        /// access kernel state.
-        ///
-        /// Does nothing if the kernel is not initialized.
-        #[cfg_attr(not(test), no_mangle)]
-        #[allow(dead_code)] // Called from assembly, not Rust
-        extern "C" fn set_current_partition(pid: u32) {
-            with_kernel_mut(|k| k.set_current_partition(pid as u8));
-        }
     };
 }
 
@@ -12699,20 +12663,6 @@ mod tests {
             }
 
             #[test]
-            fn macro_generates_get_current_partition() {
-                // Verify get_current_partition exists with extern "C" ABI
-                // and returns u32.
-                let _: extern "C" fn() -> u32 = get_current_partition;
-            }
-
-            #[test]
-            fn macro_generates_get_next_partition() {
-                // Verify get_next_partition exists with extern "C" ABI
-                // and returns u32.
-                let _: extern "C" fn() -> u32 = get_next_partition;
-            }
-
-            #[test]
             fn macro_generates_get_partition_sp_ptr() {
                 // Verify get_partition_sp_ptr exists with extern "C" ABI
                 // and returns *mut u32.
@@ -12731,21 +12681,6 @@ mod tests {
                 // Verify set_partition_sp exists with extern "C" ABI,
                 // takes u32 index and u32 value.
                 let _: extern "C" fn(u32, u32) = set_partition_sp;
-            }
-
-            #[test]
-            fn get_current_partition_returns_max_when_uninitialized() {
-                // When kernel storage is uninitialized, should return u32::MAX
-                // as sentinel. Without calling store_kernel, it remains
-                // uninitialized. We use a fresh module scope.
-                let result = get_current_partition();
-                assert_eq!(result, u32::MAX);
-            }
-
-            #[test]
-            fn get_next_partition_returns_max_when_uninitialized() {
-                let result = get_next_partition();
-                assert_eq!(result, u32::MAX);
             }
 
             #[test]
@@ -12778,43 +12713,6 @@ mod tests {
             // Some generated items (dispatch_hook, store_kernel)
             // are not used in tests but are needed for the macro expansion.
             crate::define_unified_kernel!(UnifiedTestConfig);
-
-            #[test]
-            fn accessors_return_correct_values_after_initialization() {
-                // Create a kernel with known partition state.
-                let mut kernel = Kernel::<UnifiedTestConfig> {
-                    current_partition: 1,
-                    ..Default::default()
-                };
-                kernel.set_next_partition(0);
-                kernel.set_sp(0, 0x2000_1000);
-                kernel.set_sp(1, 0x2000_2000);
-
-                // Store the kernel (initializes KERNEL static).
-                cortex_m::interrupt::free(|cs| {
-                    KERNEL.borrow(cs).replace(Some(kernel));
-                });
-
-                // Now test that accessors return the expected values.
-                assert_eq!(get_current_partition(), 1);
-                assert_eq!(get_next_partition(), 0);
-
-                // Verify partition_sp pointer is valid and points to correct data.
-                let sp_ptr = get_partition_sp_ptr();
-                assert!(!sp_ptr.is_null());
-
-                // SAFETY: We just verified the pointer is non-null and we know
-                // the kernel is initialized with our test data.
-                unsafe {
-                    assert_eq!(*sp_ptr, 0x2000_1000); // partition_sp[0]
-                    assert_eq!(*sp_ptr.add(1), 0x2000_2000); // partition_sp[1]
-                }
-
-                // Clean up: reset KERNEL to None for other tests.
-                cortex_m::interrupt::free(|cs| {
-                    KERNEL.borrow(cs).replace(None);
-                });
-            }
 
             #[test]
             fn get_partition_sp_returns_correct_values() {
