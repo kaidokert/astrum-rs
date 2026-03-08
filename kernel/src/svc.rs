@@ -2421,6 +2421,28 @@ where
         self.partitions_mut().get_mut(index)
     }
 
+    /// Increment starvation counters for all Ready partitions that are not
+    /// the currently active partition. Called when a schedule slot is wasted
+    /// on a Waiting partition.
+    pub fn increment_starvation_for_ready_partitions(&mut self) {
+        let active = self.active_partition;
+        for pcb in self.partitions_mut().iter_mut() {
+            if Some(pcb.id()) == active {
+                continue;
+            }
+            if pcb.state() == PartitionState::Ready {
+                pcb.increment_starvation();
+                if pcb.is_starved() {
+                    crate::klog!(
+                        "partition {} starved (count={})",
+                        pcb.id(),
+                        pcb.starvation_count()
+                    );
+                }
+            }
+        }
+    }
+
     /// Returns the number of partitions currently registered.
     #[inline(always)]
     pub fn partition_count(&self) -> usize {
@@ -2644,9 +2666,7 @@ where
                 .map(|pcb| pcb.state() == PartitionState::Waiting)
                 .unwrap_or(false);
             if is_waiting {
-                // TODO: apply the same Ready-partition starvation logic as
-                // advance_schedule_tick (iterate non-active Ready partitions
-                // and increment their starvation count).
+                self.increment_starvation_for_ready_partitions();
                 // Bug 06: restore active partition to Running if it is Waiting.
                 // Note: `is_waiting` checks `pid` (next scheduled), not `ap`
                 // (active partition) — they can differ in multi-partition
@@ -9813,6 +9833,57 @@ mod tests {
         let result = k.yield_current_slot();
         assert_eq!(result.partition_id(), Some(1));
         assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
+    }
+
+    /// yield_current_slot increments starvation for Ready non-active
+    /// partitions when the target partition is Waiting.
+    /// 3-partition schedule: P0(5), P1(3), P2(4).
+    /// P0 active/Running, P1 Waiting (target), P2 Ready → P2 starvation++.
+    #[test]
+    fn yield_current_slot_increments_starvation_on_waiting_target() {
+        let mut k = kernel_with_3_partition_schedule();
+
+        // Bootstrap P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Transition P1 to Waiting (Ready -> Running -> Waiting).
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // P2 is Ready (default after Kernel::new).
+        assert_eq!(k.partitions().get(2).unwrap().starvation_count(), 0);
+
+        // Yield from P0: force_advance targets P1 (Waiting) → skipped.
+        // P2 is Ready and not active, so P2.starvation_count increments.
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), None);
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
+        assert_eq!(k.partitions().get(2).unwrap().starvation_count(), 1);
+    }
+
+    /// yield_current_slot does NOT increment starvation when the target
+    /// partition is Ready (successful switch — no wasted slot).
+    #[test]
+    fn yield_current_slot_no_starvation_when_target_ready() {
+        let mut k = kernel_with_3_partition_schedule();
+
+        // Bootstrap P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // P1 and P2 are both Ready (default).
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
+        assert_eq!(k.partitions().get(2).unwrap().starvation_count(), 0);
+
+        // Yield from P0: force_advance targets P1 (Ready) → switch succeeds.
+        let result = k.yield_current_slot();
+        assert_eq!(result.partition_id(), Some(1));
+
+        // No starvation incremented for any partition on a successful switch.
+        assert_eq!(k.partitions().get(0).unwrap().starvation_count(), 0);
+        assert_eq!(k.partitions().get(2).unwrap().starvation_count(), 0);
     }
 
     /// Tests that yield_current_slot transitions the outgoing partition
