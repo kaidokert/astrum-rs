@@ -1,11 +1,17 @@
-//! Defense-in-depth test: two partitions call sys_yield() in a loop, checking
-//! PRIMASK==0 and BASEPRI==0 after each SVC under fast SysTick+PendSV stress.
+//! Defense-in-depth test: two partitions call sys_yield() and sys_get_time()
+//! in a loop under fast SysTick+PendSV stress.
+//!
+//! Verification strategy: a custom SVC dispatch hook reads PRIMASK and BASEPRI
+//! from Handler mode (privileged) inside the SVCall exception — after the
+//! assembly defense-in-depth clears but before returning to Thread mode.
+//! This avoids the ARMv7-M Read-As-Zero (RAZ) caveat that makes unprivileged
+//! MRS to PRIMASK/BASEPRI vacuously return 0 (ARMv7-M ARM B5.2.3).
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::PartitionConfig;
@@ -31,10 +37,29 @@ const MIN_COUNT: u32 = 4;
 
 static PARTITION_COUNTS: [AtomicU32; NUM_PARTITIONS] = [AtomicU32::new(0), AtomicU32::new(0)];
 
+/// Set by the verifying dispatch hook if PRIMASK or BASEPRI is non-zero
+/// inside the SVCall handler (Handler mode, privileged read — not RAZ).
+static HANDLER_MASK_VIOLATION: AtomicBool = AtomicBool::new(false);
+
 kernel::define_unified_harness!(Config, |tick, _k| {
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();
 
+    // Check for mask violations on every tick — fail fast if PRIMASK/BASEPRI
+    // leaked, rather than hanging until timeout.
+    if HANDLER_MASK_VIOLATION.load(Ordering::Acquire) {
+        let c: [u32; 2] = core::array::from_fn(|i| {
+            PARTITION_COUNTS
+                .get(i)
+                .map_or(0, |c| c.load(Ordering::Acquire))
+        });
+        hprintln!(
+            "svcall_primask_clear_test: FAIL mask leak at tick {} ({:?})",
+            tick,
+            c
+        );
+        debug::exit(debug::EXIT_FAILURE);
+    }
     if tick >= CHECK_TICK {
         let c: [u32; 2] = core::array::from_fn(|i| {
             PARTITION_COUNTS
@@ -57,30 +82,30 @@ kernel::define_unified_harness!(Config, |tick, _k| {
     }
 });
 
-/// Returns true if PRIMASK is set (interrupts disabled).
-#[inline(always)]
-fn primask_is_set() -> bool {
+/// Verifying SVC dispatch hook: reads PRIMASK and BASEPRI from Handler mode
+/// (privileged — real values, not RAZ) to check the assembly defense-in-depth
+/// clears actually worked, then delegates to the kernel dispatch.
+///
+/// # Safety
+///
+/// Must be called from SVCall exception context with a valid `ExceptionFrame`.
+unsafe extern "C" fn verifying_dispatch_hook(f: &mut kernel::context::ExceptionFrame) {
+    // Read PRIMASK and BASEPRI from Handler mode (privileged, real values).
+    // cortex_m 0.7 Primask::is_inactive() returns true when PRIMASK bit == 1
+    // (i.e. configurable exceptions inactive / interrupts masked).
+    // Reference: cortex-m-0.7.7/src/register/primask.rs — read() maps bit=1 → Inactive.
     #[cfg(target_arch = "arm")]
     {
-        cortex_m::register::primask::read().is_inactive()
+        let primask_set = cortex_m::register::primask::read().is_inactive();
+        let basepri_nonzero = cortex_m::register::basepri::read() != 0;
+        if primask_set || basepri_nonzero {
+            HANDLER_MASK_VIOLATION.store(true, Ordering::Release);
+        }
     }
-    #[cfg(not(target_arch = "arm"))]
-    {
-        false // host-build stub for clippy / check
-    }
-}
-
-/// Returns the current BASEPRI value (0 means no priority masking).
-#[inline(always)]
-fn basepri_value() -> u8 {
-    #[cfg(target_arch = "arm")]
-    {
-        cortex_m::register::basepri::read()
-    }
-    #[cfg(not(target_arch = "arm"))]
-    {
-        0 // host-build stub for clippy / check
-    }
+    // Delegate to the macro-generated dispatch_hook which handles dispatch
+    // and post-dispatch yield logic, avoiding manual duplication.
+    // SAFETY: called from SVCall exception context with a valid ExceptionFrame.
+    unsafe { dispatch_hook(f) }
 }
 
 fn fail_halt(msg: &str) -> ! {
@@ -100,11 +125,16 @@ fn partition_task(id: usize) -> ! {
         if plib::sys_yield().is_err() {
             fail_halt("sys_yield failed");
         }
-        if primask_is_set() {
-            fail_halt("PRIMASK leak after sys_yield");
+        // Check handler-side verification (privileged read, not RAZ).
+        if HANDLER_MASK_VIOLATION.load(Ordering::Acquire) {
+            fail_halt("PRIMASK/BASEPRI non-zero in SVCall handler");
         }
-        if basepri_value() != 0 {
-            fail_halt("BASEPRI leak after sys_yield");
+        // Also exercise sys_get_time to cover a second syscall path.
+        if plib::sys_get_time().is_err() {
+            fail_halt("sys_get_time failed");
+        }
+        if HANDLER_MASK_VIOLATION.load(Ordering::Acquire) {
+            fail_halt("PRIMASK/BASEPRI non-zero in SVCall handler");
         }
         counter.fetch_add(1, Ordering::Release);
     }
@@ -125,9 +155,11 @@ fn main() -> ! {
         ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1).expect("svcall: sched");
     let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
     let k = Kernel::<Config>::create(sched, &cfgs).expect("svcall: kernel");
-    // TODO: reviewer false positive — boot() and store_kernel() are generated
-    // by the define_unified_harness!() macro, not imported.
+    // boot() and store_kernel() are generated by define_unified_harness!().
     store_kernel(k);
+    // Override the macro-generated dispatch hook with our verifying wrapper
+    // that reads PRIMASK/BASEPRI from Handler mode before delegating.
+    kernel::svc::set_dispatch_hook(verifying_dispatch_hook);
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
     match boot(&parts, &mut p).expect("svcall: boot") {}
 }
