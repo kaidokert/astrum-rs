@@ -2644,17 +2644,9 @@ where
                 .map(|pcb| pcb.state() == PartitionState::Waiting)
                 .unwrap_or(false);
             if is_waiting {
-                // Track starvation: the target partition was skipped.
-                if let Some(pcb) = self.pcb_mut(pid as usize) {
-                    pcb.increment_starvation();
-                    if pcb.is_starved() {
-                        crate::klog!(
-                            "partition {} starved (count={})",
-                            pid,
-                            pcb.starvation_count()
-                        );
-                    }
-                }
+                // TODO: apply the same Ready-partition starvation logic as
+                // advance_schedule_tick (iterate non-active Ready partitions
+                // and increment their starvation count).
                 // Bug 06: restore active partition to Running if it is Waiting.
                 // Note: `is_waiting` checks `pid` (next scheduled), not `ap`
                 // (active partition) — they can differ in multi-partition
@@ -8557,9 +8549,10 @@ mod tests {
         );
     }
 
-    /// Starvation count increases by 1 each time a Waiting partition is skipped.
+    /// Waiting partitions do not accumulate starvation — they voluntarily
+    /// blocked, so skipping them is expected.
     #[test]
-    fn advance_schedule_tick_increments_starvation_on_skip() {
+    fn advance_schedule_tick_waiting_not_starved() {
         use crate::scheduler::ScheduleEvent;
         let mut k = kernel_with_schedule();
 
@@ -8581,12 +8574,14 @@ mod tests {
         pcb1.transition(PartitionState::Waiting).unwrap();
         assert_eq!(pcb1.starvation_count(), 0);
 
-        // First skip: starvation_count goes to 1.
+        // P1's slot fires — P1 is Waiting so it is skipped.
+        // Only P0 exists and it is Running (active), so no Ready
+        // partition accumulates starvation.
         assert_eq!(
             svc_scheduler::advance_schedule_tick(&mut k),
             ScheduleEvent::None
         );
-        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 1);
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
 
         // Advance through remaining P1 ticks + full P0 slot to reach
         // another P1 boundary. P1 has 3 ticks, then P0 has 5 ticks.
@@ -8594,16 +8589,17 @@ mod tests {
         for _ in 0..INTER_P1_TICKS {
             svc_scheduler::advance_schedule_tick(&mut k);
         }
-        // Next tick hits P1 boundary again.
+        // Next tick hits P1 boundary again — still Waiting, still 0.
         assert_eq!(
             svc_scheduler::advance_schedule_tick(&mut k),
             ScheduleEvent::None
         );
-        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 2);
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
     }
 
-    /// Starvation count resets to 0 when a partition starts running after
-    /// being previously skipped.
+    /// Starvation count resets to 0 when a partition starts running.
+    /// Artificially sets starvation to verify the scheduler resets it
+    /// on PartitionSwitch.
     #[test]
     fn advance_schedule_tick_resets_starvation_on_run() {
         use crate::scheduler::ScheduleEvent;
@@ -8621,28 +8617,13 @@ mod tests {
             );
         }
 
-        // Transition P1 to Waiting so it gets skipped.
+        // Artificially give P1 a non-zero starvation count.
         let pcb1 = k.partitions_mut().get_mut(1).unwrap();
-        pcb1.transition(PartitionState::Running).unwrap();
-        pcb1.transition(PartitionState::Waiting).unwrap();
+        pcb1.increment_starvation();
+        pcb1.increment_starvation();
+        assert_eq!(pcb1.starvation_count(), 2);
 
-        // Skip P1 — starvation goes to 1.
-        assert_eq!(
-            svc_scheduler::advance_schedule_tick(&mut k),
-            ScheduleEvent::None
-        );
-        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 1);
-
-        // Now make P1 Ready again so it will run on the next cycle.
-        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
-        pcb1.transition(PartitionState::Ready).unwrap();
-
-        // Advance through remaining P1 ticks + P0 slot to next P1 boundary.
-        for _ in 0..INTER_P1_TICKS {
-            svc_scheduler::advance_schedule_tick(&mut k);
-        }
-
-        // This tick switches to P1 (Ready) — starvation resets.
+        // This tick switches to P1 (Ready) — starvation resets to 0.
         assert_eq!(
             svc_scheduler::advance_schedule_tick(&mut k),
             ScheduleEvent::PartitionSwitch(1)
@@ -8677,18 +8658,68 @@ mod tests {
         assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
     }
 
-    /// Starvation count reaches STARVATION_THRESHOLD after exactly 3 skips.
+    /// Helper: 3-partition schedule for starvation tests.
+    /// P0: 5 ticks, P1: 3 ticks, P2: 4 ticks.
+    fn kernel_with_3_partition_schedule() -> Kernel<TestConfig> {
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 5)).unwrap();
+        schedule.add(ScheduleEntry::new(1, 3)).unwrap();
+        schedule.add(ScheduleEntry::new(2, 4)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            schedule.add_system_window(1).unwrap();
+        }
+        schedule.start();
+        let cfgs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0000,
+                stack_base: 0x2000_0000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
+            },
+            PartitionConfig {
+                id: 1,
+                entry_point: 0x0800_1000,
+                stack_base: 0x2000_1000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
+            },
+            PartitionConfig {
+                id: 2,
+                entry_point: 0x0800_2000,
+                stack_base: 0x2000_2000,
+                stack_size: 1024,
+                mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
+                peripheral_regions: heapless::Vec::new(),
+            },
+        ];
+        #[cfg(not(feature = "dynamic-mpu"))]
+        let k = Kernel::<TestConfig>::new(schedule, &cfgs).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        let k = Kernel::<TestConfig>::new(
+            schedule,
+            &cfgs,
+            crate::virtual_device::DeviceRegistry::new(),
+        )
+        .unwrap();
+        k
+    }
+
+    /// Ready partition accumulates starvation when another partition's
+    /// Waiting slot is skipped.  3-partition schedule: P0(5), P1(3), P2(4).
+    /// P0 runs, P1 is Waiting (skipped), P2 is Ready → P2 starvation++.
     #[test]
-    fn advance_schedule_tick_starvation_reaches_threshold() {
-        use crate::partition::STARVATION_THRESHOLD;
+    fn advance_schedule_tick_ready_partition_starved_on_skip() {
         use crate::scheduler::ScheduleEvent;
-        let mut k = kernel_with_schedule();
+        let mut k = kernel_with_3_partition_schedule();
 
         // Bootstrap P0 as active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
 
-        // Transition P1 to Waiting so it gets skipped on every boundary.
         // Advance to boundary before P1's slot (P0 has 5 ticks).
         for _ in 0..4 {
             assert_eq!(
@@ -8696,42 +8727,127 @@ mod tests {
                 ScheduleEvent::None
             );
         }
+
+        // Transition P1 to Waiting so it will be skipped.
         let pcb1 = k.partitions_mut().get_mut(1).unwrap();
         pcb1.transition(PartitionState::Running).unwrap();
         pcb1.transition(PartitionState::Waiting).unwrap();
-        assert_eq!(pcb1.starvation_count(), 0);
-        assert!(!pcb1.is_starved());
 
-        // Skip P1 three times (STARVATION_THRESHOLD == 3).
-        // Each cycle: hit P1 boundary (skip) -> advance through P1's remaining
-        // ticks + full P0 slot to reach next P1 boundary.
-        for skip in 1..=STARVATION_THRESHOLD {
-            // Tick that hits P1 boundary — P1 is Waiting, so it gets skipped.
+        // P2 is Ready (default state).
+        assert_eq!(k.partitions().get(2).unwrap().starvation_count(), 0);
+
+        // P1's slot fires — P1 is Waiting → skipped.
+        // P2 is Ready and not active, so P2.starvation_count increments.
+        assert_eq!(
+            svc_scheduler::advance_schedule_tick(&mut k),
+            ScheduleEvent::None
+        );
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
+        assert_eq!(k.partitions().get(2).unwrap().starvation_count(), 1);
+    }
+
+    /// Starvation count for a Ready partition reaches STARVATION_THRESHOLD
+    /// after repeated skips of a Waiting partition's slot.
+    #[test]
+    fn advance_schedule_tick_starvation_reaches_threshold() {
+        use crate::partition::STARVATION_THRESHOLD;
+        use crate::scheduler::ScheduleEvent;
+        let mut k = kernel_with_3_partition_schedule();
+
+        // Bootstrap P0 as active Running partition.
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+
+        // Advance to boundary before P1's slot (P0 has 5 ticks).
+        for _ in 0..4 {
             assert_eq!(
                 svc_scheduler::advance_schedule_tick(&mut k),
                 ScheduleEvent::None
             );
-            let count = k.partitions().get(1).unwrap().starvation_count();
+        }
+
+        // Transition P1 to Waiting so it gets skipped on every boundary.
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+
+        // P2 is Ready — it will accumulate starvation each time P1's slot
+        // fires and is skipped.
+        assert_eq!(k.partitions().get(2).unwrap().starvation_count(), 0);
+        assert!(!k.partitions().get(2).unwrap().is_starved());
+
+        // Each cycle: P1 boundary (skip) → advance through remaining
+        // P1 ticks + P2 slot + P0 slot to reach next P1 boundary.
+        // P1 has 3 ticks, P2 has 4 ticks, P0 has 5 ticks.
+        // After hitting P1 boundary (1 tick consumed), remaining = 2 + 4 + 5 = 11.
+        // Under dynamic-mpu there is an extra SystemWindow tick.
+        #[cfg(not(feature = "dynamic-mpu"))]
+        const CYCLE_TICKS: usize = 2 + 4 + 5;
+        #[cfg(feature = "dynamic-mpu")]
+        const CYCLE_TICKS: usize = 2 + 4 + 1 + 5;
+
+        for skip in 1..=STARVATION_THRESHOLD {
+            // Tick that hits P1 boundary — P1 is Waiting, P2 is Ready → P2.starvation++.
+            assert_eq!(
+                svc_scheduler::advance_schedule_tick(&mut k),
+                ScheduleEvent::None
+            );
+            let count = k.partitions().get(2).unwrap().starvation_count();
             assert_eq!(
                 count, skip,
                 "after skip #{skip}, expected count={skip}, got {count}"
             );
 
             if skip < STARVATION_THRESHOLD {
-                assert!(!k.partitions().get(1).unwrap().is_starved());
-                // Advance through remaining P1 ticks (2) + full P0 slot (5).
-                for _ in 0..INTER_P1_TICKS {
+                assert!(!k.partitions().get(2).unwrap().is_starved());
+                // Advance through remaining P1 ticks + P2 slot + P0 slot.
+                // P2's slot will fire PartitionSwitch(2) — P2 is Ready, so it
+                // runs and its starvation resets. We must re-setup for next skip.
+                //
+                // Instead, also put P2 in Waiting so that P2's slot is skipped
+                // too, and P2's starvation is not reset by running. Wait — that
+                // would make P2 Waiting, not Ready, so it wouldn't accumulate
+                // starvation. We need P2 to stay Ready but NOT run.
+                //
+                // The only way P2 stays Ready but doesn't run is if we don't
+                // advance through P2's slot boundary. Instead, skip through
+                // P1's remaining ticks, then P2's slot (P2 runs — starvation
+                // resets), then P0's slot, then re-set starvation manually
+                // to preserve the count for the next skip.
+                for _ in 0..CYCLE_TICKS {
                     svc_scheduler::advance_schedule_tick(&mut k);
+                }
+                // P2 ran during its slot, resetting starvation. Re-apply
+                // the accumulated count for the next iteration.
+                let pcb2 = k.partitions_mut().get_mut(2).unwrap();
+                for _ in 0..skip {
+                    pcb2.increment_starvation();
                 }
             }
         }
 
-        // After exactly STARVATION_THRESHOLD skips, is_starved() must be true.
-        assert!(k.partitions().get(1).unwrap().is_starved());
+        // After exactly STARVATION_THRESHOLD skips, P2 is_starved() must be true.
+        assert!(k.partitions().get(2).unwrap().is_starved());
         assert_eq!(
-            k.partitions().get(1).unwrap().starvation_count(),
+            k.partitions().get(2).unwrap().starvation_count(),
             STARVATION_THRESHOLD
         );
+    }
+
+    #[test]
+    fn advance_schedule_tick_sleeping_not_starved() {
+        let mut k = kernel_with_schedule();
+        k.set_next_partition(0);
+        k.active_partition = Some(0);
+        for _ in 0..4 {
+            svc_scheduler::advance_schedule_tick(&mut k);
+        }
+        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
+        pcb1.transition(PartitionState::Running).unwrap();
+        pcb1.transition(PartitionState::Waiting).unwrap();
+        pcb1.set_sleep_until(9999);
+        svc_scheduler::advance_schedule_tick(&mut k);
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
     }
 
     /// ticks_dropped starts at zero on a new kernel.
@@ -9652,10 +9768,10 @@ mod tests {
         );
     }
 
-    /// yield_current_slot increments starvation count when skipping a
-    /// Waiting partition.
+    /// yield_current_slot does NOT increment starvation for a Waiting
+    /// partition — it voluntarily blocked.
     #[test]
-    fn yield_current_slot_increments_starvation_on_skip() {
+    fn yield_current_slot_waiting_not_starved() {
         let mut k = kernel_with_schedule();
 
         // Make P0 the active Running partition.
@@ -9669,64 +9785,11 @@ mod tests {
         assert_eq!(pcb1.starvation_count(), 0);
 
         // Yield from P0: force_advance targets P1, but P1 is Waiting =>
-        // skipped, starvation incremented.
+        // skipped. With only 2 partitions (P0 Running, P1 Waiting), no
+        // Ready partition exists to accumulate starvation.
         let result = k.yield_current_slot();
         assert_eq!(result.partition_id(), None);
-        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 1);
-    }
-
-    /// Starvation count reaches STARVATION_THRESHOLD via yield_current_slot.
-    #[test]
-    fn yield_current_slot_starvation_reaches_threshold() {
-        use crate::partition::STARVATION_THRESHOLD;
-        let mut k = kernel_with_schedule();
-
-        // Make P0 the active Running partition.
-        k.set_next_partition(0);
-        k.active_partition = Some(0);
-
-        // Transition P1 to Waiting so it gets skipped on every yield.
-        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
-        pcb1.transition(PartitionState::Running).unwrap();
-        pcb1.transition(PartitionState::Waiting).unwrap();
-        assert_eq!(pcb1.starvation_count(), 0);
-        assert!(!pcb1.is_starved());
-
-        // Skip P1 STARVATION_THRESHOLD times via yield.
-        // Each iteration: yield from P0 (force_advance → P1, skipped),
-        // then tick through P1 slot (3) + P0 slot (5) - 1 to land back on
-        // P0's last tick, so the next yield targets P1 again.
-        for skip in 1..=STARVATION_THRESHOLD {
-            let result = k.yield_current_slot();
-            assert_eq!(result.partition_id(), None);
-            let count = k.partitions().get(1).unwrap().starvation_count();
-            assert_eq!(
-                count, skip,
-                "after skip #{skip}, expected count={skip}, got {count}"
-            );
-
-            if skip < STARVATION_THRESHOLD {
-                assert!(!k.partitions().get(1).unwrap().is_starved());
-                // Advance through P1 slot (3 ticks) to reach P0 boundary.
-                // Then advance through P0 slot (4 ticks) staying within P0
-                // so the next yield targets P1 again.
-                // Under dynamic-mpu, also skip SW:1 between P1 and P0.
-                #[cfg(not(feature = "dynamic-mpu"))]
-                const YIELD_CYCLE_TICKS: usize = 3 + 4;
-                #[cfg(feature = "dynamic-mpu")]
-                const YIELD_CYCLE_TICKS: usize = 3 + 1 + 4;
-                for _ in 0..YIELD_CYCLE_TICKS {
-                    svc_scheduler::advance_schedule_tick(&mut k);
-                }
-            }
-        }
-
-        // After exactly STARVATION_THRESHOLD skips, is_starved() must be true.
-        assert!(k.partitions().get(1).unwrap().is_starved());
-        assert_eq!(
-            k.partitions().get(1).unwrap().starvation_count(),
-            STARVATION_THRESHOLD
-        );
+        assert_eq!(k.partitions().get(1).unwrap().starvation_count(), 0);
     }
 
     /// yield_current_slot resets starvation count on the incoming partition

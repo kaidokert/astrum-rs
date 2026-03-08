@@ -136,14 +136,23 @@ where
                 .pcb(pid as usize)
                 .is_some_and(|pcb| pcb.state() == PartitionState::Waiting);
             if target_waiting {
-                if let Some(pcb) = kernel.pcb_mut(pid as usize) {
-                    pcb.increment_starvation();
-                    if pcb.is_starved() {
-                        crate::klog!(
-                            "partition {} starved (count={})",
-                            pid,
-                            pcb.starvation_count()
-                        );
+                // Increment starvation for Ready partitions that are not
+                // currently active — they want to run but the schedule slot
+                // was wasted on a Waiting partition.
+                let active = kernel.active_partition;
+                for pcb in kernel.partitions_mut().iter_mut() {
+                    if Some(pcb.id()) == active {
+                        continue;
+                    }
+                    if pcb.state() == PartitionState::Ready {
+                        pcb.increment_starvation();
+                        if pcb.is_starved() {
+                            crate::klog!(
+                                "partition {} starved (count={})",
+                                pcb.id(),
+                                pcb.starvation_count()
+                            );
+                        }
                     }
                 }
                 if let Some(ap) = kernel.active_partition {

@@ -2587,4 +2587,27 @@ mod tests {
         }
         assert_eq!(pcb.starvation_count(), u8::MAX);
     }
+
+    #[test]
+    fn ready_partition_starved_then_reset() {
+        let mut pcb = make_pcb();
+        assert_eq!(pcb.state(), PartitionState::Ready);
+        for _ in 0..STARVATION_THRESHOLD {
+            pcb.increment_starvation();
+        }
+        assert!(pcb.is_starved());
+        pcb.reset_starvation();
+        assert_eq!(pcb.starvation_count(), 0);
+        assert!(!pcb.is_starved());
+    }
+
+    #[test]
+    fn sleeping_partition_not_starved() {
+        let mut pcb = make_pcb();
+        pcb.transition(PartitionState::Running).unwrap();
+        pcb.transition(PartitionState::Waiting).unwrap();
+        pcb.set_sleep_until(9999);
+        assert_eq!(pcb.starvation_count(), 0);
+        assert!(!pcb.is_starved());
+    }
 }
