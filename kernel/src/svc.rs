@@ -2049,7 +2049,7 @@ where
                 } else {
                     let target_raw = (frame.r2 & 0xFF) as usize;
                     let writable = (frame.r2 & lend_flags::WRITABLE) != 0;
-                    if target_raw >= self.partitions().len() {
+                    if target_raw >= self.partition_count() {
                         SvcError::InvalidPartition.to_u32()
                     } else {
                         let target = target_raw as u8;
@@ -2087,7 +2087,7 @@ where
             Some(SyscallId::BufferRevoke) => {
                 let slot = frame.r1 as usize;
                 let target_raw = frame.r2 as usize;
-                if target_raw >= self.partitions().len() {
+                if target_raw >= self.partition_count() {
                     SvcError::InvalidPartition.to_u32()
                 } else {
                     let target = target_raw as u8;
@@ -2107,7 +2107,7 @@ where
                 let slot = frame.r1 as usize;
                 let new_owner_raw = frame.r2 as usize;
                 match u8::try_from(new_owner_raw) {
-                    Ok(new_owner) if (new_owner as usize) < self.partitions().len() => {
+                    Ok(new_owner) if (new_owner as usize) < self.partition_count() => {
                         match self.buffers.transfer_ownership(
                             slot,
                             self.current_partition,
@@ -2644,13 +2644,12 @@ where
         }
         if let Some(pid) = result.partition_id() {
             let is_waiting = self
-                .partitions()
-                .get(pid as usize)
+                .pcb(pid as usize)
                 .map(|pcb| pcb.state() == PartitionState::Waiting)
                 .unwrap_or(false);
             if is_waiting {
                 // Track starvation: the target partition was skipped.
-                if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
+                if let Some(pcb) = self.pcb_mut(pid as usize) {
                     pcb.increment_starvation();
                     if pcb.is_starved() {
                         crate::klog!(
@@ -2666,8 +2665,7 @@ where
                 // schedules, so this guard is intentionally not redundant.
                 if let Some(ap) = self.active_partition {
                     if self
-                        .partitions()
-                        .get(ap as usize)
+                        .pcb(ap as usize)
                         .is_some_and(|p| p.state() == PartitionState::Waiting)
                         && try_transition(self.partitions_mut(), ap, PartitionState::Ready)
                     {
@@ -2678,7 +2676,7 @@ where
             }
             svc_scheduler::transition_outgoing_ready(self);
             // Reset starvation: the incoming partition is now running.
-            if let Some(pcb) = self.partitions_mut().get_mut(pid as usize) {
+            if let Some(pcb) = self.pcb_mut(pid as usize) {
                 pcb.reset_starvation();
             }
             self.active_partition = Some(pid);

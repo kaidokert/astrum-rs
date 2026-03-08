@@ -245,7 +245,7 @@ macro_rules! define_unified_harness {
             if !<$Config as $crate::config::KernelConfig>::MPU_ENFORCE { return Ok(()); }
             $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
-                let pcb = k.partitions().get(pid as usize)
+                let pcb = k.pcb(pid as usize)
                     .ok_or("boot: next_partition PID missing from partition table")?;
                 $crate::mpu::apply_partition_mpu_cached(mpu, pcb);
                 Ok(())
@@ -264,7 +264,7 @@ macro_rules! define_unified_harness {
         fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) -> Result<(), &'static str> {
             $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
-                let pcb = k.partitions().get(pid as usize)
+                let pcb = k.pcb(pid as usize)
                     .ok_or("boot: next_partition PID missing from partition table")?;
                 // Program R0-R5 from pre-computed cache within a single
                 // disable/enable cycle that spans strategy setup below.
@@ -346,7 +346,7 @@ macro_rules! define_unified_harness {
             #[cfg_attr(not(feature = "dynamic-mpu"), allow(unused_variables))]
             let pid = match $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
-                let pcb = match k.partitions().get(pid as usize) {
+                let pcb = match k.pcb(pid as usize) {
                     Some(pcb) => pcb,
                     None => {
                         // [KPANIC:pendsv-bad-pid] Fatal: apply deny-all
