@@ -27,6 +27,7 @@ EXAMPLES=(
     mpu_periph_precompute_test
     all_syscalls_smoke_test
     dropped_tick_test
+    pendstclr_systick_test
     starvation_detect_test
     pendsv_stack_overflow_test
 )
