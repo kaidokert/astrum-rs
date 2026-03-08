@@ -726,6 +726,10 @@ pub const fn assert_priority_order<C: KernelConfig>() {
         C::IRQ_DEFAULT_PRIORITY < C::PENDSV_PRIORITY,
         "IRQ default priority must be strictly higher (smaller number) than PendSV priority"
     );
+    assert!(
+        C::PENDSV_PRIORITY == 0xFF,
+        "PendSV priority must be 0xFF (lowest urgency)"
+    );
 }
 
 /// Runtime guard ensuring an IRQ priority does not violate the three-tier
@@ -1639,7 +1643,7 @@ mod tests {
     struct CustomPriority;
     impl KernelConfig for CustomPriority {
         const N: usize = 2;
-        const PENDSV_PRIORITY: u8 = 0xE0;
+        const PENDSV_PRIORITY: u8 = 0xFF;
         const SYSTICK_PRIORITY: u8 = 0x10;
         const IRQ_DEFAULT_PRIORITY: u8 = 0x80;
         const CORE_CLOCK_HZ: u32 = 80_000_000; // 10 ms tick at 80 MHz
@@ -1683,7 +1687,7 @@ mod tests {
 
     #[test]
     fn custom_priorities_override_defaults() {
-        assert_eq!(CustomPriority::PENDSV_PRIORITY, 0xE0);
+        assert_eq!(CustomPriority::PENDSV_PRIORITY, 0xFF);
         assert_eq!(CustomPriority::SYSTICK_PRIORITY, 0x10);
         assert_eq!(CustomPriority::IRQ_DEFAULT_PRIORITY, 0x80);
     }
@@ -3236,6 +3240,90 @@ mod tests {
     #[should_panic(expected = "IRQ default priority must be strictly higher")]
     fn assert_priority_order_panics_pendsv_below_irq_default() {
         assert_priority_order::<PendsvBelowDefault>();
+    }
+
+    /// Valid three-tier ordering must pass without panic.
+    #[test]
+    fn assert_priority_order_valid_default_passes() {
+        // DefaultConfig: SVCALL=0x00 < SYSTICK=0x10 < MIN_APP=0x20
+        //                <= IRQ_DEFAULT=0xC0 < PENDSV=0xFF
+        assert_priority_order::<DefaultConfig>();
+    }
+
+    // TODO: test structs rely on kernel_config_types!() providing all required
+    // associated types and on KernelConfig trait defaults for unset priority
+    // constants. If trait defaults change, these tests may need updating.
+
+    /// SVCall less urgent (numerically greater) than SysTick must panic.
+    struct SvcallLessUrgentThanSystick;
+    impl KernelConfig for SvcallLessUrgentThanSystick {
+        const N: usize = 2;
+        const SVCALL_PRIORITY: u8 = 0x20;
+        const SYSTICK_PRIORITY: u8 = 0x10; // SVCall less urgent than SysTick → invalid
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "SVCall priority must be strictly higher")]
+    fn assert_priority_order_panics_svcall_less_urgent_than_systick() {
+        assert_priority_order::<SvcallLessUrgentThanSystick>();
+    }
+
+    /// PendSV set to a value other than 0xFF must panic.
+    struct PendsvNotLowestUrgency;
+    impl KernelConfig for PendsvNotLowestUrgency {
+        const N: usize = 2;
+        const PENDSV_PRIORITY: u8 = 0xFE; // not 0xFF → invalid
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "PendSV priority must be 0xFF")]
+    fn assert_priority_order_panics_pendsv_not_0xff() {
+        assert_priority_order::<PendsvNotLowestUrgency>();
+    }
+
+    /// PendSV more urgent (numerically smaller) than IRQ_DEFAULT must panic.
+    struct PendsvMoreUrgentThanIrqDefault;
+    impl KernelConfig for PendsvMoreUrgentThanIrqDefault {
+        const N: usize = 2;
+        const PENDSV_PRIORITY: u8 = 0x80; // more urgent than IRQ_DEFAULT
+        const IRQ_DEFAULT_PRIORITY: u8 = 0xC0;
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "IRQ default priority must be strictly higher")]
+    fn assert_priority_order_panics_pendsv_more_urgent_than_irq_default() {
+        assert_priority_order::<PendsvMoreUrgentThanIrqDefault>();
+    }
+
+    /// Static check: MIN_APP_IRQ_PRIORITY numerically below SYSTICK_PRIORITY
+    /// (app IRQ more urgent than tick) must be caught by assert_priority_order.
+    struct AppIrqMoreUrgentThanSystick;
+    impl KernelConfig for AppIrqMoreUrgentThanSystick {
+        const N: usize = 2;
+        const SYSTICK_PRIORITY: u8 = 0x10;
+        const MIN_APP_IRQ_PRIORITY: u8 = 0x08; // more urgent than SysTick → invalid
+        kernel_config_types!();
+    }
+
+    #[test]
+    #[should_panic(expected = "SysTick priority must be strictly higher")]
+    fn assert_priority_order_panics_app_irq_more_urgent_than_systick() {
+        assert_priority_order::<AppIrqMoreUrgentThanSystick>();
+    }
+
+    /// App IRQ priority numerically below SysTick (more urgent) must
+    /// be rejected by validate_irq_priority — the MIN_APP_IRQ_PRIORITY
+    /// floor prevents application IRQs from preempting the tick.
+    #[test]
+    fn validate_irq_priority_rejects_app_irq_in_kernel_tier() {
+        let systick = <DefaultConfig as KernelConfig>::SYSTICK_PRIORITY;
+        let floor = <DefaultConfig as KernelConfig>::MIN_APP_IRQ_PRIORITY;
+        // An app IRQ at SysTick's priority (0x10) is below floor (0x20).
+        let err = validate_irq_priority(systick, floor).unwrap_err();
+        assert!(err.contains("MIN_APP_IRQ_PRIORITY"));
     }
 
     // ============ effective_group_priority tests ============
