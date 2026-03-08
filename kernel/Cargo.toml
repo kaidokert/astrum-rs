@@ -387,6 +387,10 @@ name = "pendstclr_systick_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "starvation_counter_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "pendsv_stack_overflow_test"
 required-features = ["qemu", "log-semihosting"]
 
