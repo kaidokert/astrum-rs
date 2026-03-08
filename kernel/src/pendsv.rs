@@ -59,6 +59,11 @@ pub const PENDSV_SYSTICK_CLEAR: u32 = PENDSVCLR_BIT | PENDSTCLR_BIT;
 /// PENDSTSET: bit 26 of ICSR. Writing 1 sets SysTick pending.
 pub const PENDSTSET_BIT: u32 = 1 << 26;
 
+/// Maximum byte offset addressable by a Thumb2 `LDR Rt, [Rn, #imm12]`
+/// instruction. The encoding provides a 12-bit unsigned immediate,
+/// giving a range of 0..=4095 (i.e. offsets must be strictly less than 4096).
+pub const THUMB2_LDR_MAX_OFFSET: usize = 4096;
+
 // Compile-time validation against ARMv7-M specification values.
 const _: () = {
     assert!(ICSR_ADDR == 0xE000_ED04);
@@ -128,18 +133,18 @@ macro_rules! define_pendsv {
             type K = $crate::svc::Kernel<$Config>;
             type C = <$Config as $crate::config::KernelConfig>::Core;
 
-            // All offsets must be < 4096 (Thumb2 ldr 12-bit unsigned immediate: 0..=4095).
-            assert!(::core::mem::offset_of!(K, current_partition) < 4096,
+            // All offsets must be < THUMB2_LDR_MAX_OFFSET (Thumb2 ldr 12-bit unsigned immediate).
+            assert!(::core::mem::offset_of!(K, current_partition) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
                 "KERNEL_CURRENT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(K, ticks_dropped) < 4096,
+            assert!(::core::mem::offset_of!(K, ticks_dropped) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
                 "KERNEL_TICKS_DROPPED_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(K, core) < 4096,
+            assert!(::core::mem::offset_of!(K, core) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
                 "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(C, next_partition) < 4096,
+            assert!(::core::mem::offset_of!(C, next_partition) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
                 "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(C, partition_sp) < 4096,
+            assert!(::core::mem::offset_of!(C, partition_sp) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
                 "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(C, partition_stack_limits) < 4096,
+            assert!(::core::mem::offset_of!(C, partition_stack_limits) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
                 "CORE_PARTITION_STACK_LIMIT_OFFSET exceeds Thumb2 ldr range");
 
             // Field ordering: current_partition before core in Kernel.
@@ -344,7 +349,7 @@ macro_rules! define_pendsv_dynamic {
 pub const PCB_STACK_LIMIT_OFFSET: usize =
     core::mem::offset_of!(crate::partition::PartitionControlBlock, stack_limit);
 crate::const_assert!(
-    PCB_STACK_LIMIT_OFFSET < 4096,
+    PCB_STACK_LIMIT_OFFSET < THUMB2_LDR_MAX_OFFSET,
     "PCB stack_limit offset exceeds Thumb2 ldr range"
 );
 
@@ -383,10 +388,18 @@ mod tests {
     }
 
     #[test]
+    fn thumb2_ldr_max_offset_matches_architectural_limit() {
+        // Thumb2 LDR (immediate, T3 encoding) uses a 12-bit unsigned offset:
+        // range 0..=4095, so the exclusive upper bound is 2^12 = 4096.
+        assert_eq!(super::THUMB2_LDR_MAX_OFFSET, 1 << 12);
+        assert_eq!(super::THUMB2_LDR_MAX_OFFSET, 4096);
+    }
+
+    #[test]
     fn pcb_stack_limit_offset_matches_offset_of() {
         let actual = core::mem::offset_of!(PartitionControlBlock, stack_limit);
         assert_eq!(super::PCB_STACK_LIMIT_OFFSET, actual);
-        assert!(actual < 4096);
+        assert!(actual < super::THUMB2_LDR_MAX_OFFSET);
     }
 
     #[test]
