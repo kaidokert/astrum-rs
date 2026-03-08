@@ -26,6 +26,15 @@ impl ScheduleEntry {
     }
 }
 
+/// Error from schedule table index arithmetic or bounds checking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleError {
+    /// Checked arithmetic overflow in slot index advancement.
+    IndexOverflow,
+    /// Slot index out of bounds (should be unreachable after `is_empty` guard).
+    SlotOutOfBounds,
+}
+
 /// Outcome of a schedule tick.
 ///
 /// `SystemWindow` is only returned when the `dynamic-mpu` feature is enabled.
@@ -210,14 +219,22 @@ impl<const N: usize> ScheduleTable<N> {
     }
 
     /// Move to the next slot (with wraparound) and reload `ticks_remaining`.
-    /// Returns the index into `self.entries` of the new slot.
-    fn step_to_next_slot(&mut self) -> usize {
-        self.current_slot += 1;
-        if self.current_slot >= self.entries.len() {
-            self.current_slot = 0;
-        }
-        self.ticks_remaining = self.entries[self.current_slot].duration_ticks;
-        self.current_slot
+    /// Returns a reference to the new slot's [`ScheduleEntry`], or a
+    /// [`ScheduleError`] if checked arithmetic or bounds checking fails
+    /// (should be unreachable after the `is_empty` guard in callers).
+    fn step_to_next_slot(&mut self) -> Result<&ScheduleEntry, ScheduleError> {
+        let next = match self.current_slot.checked_add(1) {
+            Some(n) if n < self.entries.len() => n,
+            Some(_) => 0, // wrap around
+            None => return Err(ScheduleError::IndexOverflow),
+        };
+        self.current_slot = next;
+        let entry = self
+            .entries
+            .get(self.current_slot)
+            .ok_or(ScheduleError::SlotOutOfBounds)?;
+        self.ticks_remaining = entry.duration_ticks;
+        Ok(entry)
     }
 
     /// When `dynamic-mpu` is disabled there are no `SystemWindow` entries, so
@@ -256,10 +273,10 @@ impl<const N: usize> ScheduleTable<N> {
         if !self.started || self.entries.is_empty() {
             return ScheduleEvent::None;
         }
-        let idx = self.step_to_next_slot();
-        // TODO(panic-free): idx comes from step_to_next_slot which wraps
-        // current_slot within [0, entries.len()); safe after the is_empty guard.
-        let entry = &self.entries[idx];
+        let entry = match self.step_to_next_slot() {
+            Ok(e) => e,
+            Err(_) => return ScheduleEvent::None,
+        };
         #[cfg(feature = "dynamic-mpu")]
         if entry.is_system_window {
             return ScheduleEvent::SystemWindow;
@@ -275,13 +292,7 @@ impl<const N: usize> ScheduleTable<N> {
         }
         self.ticks_remaining = self.ticks_remaining.saturating_sub(1);
         if self.ticks_remaining == 0 {
-            let idx = self.step_to_next_slot();
-            let entry = &self.entries[idx];
-            #[cfg(feature = "dynamic-mpu")]
-            if entry.is_system_window {
-                return ScheduleEvent::SystemWindow;
-            }
-            return ScheduleEvent::PartitionSwitch(entry.partition_index);
+            return self.force_advance();
         }
         ScheduleEvent::None
     }
@@ -899,5 +910,38 @@ mod tests {
             }
             assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
         }
+    }
+
+    /// Verify that `step_to_next_slot` wraps correctly at the boundary
+    /// (last slot -> slot 0) and that checked arithmetic never panics.
+    #[test]
+    fn step_to_next_slot_wraps_at_boundary() {
+        // 4-slot table: advance through all slots and verify wrap-around.
+        let mut t = table(&[(0, 1), (1, 1), (2, 1), (3, 1)]);
+        // After start(), current_slot == 0, ticks_remaining == 1.
+        // Advance through slots 1, 2, 3, then wrap to 0.
+        assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(2));
+        assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(3));
+        // This call wraps current_slot from 3 back to 0.
+        assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(0));
+        // Second full cycle to confirm stable wrapping.
+        assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(2));
+        assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(3));
+        assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(0));
+    }
+
+    /// Verify advance_tick also wraps correctly at the slot boundary.
+    #[test]
+    fn advance_tick_wraps_at_last_slot() {
+        // Single-tick slots so every tick triggers a slot transition.
+        let mut t = table(&[(0, 1), (1, 1), (2, 1)]);
+        // Tick through: slot 0 has 1 tick, expires immediately on first advance.
+        assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(2));
+        // Wrap from slot 2 back to slot 0.
+        assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
+        assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(1));
     }
 }
