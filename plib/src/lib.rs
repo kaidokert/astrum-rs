@@ -892,19 +892,19 @@ pub fn sys_buf_lend(
     slot: BufferSlotId,
     target: u8,
     writable: bool,
-) -> Result<(u32, u32), SvcError> {
+) -> Result<(u32, *mut u8), SvcError> {
     let flags: u32 = if writable { lend_flags::WRITABLE } else { 0 };
     let r2 = (target as u32) | flags;
     // SAFETY: svc_r01! triggers a supervisor call whose handler validates all
     // arguments.  The slot and packed r2 contain only small integer values;
     // no pointers are passed.
-    // TODO: svc_r01! is defined in rtos-traits/src/macros.rs (pre-existing macro, not new to this change).
-    rtos_traits::api::decode_rc_r01(rtos_traits::svc_r01!(
+    let (r0, r1) = rtos_traits::api::decode_rc_r01(rtos_traits::svc_r01!(
         SYS_BUF_LEND,
         slot.as_raw() as u32,
         r2,
         0u32
-    ))
+    ))?;
+    Ok((r0, r1 as *mut u8))
 }
 
 /// Revoke a previously lent buffer slot from a target partition.
@@ -1650,13 +1650,19 @@ mod tests {
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_readonly_returns_ok_on_host() {
-        assert_eq!(sys_buf_lend(BufferSlotId::new(0), 1, false), Ok((0, 0)));
+        assert_eq!(
+            sys_buf_lend(BufferSlotId::new(0), 1, false),
+            Ok((0, core::ptr::null_mut())),
+        );
     }
 
     #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_writable_returns_ok_on_host() {
-        assert_eq!(sys_buf_lend(BufferSlotId::new(2), 3, true), Ok((0, 0)));
+        assert_eq!(
+            sys_buf_lend(BufferSlotId::new(2), 3, true),
+            Ok((0, core::ptr::null_mut())),
+        );
     }
 
     #[cfg(feature = "dynamic-mpu")]

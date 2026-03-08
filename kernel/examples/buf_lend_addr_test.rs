@@ -52,10 +52,11 @@ extern "C" fn p0_main() -> ! {
         fail();
     }
     let slot_id = plib::BufferSlotId::new(slot as u8);
-    let (_region_id, base_addr) = match plib::sys_buf_lend(slot_id, 1, true) {
+    let (_region_id, base_ptr) = match plib::sys_buf_lend(slot_id, 1, true) {
         Ok(pair) => pair,
         Err(_) => fail(),
     };
+    let base_addr = base_ptr as u32;
     // Verify the returned address is in SRAM (>= 0x2000_0000).
     // P1's subsequent read from this address (checking for 0xAA) serves as
     // the definitive verification that base_addr matches the actual slot base.
