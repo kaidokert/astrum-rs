@@ -28,6 +28,7 @@ EXAMPLES=(
     all_syscalls_smoke_test
     dropped_tick_test
     starvation_detect_test
+    pendsv_stack_overflow_test
 )
 
 CUSTOM_IVT_EXAMPLES=(

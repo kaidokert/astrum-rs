@@ -133,9 +133,7 @@ __pendsv_stack_overflow:
     pop     {{r2}}              /* r2 = &partition_sp[0] */
     ldr     r3, =0xDEAD0001
     str     r3, [r2, r0]        /* partition_sp[idx] = sentinel */
-    b       .Lstack_overflow_fault
-.Lstack_overflow_fault:
-    b       .Lstack_overflow_fault  /* fatal: loop forever */
+    bx      lr                  /* return to PendSV */
     .size __pendsv_stack_overflow, . - __pendsv_stack_overflow
     .size pendsv_context_save, . - pendsv_context_save
 

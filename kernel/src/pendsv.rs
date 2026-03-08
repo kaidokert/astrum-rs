@@ -278,6 +278,18 @@ macro_rules! define_pendsv {
             ldr     r0, [r0]            /* r0 = next_partition offset within core */
             ldrb    r4, [r6, r0]        /* r4 = next_partition (callee-saved) */
 
+            /* Skip restore if next partition has overflow sentinel
+             * (race: SysTick may schedule faulted partition before
+             * context_save writes the sentinel). */
+            ldr     r0, =CORE_PARTITION_SP_OFFSET
+            ldr     r0, [r0]
+            add     r0, r6, r0          /* r0 = &partition_sp[0] */
+            lsl     r1, r4, #2
+            ldr     r1, [r0, r1]        /* r1 = partition_sp[next] */
+            ldr     r0, =0xDEAD0001
+            cmp     r1, r0
+            beq     .Lpendsv_faulted_skip
+
             /* Store next_partition to current_partition */
             ldr     r0, =KERNEL_CURRENT_PARTITION_OFFSET
             ldr     r0, [r0]            /* r0 = current_partition offset */
@@ -287,6 +299,7 @@ macro_rules! define_pendsv {
             mov     r0, r4
             bl      pendsv_context_restore
 
+        .Lpendsv_faulted_skip:
             /* --- End PRIMASK critical section ---
              * Clear PendSV and SysTick pending bits, then unmask.
              *

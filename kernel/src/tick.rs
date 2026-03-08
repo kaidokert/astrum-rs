@@ -202,11 +202,23 @@ where
 {
     use crate::scheduler::ScheduleEvent;
 
+    let prev_next = kernel.next_partition();
+    let prev_active = kernel.active_partition;
     let event = crate::svc_scheduler::advance_schedule_tick(kernel);
     if let ScheduleEvent::PartitionSwitch(pid) = event {
-        kernel.set_next_partition(pid);
-        #[cfg(not(test))]
-        cortex_m::peripheral::SCB::set_pendsv();
+        if kernel.partition_sp().get(pid as usize) != Some(&0xDEAD0001) {
+            #[cfg(not(test))]
+            cortex_m::peripheral::SCB::set_pendsv();
+        } else {
+            // Revert: faulted partition must not stay Running
+            crate::svc::try_transition(
+                kernel.partitions_mut(),
+                pid,
+                crate::partition::PartitionState::Ready,
+            );
+            kernel.active_partition = prev_active;
+            kernel.set_next_partition(prev_next);
+        }
     }
     let current_tick = kernel.tick().get();
     kernel.expire_timed_waits::<{ C::N }>(current_tick);

@@ -379,6 +379,10 @@ name = "dropped_tick_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "pendsv_stack_overflow_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "adversarial_mod_stub"
 required-features = ["qemu", "log-semihosting"]
 
