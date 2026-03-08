@@ -175,6 +175,18 @@ where
     pub fn partitions_mut(&mut self) -> &mut PartitionTable<N> {
         &mut self.partitions
     }
+    /// Returns a reference to the partition control block at `index`, if valid.
+    pub fn pcb(&self, index: usize) -> Option<&PartitionControlBlock> {
+        self.partitions.get(index)
+    }
+    /// Returns a mutable reference to the partition control block at `index`, if valid.
+    pub fn pcb_mut(&mut self, index: usize) -> Option<&mut PartitionControlBlock> {
+        self.partitions.get_mut(index)
+    }
+    /// Returns the number of partitions currently registered.
+    pub fn partition_count(&self) -> usize {
+        self.partitions.len()
+    }
     pub fn schedule(&self) -> &ScheduleTable<SCHED> {
         &self.schedule
     }
@@ -464,10 +476,50 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::partition::MpuRegion;
     use crate::scheduler::ScheduleEntry;
 
     type TestCore<const N: usize, const SCHED: usize> =
         super::PartitionCore<N, SCHED, AlignedStack1K>;
+
+    fn test_pcb(id: u8) -> PartitionControlBlock {
+        let o = (id as u32) * 0x1000;
+        PartitionControlBlock::new(
+            id,
+            0x0800_0000 + o,
+            0x2000_0000 + o,
+            0x2000_0400 + o,
+            MpuRegion::new(0x2000_0000 + o, 4096, 0),
+        )
+    }
+
+    #[test]
+    fn pcb_returns_correct_partition_by_index() {
+        let mut core: TestCore<4, 4> = TestCore::new();
+        core.partitions_mut().add(test_pcb(0)).unwrap();
+        core.partitions_mut().add(test_pcb(1)).unwrap();
+        assert_eq!(core.partition_count(), 2);
+        assert_eq!(core.pcb(0).unwrap().id(), 0);
+        assert_eq!(core.pcb(1).unwrap().id(), 1);
+    }
+
+    #[test]
+    fn pcb_out_of_bounds_returns_none() {
+        let mut core: TestCore<4, 4> = TestCore::new();
+        core.partitions_mut().add(test_pcb(0)).unwrap();
+        assert!(core.pcb(0).is_some());
+        assert!(core.pcb(1).is_none());
+        assert!(core.pcb(100).is_none());
+    }
+
+    #[test]
+    fn pcb_mut_allows_mutation() {
+        let mut core: TestCore<4, 4> = TestCore::new();
+        core.partitions_mut().add(test_pcb(0)).unwrap();
+        assert_eq!(core.pcb(0).unwrap().event_flags(), 0);
+        core.pcb_mut(0).unwrap().set_event_flags(0xCD);
+        assert_eq!(core.pcb(0).unwrap().event_flags(), 0xCD);
+    }
 
     #[test]
     fn construction_and_field_access() {

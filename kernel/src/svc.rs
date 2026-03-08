@@ -361,7 +361,9 @@ use crate::message::MessagePool;
 #[cfg(test)]
 use crate::message::{RecvOutcome, SendOutcome};
 use crate::mutex::MutexPool;
-use crate::partition::{ConfigError, PartitionConfig, PartitionState, PartitionTable};
+use crate::partition::{
+    ConfigError, PartitionConfig, PartitionControlBlock, PartitionState, PartitionTable,
+};
 use crate::queuing::{
     QueuingError, QueuingPortPool, QueuingPortStatus, RecvQueuingOutcome, SendQueuingOutcome,
 };
@@ -2435,6 +2437,24 @@ where
     #[inline(always)]
     pub fn partitions_mut(&mut self) -> &mut PartitionTable<{ C::N }> {
         self.core.partitions_mut()
+    }
+
+    /// Returns a reference to the partition control block at `index`, if valid.
+    #[inline(always)]
+    pub fn pcb(&self, index: usize) -> Option<&PartitionControlBlock> {
+        self.partitions().get(index)
+    }
+
+    /// Returns a mutable reference to the partition control block at `index`, if valid.
+    #[inline(always)]
+    pub fn pcb_mut(&mut self, index: usize) -> Option<&mut PartitionControlBlock> {
+        self.partitions_mut().get_mut(index)
+    }
+
+    /// Returns the number of partitions currently registered.
+    #[inline(always)]
+    pub fn partition_count(&self) -> usize {
+        self.partitions().len()
     }
 
     /// Returns an immutable reference to the schedule table.
@@ -8364,6 +8384,33 @@ mod tests {
         let pcb = k.partitions_mut().get_mut(0).unwrap();
         // Verify we can read partition state through the mutable reference
         assert_eq!(pcb.id(), 0);
+    }
+
+    #[test]
+    fn pcb_returns_correct_partition_by_index() {
+        let k = kernel_with_schedule();
+        let pcb0 = k.pcb(0).expect("pcb(0) should exist");
+        assert_eq!(pcb0.id(), 0);
+        let pcb1 = k.pcb(1).expect("pcb(1) should exist");
+        assert_eq!(pcb1.id(), 1);
+        assert_eq!(k.partition_count(), 2);
+    }
+
+    #[test]
+    fn pcb_out_of_bounds_returns_none() {
+        let k = kernel_with_schedule();
+        assert!(k.pcb(2).is_none());
+        assert!(k.pcb(100).is_none());
+        assert!(k.pcb(usize::MAX).is_none());
+    }
+
+    #[test]
+    fn pcb_mut_allows_mutation() {
+        let mut k = kernel_with_schedule();
+        let flags_before = k.pcb(0).unwrap().event_flags();
+        assert_eq!(flags_before, 0);
+        k.pcb_mut(0).unwrap().set_event_flags(0xAB);
+        assert_eq!(k.pcb(0).unwrap().event_flags(), 0xAB);
     }
 
     #[test]
