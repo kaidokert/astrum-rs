@@ -884,15 +884,15 @@ pub fn sys_buf_write(slot: BufferSlotId, data: &[u8]) -> Result<u32, SvcError> {
 ///
 /// # Returns
 ///
-/// `Ok((region_id, base_addr))` with the MPU region assigned to the target
-/// and the physical base address of the buffer slot, or `Err(SvcError)` if
-/// the syscall failed.
+/// `Ok((base_addr, region_id))` with the physical base address of the buffer
+/// slot (r0) and the MPU region assigned to the target (r1), or
+/// `Err(SvcError)` if the syscall failed.
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_lend(
     slot: BufferSlotId,
     target: u8,
     writable: bool,
-) -> Result<(u32, *mut u8), SvcError> {
+) -> Result<(*mut u8, u32), SvcError> {
     let flags: u32 = if writable { lend_flags::WRITABLE } else { 0 };
     let r2 = (target as u32) | flags;
     // SAFETY: svc_r01! triggers a supervisor call whose handler validates all
@@ -904,7 +904,7 @@ pub fn sys_buf_lend(
         r2,
         0u32
     ))?;
-    Ok((r0, r1 as *mut u8))
+    Ok((r0 as *mut u8, r1))
 }
 
 /// Revoke a previously lent buffer slot from a target partition.
@@ -1654,7 +1654,7 @@ mod tests {
     fn buf_lend_readonly_returns_ok_on_host() {
         assert_eq!(
             sys_buf_lend(BufferSlotId::new(0), 1, false),
-            Ok((0, core::ptr::null_mut())),
+            Ok((core::ptr::null_mut(), 0)),
         );
     }
 
@@ -1663,7 +1663,7 @@ mod tests {
     fn buf_lend_writable_returns_ok_on_host() {
         assert_eq!(
             sys_buf_lend(BufferSlotId::new(2), 3, true),
-            Ok((0, core::ptr::null_mut())),
+            Ok((core::ptr::null_mut(), 0)),
         );
     }
 

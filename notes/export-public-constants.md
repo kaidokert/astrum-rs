@@ -69,7 +69,7 @@ re-exports them. Partitions should never import `rtos-traits` directly.
 | `sys_buf_release(slot: u8)` | BUF_RELEASE | 21 | slot | 0 | 0 | `Ok(0)` |
 | `sys_buf_read(slot: u8, dst: &mut [u8])` | BUF_READ | 37 | slot | len | ptr | `Ok(n)` |
 | `sys_buf_write(slot: u8, data: &[u8])` | BUF_WRITE | 26 | slot | len | ptr | `Ok(n)` |
-| `sys_buf_lend(slot: u8, tgt: u8, w: bool)` | BUF_LEND | 34 | slot | packed | 0 | `Ok(rgn)` |
+| `sys_buf_lend(slot: u8, tgt: u8, w: bool)` | BUF_LEND | 34 | slot | packed | 0 | `Ok((base_addr, rgn))` |
 | `sys_buf_revoke(slot: u8, tgt: u8)` | BUF_REVOKE | 35 | slot | tgt | 0 | `Ok(0)` |
 | `sys_buf_transfer(slot: u8, owner: u8)` | BUF_TRANSFER | 36 | slot | owner | 0 | `Ok(0)` |
 

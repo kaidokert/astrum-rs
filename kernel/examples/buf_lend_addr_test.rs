@@ -52,7 +52,7 @@ extern "C" fn p0_main() -> ! {
         fail();
     }
     let slot_id = plib::BufferSlotId::new(slot as u8);
-    let (_region_id, base_ptr) = match plib::sys_buf_lend(slot_id, 1, true) {
+    let (base_ptr, _region_id) = match plib::sys_buf_lend(slot_id, 1, true) {
         Ok(pair) => pair,
         Err(_) => fail(),
     };
