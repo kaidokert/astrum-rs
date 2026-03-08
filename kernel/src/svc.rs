@@ -773,16 +773,16 @@ macro_rules! define_unified_kernel {
                 let _: [u8; 4] = c.partition_sp[0].to_ne_bytes();
             }
 
-            // partition_sp must be 4-byte aligned for word-sized ldr/str.
-            assert!(CORE_PARTITION_SP_OFFSET % 4 == 0, "partition_sp must be 4-byte aligned");
+            // partition_sp combined offset must be 4-byte aligned for word-sized ldr/str.
+            assert!((KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET) % 4 == 0, "partition_sp must be 4-byte aligned");
 
             // All offsets must be < 4096 (Thumb2 ldr 12-bit unsigned immediate: 0..=4095).
             assert!(KERNEL_CURRENT_PARTITION_OFFSET < 4096, "KERNEL_CURRENT_PARTITION_OFFSET exceeds Thumb2 ldr range");
             assert!(KERNEL_TICKS_DROPPED_OFFSET < 4096, "KERNEL_TICKS_DROPPED_OFFSET exceeds Thumb2 ldr range");
             assert!(KERNEL_CORE_OFFSET < 4096, "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
-            assert!(CORE_NEXT_PARTITION_OFFSET < 4096, "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(CORE_PARTITION_SP_OFFSET < 4096, "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
-            assert!(CORE_PARTITION_STACK_LIMIT_OFFSET < 4096, "CORE_PARTITION_STACK_LIMIT_OFFSET exceeds Thumb2 ldr range");
+            assert!(KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET < 4096, "KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
+            assert!(KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET < 4096, "KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
+            assert!(KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET < 4096, "KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET exceeds Thumb2 ldr range");
 
             // Field ordering: current_partition before core in Kernel.
             assert!(KERNEL_CURRENT_PARTITION_OFFSET < KERNEL_CORE_OFFSET,
@@ -12647,11 +12647,6 @@ mod tests {
     // Compile-time version of the former pendsv_abi_offsets_match_expected_layout
     // runtime test.  These assertions fire during `cargo test` compilation,
     // catching layout regressions without needing to run the binary.
-    //
-    // NOTE: Offset < 4096 range checks are omitted here because TestConfig
-    // embeds large stacks that push `core` past the Thumb2 ldr limit.
-    // The authoritative range checks live in define_pendsv!(@assert_offsets)
-    // and define_unified_kernel!, which are invoked with real embedded configs.
     const _: () = {
         type K = Kernel<TestConfig>;
         type C = <TestConfig as KernelConfig>::Core;
@@ -12661,8 +12656,8 @@ mod tests {
         // Field ordering: next_partition before partition_sp.
         assert!(core::mem::offset_of!(C, next_partition) < core::mem::offset_of!(C, partition_sp));
 
-        // partition_sp must be 4-byte aligned for word-sized ldr/str.
-        assert!(core::mem::offset_of!(C, partition_sp) % 4 == 0);
+        // partition_sp combined offset must be 4-byte aligned for word-sized ldr/str.
+        assert!((core::mem::offset_of!(K, core) + core::mem::offset_of!(C, partition_sp)) % 4 == 0);
 
         // partition_sp element stride must be 4 (u32).
         #[allow(unused)]
@@ -12671,6 +12666,58 @@ mod tests {
             let _: [u8; 4] = c.partition_sp[0].to_ne_bytes();
         }
     };
+
+    #[test]
+    fn combined_pendsv_offsets_within_thumb2_ldr_range() {
+        use crate::pendsv::THUMB2_LDR_MAX_OFFSET;
+
+        // Small config with AlignedStack1K (align 1024) so core fits in Thumb2 range.
+        // TestConfig uses AlignedStack4K which pushes core to offset 4096.
+        struct SmallConfig;
+        impl KernelConfig for SmallConfig {
+            const N: usize = 2;
+            const STACK_WORDS: usize = 256;
+            const S: usize = 2;
+            const SW: usize = 2;
+            const MS: usize = 2;
+            const MW: usize = 2;
+            const QS: usize = 2;
+            const QD: usize = 2;
+            const QM: usize = 2;
+            const QW: usize = 2;
+            const SP: usize = 2;
+            const BS: usize = 2;
+            const BW: usize = 2;
+            #[cfg(feature = "dynamic-mpu")]
+            const BP: usize = 2;
+
+            kernel_config_types!();
+        }
+
+        type K = Kernel<SmallConfig>;
+        type C = <SmallConfig as KernelConfig>::Core;
+
+        let co = core::mem::offset_of!(K, core);
+        let cp = core::mem::offset_of!(K, current_partition);
+        let td = core::mem::offset_of!(K, ticks_dropped);
+        let np = co + core::mem::offset_of!(C, next_partition);
+        let sp = co + core::mem::offset_of!(C, partition_sp);
+        let sl = co + core::mem::offset_of!(C, partition_stack_limits);
+
+        // Every offset accessed by PendSV assembly must fit in Thumb2 ldr range.
+        for (off, name) in [
+            (cp, "current_partition"),
+            (td, "ticks_dropped"),
+            (co, "core"),
+            (np, "core+next_partition"),
+            (sp, "core+partition_sp"),
+            (sl, "core+partition_stack_limits"),
+        ] {
+            assert!(off < THUMB2_LDR_MAX_OFFSET, "{name} offset {off}");
+        }
+        assert_eq!(sp % 4, 0, "partition_sp not 4-byte aligned");
+        assert!(cp < co && np < sp);
+    }
 
     /// Test module for `define_unified_kernel!` macro.
     ///

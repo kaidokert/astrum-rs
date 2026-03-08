@@ -140,12 +140,12 @@ macro_rules! define_pendsv {
                 "KERNEL_TICKS_DROPPED_OFFSET exceeds Thumb2 ldr range");
             assert!(::core::mem::offset_of!(K, core) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
                 "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(C, next_partition) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
-                "CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(C, partition_sp) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
-                "CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(C, partition_stack_limits) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
-                "CORE_PARTITION_STACK_LIMIT_OFFSET exceeds Thumb2 ldr range");
+            assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, next_partition) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
+                "KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
+            assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, partition_sp) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
+                "KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
+            assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, partition_stack_limits) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
+                "KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET exceeds Thumb2 ldr range");
 
             // Field ordering: current_partition before core in Kernel.
             assert!(::core::mem::offset_of!(K, current_partition) < ::core::mem::offset_of!(K, core),
@@ -162,8 +162,8 @@ macro_rules! define_pendsv {
                 let _: [u8; 4] = c.partition_sp[0].to_ne_bytes();
             }
 
-            // partition_sp must be 4-byte aligned for word-sized ldr/str.
-            assert!(::core::mem::offset_of!(C, partition_sp) % 4 == 0,
+            // partition_sp combined offset must be 4-byte aligned for word-sized ldr/str.
+            assert!((::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, partition_sp)) % 4 == 0,
                 "partition_sp must be 4-byte aligned");
         };
     };
