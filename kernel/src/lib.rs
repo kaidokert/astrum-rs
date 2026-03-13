@@ -86,7 +86,6 @@ pub mod svc_blackboard;
 pub mod svc_buf;
 pub mod svc_debug;
 pub mod svc_events;
-pub mod svc_irq;
 #[cfg(feature = "ipc-message")]
 pub mod svc_msg;
 #[cfg(feature = "ipc-queuing")]
@@ -94,7 +93,6 @@ pub mod svc_queuing;
 #[cfg(feature = "ipc-sampling")]
 pub mod svc_sampling;
 pub mod svc_scheduler;
-pub mod svc_sleep;
 pub mod svc_sync;
 pub mod sync_pools;
 pub mod syscall;

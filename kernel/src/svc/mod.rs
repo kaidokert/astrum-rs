@@ -1,3 +1,6 @@
+pub mod irq;
+pub mod sleep;
+
 use core::cell::RefCell;
 
 use cortex_m::interrupt::Mutex;
@@ -1953,7 +1956,7 @@ where
             Some(SyscallId::SleepTicks) => {
                 // NOTE: self.core.partitions_mut() is intentional – split borrow
                 // needed because self.sleep_queue is also mutably borrowed.
-                let outcome = crate::svc_sleep::handle_sleep_ticks(
+                let outcome = self::sleep::handle_sleep_ticks(
                     &mut self.sleep_queue,
                     self.core.partitions_mut(),
                     self.current_partition,
@@ -2297,7 +2300,7 @@ where
             Some(SyscallId::IrqAck) => {
                 let irq_num = arg1 as u8;
                 let caller_id = self.current_partition;
-                crate::svc_irq::handle_irq_ack(self.irq_bindings, caller_id, irq_num)
+                self::irq::handle_irq_ack(self.irq_bindings, caller_id, irq_num)
             }
             #[allow(unreachable_patterns)]
             Some(_) => SvcError::InvalidSyscall.to_u32(),
