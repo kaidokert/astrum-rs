@@ -1,7 +1,4 @@
 /// Shared compile-time layout assertions for `Kernel<Config>` / `Core`.
-// TODO: `#[macro_export]` is required for `$crate::` access across modules;
-// Rust does not support `pub(crate)` for macros. `#[doc(hidden)]` keeps it
-// out of the public API docs (same pattern as `_detect_dropped_ticks!` etc.).
 #[macro_export]
 #[doc(hidden)]
 macro_rules! assert_kernel_layout {
@@ -9,8 +6,6 @@ macro_rules! assert_kernel_layout {
         type K = $crate::svc::Kernel<$Config>;
         type C = <$Config as $crate::config::KernelConfig>::Core;
         const LIM: usize = $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT;
-        // TODO: `core::mem::offset_of!` requires Rust 1.77+. If the project's
-        // MSRV is lower, a `memoffset`-style fallback would be needed.
         // All ABI-visible offsets must be < LITERAL_POOL_OFFSET_LIMIT.
         assert!(::core::mem::offset_of!(K, current_partition) < LIM,
             "KERNEL_CURRENT_PARTITION_OFFSET exceeds literal-pool offset limit");
