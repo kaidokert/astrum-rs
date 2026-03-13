@@ -339,19 +339,9 @@ impl DynamicStrategy {
                         }
                         wired += 1;
                     } else if desc_idx < reserved.min(2) {
-                        // TODO: reviewer false positive — cache_peripherals
-                        // (called unconditionally at end of loop) re-derives
-                        // RBAR from the array index (DYNAMIC_REGION_BASE + i),
-                        // so the slot_idx stored in `seen` only affects dedup
-                        // lookups, not the final cached RBAR.  The peripheral
-                        // IS registered in the PCB via part_descs + cache_peripherals.
-                        //
-                        // TODO: slot_idx = desc_idx here means cached
-                        // peripherals use a position-based slot rather than
-                        // discovery-order; acceptable because cache_peripherals
-                        // re-derives RBAR from the array index, but a future
-                        // refactor should unify the assignment strategy.
-                        //
+                        // cache_peripherals re-derives RBAR from the array
+                        // index (DYNAMIC_REGION_BASE + i), so slot_idx in
+                        // `seen` only affects dedup—not the final cached RBAR.
                         // desc_idx 0 (or 1) with reserved peripheral slots:
                         // handled by per-partition cache via
                         // cached_peripheral_regions on every PendSV context
@@ -400,8 +390,8 @@ impl DynamicStrategy {
                             owner: part.id(),
                             rbar: slot_rbar(base, slot_idx),
                         });
-                        // TODO: reviewer false positive — desc_idx is a manual
-                        // counter (not from .enumerate()), increment is required.
+                        // desc_idx is a manual counter (not from
+                        // .enumerate()); increment is required.
                         desc_idx += 1;
                     }
                 }
