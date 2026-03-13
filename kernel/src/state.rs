@@ -112,21 +112,22 @@ use crate::svc::Kernel;
 /// The `init_kernel_state` function includes a compile-time assertion to verify
 /// that the actual kernel size does not exceed this limit.
 ///
-/// Current allocation: 16 KiB, sufficient for typical configurations with
-/// up to 4 partitions using `AlignedStack1K` (4 × 1 KiB = 4 KiB for stacks)
-/// plus metadata, schedule entries, and moderate IPC pool sizes. For larger
-/// configurations, increase this value and ensure the target has sufficient RAM.
+/// Current allocation: 32 KiB, sufficient for configurations such as
+/// Partitions2 × AlignedStack4K (2 × 4 KiB = 8 KiB for stacks) as well as
+/// up to 4 partitions using `AlignedStack1K`, plus metadata, schedule entries,
+/// and moderate IPC pool sizes. For larger configurations, increase this value
+/// and ensure the target has sufficient RAM.
 ///
 /// # Relationship to literal-pool offset limit
 ///
-/// `MAX_KERNEL_SIZE` (16 KiB) and [`LITERAL_POOL_OFFSET_LIMIT`](crate::pendsv::LITERAL_POOL_OFFSET_LIMIT)
+/// `MAX_KERNEL_SIZE` (32 KiB) and [`LITERAL_POOL_OFFSET_LIMIT`](crate::pendsv::LITERAL_POOL_OFFSET_LIMIT)
 /// (64 KiB) are **independent constraints**. `MAX_KERNEL_SIZE` governs
 /// how much RAM is reserved for the entire `Kernel<C>` struct, while the
 /// literal-pool offset limit is a conservative sanity-check for struct
 /// field offsets accessed by PendSV assembly (which uses literal-pool
 /// indirection, not Thumb2 imm12 encoding).
 /// The `define_pendsv!(@assert_offsets)` macro enforces this at compile time.
-pub const MAX_KERNEL_SIZE: usize = 16 * 1024;
+pub const MAX_KERNEL_SIZE: usize = 32 * 1024;
 
 /// Generates an alignment constant and a storage struct from a single
 /// alignment literal, eliminating manual synchronization.
