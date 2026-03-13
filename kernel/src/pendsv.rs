@@ -383,6 +383,26 @@ mod tests {
     }
 
     #[test]
+    fn pcb_stack_limit_offset_aligned_and_in_range() {
+        let offset = super::PCB_STACK_LIMIT_OFFSET;
+
+        // Must be within the first 256 bytes of PCB so that short-offset
+        // addressing modes remain available in the PendSV handler.
+        assert!(
+            offset < 256,
+            "PCB_STACK_LIMIT_OFFSET ({offset}) must be within the first 256 bytes of PCB"
+        );
+
+        // Must be word-aligned (offset % 4 == 0) so that PendSV can use
+        // a simple `ldr Rt, [Rn, #offset]` without alignment faults.
+        assert_eq!(
+            offset % 4,
+            0,
+            "PCB_STACK_LIMIT_OFFSET ({offset}) must be word-aligned for ldr access"
+        );
+    }
+
+    #[test]
     fn sealed_cache_valid_for_pendsv() {
         let mut pcb = PartitionControlBlock::new(
             0,

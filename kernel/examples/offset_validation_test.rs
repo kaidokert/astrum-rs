@@ -22,7 +22,7 @@ type C = <TestConfig as KernelConfig>::Core;
 
 // TODO: The offset symbols used below (KERNEL_CURRENT_PARTITION_OFFSET, etc.)
 // are `#[no_mangle] static usize` items emitted by `define_unified_harness!`.
-// They cannot be re-declared via `extern "C"` without causing duplicate-symbol
+// They cannot be redeclared via `extern "C"` without causing duplicate-symbol
 // errors.  Ideally the macro would export them through an explicit public API
 // rather than relying on implicit `#[no_mangle]` visibility.
 
