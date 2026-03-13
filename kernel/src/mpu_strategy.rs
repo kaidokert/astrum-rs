@@ -130,8 +130,33 @@ type PeripheralCache<const N: usize> = [[(u32, u32); 2]; N];
 
 /// Dynamic MPU strategy — manages regions R4-R7 at runtime.
 ///
-/// Slot 0 (R4) holds the partition's private RAM. Slots 1-3 (R5-R7)
-/// are ad-hoc windows. Pure data-structure tracker — no hardware writes.
+/// ## Two-tier MPU region scheme
+///
+/// The layout of dynamic slots R4–R7 depends on
+/// [`configure_partition`](MpuStrategy::configure_partition)'s
+/// `peripheral_reserved` parameter:
+///
+/// **`peripheral_reserved = 0` (no peripherals):**
+/// Slot 0 (R4) holds the partition's private RAM.  Slots 1–3 (R5–R7)
+/// are ad-hoc windows available to
+/// [`add_window`](MpuStrategy::add_window) (used by `sys_buf_lend`).
+///
+/// **`peripheral_reserved = 2` (peripheral-capable partitions):**
+/// - **Reserved per-partition slots (R4–R5):** populated at boot by
+///   [`wire_boot_peripherals`](Self::wire_boot_peripherals) into `slots[]`,
+///   then overridden per-partition at every context switch by
+///   [`cached_peripheral_regions`](Self::cached_peripheral_regions)
+///   (called from `__pendsv_program_mpu` in `harness.rs`).
+/// - **Partition RAM** moves to slot 2 (R6).
+/// - **Dynamic window (R7):** allocated at runtime by
+///   [`add_window`](MpuStrategy::add_window).
+///
+/// The `desc_idx < reserved.min(2)` guard in
+/// [`try_wire_region`](Self::try_wire_region) ensures peripherals handled
+/// by the per-partition cache do NOT consume dynamic slots needed by
+/// `sys_buf_lend`.
+///
+/// Pure data-structure tracker — no hardware writes.
 ///
 /// Interior mutability is provided by `Mutex<RefCell<…>>`, which uses a
 /// critical section (interrupt-disable) on single-core Cortex-M to ensure
@@ -203,9 +228,16 @@ impl<const N: usize> DynamicStrategy<N> {
 
     /// Compute the (RBAR, RASR) register values for regions R4-R7.
     ///
-    /// Occupied slots (including peripheral-reserved R4/R5 populated by
-    /// [`wire_boot_peripherals`]) emit their stored descriptor; empty
-    /// slots emit a disabled region (RASR = 0).
+    /// Returns four (RBAR, RASR) pairs corresponding to dynamic slots
+    /// R4–R7.  Occupied slots (including peripheral-reserved R4/R5
+    /// populated by [`wire_boot_peripherals`](Self::wire_boot_peripherals))
+    /// emit their stored descriptor; empty slots emit a disabled region
+    /// (RASR = 0).
+    ///
+    /// **Note:** the R4-R5 values returned here may be overridden at
+    /// context-switch time by
+    /// [`cached_peripheral_regions`](Self::cached_peripheral_regions),
+    /// which provides per-partition peripheral mappings.
     ///
     /// This is the testable, hardware-free counterpart of [`Self::program_regions`].
     pub fn compute_region_values(&self) -> [(u32, u32); DYNAMIC_SLOT_COUNT] {
@@ -289,7 +321,13 @@ impl<const N: usize> DynamicStrategy<N> {
         });
     }
 
-    /// Return pre-computed (RBAR, RASR) pairs for `partition_id`'s peripherals.
+    /// Return pre-computed (RBAR, RASR) pairs for `partition_id`'s peripheral
+    /// regions (R4-R5).
+    ///
+    /// Called from `__pendsv_program_mpu` (in `harness.rs`) at every context
+    /// switch to overwrite the reserved peripheral slots (R4-R5) with the
+    /// incoming partition's cached values.  Partitions without peripherals
+    /// receive disabled pairs (RASR = 0).
     pub fn cached_peripheral_regions(&self, partition_id: u8) -> [(u32, u32); 2] {
         let idx = partition_id as usize;
         if idx >= N {
@@ -350,8 +388,17 @@ impl<const N: usize> DynamicStrategy<N> {
         }
     }
 
-    /// Wire a single unseen peripheral region: reserved slot, cache-only,
-    /// or [`add_window`] fallback.  Returns `Ok(wired-count delta)`.
+    /// Wire a single unseen peripheral region via a three-way branch:
+    ///
+    /// 1. **Reserved slot** (`wired < reserved`): store the descriptor in
+    ///    the next free reserved slot (R4 or R5) and bump the wired count.
+    /// 2. **Cache-only** (`desc_idx < reserved.min(2)`): the peripheral
+    ///    fits in the per-partition cache and does NOT consume a dynamic
+    ///    slot — this preserves R6-R7 for `sys_buf_lend` windows.
+    /// 3. **`add_window` fallback**: allocate a dynamic slot via the
+    ///    normal [`add_window`](MpuStrategy::add_window) path.
+    ///
+    /// Returns `Ok(wired-count delta)`.
     fn try_wire_region(
         &self,
         seen: &mut heapless::Vec<(u32, u32, usize, u32), 8>,
@@ -386,9 +433,17 @@ impl<const N: usize> DynamicStrategy<N> {
     }
 
     /// Populate dynamic slots with deduplicated peripheral regions from
-    /// the given partitions (device memory: S=1,C=0,B=1 (Shareable Device memory), XN, AP_FULL_ACCESS).
-    /// Reserved peripheral slots (R4/R5) are written directly; remaining
-    /// regions use [`add_window`].  Returns the number wired.
+    /// the given partitions (device memory: S=1,C=0,B=1 (Shareable Device
+    /// memory), XN, AP_FULL_ACCESS).
+    ///
+    /// Reserved peripheral slots (R4/R5) are populated at boot into
+    /// `slots[]` and their per-partition (RBAR, RASR) pairs are cached so
+    /// that [`cached_peripheral_regions`](Self::cached_peripheral_regions)
+    /// can override them during each context switch (called from
+    /// `__pendsv_program_mpu` in `harness.rs`).  Remaining regions use
+    /// [`add_window`](MpuStrategy::add_window).
+    ///
+    /// Returns the number of dynamic slots wired.
     pub fn wire_boot_peripherals(
         &self,
         partitions: &[crate::partition::PartitionControlBlock],
