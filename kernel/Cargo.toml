@@ -489,3 +489,6 @@ single-core = []
 
 [dev-dependencies]
 plib = { path = "../plib" }
+
+[target.'cfg(not(target_arch = "arm"))'.dev-dependencies]
+trybuild = "1"
