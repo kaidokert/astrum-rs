@@ -403,9 +403,9 @@ mod tests {
     /// Verifies that a large partition config produces a Core metadata
     /// region that exceeds the literal-pool offset limit, proving the
     /// compile-time guard in `define_pendsv!(@assert_offsets)` is necessary.
-    // TODO: add a compile-fail test (e.g. trybuild) that instantiates
-    // `define_pendsv!` with an oversized config and asserts it fails to
-    // compile. Deferred because trybuild infrastructure is not yet set up.
+    // Compile-fail coverage: tests/ui/oversized_partition_config.rs
+    // verifies that `define_pendsv!` with 500 partitions triggers the
+    // compile-time assertion via trybuild.
     ///
     /// Uses an independent computation (offset of last PendSV-accessed
     /// array + array size) rather than mirroring the guard's
