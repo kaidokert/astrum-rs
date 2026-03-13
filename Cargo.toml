@@ -2,10 +2,11 @@
 members = ["kernel", "plib", "rtos-traits", "bsp-nrf52840", "bsp-stm32f4", "bsp-atsamd51"]
 resolver = "2"
 
-# Dev profile: full debug symbols and no optimisation for GDB debugging.
-# These are Cargo defaults, but we state them explicitly so that
-# `cargo build` always produces DWARF info suitable for step-debugging
-# with GDB / OpenOCD / QEMU.
+# Dev profile: debug symbols with basic optimisation (opt-level = 1).
+# opt-level = 1 enables NRVO and dead-code elimination while preserving
+# most DWARF debug info for GDB / OpenOCD / QEMU step-debugging.
+# Required because Kernel<C> with large stack tiers (AlignedStack4K)
+# exceeds the 28 KiB MSP stack at opt-level = 0 due to by-value returns.
 [profile.dev]
 debug = true
-opt-level = 0
+opt-level = 1
