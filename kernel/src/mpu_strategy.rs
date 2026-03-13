@@ -2640,6 +2640,49 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // try_wire_region tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn try_wire_region_three_way_branch() {
+        let rasr = periph_rasr(4096);
+        let r = |b| (b, 4096u32, rasr);
+        let ds = DynamicStrategy::<4>::new();
+        with_cs(|cs| *ds.peripheral_reserved.borrow(cs).borrow_mut() = 2);
+        let mut seen: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
+        // Branch 1: reserved slot → delta=1, slot populated.
+        assert_eq!(
+            ds.try_wire_region(&mut seen, 0, 0, 2, r(0x4000_0000), 0),
+            Ok(1)
+        );
+        let s = ds.slot(4).expect("R4 occupied");
+        assert_eq!((s.base, s.size, s.permissions), (0x4000_0000, 4096, rasr));
+        // Branch 2: cache-only → delta=0.
+        assert_eq!(
+            ds.try_wire_region(&mut seen, 2, 0, 2, r(0x4001_0000), 0),
+            Ok(0)
+        );
+        // Branch 3: add_window fallback → delta=1.
+        let ds2 = DynamicStrategy::<4>::new();
+        let mut seen2: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
+        assert_eq!(
+            ds2.try_wire_region(&mut seen2, 0, 0, 0, r(0x4000_0000), 0),
+            Ok(1)
+        );
+        // Exhaust remaining slots → SlotExhausted.
+        for i in 1u32..3 {
+            let b = 0x4000_0000 + i * 0x1_0000;
+            assert!(ds2
+                .try_wire_region(&mut seen2, i as usize, 0, 0, r(b), 0)
+                .is_ok());
+        }
+        assert_eq!(
+            ds2.try_wire_region(&mut seen2, 3, 0, 0, r(0x4003_0000), 0),
+            Err(MpuError::SlotExhausted)
+        );
+    }
+
+    // ------------------------------------------------------------------
     // compute_peripheral_rasr tests
     // ------------------------------------------------------------------
 
