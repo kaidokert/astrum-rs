@@ -257,7 +257,7 @@ fn SysTick() {
                 match k.buffers.revoke_from_partition(*SLOT, &STRATEGY) {
                     Ok(()) => {
                         let slot = k.buffers.get(*SLOT).unwrap();
-                        let slot_idx = DynamicStrategy::region_to_slot_index(*RID)
+                        let slot_idx = DynamicStrategy::<4>::region_to_slot_index(*RID)
                             .expect("RID must map to a valid dynamic slot");
                         let rasr = STRATEGY.compute_region_values()[slot_idx].1;
                         let ok = slot.state() == kernel::buffer_pool::BorrowState::Free

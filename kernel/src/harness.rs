@@ -233,8 +233,11 @@ macro_rules! define_unified_harness {
     // Internal: handlers only (SysTick, PendSV, SVC linkage, kernel state)
     (@handlers $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
         #[cfg(feature = "dynamic-mpu")]
-        static HARNESS_STRATEGY: $crate::mpu_strategy::DynamicStrategy =
-            $crate::mpu_strategy::DynamicStrategy::new();
+        static HARNESS_STRATEGY: $crate::mpu_strategy::DynamicStrategy<
+            {<$Config as $crate::config::KernelConfig>::N}
+        > = $crate::mpu_strategy::DynamicStrategy::<
+            {<$Config as $crate::config::KernelConfig>::N}
+        >::with_partition_count();
 
         /// Boot-time MPU initialisation hook called from `boot::boot()`
         /// before `SCB::set_pendsv()` triggers the first context switch.

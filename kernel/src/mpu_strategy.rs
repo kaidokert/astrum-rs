@@ -118,7 +118,7 @@ fn compute_peripheral_rasr(size: u32) -> u32 {
 }
 
 /// Per-partition pre-computed (RBAR, RASR) pairs for peripheral regions R4-R5.
-type PeripheralCache = [[(u32, u32); 2]; DYNAMIC_SLOT_COUNT];
+type PeripheralCache<const N: usize> = [[(u32, u32); 2]; N];
 
 /// Dynamic MPU strategy — manages regions R4-R7 at runtime.
 ///
@@ -128,7 +128,10 @@ type PeripheralCache = [[(u32, u32); 2]; DYNAMIC_SLOT_COUNT];
 /// Interior mutability is provided by `Mutex<RefCell<…>>`, which uses a
 /// critical section (interrupt-disable) on single-core Cortex-M to ensure
 /// exclusive access.
-pub struct DynamicStrategy {
+///
+/// `N` is the maximum number of partitions whose peripheral regions can be
+/// cached. Defaults to `DYNAMIC_SLOT_COUNT` (4) for backwards compatibility.
+pub struct DynamicStrategy<const N: usize = DYNAMIC_SLOT_COUNT> {
     slots: Mutex<RefCell<[Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT]>>,
     /// Number of leading slots (0 or 2) reserved for peripheral MMIO regions.
     /// Set by `configure_partition`; `wire_boot_peripherals` populates these
@@ -136,29 +139,25 @@ pub struct DynamicStrategy {
     /// them during PendSV context switches.
     peripheral_reserved: Mutex<RefCell<usize>>,
     /// Pre-computed (RBAR, RASR) pairs for R4-R5, indexed by partition_id.
-    peripheral_cache: Mutex<RefCell<PeripheralCache>>,
+    peripheral_cache: Mutex<RefCell<PeripheralCache<N>>>,
 }
 
-impl Default for DynamicStrategy {
+impl<const N: usize> Default for DynamicStrategy<N> {
     fn default() -> Self {
-        Self::new()
+        Self::with_partition_count()
     }
 }
 
+/// Backwards-compatible constructor.
 impl DynamicStrategy {
-    /// Create a new strategy with all slots empty.
+    /// Create a new strategy with all slots empty and the default partition
+    /// cache size (`DYNAMIC_SLOT_COUNT`).
     pub const fn new() -> Self {
-        const DISABLED: [(u32, u32); 2] = [
-            disabled_pair(DYNAMIC_REGION_BASE),
-            disabled_pair(DYNAMIC_REGION_BASE + 1),
-        ];
-        Self {
-            slots: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
-            peripheral_reserved: Mutex::new(RefCell::new(0)),
-            peripheral_cache: Mutex::new(RefCell::new([DISABLED; DYNAMIC_SLOT_COUNT])),
-        }
+        Self::with_partition_count()
     }
+}
 
+impl<const N: usize> DynamicStrategy<N> {
     /// Convert a hardware MPU region ID (4-7) to a `compute_region_values`
     /// array index (0-3), or `None` if the ID is out of range.
     pub fn region_to_slot_index(region_id: u8) -> Option<usize> {
@@ -167,6 +166,19 @@ impl DynamicStrategy {
             Some(idx)
         } else {
             None
+        }
+    }
+    /// Create a new strategy with all slots empty and a peripheral cache
+    /// sized for `N` partitions.
+    pub const fn with_partition_count() -> Self {
+        const DISABLED: [(u32, u32); 2] = [
+            disabled_pair(DYNAMIC_REGION_BASE),
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+        ];
+        Self {
+            slots: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
+            peripheral_reserved: Mutex::new(RefCell::new(0)),
+            peripheral_cache: Mutex::new(RefCell::new([DISABLED; N])),
         }
     }
 
@@ -246,10 +258,13 @@ impl DynamicStrategy {
 
     /// Store pre-computed (RBAR, RASR) pairs for a partition's peripherals.
     ///
-    /// `partition_id` indexes into the cache (max `DYNAMIC_SLOT_COUNT - 1`).
+    /// `partition_id` indexes into the cache (max `N - 1`).
     /// Out-of-range IDs are silently ignored.
     pub fn cache_peripherals(&self, partition_id: u8, descriptors: [Option<WindowDescriptor>; 2]) {
         let idx = partition_id as usize;
+        if idx >= N {
+            return;
+        }
         let pairs = core::array::from_fn(|i| {
             let rid = DYNAMIC_REGION_BASE + i as u8;
             match &descriptors[i] {
@@ -269,7 +284,7 @@ impl DynamicStrategy {
     /// Return pre-computed (RBAR, RASR) pairs for `partition_id`'s peripherals.
     pub fn cached_peripheral_regions(&self, partition_id: u8) -> [(u32, u32); 2] {
         let idx = partition_id as usize;
-        if idx >= DYNAMIC_SLOT_COUNT {
+        if idx >= N {
             return [
                 disabled_pair(DYNAMIC_REGION_BASE),
                 disabled_pair(DYNAMIC_REGION_BASE + 1),
@@ -460,7 +475,7 @@ impl DynamicStrategy {
     }
 }
 
-impl MpuStrategy for DynamicStrategy {
+impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
     fn configure_partition(
         &self,
         partition_id: u8,
