@@ -67,9 +67,6 @@ extern "C" fn p1_main() -> ! {
     assert_or_fail(rc == MSG_HELLO.len() as u32, "P1: DEV_WRITE short");
     hprintln!("[P1] wrote {} bytes to UART-A TX", rc);
 
-    // TODO: SYS_DEV_READ_TIMED currently reads one byte per call (kernel
-    // hardcodes len=1). Replace this loop with a single multi-byte blocking
-    // read once the kernel supports a length parameter.
     let mut buf = [0u8; 8];
     let mut received = 0usize;
     while received < MSG_REPLY.len() {
@@ -106,9 +103,6 @@ extern "C" fn p2_main() -> ! {
         "P2: DEV_OPEN UART-B failed",
     );
 
-    // TODO: SYS_DEV_READ_TIMED currently reads one byte per call (kernel
-    // hardcodes len=1). Replace this loop with a single multi-byte blocking
-    // read once the kernel supports a length parameter.
     let mut buf = [0u8; 8];
     let mut received = 0usize;
     while received < MSG_HELLO.len() {
