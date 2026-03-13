@@ -340,6 +340,41 @@ impl<const N: usize> DynamicStrategy<N> {
         }
     }
 
+    /// Wire a single unseen peripheral region: reserved slot, cache-only,
+    /// or [`add_window`] fallback.  Returns `Ok(wired-count delta)`.
+    fn try_wire_region(
+        &self,
+        seen: &mut heapless::Vec<(u32, u32, usize, u32), 8>,
+        wired: usize,
+        desc_idx: usize,
+        reserved: usize,
+        region: (u32, u32, u32),
+        part_id: u8,
+    ) -> Result<usize, MpuError> {
+        let (base, size, rasr) = region;
+        let (slot_idx, delta) = if wired < reserved {
+            with_cs(|cs| {
+                self.slots.borrow(cs).borrow_mut()[wired] = Some(WindowDescriptor {
+                    base,
+                    size,
+                    permissions: rasr,
+                    owner: part_id,
+                    rbar: slot_rbar(base, wired),
+                });
+            });
+            (wired, 1)
+        } else if desc_idx < reserved.min(2) {
+            (desc_idx, 0)
+        } else {
+            let rn = self.add_window(base, size, rasr, part_id)?;
+            ((rn - DYNAMIC_REGION_BASE) as usize, 1)
+        };
+        if seen.push((base, size, slot_idx, rasr)).is_err() {
+            debug_assert!(false, "seen overflow: dedup capacity exceeded");
+        }
+        Ok(delta)
+    }
+
     /// Populate dynamic slots with deduplicated peripheral regions from
     /// the given partitions (device memory: S=1,C=0,B=1 (Shareable Device memory), XN, AP_FULL_ACCESS).
     /// Reserved peripheral slots (R4/R5) are written directly; remaining
@@ -369,79 +404,35 @@ impl<const N: usize> DynamicStrategy<N> {
                     .iter()
                     .find(|(b, s, _, _)| *b == base && *s == size)
                     .copied();
-                // Skip entirely when already wired and cache is full.
                 if prior.is_some() && desc_idx >= 2 {
                     continue;
                 }
-                // Reuse RASR from seen if already computed; otherwise compute once.
-                // MpuRegion.permissions intentionally ignored: fixed Device attrs.
                 let rasr = if let Some((_, _, _, stored)) = prior {
                     stored
                 } else {
                     compute_peripheral_rasr(size)
                 };
-                // Only wire if not already wired by a preceding partition.
                 if prior.is_none() {
-                    // Populate reserved peripheral slots directly; add_window
-                    // skips them so they must be written here.
-                    if wired < reserved {
-                        with_cs(|cs| {
-                            self.slots.borrow(cs).borrow_mut()[wired] = Some(WindowDescriptor {
-                                base,
-                                size,
-                                permissions: rasr,
-                                owner: part.id(),
-                                rbar: slot_rbar(base, wired),
-                            });
-                        });
-                        // On overflow the cache lookup below gracefully
-                        // skips the entry.
-                        if seen.push((base, size, wired, rasr)).is_err() {
-                            debug_assert!(false, "seen overflow: dedup capacity exceeded");
+                    match self.try_wire_region(
+                        &mut seen,
+                        wired,
+                        desc_idx,
+                        reserved,
+                        (base, size, rasr),
+                        part.id(),
+                    ) {
+                        Ok(delta) => wired += delta,
+                        Err(MpuError::SlotExhausted) => {
+                            self.cache_peripherals(part.id(), part_descs);
+                            return wired;
                         }
-                        wired += 1;
-                    } else if desc_idx < reserved.min(2) {
-                        // cache_peripherals re-derives RBAR from the array
-                        // index (DYNAMIC_REGION_BASE + i), so slot_idx in
-                        // `seen` only affects dedup—not the final cached RBAR.
-                        // desc_idx 0 (or 1) with reserved peripheral slots:
-                        // handled by per-partition cache via
-                        // cached_peripheral_regions on every PendSV context
-                        // switch.  Record in seen so dedup works, but do NOT
-                        // call add_window and do NOT increment wired.
-                        if seen.push((base, size, desc_idx, rasr)).is_err() {
-                            debug_assert!(false, "seen overflow: dedup capacity exceeded");
-                        }
-                    } else {
-                        // 3rd+ peripheral per partition (desc_idx >= 2) or
-                        // no reserved slots: allocate a dynamic window slot.
-                        match self.add_window(base, size, rasr, part.id()) {
-                            Ok(region_num) => {
-                                // Derive actual slot index from the hardware
-                                // region number returned by add_window, which
-                                // skips the RAM slot at index `reserved`.
-                                let actual_slot = (region_num - DYNAMIC_REGION_BASE) as usize;
-                                if seen.push((base, size, actual_slot, rasr)).is_err() {
-                                    debug_assert!(false, "seen overflow: dedup capacity exceeded");
-                                }
-                                wired += 1;
-                            }
-                            Err(MpuError::SlotExhausted) => {
-                                self.cache_peripherals(part.id(), part_descs);
-                                return wired;
-                            }
-                            Err(_) => continue,
-                        }
+                        Err(_) => continue,
                     }
                 }
                 // Cache for this partition regardless of prior wiring;
                 // shared peripherals must appear in every partition's
                 // cache for correct context-switch restoration.
                 if desc_idx < reserved.min(2) {
-                    // Look up the correct slot index from seen (which now
-                    // holds the actual hardware slot for add_window regions).
-                    // If the region wasn't tracked (e.g. seen capacity exceeded),
-                    // skip this cache entry rather than panicking.
                     if let Some(&(_, _, slot_idx, _)) =
                         seen.iter().find(|(b, s, _, _)| *b == base && *s == size)
                     {
@@ -452,8 +443,6 @@ impl<const N: usize> DynamicStrategy<N> {
                             owner: part.id(),
                             rbar: slot_rbar(base, slot_idx),
                         });
-                        // desc_idx is a manual counter (not from
-                        // .enumerate()); increment is required.
                         desc_idx += 1;
                     }
                 }
