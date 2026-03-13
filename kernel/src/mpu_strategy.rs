@@ -432,19 +432,17 @@ impl<const N: usize> DynamicStrategy<N> {
                 // Cache for this partition regardless of prior wiring;
                 // shared peripherals must appear in every partition's
                 // cache for correct context-switch restoration.
-                if desc_idx < reserved.min(2) {
-                    if let Some(&(_, _, slot_idx, _)) =
-                        seen.iter().find(|(b, s, _, _)| *b == base && *s == size)
-                    {
-                        part_descs[desc_idx] = Some(WindowDescriptor {
-                            base,
-                            size,
-                            permissions: rasr,
-                            owner: part.id(),
-                            rbar: slot_rbar(base, slot_idx),
-                        });
-                        desc_idx += 1;
-                    }
+                if let Some(wd) = Self::build_partition_cache_entry(
+                    &seen,
+                    base,
+                    size,
+                    rasr,
+                    desc_idx,
+                    reserved,
+                    part.id(),
+                ) {
+                    part_descs[desc_idx] = Some(wd);
+                    desc_idx += 1;
                 }
             }
             self.cache_peripherals(part.id(), part_descs);
@@ -453,6 +451,33 @@ impl<const N: usize> DynamicStrategy<N> {
             self.debug_verify_cache_consistency(part);
         }
         wired
+    }
+
+    /// Build a cache entry for a peripheral region if `desc_idx` is
+    /// within the reserved window and `seen` contains a matching slot.
+    ///
+    /// Returns `Some(WindowDescriptor)` when both conditions hold,
+    /// `None` otherwise.
+    fn build_partition_cache_entry(
+        seen: &heapless::Vec<(u32, u32, usize, u32), 8>,
+        base: u32,
+        size: u32,
+        rasr: u32,
+        desc_idx: usize,
+        reserved: usize,
+        part_id: u8,
+    ) -> Option<WindowDescriptor> {
+        if desc_idx >= reserved.min(2) {
+            return None;
+        }
+        let &(_, _, slot_idx, _) = seen.iter().find(|(b, s, _, _)| *b == base && *s == size)?;
+        Some(WindowDescriptor {
+            base,
+            size,
+            permissions: rasr,
+            owner: part_id,
+            rbar: slot_rbar(base, slot_idx),
+        })
     }
 
     /// Program regions R4-R7 into the MPU hardware.
@@ -2706,5 +2731,76 @@ mod tests {
     fn compute_peripheral_rasr_too_small() {
         // size=16 → trailing_zeros=4, which is < 5 → debug_assert fires.
         let _ = compute_peripheral_rasr(16);
+    }
+
+    #[test]
+    fn build_partition_cache_entry_returns_some_when_cached() {
+        let mut seen: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
+        let rasr = periph_rasr(4096);
+        seen.push((0x4000_0000, 4096, 1, rasr)).unwrap();
+
+        let result = DynamicStrategy::<4>::build_partition_cache_entry(
+            &seen,
+            0x4000_0000,
+            4096,
+            rasr,
+            0,
+            2,
+            5,
+        );
+        let wd = result.expect("expected Some for desc_idx < reserved with matching seen entry");
+        assert_eq!(wd.base, 0x4000_0000);
+        assert_eq!(wd.size, 4096);
+        assert_eq!(wd.permissions, rasr);
+        assert_eq!(wd.owner, 5);
+        assert_eq!(wd.rbar, slot_rbar(0x4000_0000, 1));
+    }
+
+    #[test]
+    fn build_partition_cache_entry_none_when_desc_idx_ge_reserved() {
+        let mut seen: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
+        let rasr = periph_rasr(4096);
+        seen.push((0x4000_0000, 4096, 0, rasr)).unwrap();
+
+        // desc_idx == reserved → None
+        let result = DynamicStrategy::<4>::build_partition_cache_entry(
+            &seen,
+            0x4000_0000,
+            4096,
+            rasr,
+            2,
+            2,
+            0,
+        );
+        assert!(result.is_none(), "expected None when desc_idx >= reserved");
+
+        // reserved == 0 → None even at desc_idx 0
+        let result = DynamicStrategy::<4>::build_partition_cache_entry(
+            &seen,
+            0x4000_0000,
+            4096,
+            rasr,
+            0,
+            0,
+            0,
+        );
+        assert!(result.is_none(), "expected None when reserved is 0");
+    }
+
+    #[test]
+    fn build_partition_cache_entry_none_when_unseen() {
+        let seen: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
+        let rasr = periph_rasr(4096);
+
+        let result = DynamicStrategy::<4>::build_partition_cache_entry(
+            &seen,
+            0x4000_0000,
+            4096,
+            rasr,
+            0,
+            2,
+            0,
+        );
+        assert!(result.is_none(), "expected None when seen is empty");
     }
 }
