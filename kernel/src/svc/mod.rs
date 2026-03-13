@@ -371,9 +371,7 @@ use crate::mutex::MutexPool;
 use crate::partition::{
     ConfigError, PartitionConfig, PartitionControlBlock, PartitionState, PartitionTable,
 };
-use crate::queuing::{
-    QueuingError, QueuingPortPool, QueuingPortStatus, RecvQueuingOutcome, SendQueuingOutcome,
-};
+use crate::queuing::{QueuingPortPool, QueuingPortStatus, RecvQueuingOutcome, SendQueuingOutcome};
 use crate::sampling::SamplingPortPool;
 use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
@@ -1821,30 +1819,14 @@ where
                 // C::QM, a KernelConfig constant. (3) The partition owns this
                 // memory as enforced by MPU isolation.
                 let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
-                let pid = self.current_partition;
-                let tick = self.tick.get();
-                match self.msg.queuing_mut().receive_queuing_message(
+                queuing::handle_queuing_receive(
+                    self.msg.queuing_mut(),
+                    self.core.partitions_mut(),
+                    self.current_partition,
+                    self.tick.get(),
                     frame.r1 as usize,
-                    pid,
                     b,
-                    0,
-                    tick,
-                ) {
-                    Ok(RecvQueuingOutcome::Received {
-                        msg_len,
-                        wake_sender: w,
-                    }) => {
-                        if let Some(wpid) = w {
-                            try_transition(self.core.partitions_mut(), wpid, PartitionState::Ready);
-                        }
-                        msg_len as u32
-                    }
-                    // timeout=0 (non-timed): non-blocking try-receive; return immediately.
-                    Ok(RecvQueuingOutcome::ReceiverBlocked { .. }) => 0,
-                    // Transient queue-empty: same non-blocking return path as ReceiverBlocked.
-                    Err(QueuingError::QueueEmpty) => 0,
-                    Err(_) => SvcError::InvalidResource.to_u32(),
-                }
+                )
             }),
             #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingStatus) => {
@@ -1853,19 +1835,15 @@ where
                     // lies within the calling partition's MPU data region. (2) Size is
                     // compile-time constant size_of::<QueuingPortStatus>. (3) The
                     // partition owns this memory as enforced by MPU isolation.
-                    let status_ptr = frame.r2 as *mut QueuingPortStatus;
-                    match self
-                        .msg
-                        .queuing()
-                        .get_queuing_port_status(frame.r1 as usize)
-                    {
-                        Ok(status) => {
-                            // SAFETY: Same as above — validated_ptr confirmed the pointer
-                            // and size; we are in Handler mode so the write is sound.
-                            unsafe { core::ptr::write(status_ptr, status) };
-                            0
-                        }
-                        Err(_) => SvcError::InvalidResource.to_u32(),
+                    // SAFETY: validated_ptr confirmed the pointer and size lie within the
+                    // calling partition's MPU data region; handle_queuing_status requires
+                    // `out` to be valid, aligned, and writable, which is guaranteed here.
+                    unsafe {
+                        queuing::handle_queuing_status(
+                            self.msg.queuing(),
+                            frame.r1 as usize,
+                            frame.r2 as *mut QueuingPortStatus,
+                        )
                     }
                 })
             }

@@ -1,5 +1,7 @@
 use crate::partition::{PartitionState, PartitionTable};
-use crate::queuing::{QueuingError, QueuingPortPool, SendQueuingOutcome};
+use crate::queuing::{
+    QueuingError, QueuingPortPool, QueuingPortStatus, RecvQueuingOutcome, SendQueuingOutcome,
+};
 use crate::svc::{try_transition, SvcError};
 
 // TODO: handle_queuing_send carries 5 generic parameters from QueuingPortPool.
@@ -30,13 +32,90 @@ pub fn handle_queuing_send<
         Err(_) => SvcError::InvalidResource.to_u32(),
     }
 }
+pub fn handle_queuing_receive<
+    const N: usize,
+    const S: usize,
+    const D: usize,
+    const M: usize,
+    const W: usize,
+>(
+    pool: &mut QueuingPortPool<S, D, M, W>,
+    partitions: &mut PartitionTable<N>,
+    current_partition: u8,
+    tick: u64,
+    port_id: usize,
+    buf: &mut [u8],
+) -> u32 {
+    match pool.receive_queuing_message(port_id, current_partition, buf, 0, tick) {
+        Ok(RecvQueuingOutcome::Received {
+            msg_len,
+            wake_sender,
+        }) => {
+            if let Some(w) = wake_sender {
+                try_transition(partitions, w, PartitionState::Ready);
+            }
+            msg_len as u32
+        }
+        Ok(RecvQueuingOutcome::ReceiverBlocked { .. }) | Err(QueuingError::QueueEmpty) => 0,
+        Err(_) => SvcError::InvalidResource.to_u32(),
+    }
+}
+/// # Safety
+/// `out` must be valid, aligned, and writable.
+pub unsafe fn handle_queuing_status<
+    const S: usize,
+    const D: usize,
+    const M: usize,
+    const W: usize,
+>(
+    pool: &QueuingPortPool<S, D, M, W>,
+    port_id: usize,
+    out: *mut QueuingPortStatus,
+) -> u32 {
+    match pool.get_queuing_port_status(port_id) {
+        Ok(status) => {
+            // SAFETY: The caller guarantees `out` is valid, aligned, and writable.
+            // In the syscall path, validated_ptr confirms the pointer lies within
+            // the partition's MPU data region with sufficient size.
+            unsafe { core::ptr::write(out, status) };
+            0
+        }
+        Err(_) => SvcError::InvalidResource.to_u32(),
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::partition::{MpuRegion, PartitionControlBlock};
-    use crate::queuing::RecvQueuingOutcome;
     use crate::sampling::PortDirection;
+
+    #[test]
+    #[rustfmt::skip]
+    #[allow(clippy::undocumented_unsafe_blocks)]
+    fn recv_and_status_outcomes() {
+        let (mut pool, mut pt) = make_pool_and_pt();
+        let (src, dst) = add_route(&mut pool);
+        let mut buf = [0u8; 64];
+        pool.send_routed(src, 0, &[0xCC; 8], 0, 100).unwrap();
+        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, 1, 100, dst, &mut buf), 8);
+        assert_eq!(&buf[..8], &[0xCC; 8]);
+        assert_eq!(pt.get(0).unwrap().state(), PartitionState::Running);
+        pool.get_mut(dst).unwrap().inject_message(4, &[0xDD; 4]);
+        pt.get_mut(0).unwrap().transition(PartitionState::Waiting).unwrap();
+        pool.get_mut(dst).unwrap().enqueue_blocked_sender(0, 999);
+        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, 1, 101, dst, &mut buf), 4);
+        assert_eq!(&buf[..4], &[0xDD; 4]);
+        assert_eq!(pt.get(0).unwrap().state(), PartitionState::Ready);
+        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, 1, 102, dst, &mut buf), 0);
+        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, 0, 103, 99, &mut buf), SvcError::InvalidResource.to_u32());
+        let mut s = core::mem::MaybeUninit::<QueuingPortStatus>::uninit();
+        assert_eq!(unsafe { handle_queuing_status(&pool, dst, s.as_mut_ptr()) }, 0);
+        let s = unsafe { s.assume_init() };
+        assert_eq!((s.nb_messages, s.max_nb_messages, s.max_message_size), (0, 2, 64));
+        let mut s2 = core::mem::MaybeUninit::<QueuingPortStatus>::uninit();
+        assert_eq!(unsafe { handle_queuing_status(&pool, 99, s2.as_mut_ptr()) }, SvcError::InvalidResource.to_u32());
+    }
 
     #[rustfmt::skip]
     fn make_pool_and_pt() -> (QueuingPortPool<4, 2, 64, 2>, PartitionTable<4>) {
