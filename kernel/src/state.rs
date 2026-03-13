@@ -226,7 +226,7 @@ const _: () = assert!(
 );
 
 // Compile-time assertion: MAX_KERNEL_SIZE must be <= LITERAL_POOL_OFFSET_LIMIT.
-// PendSV and SVC handlers use Thumb-2 LDR instructions with immediate offsets to access
+// PendSV and SVC handlers use literal-pool indirection (`ldr Rx, =SYMBOL`) to access
 // Kernel fields. If MAX_KERNEL_SIZE exceeded the literal-pool offset limit (65536),
 // field offsets could be unreachable and the generated assembly would silently break.
 const _: () = assert!(
@@ -650,8 +650,8 @@ mod tests {
     #[allow(clippy::assertions_on_constants)]
     fn max_kernel_size_within_offset_limit() {
         // Mirrors the compile-time const assertion: MAX_KERNEL_SIZE must not
-        // exceed LITERAL_POOL_OFFSET_LIMIT, otherwise PendSV/SVC Thumb-2 LDR
-        // offsets could become unreachable.
+        // exceed LITERAL_POOL_OFFSET_LIMIT, otherwise PendSV/SVC literal-pool
+        // indirection could become unreachable.
         assert!(
             MAX_KERNEL_SIZE <= crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
             "MAX_KERNEL_SIZE ({}) must be <= LITERAL_POOL_OFFSET_LIMIT ({})",
