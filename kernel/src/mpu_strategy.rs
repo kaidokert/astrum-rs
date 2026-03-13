@@ -101,6 +101,22 @@ const fn disabled_pair(region: u8) -> (u32, u32) {
     (region as u32 | (1 << 4), 0)
 }
 
+/// Compute the RASR value for a peripheral MMIO region of the given `size`.
+///
+/// The result uses Device-attribute settings (S=1, C=0, B=1), full
+/// read/write access, and execute-never.  `size` must be a power-of-two
+/// >= 32 bytes.
+fn compute_peripheral_rasr(size: u32) -> u32 {
+    let tz = size.trailing_zeros();
+    debug_assert!(tz >= 5, "MPU region size must be >= 32 bytes (size={size})");
+    crate::mpu::build_rasr(
+        tz.saturating_sub(1),
+        crate::mpu::AP_FULL_ACCESS,
+        true,
+        (true, false, true),
+    )
+}
+
 /// Per-partition pre-computed (RBAR, RASR) pairs for peripheral regions R4-R5.
 type PeripheralCache = [[(u32, u32); 2]; DYNAMIC_SLOT_COUNT];
 
@@ -300,14 +316,7 @@ impl DynamicStrategy {
                 let rasr = if let Some((_, _, _, stored)) = prior {
                     stored
                 } else {
-                    let tz = size.trailing_zeros();
-                    debug_assert!(tz >= 5, "MPU region size must be >= 32 bytes (size={size})");
-                    crate::mpu::build_rasr(
-                        tz.saturating_sub(1),
-                        crate::mpu::AP_FULL_ACCESS,
-                        true,
-                        (true, false, true),
-                    )
+                    compute_peripheral_rasr(size)
                 };
                 // Only wire if not already wired by a preceding partition.
                 if prior.is_none() {
@@ -2588,5 +2597,31 @@ mod tests {
             (build_rbar(0x4001_0000, 5).unwrap(), periph_rasr(4096)),
             "cache[1] must hold second peripheral at R5"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // compute_peripheral_rasr tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn compute_peripheral_rasr_sizes() {
+        // size=32 → trailing_zeros=5, size_field=4
+        let rasr_32 = compute_peripheral_rasr(32);
+        assert_eq!(rasr_32, periph_rasr(32));
+
+        // size=256 → trailing_zeros=8, size_field=7
+        let rasr_256 = compute_peripheral_rasr(256);
+        assert_eq!(rasr_256, periph_rasr(256));
+
+        // size=4096 → trailing_zeros=12, size_field=11
+        let rasr_4096 = compute_peripheral_rasr(4096);
+        assert_eq!(rasr_4096, periph_rasr(4096));
+    }
+
+    #[test]
+    #[should_panic(expected = "MPU region size must be >= 32 bytes")]
+    fn compute_peripheral_rasr_too_small() {
+        // size=16 → trailing_zeros=4, which is < 5 → debug_assert fires.
+        let _ = compute_peripheral_rasr(16);
     }
 }
