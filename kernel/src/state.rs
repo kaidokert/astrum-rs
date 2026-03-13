@@ -431,10 +431,6 @@ where
     addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>
 }
 
-// TODO: DRY violation - with_kernel and with_kernel_mut have nearly identical
-// documentation. Consider using #[doc = include_str!("...")] or a doc macro
-// if the toolchain supports it and the duplication becomes a maintenance burden.
-
 /// Access the unified kernel state immutably within a critical section.
 ///
 /// Wraps access to `UNIFIED_KERNEL_STORAGE` in `cortex_m::interrupt::free()`,

@@ -2440,10 +2440,6 @@ mod tests {
         );
         assert_eq!(cached0[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
 
-        // TODO: reviewer false positive — Partition 1's peripheral is
-        // wired to slot 1 (R5) at boot, but cache_peripherals re-derives
-        // RBAR from the array index (DYNAMIC_REGION_BASE + 0 = R4), so
-        // cached index 0 always maps to R4 regardless of the boot slot.
         let cached1 = ds.cached_peripheral_regions(1);
         assert_eq!(
             cached1[0],
@@ -2452,9 +2448,6 @@ mod tests {
         );
         assert_eq!(cached1[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
 
-        // TODO: reviewer false positive — Partition 2's peripheral hits
-        // the else-if branch and IS registered via part_descs + cache_peripherals.
-        // cached_peripheral_regions returns valid data, not a disabled region.
         let cached2 = ds.cached_peripheral_regions(2);
         assert_eq!(
             cached2[0],
