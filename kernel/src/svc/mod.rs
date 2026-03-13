@@ -1,6 +1,8 @@
 #[cfg(feature = "dynamic-mpu")]
 pub mod buffer;
 pub mod irq;
+#[cfg(feature = "ipc-queuing")]
+pub mod queuing;
 pub mod sleep;
 
 use core::cell::RefCell;
@@ -1802,29 +1804,14 @@ where
                     let d = unsafe {
                         core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                     };
-                    let pid = self.current_partition;
-                    let tick = self.tick.get();
-                    match self
-                        .msg
-                        .queuing_mut()
-                        .send_routed(frame.r1 as usize, pid, d, 0, tick)
-                    {
-                        Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
-                            if let Some(wpid) = w {
-                                try_transition(
-                                    self.core.partitions_mut(),
-                                    wpid,
-                                    PartitionState::Ready,
-                                );
-                            }
-                            0
-                        }
-                        // timeout=0 (non-timed): non-blocking try-send; return immediately.
-                        Ok(SendQueuingOutcome::SenderBlocked { .. }) => 0,
-                        // Transient queue-full: same non-blocking return path as SenderBlocked.
-                        Err(QueuingError::QueueFull) => 0,
-                        Err(_) => SvcError::InvalidResource.to_u32(),
-                    }
+                    queuing::handle_queuing_send(
+                        self.msg.queuing_mut(),
+                        self.core.partitions_mut(),
+                        self.current_partition,
+                        self.tick.get(),
+                        frame.r1 as usize,
+                        d,
+                    )
                 })
             }
             #[cfg(feature = "ipc-queuing")]
