@@ -12756,10 +12756,10 @@ mod tests {
     };
 
     #[test]
-    fn combined_pendsv_offsets_within_thumb2_ldr_range() {
-        use crate::pendsv::THUMB2_LDR_MAX_OFFSET;
+    fn combined_pendsv_offsets_within_literal_pool_limit() {
+        use crate::pendsv::LITERAL_POOL_OFFSET_LIMIT;
 
-        // Small config with AlignedStack1K (align 1024) so core fits in Thumb2 range.
+        // Small config with AlignedStack1K (align 1024) so core fits within limit.
         // TestConfig uses AlignedStack4K which pushes core to offset 4096.
         struct SmallConfig;
         impl KernelConfig for SmallConfig {
@@ -12801,7 +12801,7 @@ mod tests {
             (sp, "core+partition_sp"),
             (sl, "core+partition_stack_limits"),
         ] {
-            assert!(off < THUMB2_LDR_MAX_OFFSET, "{name} offset {off}");
+            assert!(off < LITERAL_POOL_OFFSET_LIMIT, "{name} offset {off}");
         }
         assert_eq!(sp % 4, 0, "partition_sp not 4-byte aligned");
         assert!(cp < co && np < sp);

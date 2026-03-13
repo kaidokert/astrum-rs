@@ -117,17 +117,15 @@ use crate::svc::Kernel;
 /// plus metadata, schedule entries, and moderate IPC pool sizes. For larger
 /// configurations, increase this value and ensure the target has sufficient RAM.
 ///
-/// # Relationship to Thumb2 LDR offset limit
+/// # Relationship to literal-pool offset limit
 ///
-/// `MAX_KERNEL_SIZE` (16 KiB) and [`THUMB2_LDR_MAX_OFFSET`](crate::pendsv::THUMB2_LDR_MAX_OFFSET)
-/// (4096 bytes) are **independent constraints**. `MAX_KERNEL_SIZE` governs
+/// `MAX_KERNEL_SIZE` (16 KiB) and [`LITERAL_POOL_OFFSET_LIMIT`](crate::pendsv::LITERAL_POOL_OFFSET_LIMIT)
+/// (64 KiB) are **independent constraints**. `MAX_KERNEL_SIZE` governs
 /// how much RAM is reserved for the entire `Kernel<C>` struct, while the
-/// Thumb2 limit restricts which fields PendSV assembly can address via
-/// `LDR Rt, [Rn, #imm12]` (12-bit unsigned immediate, range 0..=4095).
-/// A `Kernel<C>` may legally be up to 16 KiB, but the `core` sub-struct —
-/// whose fields PendSV accesses at runtime — must end within 4096 bytes of
-/// the Kernel base. The `define_pendsv!(@assert_offsets)` macro enforces
-/// this at compile time.
+/// literal-pool offset limit is a conservative sanity-check for struct
+/// field offsets accessed by PendSV assembly (which uses literal-pool
+/// indirection, not Thumb2 imm12 encoding).
+/// The `define_pendsv!(@assert_offsets)` macro enforces this at compile time.
 pub const MAX_KERNEL_SIZE: usize = 16 * 1024;
 
 /// Generates an alignment constant and a storage struct from a single

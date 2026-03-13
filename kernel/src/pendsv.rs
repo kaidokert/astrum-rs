@@ -59,10 +59,10 @@ pub const PENDSV_SYSTICK_CLEAR: u32 = PENDSVCLR_BIT | PENDSTCLR_BIT;
 /// PENDSTSET: bit 26 of ICSR. Writing 1 sets SysTick pending.
 pub const PENDSTSET_BIT: u32 = 1 << 26;
 
-/// Maximum byte offset addressable by a Thumb2 `LDR Rt, [Rn, #imm12]`
-/// instruction. The encoding provides a 12-bit unsigned immediate,
-/// giving a range of 0..=4095 (i.e. offsets must be strictly less than 4096).
-pub const THUMB2_LDR_MAX_OFFSET: usize = 4096;
+/// Conservative upper bound for kernel struct field offsets used in PendSV assembly.
+/// Offsets use literal-pool indirection (`ldr Rx, =SYMBOL; ldr Rx, [Rx]`) then register
+/// operands (`ldrb Rd, [Rn, Rm]`), so the Thumb2 12-bit immediate limit does not apply.
+pub const LITERAL_POOL_OFFSET_LIMIT: usize = 65536;
 
 // Compile-time validation against ARMv7-M specification values.
 const _: () = {
@@ -133,23 +133,23 @@ macro_rules! define_pendsv {
             type K = $crate::svc::Kernel<$Config>;
             type C = <$Config as $crate::config::KernelConfig>::Core;
 
-            // All offsets must be < THUMB2_LDR_MAX_OFFSET (Thumb2 ldr 12-bit unsigned immediate).
-            assert!(::core::mem::offset_of!(K, current_partition) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
-                "KERNEL_CURRENT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(K, ticks_dropped) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
-                "KERNEL_TICKS_DROPPED_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(K, core) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
-                "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, next_partition) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
-                "KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, partition_sp) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
-                "KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
-            assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, partition_stack_limits) < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
-                "KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET exceeds Thumb2 ldr range");
+            // All offsets must be < LITERAL_POOL_OFFSET_LIMIT (sanity-check for struct layout).
+            assert!(::core::mem::offset_of!(K, current_partition) < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
+                "KERNEL_CURRENT_PARTITION_OFFSET exceeds literal-pool offset limit");
+            assert!(::core::mem::offset_of!(K, ticks_dropped) < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
+                "KERNEL_TICKS_DROPPED_OFFSET exceeds literal-pool offset limit");
+            assert!(::core::mem::offset_of!(K, core) < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
+                "KERNEL_CORE_OFFSET exceeds literal-pool offset limit");
+            assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, next_partition) < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
+                "KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET exceeds literal-pool offset limit");
+            assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, partition_sp) < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
+                "KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET exceeds literal-pool offset limit");
+            assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, partition_stack_limits) < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
+                "KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET exceeds literal-pool offset limit");
 
             // Guard: the Core metadata region (everything before the bulk
-            // `stacks` array) must fit within Thumb2 LDR range from the kernel
-            // base.  `stacks` is placed last in PartitionCore (#[repr(C)]), so
+            // `stacks` array) must fit within the literal-pool offset limit from
+            // the kernel base.  `stacks` is placed last in PartitionCore (#[repr(C)]), so
             // `offset_of!(C, stacks)` equals the metadata size.  Any new field
             // added before `stacks` is automatically covered by this guard.
             //
@@ -167,8 +167,8 @@ macro_rules! define_pendsv {
             assert!(
                 ::core::mem::offset_of!(K, core)
                     + ::core::mem::offset_of!(C, stacks)
-                    < $crate::pendsv::THUMB2_LDR_MAX_OFFSET,
-                "Core metadata region exceeds Thumb2 ldr range: reduce partition count");
+                    < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
+                "Core metadata region exceeds literal-pool offset limit: reduce partition count");
 
             // Field ordering: current_partition before core in Kernel.
             assert!(::core::mem::offset_of!(K, current_partition) < ::core::mem::offset_of!(K, core),
@@ -372,8 +372,8 @@ macro_rules! define_pendsv_dynamic {
 pub const PCB_STACK_LIMIT_OFFSET: usize =
     core::mem::offset_of!(crate::partition::PartitionControlBlock, stack_limit);
 crate::const_assert!(
-    PCB_STACK_LIMIT_OFFSET < THUMB2_LDR_MAX_OFFSET,
-    "PCB stack_limit offset exceeds Thumb2 ldr range"
+    PCB_STACK_LIMIT_OFFSET < LITERAL_POOL_OFFSET_LIMIT,
+    "PCB stack_limit offset exceeds literal-pool offset limit"
 );
 
 #[cfg(test)]
@@ -411,18 +411,23 @@ mod tests {
     }
 
     #[test]
-    fn thumb2_ldr_max_offset_matches_architectural_limit() {
-        // Thumb2 LDR (immediate, T3 encoding) uses a 12-bit unsigned offset:
-        // range 0..=4095, so the exclusive upper bound is 2^12 = 4096.
-        assert_eq!(super::THUMB2_LDR_MAX_OFFSET, 1 << 12);
-        assert_eq!(super::THUMB2_LDR_MAX_OFFSET, 4096);
+    fn literal_pool_offset_limit_is_correct() {
+        let limit = super::LITERAL_POOL_OFFSET_LIMIT;
+        // Must be a power of two for clean boundary checking.
+        assert!(limit.is_power_of_two(), "limit must be a power of two");
+        // Must exceed the Thumb2 imm12 range (4096) — the whole point of
+        // switching to literal-pool indirection.
+        assert!(limit > 4096, "limit must exceed Thumb2 imm12 range");
+        // Must not exceed 64 KiB — beyond that, struct layout is unreasonable
+        // for a Cortex-M kernel with limited SRAM.
+        assert!(limit <= 65536, "limit must not exceed 64 KiB");
     }
 
     #[test]
     fn pcb_stack_limit_offset_matches_offset_of() {
         let actual = core::mem::offset_of!(PartitionControlBlock, stack_limit);
         assert_eq!(super::PCB_STACK_LIMIT_OFFSET, actual);
-        assert!(actual < super::THUMB2_LDR_MAX_OFFSET);
+        assert!(actual < super::LITERAL_POOL_OFFSET_LIMIT);
     }
 
     #[test]
@@ -444,7 +449,7 @@ mod tests {
     }
 
     /// Verifies that a large partition config produces a Core metadata
-    /// region that exceeds the Thumb2 LDR offset limit, proving the
+    /// region that exceeds the literal-pool offset limit, proving the
     /// compile-time guard in `define_pendsv!(@assert_offsets)` is necessary.
     // TODO: add a compile-fail test (e.g. trybuild) that instantiates
     // `define_pendsv!` with an oversized config and asserts it fails to
@@ -457,23 +462,24 @@ mod tests {
     fn core_metadata_guard_catches_large_partition_config() {
         use crate::partition_core::{AlignedStack1K, PartitionCore};
 
-        // 255 partitions: partition_sp[255] and partition_stack_limits[255]
-        // each occupy 1020 bytes, plus PartitionTable, ScheduleTable, and
-        // scalar fields.
-        type BigCore = PartitionCore<255, 4, AlignedStack1K>;
+        // 500 partitions: PartitionTable<500> stores 500 PartitionControlBlocks
+        // inline (each ~100+ bytes), which alone exceeds the 65536-byte limit.
+        // The partition_sp[500] and partition_stack_limits[500] arrays add
+        // another ~4000 bytes on top of that.
+        type BigCore = PartitionCore<500, 4, AlignedStack1K>;
 
         // Independent check: the end of the last PendSV-accessed array
-        // (partition_stack_limits) must exceed the Thumb2 LDR limit.
+        // (partition_stack_limits) must exceed the literal-pool offset limit.
         // This proves the guard is necessary without using offset_of!(stacks).
         let stack_limits_end = core::mem::offset_of!(BigCore, partition_stack_limits)
-            + core::mem::size_of::<[u32; 255]>();
+            + core::mem::size_of::<[u32; 500]>();
 
         assert!(
-            stack_limits_end > super::THUMB2_LDR_MAX_OFFSET,
+            stack_limits_end > super::LITERAL_POOL_OFFSET_LIMIT,
             "BigCore partition_stack_limits end ({} bytes) must exceed \
-             THUMB2_LDR_MAX_OFFSET ({}) to prove the guard is necessary",
+             LITERAL_POOL_OFFSET_LIMIT ({}) to prove the guard is necessary",
             stack_limits_end,
-            super::THUMB2_LDR_MAX_OFFSET
+            super::LITERAL_POOL_OFFSET_LIMIT
         );
     }
 }
