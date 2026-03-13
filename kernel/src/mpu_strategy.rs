@@ -293,6 +293,53 @@ impl<const N: usize> DynamicStrategy<N> {
         with_cs(|cs| self.peripheral_cache.borrow(cs).borrow()[idx])
     }
 
+    /// Verify that cached (RBAR, RASR) pairs match the PCB's peripheral regions.
+    ///
+    /// Panics (via `debug_assert!`) if the cached RBAR does not match the
+    /// expected value derived from the region's base address, or if the
+    /// cached RASR is zero (disabled) for a mappable peripheral.
+    #[cfg(debug_assertions)]
+    pub fn debug_verify_cache_consistency(&self, part: &crate::partition::PartitionControlBlock) {
+        let cached = self.cached_peripheral_regions(part.id());
+        for (ci, region) in part
+            .peripheral_regions()
+            .iter()
+            .filter(|r| r.is_mappable())
+            .take(cached.len())
+            .enumerate()
+        {
+            let entry = cached.get(ci);
+            debug_assert!(
+                entry.is_some(),
+                "cache index {} out of bounds for partition {}",
+                ci,
+                part.id()
+            );
+            let (rbar, rasr) = match entry {
+                Some(&pair) => pair,
+                None => continue,
+            };
+            let expected_rbar =
+                crate::mpu::build_rbar(region.base(), DYNAMIC_REGION_BASE as u32 + ci as u32);
+            if let Some(expected) = expected_rbar {
+                debug_assert_eq!(
+                    rbar,
+                    expected,
+                    "cache-PCB RBAR mismatch: partition {} descriptor {}",
+                    part.id(),
+                    ci
+                );
+            }
+            debug_assert_ne!(
+                rasr,
+                0,
+                "cache-PCB RASR must be non-zero (enabled): partition {} descriptor {}",
+                part.id(),
+                ci
+            );
+        }
+    }
+
     /// Populate dynamic slots with deduplicated peripheral regions from
     /// the given partitions (device memory: S=1,C=0,B=1 (Shareable Device memory), XN, AP_FULL_ACCESS).
     /// Reserved peripheral slots (R4/R5) are written directly; remaining
@@ -413,41 +460,8 @@ impl<const N: usize> DynamicStrategy<N> {
             }
             self.cache_peripherals(part.id(), part_descs);
 
-            // Verify the stored (RBAR, RASR) pairs in the production cache
-            // match the expected values for each peripheral region.
             #[cfg(debug_assertions)]
-            {
-                let cached = self.cached_peripheral_regions(part.id());
-                for (ci, region) in part
-                    .peripheral_regions()
-                    .iter()
-                    .filter(|r| r.is_mappable())
-                    .take(cached.len())
-                    .enumerate()
-                {
-                    let (rbar, rasr) = cached[ci];
-                    let expected_rbar = crate::mpu::build_rbar(
-                        region.base(),
-                        DYNAMIC_REGION_BASE as u32 + ci as u32,
-                    );
-                    if let Some(expected) = expected_rbar {
-                        debug_assert_eq!(
-                            rbar,
-                            expected,
-                            "cache-PCB RBAR mismatch: partition {} descriptor {}",
-                            part.id(),
-                            ci
-                        );
-                    }
-                    debug_assert_ne!(
-                        rasr,
-                        0,
-                        "cache-PCB RASR must be non-zero (enabled): partition {} descriptor {}",
-                        part.id(),
-                        ci
-                    );
-                }
-            }
+            self.debug_verify_cache_consistency(part);
         }
         wired
     }
@@ -2046,6 +2060,45 @@ mod tests {
             "partition 1 R4 RBAR must encode 0x4001_0000"
         );
         assert_ne!(cached1[0].1, 0, "partition 1 R4 must be enabled");
+    }
+
+    #[test]
+    #[should_panic(expected = "cache-PCB RBAR mismatch")]
+    fn debug_verify_cache_consistency_detects_rbar_mismatch() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+
+        // Wire normally so the cache is populated with correct values.
+        ds.wire_boot_peripherals(std::slice::from_ref(&pcb));
+
+        // Corrupt the cached RBAR for partition 0, descriptor 0:
+        // overwrite with an RBAR encoding a different base address.
+        // TODO(panic-free): unwrap acceptable in test-only code
+        let bad_rbar = build_rbar(0x4001_0000, DYNAMIC_REGION_BASE as u32).unwrap();
+        let good_rasr = ds.cached_peripheral_regions(0)[0].1;
+        ds.cache_peripherals(
+            0,
+            [
+                Some(WindowDescriptor {
+                    base: 0x4001_0000,
+                    size: 4096,
+                    permissions: good_rasr,
+                    owner: 0,
+                    rbar: bad_rbar,
+                }),
+                None,
+            ],
+        );
+
+        // Should panic: cached RBAR (0x4001_0000) != expected (0x4000_0000).
+        ds.debug_verify_cache_consistency(&pcb);
     }
 
     // ------------------------------------------------------------------
