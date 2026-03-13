@@ -2115,6 +2115,49 @@ mod tests {
         ds.debug_verify_cache_consistency(&pcb);
     }
 
+    #[test]
+    #[should_panic(expected = "cache-PCB RASR must be non-zero")]
+    fn debug_verify_cache_consistency_detects_rasr_zero() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+
+        // Reserve 2 peripheral slots so wire_boot_peripherals populates cache.
+        let sf = encode_size(4096).unwrap();
+        let rasr = build_rasr(sf, AP_FULL_ACCESS, true, (true, true, false));
+        let rbar = build_rbar(0x2000_0000, 6).unwrap();
+        ds.configure_partition(0, &[(rbar, rasr)], 2).unwrap();
+
+        // Wire normally so the cache is populated with correct values.
+        ds.wire_boot_peripherals(std::slice::from_ref(&pcb));
+
+        // Corrupt the cached RASR to zero for partition 0, descriptor 0.
+        // Keep the correct base so the RBAR check passes first.
+        let good_rbar = ds.cached_peripheral_regions(0)[0].0;
+        ds.cache_peripherals(
+            0,
+            [
+                Some(WindowDescriptor {
+                    base: 0x4000_0000,
+                    size: 4096,
+                    permissions: 0, // RASR = 0: should trigger the assertion
+                    owner: 0,
+                    rbar: good_rbar,
+                }),
+                None,
+            ],
+        );
+
+        // Should panic: cached RASR is zero for a mappable peripheral.
+        ds.debug_verify_cache_consistency(&pcb);
+    }
+
     // ------------------------------------------------------------------
     // cached_peripheral_regions: (RBAR, RASR) from cached descriptors
     // ------------------------------------------------------------------
