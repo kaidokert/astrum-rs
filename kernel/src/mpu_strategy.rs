@@ -300,12 +300,14 @@ impl<const N: usize> DynamicStrategy<N> {
     /// cached RASR is zero (disabled) for a mappable peripheral.
     #[cfg(debug_assertions)]
     pub fn debug_verify_cache_consistency(&self, part: &crate::partition::PartitionControlBlock) {
+        let reserved = with_cs(|cs| *self.peripheral_reserved.borrow(cs).borrow());
+        let check_count = reserved.min(2);
         let cached = self.cached_peripheral_regions(part.id());
         for (ci, region) in part
             .peripheral_regions()
             .iter()
             .filter(|r| r.is_mappable())
-            .take(cached.len())
+            .take(check_count)
             .enumerate()
         {
             let entry = cached.get(ci);
@@ -1915,6 +1917,8 @@ mod tests {
     #[test]
     fn wire_boot_peripherals_populates_cache() {
         let ds = DynamicStrategy::new();
+        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
         // Two partitions with distinct IDs and one peripheral each.
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -1986,6 +1990,8 @@ mod tests {
     #[test]
     fn wire_boot_peripherals_shared_peripheral_cached_for_both() {
         let ds = DynamicStrategy::new();
+        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
         // Both partitions share the same peripheral at 0x4000_0000.
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -2037,6 +2043,8 @@ mod tests {
         // wire_boot_peripherals does not fire for well-formed inputs:
         // two partitions each with one valid peripheral region.
         let ds = DynamicStrategy::new();
+        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
         let pcb0 = PartitionControlBlock::new(
             0,
             0x0,
@@ -2080,6 +2088,8 @@ mod tests {
     #[should_panic(expected = "cache-PCB RBAR mismatch")]
     fn debug_verify_cache_consistency_detects_rbar_mismatch() {
         let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
         let pcb = PartitionControlBlock::new(
             0,
             0x0,
@@ -3034,5 +3044,89 @@ mod tests {
         let oob = ds.cached_peripheral_regions(5);
         assert_eq!(oob[0], disabled_pair(DYNAMIC_REGION_BASE));
         assert_eq!(oob[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
+    }
+
+    // ------------------------------------------------------------------
+    // wire_boot_peripherals: SlotExhausted early-return
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn wire_boot_peripherals_early_return_on_slot_exhaustion() {
+        // reserved=0 (default): all peripherals go through add_window.
+        // add_window skips slot 0 (partition-RAM) and scans slots 1-3,
+        // giving 3 usable window slots.  With 5 partitions each owning
+        // one unique peripheral, the 4th partition must trigger
+        // SlotExhausted and the 5th must never be processed.
+        let ds = DynamicStrategy::<5>::with_partition_count();
+
+        let pcbs: heapless::Vec<PartitionControlBlock, 5> = (0u8..5)
+            .map(|pid| {
+                let ram_base = 0x2000_0000 + u32::from(pid) * 0x1_0000;
+                let periph_base = 0x4000_0000 + u32::from(pid) * 0x1_0000;
+                PartitionControlBlock::new(
+                    pid,
+                    0x0,
+                    ram_base,
+                    ram_base + 0x1000,
+                    MpuRegion::new(ram_base, 4096, 0),
+                )
+                .with_peripheral_regions(&[periph(periph_base, 4096)])
+            })
+            .collect();
+
+        let wired = ds.wire_boot_peripherals(&pcbs);
+
+        // (1) Wired count equals the 3 available dynamic window slots.
+        assert_eq!(wired, 3, "must wire exactly 3 peripherals (slots 1-3)");
+
+        // (2) Partition 3 triggered exhaustion; verify its cache was
+        //     flushed (disabled pairs, since reserved=0 → no cache
+        //     entries are built, but cache_peripherals must still run).
+        let disabled_r4 = disabled_pair(DYNAMIC_REGION_BASE);
+        let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
+        let cache3 = ds.cached_peripheral_regions(3);
+        assert_eq!(
+            cache3[0], disabled_r4,
+            "partition 3 cache[0] must be disabled (flushed on early return)"
+        );
+        assert_eq!(
+            cache3[1], disabled_r5,
+            "partition 3 cache[1] must be disabled (flushed on early return)"
+        );
+
+        // (3) Remaining partition (4) was never processed — cache is
+        //     initial disabled state (cache_peripherals was never called).
+        let cache4 = ds.cached_peripheral_regions(4);
+        assert_eq!(
+            cache4[0], disabled_r4,
+            "partition 4 cache[0] must be initial"
+        );
+        assert_eq!(
+            cache4[1], disabled_r5,
+            "partition 4 cache[1] must be initial"
+        );
+
+        // Verify the 3 wired peripherals occupy slots 1-3 (R5-R7).
+        for i in 0u8..3 {
+            let region_id = DYNAMIC_REGION_BASE + 1 + i; // R5, R6, R7
+            let desc = ds
+                .slot(region_id)
+                .unwrap_or_else(|| panic!("R{} must be occupied", region_id));
+            let expected_base = 0x4000_0000 + u32::from(i) * 0x1_0000;
+            assert_eq!(
+                desc.base, expected_base,
+                "R{region_id} must hold peripheral at {expected_base:#x}"
+            );
+        }
+
+        // Partitions 3 & 4 peripherals must not appear in any slot.
+        for rid in 4..8u8 {
+            if let Some(d) = ds.slot(rid) {
+                assert!(
+                    d.base != 0x4003_0000 && d.base != 0x4004_0000,
+                    "unwired peripheral found in R{rid}"
+                );
+            }
+        }
     }
 }
