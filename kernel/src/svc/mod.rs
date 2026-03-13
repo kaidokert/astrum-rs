@@ -1,3 +1,5 @@
+#[cfg(feature = "dynamic-mpu")]
+pub mod buffer;
 pub mod irq;
 pub mod sleep;
 
@@ -1985,51 +1987,23 @@ where
             ),
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferLend) => {
-                let slot = frame.r1 as usize;
-                use rtos_traits::syscall::lend_flags;
-                const RESERVED_MASK: u32 = 0xFE00; // bits 9-15
-                if frame.r2 & RESERVED_MASK != 0 {
-                    SvcError::OperationFailed.to_u32()
-                } else {
-                    let target_raw = (frame.r2 & 0xFF) as usize;
-                    let writable = (frame.r2 & lend_flags::WRITABLE) != 0;
-                    if target_raw >= self.partition_count() {
-                        SvcError::InvalidPartition.to_u32()
-                    } else {
-                        let target = target_raw as u8;
-                        match self.buffers.share_with_partition(
-                            slot,
-                            self.current_partition,
-                            target,
-                            writable,
-                            &self.dynamic_strategy,
-                        ) {
-                            Ok(region_id) => match self.buffers.slot_base_address(slot) {
-                                Some(base_addr) => {
-                                    frame.r1 = region_id as u32;
-                                    let deadline_ticks = frame.r3;
-                                    if deadline_ticks > 0
-                                        && deadline_ticks != LEGACY_TEST_FRAME_R3_SENTINEL
-                                    {
-                                        let deadline =
-                                            self.tick.get().wrapping_add(deadline_ticks as u64);
-                                        if let Err(e) =
-                                            self.buffers.set_deadline(slot, Some(deadline))
-                                        {
-                                            e.to_svc_error().to_u32()
-                                        } else {
-                                            base_addr
-                                        }
-                                    } else {
-                                        base_addr
-                                    }
-                                }
-                                None => SvcError::InvalidBuffer.to_u32(),
-                            },
-                            Err(e) => e.to_svc_error().to_u32(),
-                        }
-                    }
+                let pc = self.partition_count();
+                let tick = self.tick.get();
+                let (r0, r1_ov) = buffer::handle_buffer_lend(
+                    &mut self.buffers,
+                    &self.dynamic_strategy,
+                    self.current_partition,
+                    pc,
+                    tick,
+                    frame.r1,
+                    frame.r2,
+                    frame.r3,
+                    LEGACY_TEST_FRAME_R3_SENTINEL,
+                );
+                if let Some(v) = r1_ov {
+                    frame.r1 = v;
                 }
+                r0
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferRevoke) => {
