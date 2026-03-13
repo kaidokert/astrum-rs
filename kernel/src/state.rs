@@ -225,6 +225,15 @@ const _: () = assert!(
     "MAX_KERNEL_SIZE must be >= KERNEL_ALIGNMENT for valid MPU region configuration"
 );
 
+// Compile-time assertion: MAX_KERNEL_SIZE must be <= LITERAL_POOL_OFFSET_LIMIT.
+// PendSV and SVC handlers use Thumb-2 LDR instructions with immediate offsets to access
+// Kernel fields. If MAX_KERNEL_SIZE exceeded the literal-pool offset limit (65536),
+// field offsets could be unreachable and the generated assembly would silently break.
+const _: () = assert!(
+    MAX_KERNEL_SIZE <= crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
+    "MAX_KERNEL_SIZE must be <= LITERAL_POOL_OFFSET_LIMIT to keep PendSV/SVC offsets valid"
+);
+
 // Compile-time assertion: KERNEL_ALIGNMENT must be >= the alignment of every stack tier.
 // Stack tiers are embedded inside Kernel<C> via PartitionCore, so the kernel storage
 // buffer must be aligned at least as strictly as the most-aligned tier. If a future
@@ -634,6 +643,20 @@ mod tests {
             "MAX_KERNEL_SIZE ({}) must be >= KERNEL_ALIGNMENT ({})",
             MAX_KERNEL_SIZE,
             KERNEL_ALIGNMENT,
+        );
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn max_kernel_size_within_offset_limit() {
+        // Mirrors the compile-time const assertion: MAX_KERNEL_SIZE must not
+        // exceed LITERAL_POOL_OFFSET_LIMIT, otherwise PendSV/SVC Thumb-2 LDR
+        // offsets could become unreachable.
+        assert!(
+            MAX_KERNEL_SIZE <= crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
+            "MAX_KERNEL_SIZE ({}) must be <= LITERAL_POOL_OFFSET_LIMIT ({})",
+            MAX_KERNEL_SIZE,
+            crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
         );
     }
 
