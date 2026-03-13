@@ -1,8 +1,13 @@
+#[cfg(feature = "ipc-blackboard")]
+pub mod blackboard;
 #[cfg(feature = "dynamic-mpu")]
 pub mod buffer;
+pub mod events;
 pub mod irq;
 #[cfg(feature = "ipc-queuing")]
 pub mod queuing;
+#[cfg(feature = "ipc-sampling")]
+pub mod sampling;
 pub mod sleep;
 
 use core::cell::RefCell;
@@ -336,7 +341,7 @@ macro_rules! validated_ptr_dynamic {
 }
 
 #[cfg(test)]
-use crate::events;
+use crate::events as ev_data;
 use crate::scheduler::ScheduleEvent;
 
 /// Abstracts over schedule advance return type for feature-gated code.
@@ -928,7 +933,7 @@ pub fn dispatch_syscall<const N: usize>(
     partitions: &mut PartitionTable<N>,
     caller: usize,
 ) {
-    use crate::svc_events as ev;
+    use events as ev;
     frame.r0 = match SyscallId::from_u32(frame.r0) {
         Some(SyscallId::Yield) => handle_yield(),
         Some(SyscallId::GetPartitionId) => caller as u32,
@@ -1631,7 +1636,7 @@ where
     /// writable `QueuingPortStatus`. The caller is responsible for ensuring
     /// this; in production the MPU enforces partition isolation.
     pub unsafe fn dispatch(&mut self, frame: &mut ExceptionFrame) {
-        use crate::svc_events as ev;
+        use events as ev;
         // SAFETY: Snapshot all argument registers before the match writes
         // frame.r0 with the return value.  This prevents any theoretical
         // compiler reordering between reads of r1/r2/r3 and the r0 write,
@@ -1776,7 +1781,7 @@ where
                 let tick = self.tick.get();
                 // SAFETY: validated_ptr! confirmed [r3, r3+SM) is in-bounds.
                 let r = unsafe {
-                    crate::svc_sampling::handle_sampling_read(
+                    sampling::handle_sampling_read(
                         self.ports.sampling_mut(),
                         frame.r1 as usize,
                         frame.r3 as *mut u8,
@@ -3678,7 +3683,7 @@ mod tests {
     #[test]
     fn event_wait_dispatches_to_events_module() {
         let mut t = tbl();
-        events::event_set(&mut t, 0, 0b1010);
+        ev_data::event_set(&mut t, 0, 0b1010);
         let mut ef = frame(SYS_EVT_WAIT, 0xDEADBEEF, 0b1110);
         dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!(ef.r0, 0b1010);
@@ -3697,7 +3702,7 @@ mod tests {
     #[test]
     fn event_clear_dispatches_to_events_module() {
         let mut t = tbl();
-        events::event_set(&mut t, 0, 0b1111);
+        ev_data::event_set(&mut t, 0, 0b1111);
         let mut ef = frame(SYS_EVT_CLEAR, 0xDEADBEEF, 0b0101);
         dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!(ef.r0, 0b1111, "event_clear must return previous flags");
@@ -3782,7 +3787,7 @@ mod tests {
     fn dispatch_event_wait_immediate_no_deschedule() {
         let mut k = kernel(0, 0, 0);
         // Pre-set bits so event_wait returns immediately with matched bits.
-        events::event_set(k.partitions_mut(), 0, 0b1010);
+        ev_data::event_set(k.partitions_mut(), 0, 0b1010);
         let mut ef = frame(SYS_EVT_WAIT, 0, 0b1110);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
@@ -3844,8 +3849,8 @@ mod tests {
     fn event_clear_uses_current_partition_not_r1() {
         let mut k = kernel(0, 0, 0);
         // Pre-set bits on both partitions
-        events::event_set(k.partitions_mut(), 0, 0b1111);
-        events::event_set(k.partitions_mut(), 1, 0b1111);
+        ev_data::event_set(k.partitions_mut(), 0, 0b1111);
+        ev_data::event_set(k.partitions_mut(), 1, 0b1111);
         // r1=1 (attacker tries to clear partition 1's flags), mask in r2
         let mut ef = frame(SYS_EVT_CLEAR, 1, 0b0101);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
