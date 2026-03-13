@@ -751,6 +751,9 @@ pub fn sys_dev_write(device_id: DeviceId, data: &[u8]) -> Result<u32, SvcError> 
 ///
 /// ABI: r1 = device_id, r2 = (timeout_ticks_hi16 << 16 | buf_len_lo16), r3 = buf_ptr.
 /// Returns `Ok(n)` bytes read, `Err(OperationFailed)` if buf > 65 535 bytes.
+///
+/// Kernel side: handled by the `DevReadTimed` arm in `kernel/src/svc.rs`, which
+/// unpacks r2 via [`unpack_packed_r2`](kernel::unpack_packed_r2).
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_read_timed(
     device_id: DeviceId,

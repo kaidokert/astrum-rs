@@ -2138,6 +2138,7 @@ where
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevReadTimed) => {
                 // r1 = device_id, r2 = (timeout_ticks << 16 | buf_len), r3 = buf_ptr
+                // Canonical caller: plib::sys_dev_read_timed (plib/src/lib.rs) packs r2.
                 let (timeout_ticks, buf_len) = unpack_packed_r2(frame.r2);
                 let buf_len = buf_len as usize;
                 validated_ptr!(self, frame.r3, buf_len, {
