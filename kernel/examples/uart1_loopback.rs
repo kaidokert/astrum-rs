@@ -26,9 +26,7 @@ use kernel::{
     mpu_strategy::DynamicStrategy,
     partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
-    svc,
-    svc::{Kernel, SvcError, YieldResult},
-    syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE, SYS_YIELD},
+    svc::{Kernel, YieldResult},
     uart_hal::UartRegs,
     virtual_device::VirtualDevice,
     DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncMinimal,
@@ -188,25 +186,11 @@ fn boot(partitions: &[(extern "C" fn() -> !, u32)], peripherals: &mut cortex_m::
     }
 }
 
-/// Helper: write `len` bytes from `buf` to the device, return bytes written.
-fn dev_write(buf: &[u8], len: usize) -> u32 {
-    svc!(SYS_DEV_WRITE, HW_UART_DEV, len as u32, buf.as_ptr() as u32)
-}
-
-/// Helper: read from the device into `buf`, return bytes read (or error).
-fn dev_read(buf: &mut [u8]) -> u32 {
-    svc!(
-        SYS_DEV_READ,
-        HW_UART_DEV,
-        buf.len() as u32,
-        buf.as_mut_ptr() as u32
-    )
-}
+const DEV: plib::DeviceId = plib::DeviceId::new(HW_UART_DEV as u8);
 
 extern "C" fn p1_main() -> ! {
     // --- Open the device ---
-    let rc = svc!(SYS_DEV_OPEN, HW_UART_DEV, 0u32, 0u32);
-    if SvcError::is_error(rc) {
+    if plib::sys_dev_open(DEV).is_err() {
         record(false, "P1: DEV_OPEN");
         finish();
     }
@@ -214,24 +198,22 @@ extern "C" fn p1_main() -> ! {
     // --- Test: read-when-empty (RX buffer should be empty at start) ---
     hprintln!("[P1] test: read-when-empty");
     let mut rx_buf = [0u8; 16];
-    let n = dev_read(&mut rx_buf);
-    if !SvcError::is_error(n) && n == 0 {
-        record(true, "P1: read-when-empty returns 0");
-    } else {
-        record(false, "P1: read-when-empty (expected 0)");
+    match plib::sys_dev_read(DEV, &mut rx_buf) {
+        Ok(0) => record(true, "P1: read-when-empty returns 0"),
+        _ => record(false, "P1: read-when-empty (expected 0)"),
     }
 
     // Yield without writing — lets P2 test read-when-empty on a clean RX.
-    svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    let _ = plib::sys_yield();
 
     // --- Send each message, yielding after each to let the system window
     //     drain TX→RX via software loopback. ---
     let mut tx_buf = [0u8; 64];
     for (i, msg) in MESSAGES.iter().enumerate() {
         tx_buf[..msg.len()].copy_from_slice(msg);
-        let written = dev_write(&tx_buf, msg.len());
+        let written = plib::sys_dev_write(DEV, &tx_buf[..msg.len()]).unwrap_or(0);
         hprintln!("[P1] msg{}: wrote {}/{} bytes", i, written, msg.len());
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        let _ = plib::sys_yield();
     }
 
     // --- Test: write-when-TX-full ---
@@ -240,46 +222,34 @@ extern "C" fn p1_main() -> ! {
     let fill_data = [0xABu8; TX_CAPACITY];
     tx_buf = [0u8; 64];
     tx_buf[..TX_CAPACITY].copy_from_slice(&fill_data);
-    let n_fill = svc!(
-        SYS_DEV_WRITE,
-        HW_UART_DEV,
-        TX_CAPACITY as u32,
-        tx_buf.as_ptr() as u32
-    );
+    let n_fill = plib::sys_dev_write(DEV, &tx_buf[..TX_CAPACITY]);
     // Now attempt to write one more byte — should return 0 (partial write).
-    let mut overflow_buf = [0xFFu8; 1];
-    let n_over = svc!(
-        SYS_DEV_WRITE,
-        HW_UART_DEV,
-        1u32,
-        overflow_buf.as_mut_ptr() as u32
-    );
-    if !SvcError::is_error(n_fill)
-        && n_fill == TX_CAPACITY as u32
-        && !SvcError::is_error(n_over)
-        && n_over == 0
-    {
-        record(true, "P1: write-when-TX-full (partial write = 0)");
-    } else {
-        hprintln!(
-            "[P1] TX-full: fill={}, overflow={} (expected {}, 0)",
-            n_fill,
-            n_over,
-            TX_CAPACITY
-        );
-        record(false, "P1: write-when-TX-full");
+    let overflow_buf = [0xFFu8; 1];
+    let n_over = plib::sys_dev_write(DEV, &overflow_buf);
+    match (n_fill, n_over) {
+        (Ok(fill), Ok(0)) if fill == TX_CAPACITY as u32 => {
+            record(true, "P1: write-when-TX-full (partial write = 0)");
+        }
+        _ => {
+            hprintln!(
+                "[P1] TX-full: fill={:?}, overflow={:?} (expected {}, 0)",
+                n_fill,
+                n_over,
+                TX_CAPACITY
+            );
+            record(false, "P1: write-when-TX-full");
+        }
     }
 
     // Yield to let the system window drain, then idle.
     loop {
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        let _ = plib::sys_yield();
     }
 }
 
 extern "C" fn p2_main() -> ! {
     // --- Open the device ---
-    let rc = svc!(SYS_DEV_OPEN, HW_UART_DEV, 0u32, 0u32);
-    if SvcError::is_error(rc) {
+    if plib::sys_dev_open(DEV).is_err() {
         record(false, "P2: DEV_OPEN");
         finish();
     }
@@ -287,15 +257,13 @@ extern "C" fn p2_main() -> ! {
     // --- Test: read-when-empty (P1 hasn't written yet on first P2 slot) ---
     hprintln!("[P2] test: read-when-empty");
     let mut buf = [0u8; 64];
-    let n = dev_read(&mut buf);
-    if !SvcError::is_error(n) && n == 0 {
-        record(true, "P2: read-when-empty returns 0");
-    } else {
-        record(false, "P2: read-when-empty (expected 0)");
+    match plib::sys_dev_read(DEV, &mut buf) {
+        Ok(0) => record(true, "P2: read-when-empty returns 0"),
+        _ => record(false, "P2: read-when-empty (expected 0)"),
     }
 
     // Yield so P1 gets its first timeslot to write message 0.
-    svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+    let _ = plib::sys_yield();
 
     // --- Verify each message ---
     for (i, expected) in MESSAGES.iter().enumerate() {
@@ -309,15 +277,16 @@ extern "C" fn p2_main() -> ! {
         let mut total = 0usize;
         buf = [0u8; 64];
         for _attempt in 0..10 {
-            let n = dev_read(&mut buf[total..]);
-            if SvcError::is_error(n) {
-                break;
+            match plib::sys_dev_read(DEV, &mut buf[total..]) {
+                Ok(n) => {
+                    total += n as usize;
+                    if total >= expected.len() {
+                        break;
+                    }
+                }
+                Err(_) => break,
             }
-            total += n as usize;
-            if total >= expected.len() {
-                break;
-            }
-            svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+            let _ = plib::sys_yield();
         }
         let ok = total == expected.len() && buf[..total] == **expected;
         let label = match i {
@@ -337,7 +306,7 @@ extern "C" fn p2_main() -> ! {
             record(false, label);
         }
         // Yield to let P1 send the next message.
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        let _ = plib::sys_yield();
     }
 
     // --- Drain the TX-full test data (64 bytes of 0xAB) ---
@@ -346,15 +315,16 @@ extern "C" fn p2_main() -> ! {
     let mut drained = 0usize;
     // NOTE: Same arbitrary retry limit; see comment above.
     for _attempt in 0..10 {
-        let n = dev_read(&mut drain_buf[drained..]);
-        if SvcError::is_error(n) {
-            break;
+        match plib::sys_dev_read(DEV, &mut drain_buf[drained..]) {
+            Ok(n) => {
+                drained += n as usize;
+                if drained >= TX_CAPACITY {
+                    break;
+                }
+            }
+            Err(_) => break,
         }
-        drained += n as usize;
-        if drained >= TX_CAPACITY {
-            break;
-        }
-        svc!(SYS_YIELD, 0u32, 0u32, 0u32);
+        let _ = plib::sys_yield();
     }
     if drained == TX_CAPACITY && drain_buf.iter().all(|&b| b == 0xAB) {
         record(true, "P2: TX-full data received and verified");
