@@ -298,9 +298,18 @@ macro_rules! define_unified_harness {
 
                 // Populate dynamic slots 1-3 (R5-R7) with deduplicated
                 // peripheral regions from all partitions.
-                HARNESS_STRATEGY.wire_boot_peripherals(
+                #[cfg_attr(not(debug_assertions), allow(unused))]
+                let boot_wired = HARNESS_STRATEGY.wire_boot_peripherals(
                     k.partitions().as_slice(),
                 );
+                #[cfg(debug_assertions)]
+                {
+                    let limit = $crate::mpu_strategy::BOOT_WIRE_LIMIT;
+                    debug_assert!(
+                        boot_wired < limit,
+                        "boot wiring consumed all dynamic window slots ({boot_wired}/{limit}), none left for runtime add_window"
+                    );
+                }
                 Ok(())
             })?
         }

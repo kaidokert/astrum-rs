@@ -91,6 +91,14 @@ fn slot_rbar(base: u32, slot_index: usize) -> u32 {
 /// Number of dynamic region slots (R4 through R7).
 const DYNAMIC_SLOT_COUNT: usize = 4;
 
+/// Number of dynamic slots permanently occupied by partition RAM.
+const RAM_SLOT_COUNT: usize = 1;
+
+/// Upper bound (exclusive) on peripherals `wire_boot_peripherals` may wire.
+/// Accounts for the RAM slot and preserves at least one free dynamic slot
+/// for runtime `add_window`.
+pub const BOOT_WIRE_LIMIT: usize = DYNAMIC_SLOT_COUNT - RAM_SLOT_COUNT;
+
 /// First hardware MPU region number used by the dynamic strategy.
 const DYNAMIC_REGION_BASE: u8 = 4;
 
@@ -452,6 +460,13 @@ impl<const N: usize> DynamicStrategy<N> {
             #[cfg(debug_assertions)]
             self.debug_verify_cache_consistency(part);
         }
+
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            wired < BOOT_WIRE_LIMIT,
+            "boot wiring consumed all dynamic window slots ({wired}/{BOOT_WIRE_LIMIT}), none left for runtime add_window",
+        );
+
         wired
     }
 
@@ -2661,10 +2676,13 @@ mod tests {
     }
 
     #[test]
-    fn wire_boot_peripherals_three_peripherals_overflow_to_add_window() {
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "boot wiring consumed all dynamic window slots")]
+    fn wire_boot_peripherals_three_peripherals_overflow_exhausts_slots() {
         // Single partition with 3 peripherals, reserved=2.
         // First 2 go to reserved slots R4/R5; 3rd overflows to add_window
-        // which scans from index reserved+1=3 → R7.
+        // which fills the last slot (R7), leaving none for runtime
+        // add_window.  The debug_assert must fire.
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
         ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
@@ -2682,39 +2700,8 @@ mod tests {
             periph(0x4002_0000, 4096),
         ]);
 
-        let wired = ds.wire_boot_peripherals(&[pcb]);
-        assert_eq!(wired, 3, "all 3 peripherals must be wired");
-
-        // First 2 in reserved slots R4 (slot 0) and R5 (slot 1).
-        let s4 = ds.slot(4).expect("R4 must hold first peripheral");
-        assert_eq!((s4.base, s4.size), (0x4000_0000, 4096));
-        assert_eq!(s4.permissions, periph_rasr(4096));
-
-        let s5 = ds.slot(5).expect("R5 must hold second peripheral");
-        assert_eq!((s5.base, s5.size), (0x4001_0000, 4096));
-        assert_eq!(s5.permissions, periph_rasr(4096));
-
-        // R6 (slot 2) holds partition RAM, unchanged.
-        let s6 = ds.slot(6).expect("R6 must hold RAM");
-        assert_eq!(s6.base, 0x2000_0000);
-
-        // 3rd peripheral overflows to R7 (slot 3) via add_window.
-        let s7 = ds.slot(7).expect("R7 must hold overflow peripheral");
-        assert_eq!((s7.base, s7.size), (0x4002_0000, 4096));
-        assert_eq!(s7.permissions, periph_rasr(4096));
-
-        // Cache holds only first 2 (desc_idx limit is 2).
-        let cached = ds.cached_peripheral_regions(0);
-        assert_eq!(
-            cached[0],
-            (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096)),
-            "cache[0] must hold first peripheral at R4"
-        );
-        assert_eq!(
-            cached[1],
-            (build_rbar(0x4001_0000, 5).unwrap(), periph_rasr(4096)),
-            "cache[1] must hold second peripheral at R5"
-        );
+        // Panics: all dynamic slots consumed, none left for buf_lend.
+        let _wired = ds.wire_boot_peripherals(&[pcb]);
     }
 
     // ------------------------------------------------------------------
