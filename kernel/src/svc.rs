@@ -755,6 +755,10 @@ macro_rules! define_unified_kernel {
                 CORE_PARTITION_SP_OFFSET == ::core::mem::offset_of!(C, partition_sp),
                 "CORE_PARTITION_SP_OFFSET does not match struct layout"
             );
+            assert!(
+                CORE_PARTITION_STACK_LIMIT_OFFSET == ::core::mem::offset_of!(C, partition_stack_limits),
+                "CORE_PARTITION_STACK_LIMIT_OFFSET does not match struct layout"
+            );
             // PendSV uses ldrb/strb for current_partition — must be u8.
             #[allow(unused)]
             fn _assert_cp_is_u8(k: &K) { let _: u8 = k.current_partition; }
@@ -776,13 +780,13 @@ macro_rules! define_unified_kernel {
             // partition_sp combined offset must be 4-byte aligned for word-sized ldr/str.
             assert!((KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET) % 4 == 0, "partition_sp must be 4-byte aligned");
 
-            // All offsets must be < 4096 (Thumb2 ldr 12-bit unsigned immediate: 0..=4095).
-            assert!(KERNEL_CURRENT_PARTITION_OFFSET < 4096, "KERNEL_CURRENT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(KERNEL_TICKS_DROPPED_OFFSET < 4096, "KERNEL_TICKS_DROPPED_OFFSET exceeds Thumb2 ldr range");
-            assert!(KERNEL_CORE_OFFSET < 4096, "KERNEL_CORE_OFFSET exceeds Thumb2 ldr range");
-            assert!(KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET < 4096, "KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET exceeds Thumb2 ldr range");
-            assert!(KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET < 4096, "KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET exceeds Thumb2 ldr range");
-            assert!(KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET < 4096, "KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET exceeds Thumb2 ldr range");
+            // All offsets must be < LITERAL_POOL_OFFSET_LIMIT (literal-pool offset limit).
+            assert!(KERNEL_CURRENT_PARTITION_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_CURRENT_PARTITION_OFFSET exceeds literal-pool offset limit");
+            assert!(KERNEL_TICKS_DROPPED_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_TICKS_DROPPED_OFFSET exceeds literal-pool offset limit");
+            assert!(KERNEL_CORE_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_CORE_OFFSET exceeds literal-pool offset limit");
+            assert!(KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET exceeds literal-pool offset limit");
+            assert!(KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET exceeds literal-pool offset limit");
+            assert!(KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET exceeds literal-pool offset limit");
 
             // Field ordering: current_partition before core in Kernel.
             assert!(KERNEL_CURRENT_PARTITION_OFFSET < KERNEL_CORE_OFFSET,
@@ -12792,7 +12796,7 @@ mod tests {
         let sp = co + core::mem::offset_of!(C, partition_sp);
         let sl = co + core::mem::offset_of!(C, partition_stack_limits);
 
-        // Every offset accessed by PendSV assembly must fit in Thumb2 ldr range.
+        // Every offset accessed by PendSV assembly must fit in literal-pool offset limit.
         for (off, name) in [
             (cp, "current_partition"),
             (td, "ticks_dropped"),
