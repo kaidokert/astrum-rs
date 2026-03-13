@@ -2788,6 +2788,93 @@ mod tests {
     }
 
     #[test]
+    fn wire_boot_peripherals_shared_peripheral_dedup_stress() {
+        // 4 partitions each mapping the same 2 peripherals (same base+size).
+        // With reserved=2, only 2 slots should be wired (dedup), all 4
+        // partition caches must hold the correct (RBAR, RASR) pairs, and
+        // no dynamic slots (R6/R7) should be consumed.
+        let ds = DynamicStrategy::new();
+        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+
+        let shared_periphs = [periph(0x4000_0000, 4096), periph(0x4001_0000, 256)];
+
+        let pcb0 = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&shared_periphs);
+
+        let pcb1 = PartitionControlBlock::new(
+            1,
+            0x0,
+            0x2000_8000,
+            0x2000_9000,
+            MpuRegion::new(0x2000_8000, 4096, 0),
+        )
+        .with_peripheral_regions(&shared_periphs);
+
+        let pcb2 = PartitionControlBlock::new(
+            2,
+            0x0,
+            0x2001_0000,
+            0x2001_1000,
+            MpuRegion::new(0x2001_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&shared_periphs);
+
+        let pcb3 = PartitionControlBlock::new(
+            3,
+            0x0,
+            0x2001_8000,
+            0x2001_9000,
+            MpuRegion::new(0x2001_8000, 4096, 0),
+        )
+        .with_peripheral_regions(&shared_periphs);
+
+        let wired = ds.wire_boot_peripherals(&[pcb0, pcb1, pcb2, pcb3]);
+        assert_eq!(
+            wired, 2,
+            "dedup must collapse 8 mappings into 2 wired slots"
+        );
+
+        // Expected (RBAR, RASR) for each peripheral.
+        let rasr_4k = periph_rasr(4096);
+        let rasr_256 = periph_rasr(256);
+        let expected_r4 = (build_rbar(0x4000_0000, 4).unwrap(), rasr_4k);
+        let expected_r5 = (build_rbar(0x4001_0000, 5).unwrap(), rasr_256);
+
+        // All 4 partition caches must hold the same pairs.
+        for pid in 0..4u8 {
+            let cached = ds.cached_peripheral_regions(pid);
+            assert_eq!(
+                cached[0], expected_r4,
+                "partition {pid} cache[0] must hold peripheral at 0x4000_0000"
+            );
+            assert_eq!(
+                cached[1], expected_r5,
+                "partition {pid} cache[1] must hold peripheral at 0x4001_0000"
+            );
+        }
+
+        // No dynamic window slots consumed by peripherals.
+        // R6 (slot 2) holds partition-0 RAM from configure_partition;
+        // R7 (slot 3) must be empty.
+        let r6 = ds.slot(6).expect("R6 must hold partition RAM");
+        assert_eq!(
+            r6.base, 0x2000_0000,
+            "R6 must be partition RAM, not a peripheral"
+        );
+        assert!(
+            ds.slot(7).is_none(),
+            "R7 must be empty — no dynamic slot consumed"
+        );
+    }
+
+    #[test]
     fn build_partition_cache_entry_none_when_unseen() {
         let seen: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
         let rasr = periph_rasr(4096);
