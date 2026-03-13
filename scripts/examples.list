@@ -65,6 +65,7 @@ DYNAMIC_MPU_EXAMPLES=(
     buf_lend_rw_test buf_lend_ro_test buf_transfer_test buf_lend_addr_test buf_deadline_test buf_error_test
     pendsv_primask_dynamic_test
     plib_dev_read_timed_test
+    peripheral_buf_lend_test
     # Disabled pending MPU config fixes:
     # mpu_dynamic_test buffer_pool_test virtual_uart_demo uart1_loopback
 )
