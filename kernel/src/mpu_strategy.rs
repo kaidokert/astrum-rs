@@ -2933,4 +2933,106 @@ mod tests {
         );
         assert!(result.is_none(), "expected None when seen is empty");
     }
+
+    // ------------------------------------------------------------------
+    // DynamicStrategy<6>: N > DYNAMIC_SLOT_COUNT
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn dynamic_strategy_6_cache_all_partitions() {
+        let ds = DynamicStrategy::<6>::with_partition_count();
+        let disabled_r4 = disabled_pair(DYNAMIC_REGION_BASE);
+        let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
+
+        // Cache a peripheral for each of the 6 partitions.
+        for pid in 0u8..6 {
+            let base = 0x4000_0000 + u32::from(pid) * 0x1_0000;
+            let descs = [
+                Some(WindowDescriptor {
+                    base,
+                    size: 4096,
+                    permissions: periph_rasr(4096),
+                    owner: pid,
+                    rbar: 0,
+                }),
+                None,
+            ];
+            ds.cache_peripherals(pid, descs);
+        }
+
+        // Verify each partition's cached entry.
+        for pid in 0u8..6 {
+            let base = 0x4000_0000 + u32::from(pid) * 0x1_0000;
+            let got = ds.cached_peripheral_regions(pid);
+            assert_eq!(
+                got[0],
+                (build_rbar(base, 4).unwrap(), periph_rasr(4096)),
+                "partition {pid} R4 must hold its peripheral"
+            );
+            assert_eq!(got[1], disabled_r5, "partition {pid} R5 must be disabled");
+        }
+
+        // Specifically check partition_id=5 (highest valid index).
+        let got5 = ds.cached_peripheral_regions(5);
+        assert_eq!(
+            got5[0],
+            (build_rbar(0x4005_0000, 4).unwrap(), periph_rasr(4096)),
+            "partition 5 R4 must hold peripheral at 0x4005_0000"
+        );
+        assert_eq!(got5[1], disabled_r5);
+
+        // Out-of-range: partition_id=6 must return disabled pairs.
+        let got6 = ds.cached_peripheral_regions(6);
+        assert_eq!(
+            got6[0], disabled_r4,
+            "partition 6 (OOB) R4 must be disabled"
+        );
+        assert_eq!(
+            got6[1], disabled_r5,
+            "partition 6 (OOB) R5 must be disabled"
+        );
+    }
+
+    #[test]
+    fn dynamic_strategy_5_cache_peripherals_and_oob() {
+        let ds = DynamicStrategy::<5>::with_partition_count();
+        let rasr_4k = periph_rasr(4096);
+
+        // Cache one peripheral per partition for 5 partitions.
+        for pid in 0u8..5 {
+            let base = 0x4000_0000 + u32::from(pid) * 0x1_0000;
+            let descs = [
+                Some(WindowDescriptor {
+                    base,
+                    size: 4096,
+                    permissions: rasr_4k,
+                    owner: pid,
+                    rbar: 0,
+                }),
+                None,
+            ];
+            ds.cache_peripherals(pid, descs);
+        }
+
+        // Verify each partition's cached entry is correct.
+        for pid in 0u8..5 {
+            let expected_base = 0x4000_0000 + u32::from(pid) * 0x1_0000;
+            let cached = ds.cached_peripheral_regions(pid);
+            assert_eq!(
+                cached[0],
+                (build_rbar(expected_base, 4).unwrap(), rasr_4k),
+                "partition {pid} cache[0] must hold its peripheral"
+            );
+            assert_eq!(
+                cached[1],
+                disabled_pair(DYNAMIC_REGION_BASE + 1),
+                "partition {pid} cache[1] must be disabled"
+            );
+        }
+
+        // Out-of-range: partition_id=5 with N=5 must return disabled.
+        let oob = ds.cached_peripheral_regions(5);
+        assert_eq!(oob[0], disabled_pair(DYNAMIC_REGION_BASE));
+        assert_eq!(oob[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
+    }
 }
