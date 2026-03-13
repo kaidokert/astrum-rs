@@ -376,7 +376,7 @@ impl DynamicStrategy {
                 // Cache for this partition regardless of prior wiring;
                 // shared peripherals must appear in every partition's
                 // cache for correct context-switch restoration.
-                if desc_idx < 2 {
+                if desc_idx < reserved.min(2) {
                     // Look up the correct slot index from seen (which now
                     // holds the actual hardware slot for add_window regions).
                     // If the region wasn't tracked (e.g. seen capacity exceeded),
@@ -2468,6 +2468,125 @@ mod tests {
         assert!(
             ds.add_window(0x2002_0000, 4096, rasr_4k, 0).is_ok(),
             "add_window must succeed — no dynamic slots consumed"
+        );
+    }
+
+    #[test]
+    fn wire_boot_peripherals_reserved_zero_all_via_add_window() {
+        // With peripheral_reserved=0 every peripheral is wired via
+        // add_window into global dynamic slots.  No caching must occur
+        // because cache[0] targets R4, which holds partition RAM.
+        let ds = DynamicStrategy::new();
+        let (rb, rs) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rb, rs)], 0).unwrap();
+
+        let pcb0 = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+
+        let pcb1 = PartitionControlBlock::new(
+            1,
+            0x0,
+            0x2000_8000,
+            0x2000_9000,
+            MpuRegion::new(0x2000_8000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4001_0000, 256)]);
+
+        let wired = ds.wire_boot_peripherals(&[pcb0, pcb1]);
+        assert_eq!(wired, 2, "both peripherals must be wired via add_window");
+
+        // RAM occupies slot 0 (R4); add_window skips reserved+1=1 slot,
+        // so peripherals land in slots 1 (R5) and 2 (R6).
+        let s5 = ds.slot(5).expect("R5 must hold first peripheral");
+        assert_eq!((s5.base, s5.size), (0x4000_0000, 4096));
+        let s6 = ds.slot(6).expect("R6 must hold second peripheral");
+        assert_eq!((s6.base, s6.size), (0x4001_0000, 256));
+        assert!(ds.slot(7).is_none(), "R7 must be empty");
+
+        // Verify device-memory RASR on both.
+        assert_eq!(s5.permissions, periph_rasr(4096));
+        assert_eq!(s6.permissions, periph_rasr(256));
+
+        // When reserved=0, R4 holds partition RAM.  Caching peripherals
+        // into cache[0] (which targets R4) would clobber RAM on context
+        // switch, so the cache must remain disabled for both partitions.
+        let cached0 = ds.cached_peripheral_regions(0);
+        assert_eq!(
+            cached0[0],
+            disabled_pair(DYNAMIC_REGION_BASE),
+            "partition 0 cache[0] must be disabled — R4 holds RAM"
+        );
+        assert_eq!(cached0[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
+
+        let cached1 = ds.cached_peripheral_regions(1);
+        assert_eq!(
+            cached1[0],
+            disabled_pair(DYNAMIC_REGION_BASE),
+            "partition 1 cache[0] must be disabled — R4 holds RAM"
+        );
+        assert_eq!(cached1[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
+    }
+
+    #[test]
+    fn wire_boot_peripherals_three_peripherals_overflow_to_add_window() {
+        // Single partition with 3 peripherals, reserved=2.
+        // First 2 go to reserved slots R4/R5; 3rd overflows to add_window
+        // which scans from index reserved+1=3 → R7.
+        let ds = DynamicStrategy::new();
+        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[
+            periph(0x4000_0000, 4096),
+            periph(0x4001_0000, 4096),
+            periph(0x4002_0000, 4096),
+        ]);
+
+        let wired = ds.wire_boot_peripherals(&[pcb]);
+        assert_eq!(wired, 3, "all 3 peripherals must be wired");
+
+        // First 2 in reserved slots R4 (slot 0) and R5 (slot 1).
+        let s4 = ds.slot(4).expect("R4 must hold first peripheral");
+        assert_eq!((s4.base, s4.size), (0x4000_0000, 4096));
+        assert_eq!(s4.permissions, periph_rasr(4096));
+
+        let s5 = ds.slot(5).expect("R5 must hold second peripheral");
+        assert_eq!((s5.base, s5.size), (0x4001_0000, 4096));
+        assert_eq!(s5.permissions, periph_rasr(4096));
+
+        // R6 (slot 2) holds partition RAM, unchanged.
+        let s6 = ds.slot(6).expect("R6 must hold RAM");
+        assert_eq!(s6.base, 0x2000_0000);
+
+        // 3rd peripheral overflows to R7 (slot 3) via add_window.
+        let s7 = ds.slot(7).expect("R7 must hold overflow peripheral");
+        assert_eq!((s7.base, s7.size), (0x4002_0000, 4096));
+        assert_eq!(s7.permissions, periph_rasr(4096));
+
+        // Cache holds only first 2 (desc_idx limit is 2).
+        let cached = ds.cached_peripheral_regions(0);
+        assert_eq!(
+            cached[0],
+            (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096)),
+            "cache[0] must hold first peripheral at R4"
+        );
+        assert_eq!(
+            cached[1],
+            (build_rbar(0x4001_0000, 5).unwrap(), periph_rasr(4096)),
+            "cache[1] must hold second peripheral at R5"
         );
     }
 }
