@@ -721,20 +721,16 @@ macro_rules! define_unified_kernel {
         static CORE_PARTITION_STACK_LIMIT_OFFSET: usize =
             ::core::mem::offset_of!(<$Config as $crate::config::KernelConfig>::Core, partition_stack_limits);
 
-        // Compile-time assertions for PendSV assembly invariants.
-        //
-        // These verify the exported ABI statics against offset_of! and
-        // check range/ordering/alignment constraints.  The define_pendsv!
-        // macro has its own @assert_offsets arm that duplicates the
-        // offset_of!-based checks (without access to the statics).
+        // Shared offset-limit, field-ordering, alignment, and stride checks.
+        $crate::assert_kernel_layout!($Config);
+
+        // SVC-specific: verify exported ABI statics match offset_of! and
+        // check type constraints for ldrb/strb instructions.
         const _: () = {
             type K = $crate::svc::Kernel<$Config>;
             type C = <$Config as $crate::config::KernelConfig>::Core;
 
             // Verify the exported ABI constants match the actual struct layout.
-            // These compare the statics (which PendSV assembly consumes) against
-            // offset_of!, catching silent breakage if a static is replaced with
-            // a hardcoded literal.
             assert!(
                 KERNEL_CURRENT_PARTITION_OFFSET == ::core::mem::offset_of!(K, current_partition),
                 "KERNEL_CURRENT_PARTITION_OFFSET does not match struct layout"
@@ -766,35 +762,6 @@ macro_rules! define_unified_kernel {
             // PendSV uses ldrb for next_partition — must be u8.
             #[allow(unused)]
             fn _assert_np_is_u8(c: &C) { let _: u8 = c.next_partition; }
-
-            // PendSV indexes partition_sp with `lsl r0, #2` (×4) and
-            // loads/stores with ldr/str (32-bit) — elements must be u32, stride 4.
-            #[allow(unused)]
-            fn _assert_sp_elem_is_u32_stride_4(c: &C) {
-                let _: u32 = c.partition_sp[0];
-                // to_ne_bytes() returns [u8; size_of::<ElemType>()]; binding to
-                // [u8; 4] fails compilation if the actual element size != 4.
-                let _: [u8; 4] = c.partition_sp[0].to_ne_bytes();
-            }
-
-            // partition_sp combined offset must be 4-byte aligned for word-sized ldr/str.
-            assert!((KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET) % 4 == 0, "partition_sp must be 4-byte aligned");
-
-            // All offsets must be < LITERAL_POOL_OFFSET_LIMIT (literal-pool offset limit).
-            assert!(KERNEL_CURRENT_PARTITION_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_CURRENT_PARTITION_OFFSET exceeds literal-pool offset limit");
-            assert!(KERNEL_TICKS_DROPPED_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_TICKS_DROPPED_OFFSET exceeds literal-pool offset limit");
-            assert!(KERNEL_CORE_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_CORE_OFFSET exceeds literal-pool offset limit");
-            assert!(KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_CORE_OFFSET + CORE_NEXT_PARTITION_OFFSET exceeds literal-pool offset limit");
-            assert!(KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET exceeds literal-pool offset limit");
-            assert!(KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT, "KERNEL_CORE_OFFSET + CORE_PARTITION_STACK_LIMIT_OFFSET exceeds literal-pool offset limit");
-
-            // Field ordering: current_partition before core in Kernel.
-            assert!(KERNEL_CURRENT_PARTITION_OFFSET < KERNEL_CORE_OFFSET,
-                "current_partition must precede core in Kernel layout");
-
-            // Field ordering: next_partition before partition_sp in Core.
-            assert!(CORE_NEXT_PARTITION_OFFSET < CORE_PARTITION_SP_OFFSET,
-                "next_partition must precede partition_sp in Core layout");
         };
 
         /// SVC dispatch hook that routes syscalls through the unified kernel.

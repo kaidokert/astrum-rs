@@ -53,6 +53,7 @@ pub mod hw_uart;
 pub mod invariants;
 pub mod irq_ack;
 pub mod irq_dispatch;
+pub(crate) mod layout_checks;
 pub mod message;
 pub mod mpu;
 #[cfg(feature = "dynamic-mpu")]
