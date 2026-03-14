@@ -33,8 +33,7 @@ fn main() -> ! {
     hprintln!("pendsv_stack_overflow_test: start");
     let sched =
         kernel::scheduler::ScheduleTable::<{ Config::SCHED }>::round_robin(2, 1).expect("sched");
-    let cfgs = kernel::partition::PartitionConfig::sentinel_array::<2>(Config::STACK_WORDS);
-    let k = kernel::svc::Kernel::<Config>::create(sched, &cfgs).expect("kernel");
+    let k = kernel::svc::Kernel::<Config>::create_sentinels(sched).expect("kernel");
     store_kernel(k);
     match boot(&[(p0_overflow, 0), (p1_healthy, 0)], &mut p).expect("boot") {}
 }

@@ -18,7 +18,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
@@ -35,7 +34,6 @@ kernel::compose_kernel_config!(
 );
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = Config::STACK_WORDS;
 
 /// PendSV writes this into saved-SP on stack overflow detection.
 const STACK_SENTINEL: u32 = 0xDEAD0001;
@@ -125,8 +123,7 @@ fn main() -> ! {
     // 2 partitions, 1 tick per slot → major frame = 2 ticks (~1992 cycles).
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("round-robin schedule for 2 partitions must fit");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let k = Kernel::<Config>::create(sched, &cfgs)
+    let k = Kernel::<Config>::create_sentinels(sched)
         .expect("kernel create with 2 partitions must succeed");
     store_kernel(k);
 

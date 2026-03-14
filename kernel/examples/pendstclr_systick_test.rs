@@ -23,7 +23,6 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
@@ -40,7 +39,6 @@ kernel::compose_kernel_config!(
 );
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = Config::STACK_WORDS;
 const TIMEOUT_TICK: u32 = 400;
 /// Minimum number of verified context-switch alternations to pass.
 const MIN_SWITCHES: u32 = 10;
@@ -137,8 +135,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 2)
         .expect("pendstclr_systick: sched");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let k = Kernel::<Config>::create(sched, &cfgs).expect("pendstclr_systick: Kernel::create");
+    let k = Kernel::<Config>::create_sentinels(sched).expect("pendstclr_systick: Kernel::create");
     store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
     match boot(&parts, &mut p).expect("pendstclr_systick: boot") {}

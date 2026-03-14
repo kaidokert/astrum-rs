@@ -19,7 +19,6 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
 use kernel::svc::Kernel;
@@ -28,7 +27,6 @@ use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 kernel::compose_kernel_config!(SmokeConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 const NUM_PARTITIONS: usize = SmokeConfig::N;
-const STACK_WORDS: usize = SmokeConfig::STACK_WORDS;
 const TIMEOUT_TICKS: u32 = 50;
 
 /// SYS_YIELD success return code.
@@ -115,9 +113,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ SmokeConfig::SCHED }>::round_robin(2, 3)
         .expect("qemu_smoke: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let mut k = Kernel::<SmokeConfig>::create(sched, &cfgs).expect("qemu_smoke: Kernel::create");
+    let mut k = Kernel::<SmokeConfig>::create_sentinels(sched).expect("qemu_smoke: Kernel::create");
 
     // Semaphore 0: initial count=0, max=1.
     // P0 signals (0→1), then P1 waits and acquires (1→0).
