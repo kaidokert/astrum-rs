@@ -3504,27 +3504,19 @@ mod tests {
 
     /// Build a single-partition Kernel whose only variable is `mpu_region`.
     fn kernel_with_mpu_region(region: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
-        use crate::partition::PartitionConfig;
+        use crate::partition::PartitionMemory;
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
-        let configs = [PartitionConfig {
-            id: 0,
+        let mem = PartitionMemory {
+            stack_base: 0,
+            stack_size: 0,
             entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
             mpu_region: region,
             peripheral_regions: heapless::Vec::new(),
-        }];
-        #[cfg(feature = "dynamic-mpu")]
-        let registry = crate::virtual_device::DeviceRegistry::new();
-        Kernel::<TestConfig>::new(
-            schedule,
-            &configs,
-            #[cfg(feature = "dynamic-mpu")]
-            registry,
-        )
+        };
+        Kernel::<TestConfig>::create_from_memory(schedule, core::slice::from_ref(&mem))
     }
 
     /// Kernel::new() succeeds when a partition uses mpu_region size==0
@@ -7709,28 +7701,18 @@ mod tests {
 
     #[test]
     fn kernel_new_validates_and_creates() {
-        // Test empty schedule rejection
-        let empty: ScheduleTable<4> = ScheduleTable::new();
-        let cfg = PartitionConfig {
-            id: 0,
+        use crate::partition::PartitionMemory;
+        let mem = PartitionMemory {
+            stack_base: 0,
+            stack_size: 0,
             entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
             peripheral_regions: heapless::Vec::new(),
         };
-        #[cfg(not(feature = "dynamic-mpu"))]
+        // Test empty schedule rejection
+        let empty: ScheduleTable<4> = ScheduleTable::new();
         assert!(matches!(
-            Kernel::<TestConfig>::new(empty, core::slice::from_ref(&cfg)),
-            Err(ConfigError::ScheduleEmpty)
-        ));
-        #[cfg(feature = "dynamic-mpu")]
-        assert!(matches!(
-            Kernel::<TestConfig>::new(
-                empty,
-                core::slice::from_ref(&cfg),
-                crate::virtual_device::DeviceRegistry::new()
-            ),
+            Kernel::<TestConfig>::create_from_memory(empty, core::slice::from_ref(&mem)),
             Err(ConfigError::ScheduleEmpty)
         ));
         // Test valid config succeeds
@@ -7738,27 +7720,26 @@ mod tests {
         s.add(ScheduleEntry::new(0, 100)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         s.add_system_window(1).unwrap();
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let k = Kernel::<TestConfig>::new(s, core::slice::from_ref(&cfg)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
-        let k = Kernel::<TestConfig>::new(
-            s,
-            core::slice::from_ref(&cfg),
-            crate::virtual_device::DeviceRegistry::new(),
-        )
-        .unwrap();
+        let k = Kernel::<TestConfig>::create_from_memory(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().len(), 1);
         assert_eq!(k.active_partition(), None);
     }
 
     #[test]
     fn kernel_create_succeeds_with_valid_config() {
+        use crate::partition::PartitionMemory;
         let mut s: ScheduleTable<4> = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         s.add_system_window(1).unwrap();
-        let cfg = PartitionConfig::sentinel(0, 1024);
-        let k = Kernel::<TestConfig>::create(s, core::slice::from_ref(&cfg)).unwrap();
+        let mem = PartitionMemory {
+            stack_base: 0,
+            stack_size: 0,
+            entry_point: 0,
+            mpu_region: MpuRegion::new(0, 0, 0),
+            peripheral_regions: heapless::Vec::new(),
+        };
+        let k = Kernel::<TestConfig>::create_from_memory(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().len(), 1);
         assert_eq!(k.active_partition(), None);
     }
