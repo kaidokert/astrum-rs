@@ -25,7 +25,15 @@ use kernel::{
 use plib;
 
 const NP: usize = 2;
+const SW: usize = TestConfig::STACK_WORDS;
 const REGION_SZ: u32 = 1024;
+
+// TODO: PartitionStacks boilerplate is duplicated across mpu_cached_dynamic_test,
+// mpu_dynamic_base_test, and mpu_periph_precompute_test — consolidate into a shared
+// macro or common test utilities module.
+#[repr(C, align(4096))]
+struct PartitionStacks([[u32; SW]; TestConfig::N]);
+static mut PARTITION_STACKS: PartitionStacks = PartitionStacks([[0u32; SW]; TestConfig::N]);
 
 static P0_COUNTER: AtomicU32 = AtomicU32::new(0);
 static P1_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -115,9 +123,12 @@ fn main() -> ! {
     hprintln!("  kernel created");
     store_kernel(k);
     hprintln!("  kernel stored");
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks: &mut [[u32; SW]; TestConfig::N] =
+        unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
     kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {
-        for i in 0..NP {
-            let base = k.core_stack_mut(i).expect("stack").as_ptr() as u32;
+        for (i, stk) in stacks.iter().enumerate() {
+            let base = stk.as_ptr() as u32;
             k.partitions_mut()
                 .get_mut(i)
                 .expect("partition")
@@ -128,6 +139,6 @@ fn main() -> ! {
     .expect("with_kernel_mut");
     hprintln!("  MPU promoted");
     let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_entry, 0), (p1_entry, 0)];
-    hprintln!("  calling boot::boot");
-    match boot::boot::<TestConfig>(&parts, &mut p).expect("boot") {}
+    hprintln!("  calling boot::boot_external");
+    match boot::boot_external::<TestConfig, SW>(&parts, &mut p, stacks).expect("boot") {}
 }
