@@ -38,6 +38,13 @@ kernel::compose_kernel_config!(
     }
 );
 
+const SW: usize = TestConfig::STACK_WORDS;
+// TODO: reviewer false positive on align(4096) — matches the harness macro's alignment
+// (kernel/src/harness.rs) which also uses align(4096) for MPU region sizing constraints.
+#[repr(C, align(4096))]
+struct PartitionStacks([[u32; SW]; NP]);
+static mut PARTITION_STACKS: PartitionStacks = PartitionStacks([[0u32; SW]; NP]);
+
 // Shared partition body: yield in a loop, asserting success each time.
 // No memory access beyond the stack (covered by the MPU data region)
 // and registers (SVC ABI).
@@ -134,9 +141,11 @@ fn main() -> ! {
     }
     let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("kernel");
     store_kernel(k);
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks: &mut [[u32; SW]; NP] = unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
     kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {
-        for i in 0..NP {
-            let base = k.core_stack_mut(i).expect("stack").as_ptr() as u32;
+        for (i, stk) in stacks.iter().enumerate() {
+            let base = stk.as_ptr() as u32;
             k.partitions_mut()
                 .get_mut(i)
                 .expect("partition")
@@ -146,5 +155,5 @@ fn main() -> ! {
     })
     .expect("with_kernel_mut");
     let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_entry, 0), (p1_entry, 0)];
-    match boot::boot::<TestConfig>(&parts, &mut p).expect("boot") {}
+    match boot::boot_external::<TestConfig, SW>(&parts, &mut p, stacks).expect("boot") {}
 }

@@ -13,7 +13,7 @@ use cortex_m_rt::exception;
 use kernel::{
     boot,
     kexit, klog,
-    partition::{MpuRegion, PartitionConfig},
+    partition::PartitionConfig,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
@@ -22,6 +22,10 @@ use kernel::{
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
+const SW: usize = Cfg::STACK_WORDS;
+#[repr(C, align(4096))]
+struct PartitionStacks([[u32; SW]; Cfg::N]);
+static mut PARTITION_STACKS: PartitionStacks = PartitionStacks([[0u32; SW]; Cfg::N]);
 static P0_SENT: AtomicU32 = AtomicU32::new(0);
 static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);
 static PARTS_RAN: AtomicU32 = AtomicU32::new(0);
@@ -72,17 +76,8 @@ fn main() -> ! {
     if sched.add(ScheduleEntry::new(1, 2)).is_err() { loop { kexit!(failure); } }
     #[cfg(feature = "dynamic-mpu")]
     if sched.add_system_window(1).is_err() { loop { kexit!(failure); } }
-    let cfgs: [PartitionConfig; Cfg::N] = core::array::from_fn(|i| PartitionConfig {
-        id: i as u8, entry_point: 0, stack_base: 0, stack_size: (Cfg::STACK_WORDS * 4) as u32,
-        mpu_region: MpuRegion::new(0, 0, 0), peripheral_regions: heapless::Vec::new(),
-    });
-    #[cfg(feature = "dynamic-mpu")]
-    let mut k = match Kernel::<Cfg>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new()) {
-        Ok(k) => k,
-        Err(_) => loop { kexit!(failure); },
-    };
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let mut k = match Kernel::<Cfg>::new(sched, &cfgs) {
+    let cfgs = PartitionConfig::sentinel_array::<{ Cfg::N }>(Cfg::STACK_WORDS);
+    let mut k = match Kernel::<Cfg>::create(sched, &cfgs) {
         Ok(k) => k,
         Err(_) => loop { kexit!(failure); },
     };
@@ -96,9 +91,12 @@ fn main() -> ! {
     };
     if k.queuing_mut().connect_ports(src, dst).is_err() { loop { kexit!(failure); } }
     store_kernel(k);
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks: &mut [[u32; SW]; Cfg::N] =
+        unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
     let parts: [(extern "C" fn() -> !, u32); Cfg::N] =
         [(p0_main, (src as u32) << 16), (p1_main, dst as u32)];
-    match boot::boot::<Cfg>(&parts, &mut p) {
+    match boot::boot_external::<Cfg, SW>(&parts, &mut p, stacks) {
         Ok(never) => match never {},
         Err(_) => loop { kexit!(failure); },
     }
