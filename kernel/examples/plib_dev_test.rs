@@ -10,7 +10,6 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::virtual_device::VirtualDevice;
@@ -108,8 +107,7 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 3))
         .expect("plib_dev_test: add P0");
     sched.add_system_window(1).expect("plib_dev_test: sys0");
-    let cfgs = PartitionConfig::sentinel_array::<1>(TestConfig::STACK_WORDS);
-    let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("plib_dev_test: kernel");
+    let k = Kernel::<TestConfig>::create_sentinels(sched).expect("plib_dev_test: kernel");
     store_kernel(k);
 
     // Register UART-A (device 0) so SYS_DEV_* syscalls can reach it.

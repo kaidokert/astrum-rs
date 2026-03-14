@@ -18,7 +18,6 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -26,9 +25,6 @@ use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 kernel::compose_kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
-
-const NUM_PARTITIONS: usize = TestConfig::N;
-const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 
 /// Sentinel: syscall not yet attempted.
 const NOT_YET: u32 = 0xDEAD_C0DE;
@@ -104,10 +100,9 @@ fn main() -> ! {
     hprintln!("plib_abi_test: start");
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("round_robin");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("kernel");
+    let k = Kernel::<TestConfig>::create_sentinels(sched).expect("kernel");
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
+    let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
     match boot(&parts, &mut p).expect("boot") {}
 }
