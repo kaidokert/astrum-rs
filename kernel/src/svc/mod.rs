@@ -3021,7 +3021,7 @@ mod tests {
     use crate::mpu::MpuError;
     #[cfg(feature = "dynamic-mpu")]
     use crate::mpu_strategy::MpuStrategy;
-    use crate::partition::{MpuRegion, PartitionControlBlock};
+    use crate::partition::{MpuRegion, PartitionControlBlock, PartitionMemory};
     use crate::partition_core::AlignedStack4K;
     use crate::scheduler::ScheduleEntry;
     use crate::scheduler::ScheduleEvent;
@@ -3504,7 +3504,6 @@ mod tests {
 
     /// Build a single-partition Kernel whose only variable is `mpu_region`.
     fn kernel_with_mpu_region(region: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
-        use crate::partition::PartitionMemory;
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
@@ -3582,7 +3581,6 @@ mod tests {
 
     /// Helper: build a single-partition kernel via `create_from_memory`.
     fn mem_kernel(entry: u32, mpu: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
-        use crate::partition::PartitionMemory;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
@@ -3627,7 +3625,6 @@ mod tests {
             }
         ));
         // Empty schedule rejected
-        use crate::partition::PartitionMemory;
         let m = PartitionMemory {
             stack_base: 0,
             stack_size: 256,
@@ -3641,7 +3638,6 @@ mod tests {
 
     #[test]
     fn create_from_memory_two_partitions_ids_from_indices() {
-        use crate::partition::PartitionMemory;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 5)).unwrap();
         sched.add(ScheduleEntry::new(1, 5)).unwrap();
@@ -7701,7 +7697,6 @@ mod tests {
 
     #[test]
     fn kernel_new_validates_and_creates() {
-        use crate::partition::PartitionMemory;
         let mem = PartitionMemory {
             stack_base: 0,
             stack_size: 0,
@@ -7727,7 +7722,6 @@ mod tests {
 
     #[test]
     fn kernel_create_succeeds_with_valid_config() {
-        use crate::partition::PartitionMemory;
         let mut s: ScheduleTable<4> = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
@@ -7744,7 +7738,7 @@ mod tests {
         assert_eq!(k.active_partition(), None);
     }
 
-    /// Kernel::new() constructs mpu_region from internal_stack_base.
+    /// Kernel::create_from_memory() constructs mpu_region from internal_stack_base.
     /// Both stack_base and mpu_region.base are captured from the same
     /// address, so they must be equal (even if stale after a move).
     #[test]
@@ -7752,17 +7746,15 @@ mod tests {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
-        let cfgs = [
-            PartitionConfig {
-                id: 0,
+        let mems = [
+            PartitionMemory {
                 entry_point: 0x0800_0000,
                 stack_base: 0x2000_0000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
                 peripheral_regions: heapless::Vec::new(),
             },
-            PartitionConfig {
-                id: 1,
+            PartitionMemory {
                 entry_point: 0x0800_1000,
                 stack_base: 0x2000_1000,
                 stack_size: 1024,
@@ -7770,13 +7762,13 @@ mod tests {
                 peripheral_regions: heapless::Vec::new(),
             },
         ];
-        let k = try_kernel_new(s, &cfgs).unwrap();
-        for (i, cfg) in cfgs.iter().enumerate() {
+        let k = try_kernel_new_mem(s, &mems).unwrap();
+        for (i, mem) in mems.iter().enumerate() {
             let pcb = k.partitions().get(i).unwrap();
             // User-configured (size>0): base preserved from config.
-            assert_eq!(pcb.mpu_region().base(), cfg.mpu_region.base());
-            assert_eq!(pcb.mpu_region().size(), cfg.mpu_region.size());
-            assert_eq!(pcb.mpu_region().permissions(), cfg.mpu_region.permissions());
+            assert_eq!(pcb.mpu_region().base(), mem.mpu_region.base());
+            assert_eq!(pcb.mpu_region().size(), mem.mpu_region.size());
+            assert_eq!(pcb.mpu_region().permissions(), mem.mpu_region.permissions());
         }
     }
 
@@ -7814,23 +7806,21 @@ mod tests {
     #[test]
     fn kernel_new_allows_overlapping_data_regions() {
         // Only the data (MPU) regions overlap here. The stack addresses from
-        // PartitionConfig are ignored — Kernel::new uses internal stacks at
-        // unrelated addresses. Since Data-vs-Data is the only overlap and is
-        // permitted for shared-memory IPC, this should succeed.
+        // PartitionMemory are ignored — Kernel::create_from_memory uses internal
+        // stacks at unrelated addresses. Since Data-vs-Data is the only overlap
+        // and is permitted for shared-memory IPC, this should succeed.
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
-        let cfgs = [
-            PartitionConfig {
-                id: 0,
+        let mems = [
+            PartitionMemory {
                 entry_point: 0x0800_0000,
                 stack_base: 0x2000_0000,
                 stack_size: 4096,
                 mpu_region: MpuRegion::new(0x2000_0000, 16384, 0),
                 peripheral_regions: heapless::Vec::new(),
             },
-            PartitionConfig {
-                id: 1,
+            PartitionMemory {
                 entry_point: 0x0800_2000,
                 stack_base: 0x2000_2000,
                 stack_size: 4096,
@@ -7838,7 +7828,7 @@ mod tests {
                 peripheral_regions: heapless::Vec::new(),
             },
         ];
-        let _k = try_kernel_new(s, &cfgs).unwrap();
+        let _k = try_kernel_new_mem(s, &mems).unwrap();
     }
 
     #[test]
@@ -7846,17 +7836,15 @@ mod tests {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
-        let cfgs = [
-            PartitionConfig {
-                id: 0,
+        let mems = [
+            PartitionMemory {
                 entry_point: 0x0800_0000,
                 stack_base: 0x2000_0000,
                 stack_size: 4096,
                 mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
                 peripheral_regions: heapless::Vec::new(),
             },
-            PartitionConfig {
-                id: 1,
+            PartitionMemory {
                 entry_point: 0x0800_1000,
                 stack_base: 0x2000_1000,
                 stack_size: 4096,
@@ -7864,7 +7852,7 @@ mod tests {
                 peripheral_regions: heapless::Vec::new(),
             },
         ];
-        let k = try_kernel_new(s, &cfgs).unwrap();
+        let k = try_kernel_new_mem(s, &mems).unwrap();
         assert_eq!(k.partitions().len(), 2);
         assert_eq!(k.partitions().get(0).unwrap().id(), 0);
         assert_eq!(k.partitions().get(1).unwrap().id(), 1);
@@ -7874,66 +7862,23 @@ mod tests {
         assert!(b0 + 4096 <= b1, "regions must be non-overlapping");
     }
 
-    #[test]
-    fn kernel_new_rejects_partition_id_mismatch() {
-        let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 100)).unwrap();
-
-        // Config where id=5 is at index 0 (mismatch)
-        let bad_cfg = PartitionConfig {
-            id: 5, // should be 0
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
-
-        let result = try_kernel_new(s, &[bad_cfg]);
-
-        assert!(matches!(
-            result,
-            Err(ConfigError::PartitionIdMismatch {
-                index: 0,
-                expected_id: 0,
-                actual_id: 5,
-            })
-        ));
-    }
-
-    #[test]
-    fn kernel_new_rejects_second_partition_id_mismatch() {
-        let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 50)).unwrap();
-        s.add(ScheduleEntry::new(1, 50)).unwrap();
-
-        let cfg0 = PartitionConfig {
-            id: 0, // correct
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
-        let cfg1 = PartitionConfig {
-            id: 3, // should be 1
-            entry_point: 0x0800_1000,
-            stack_base: 0x2000_1000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
-
-        let result = try_kernel_new(s, &[cfg0, cfg1]);
-
-        assert!(matches!(
-            result,
-            Err(ConfigError::PartitionIdMismatch {
-                index: 1,
-                expected_id: 1,
-                actual_id: 3,
-            })
-        ));
+    /// Like `try_kernel_new` but takes `PartitionMemory` and uses `create_from_memory`.
+    fn try_kernel_new_mem(
+        schedule: ScheduleTable<4>,
+        memories: &[PartitionMemory],
+    ) -> Result<Kernel<TestConfig>, ConfigError> {
+        #[cfg(not(feature = "dynamic-mpu"))]
+        {
+            Kernel::<TestConfig>::create_from_memory(schedule, memories)
+        }
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            let mut schedule = schedule;
+            schedule
+                .add_system_window(1)
+                .expect("schedule must have room for system window");
+            Kernel::<TestConfig>::create_from_memory(schedule, memories)
+        }
     }
 
     #[test]
@@ -7941,18 +7886,15 @@ mod tests {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
-
-        let cfgs = [
-            PartitionConfig {
-                id: 0,
+        let mems = [
+            PartitionMemory {
                 entry_point: 0x0800_0000,
                 stack_base: 0x2000_0000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
                 peripheral_regions: heapless::Vec::new(),
             },
-            PartitionConfig {
-                id: 1,
+            PartitionMemory {
                 entry_point: 0x0800_1000,
                 stack_base: 0x2000_1000,
                 stack_size: 1024,
@@ -7960,12 +7902,13 @@ mod tests {
                 peripheral_regions: heapless::Vec::new(),
             },
         ];
-
-        let k = try_kernel_new(s, &cfgs).unwrap();
-
+        let k = try_kernel_new_mem(s, &mems).unwrap();
         assert_eq!(k.partitions().len(), 2);
         assert_eq!(k.partitions().get(0).unwrap().id(), 0);
         assert_eq!(k.partitions().get(1).unwrap().id(), 1);
+        // Verify data-carrying fields were mapped correctly from PartitionMemory.
+        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
+        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1000);
     }
 
     #[test]
