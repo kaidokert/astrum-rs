@@ -9,7 +9,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
@@ -22,8 +21,6 @@ kernel::bind_interrupts!(AckMultiConfig, 70,
 );
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = AckMultiConfig::STACK_WORDS;
-
 static P0_ACK: AtomicU32 = AtomicU32::new(0);
 static P1_ACK: AtomicU32 = AtomicU32::new(0);
 
@@ -99,9 +96,8 @@ fn main() -> ! {
 
     let sched = ScheduleTable::<{ AckMultiConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_ack_multi_test: round_robin");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let k =
-        Kernel::<AckMultiConfig>::create(sched, &cfgs).expect("irq_ack_multi_test: Kernel::create");
+    let k = Kernel::<AckMultiConfig>::create_sentinels(sched)
+        .expect("irq_ack_multi_test: Kernel::create");
     store_kernel(k);
     enable_bound_irqs(&mut p.NVIC, AckMultiConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];

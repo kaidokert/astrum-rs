@@ -13,7 +13,6 @@ use cortex_m_rt::exception;
 use kernel::{
     boot,
     kexit, klog,
-    partition::PartitionConfig,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
@@ -76,8 +75,7 @@ fn main() -> ! {
     if sched.add(ScheduleEntry::new(1, 2)).is_err() { loop { kexit!(failure); } }
     #[cfg(feature = "dynamic-mpu")]
     if sched.add_system_window(1).is_err() { loop { kexit!(failure); } }
-    let cfgs = PartitionConfig::sentinel_array::<{ Cfg::N }>(Cfg::STACK_WORDS);
-    let mut k = match Kernel::<Cfg>::create(sched, &cfgs) {
+    let mut k = match Kernel::<Cfg>::create_sentinels(sched) {
         Ok(k) => k,
         Err(_) => loop { kexit!(failure); },
     };
