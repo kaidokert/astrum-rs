@@ -92,7 +92,7 @@ extern "C" fn p1_main() -> ! {
 }
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals");
+    let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("buf_lend_addr_test: start");
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 3)).ok();
@@ -101,5 +101,5 @@ fn main() -> ! {
     sched.add_system_window(1).ok();
     let k = Kernel::<TestConfig>::create_sentinels(sched).expect("kernel");
     store_kernel(k);
-    match boot(&[(p0_main, 0), (p1_main, 0)], &mut p).expect("boot") {}
+    match boot(&[(p0_main, 0), (p1_main, 0)], p).expect("boot") {}
 }

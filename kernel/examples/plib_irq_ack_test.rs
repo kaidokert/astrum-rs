@@ -124,5 +124,5 @@ fn main() -> ! {
     enable_bound_irqs(&mut p.NVIC, TestConfig::IRQ_DEFAULT_PRIORITY).unwrap();
 
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
-    match boot(&parts, &mut p).expect("boot") {}
+    match boot(&parts, p).expect("boot") {}
 }

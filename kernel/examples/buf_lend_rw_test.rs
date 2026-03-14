@@ -106,7 +106,7 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals already taken");
+    let p = cortex_m::Peripherals::take().expect("peripherals already taken");
     hprintln!("buf_lend_rw_test: start");
     // Schedule: P0(3) → sys(1) → P1(3) → sys(1) → repeat.
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
@@ -124,5 +124,5 @@ fn main() -> ! {
     let k = Kernel::<TestConfig>::new(sched, &cfgs, DeviceRegistry::new()).expect("kernel");
     store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("boot") {}
+    match boot(&parts, p).expect("boot") {}
 }
