@@ -2176,40 +2176,45 @@ where
                 // Canonical caller: plib::sys_dev_read_timed (plib/src/lib.rs) packs r2.
                 let (timeout_ticks, buf_len) = unpack_packed_r2(frame.r2);
                 let buf_len = buf_len as usize;
-                validated_ptr!(self, frame.r3, buf_len, {
-                    let buf_ptr = frame.r3 as *mut u8;
-                    let timeout = timeout_ticks as u32;
-                    let pid = self.current_partition;
-                    let device_id = frame.r1 as u8;
-                    match self.registry.get_mut(device_id) {
-                        Some(dev) => {
-                            // SAFETY: validated_ptr confirmed [r3, r3+buf_len) lies
-                            // within the calling partition's MPU data region.
-                            let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_len) };
-                            match dev.read(pid, buf) {
-                                Ok(n) if n > 0 => n as u32,
-                                Ok(_) if timeout > 0 => {
-                                    // No data available — block the caller.
-                                    let expiry = self.tick.get() + timeout as u64;
-                                    match self.dev_wait_queue.block_reader(pid, expiry) {
-                                        Ok(()) => {
-                                            try_transition(
-                                                self.partitions_mut(),
-                                                pid,
-                                                PartitionState::Waiting,
-                                            );
-                                            self.trigger_deschedule()
+                match self.check_user_ptr_dynamic(frame.r3, buf_len) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        let buf_ptr = frame.r3 as *mut u8;
+                        let timeout = timeout_ticks as u32;
+                        let pid = self.current_partition;
+                        let device_id = frame.r1 as u8;
+                        match self.registry.get_mut(device_id) {
+                            Some(dev) => {
+                                // SAFETY: check_user_ptr_dynamic confirmed
+                                // [r3, r3+buf_len) lies within the calling
+                                // partition's accessible memory regions.
+                                let buf =
+                                    unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_len) };
+                                match dev.read(pid, buf) {
+                                    Ok(n) if n > 0 => n as u32,
+                                    Ok(_) if timeout > 0 => {
+                                        // No data available — block the caller.
+                                        let expiry = self.tick.get() + timeout as u64;
+                                        match self.dev_wait_queue.block_reader(pid, expiry) {
+                                            Ok(()) => {
+                                                try_transition(
+                                                    self.partitions_mut(),
+                                                    pid,
+                                                    PartitionState::Waiting,
+                                                );
+                                                self.trigger_deschedule()
+                                            }
+                                            Err(_) => SvcError::WaitQueueFull.to_u32(),
                                         }
-                                        Err(_) => SvcError::WaitQueueFull.to_u32(),
                                     }
+                                    Ok(_) => 0, // non-blocking, no data
+                                    Err(_) => SvcError::OperationFailed.to_u32(),
                                 }
-                                Ok(_) => 0, // non-blocking, no data
-                                Err(_) => SvcError::OperationFailed.to_u32(),
                             }
+                            None => SvcError::InvalidResource.to_u32(),
                         }
-                        None => SvcError::InvalidResource.to_u32(),
                     }
-                })
+                }
             }
             // TODO: QueryBottomHalf gated behind dynamic-mpu because underlying
             // ticks_since_bottom_half/is_bottom_half_stale are feature-gated. Future
