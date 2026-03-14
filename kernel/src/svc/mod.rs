@@ -1890,58 +1890,71 @@ where
             },
             #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingSend) => {
-                validated_ptr!(self, frame.r3, frame.r2 as usize, {
-                    // SAFETY: (1) validated_ptr confirmed [r3, r3+r2) lies within
-                    // the calling partition's MPU data region. (2) Slice length
-                    // is user-provided but validated against MPU bounds.
-                    // (3) The partition owns this memory as enforced by MPU.
-                    let d = unsafe {
-                        core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
-                    };
-                    queuing::handle_queuing_send(
+                match self.check_user_ptr(frame.r3, frame.r2 as usize) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        // SAFETY: (1) check_user_ptr confirmed [r3, r3+r2) lies within
+                        // the calling partition's MPU data region. (2) Slice length
+                        // is user-provided but validated against MPU bounds.
+                        // (3) The partition owns this memory as enforced by MPU.
+                        let d = unsafe {
+                            core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
+                        };
+                        queuing::handle_queuing_send(
+                            self.msg.queuing_mut(),
+                            self.core.partitions_mut(),
+                            self.current_partition,
+                            self.tick.get(),
+                            frame.r1 as usize,
+                            d,
+                        )
+                    }
+                }
+            }
+            #[cfg(feature = "ipc-queuing")]
+            Some(SyscallId::QueuingRecv) => match self.check_user_ptr(frame.r3, C::QM) {
+                Err(e) => e,
+                Ok(()) => {
+                    // SAFETY: (1) check_user_ptr confirmed [r3, r3+QM) lies within
+                    // the calling partition's MPU data region. (2) Slice length is
+                    // C::QM, a KernelConfig constant. (3) The partition owns this
+                    // memory as enforced by MPU isolation.
+                    let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
+                    queuing::handle_queuing_receive(
                         self.msg.queuing_mut(),
                         self.core.partitions_mut(),
                         self.current_partition,
                         self.tick.get(),
                         frame.r1 as usize,
-                        d,
+                        b,
                     )
-                })
-            }
-            #[cfg(feature = "ipc-queuing")]
-            Some(SyscallId::QueuingRecv) => validated_ptr!(self, frame.r3, C::QM, {
-                // SAFETY: (1) validated_ptr confirmed [r3, r3+QM) lies within
-                // the calling partition's MPU data region. (2) Slice length is
-                // C::QM, a KernelConfig constant. (3) The partition owns this
-                // memory as enforced by MPU isolation.
-                let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
-                queuing::handle_queuing_receive(
-                    self.msg.queuing_mut(),
-                    self.core.partitions_mut(),
-                    self.current_partition,
-                    self.tick.get(),
-                    frame.r1 as usize,
-                    b,
-                )
-            }),
+                }
+            },
             #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingStatus) => {
-                validated_ptr!(self, frame.r2, core::mem::size_of::<QueuingPortStatus>(), {
-                    // SAFETY: (1) validated_ptr confirmed [r2, r2+size_of QueuingPortStatus)
-                    // lies within the calling partition's MPU data region. (2) Size is
-                    // compile-time constant size_of::<QueuingPortStatus>. (3) The
-                    // partition owns this memory as enforced by MPU isolation.
-                    // SAFETY: validated_ptr confirmed the pointer and size lie within the
-                    // calling partition's MPU data region; handle_queuing_status requires
-                    // `out` to be valid, aligned, and writable, which is guaranteed here.
-                    unsafe {
-                        queuing::handle_queuing_status(
-                            self.msg.queuing(),
-                            frame.r1 as usize,
-                            frame.r2 as *mut QueuingPortStatus,
-                        )
+                match self.check_user_ptr(frame.r2, core::mem::size_of::<QueuingPortStatus>()) {
+                    Err(e) => e,
+                    Ok(())
+                        if !(frame.r2 as usize)
+                            .is_multiple_of(core::mem::align_of::<QueuingPortStatus>()) =>
+                    {
+                        SvcError::InvalidPointer.to_u32()
                     }
-                })
+                    Ok(()) => {
+                        // SAFETY: (1) check_user_ptr confirmed [r2, r2+size_of
+                        // QueuingPortStatus) lies within the calling partition's MPU
+                        // data region. (2) Alignment of r2 for QueuingPortStatus is
+                        // verified by the guard on the preceding arm. (3) The partition
+                        // owns this memory as enforced by MPU isolation.
+                        unsafe {
+                            queuing::handle_queuing_status(
+                                self.msg.queuing(),
+                                frame.r1 as usize,
+                                frame.r2 as *mut QueuingPortStatus,
+                            )
+                        }
+                    }
+                }
             }
             #[cfg(feature = "ipc-blackboard")]
             Some(SyscallId::BbDisplay) => {
