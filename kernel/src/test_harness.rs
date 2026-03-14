@@ -2,7 +2,7 @@ use crate::config::KernelConfig;
 use crate::context::ExceptionFrame;
 use crate::kernel_config_types;
 use crate::message::MessageQueue;
-use crate::partition::{ConfigError, MpuRegion, PartitionConfig, PartitionState, TransitionError};
+use crate::partition::{ConfigError, MpuRegion, PartitionMemory, PartitionState, TransitionError};
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
 use crate::semaphore::Semaphore;
 use crate::svc::{Kernel, YieldResult};
@@ -75,28 +75,22 @@ impl KernelTestHarness {
         schedule
             .add_system_window(10)
             .map_err(|_| HarnessError::ScheduleFull)?;
-        let mut configs: Vec<PartitionConfig, { HarnessConfig::N }> = Vec::new();
+        let mut mems: Vec<PartitionMemory, { HarnessConfig::N }> = Vec::new();
         for i in 0..n {
             let o = (i as u32) * PARTITION_OFFSET;
-            configs
-                .push(PartitionConfig {
-                    id: i as u8,
-                    entry_point: FLASH_BASE + o,
-                    stack_base: RAM_BASE + o,
-                    stack_size: STACK_SIZE_BYTES,
-                    mpu_region: MpuRegion::new(RAM_BASE + o, STACK_SIZE_BYTES, 0),
-                    peripheral_regions: peripheral_fn(i),
-                })
-                .map_err(|_| HarnessError::ConfigsFull)?;
+            mems.push(PartitionMemory {
+                entry_point: FLASH_BASE + o,
+                stack_base: RAM_BASE + o,
+                stack_size: STACK_SIZE_BYTES,
+                mpu_region: MpuRegion::new(RAM_BASE + o, STACK_SIZE_BYTES, 0),
+                peripheral_regions: peripheral_fn(i),
+            })
+            .map_err(|_| HarnessError::ConfigsFull)?;
         }
+        // create_from_memory auto-creates a default DeviceRegistry on dynamic-mpu builds,
+        // replacing the explicit DeviceRegistry::new() that Kernel::new() required.
         let mut kernel = Box::new(
-            Kernel::new(
-                schedule,
-                &configs,
-                #[cfg(feature = "dynamic-mpu")]
-                crate::virtual_device::DeviceRegistry::new(),
-            )
-            .map_err(HarnessError::KernelInit)?,
+            Kernel::create_from_memory(schedule, &mems).map_err(HarnessError::KernelInit)?,
         );
         // Only partition 0 starts Running; others remain Ready (at-most-one-Running invariant).
         kernel
@@ -222,35 +216,24 @@ impl KernelTestHarness {
         schedule
             .add_system_window(10)
             .map_err(|_| HarnessError::ScheduleFull)?;
-        let mut configs: Vec<PartitionConfig, { HarnessConfig::N }> = Vec::new();
-        configs
-            .push(PartitionConfig {
-                id: 0,
+        let mems: [PartitionMemory; 2] = [
+            PartitionMemory {
                 entry_point: FLASH_BASE,
                 stack_base: RAM_BASE,
                 stack_size: STACK_SIZE_BYTES,
                 mpu_region: MpuRegion::new(0, 0, 0),
                 peripheral_regions: Vec::new(),
-            })
-            .map_err(|_| HarnessError::ConfigsFull)?;
-        configs
-            .push(PartitionConfig {
-                id: 1,
+            },
+            PartitionMemory {
                 entry_point: FLASH_BASE + PARTITION_OFFSET,
                 stack_base: RAM_BASE + PARTITION_OFFSET,
                 stack_size: STACK_SIZE_BYTES,
                 mpu_region: MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
                 peripheral_regions: Vec::new(),
-            })
-            .map_err(|_| HarnessError::ConfigsFull)?;
+            },
+        ];
         let mut kernel = Box::new(
-            Kernel::new(
-                schedule,
-                &configs,
-                #[cfg(feature = "dynamic-mpu")]
-                crate::virtual_device::DeviceRegistry::new(),
-            )
-            .map_err(HarnessError::KernelInit)?,
+            Kernel::create_from_memory(schedule, &mems).map_err(HarnessError::KernelInit)?,
         );
         // Verify Kernel::new preserved P1's user-configured base before fixup.
         assert_eq!(
@@ -2731,20 +2714,15 @@ mod tests {
 
         // P0: sentinel mpu_region (size==0).
         // P1: user-configured mpu_region.
-        let mut configs: Vec<PartitionConfig, { HarnessConfig::N }> = Vec::new();
-        configs
-            .push(PartitionConfig {
-                id: 0,
+        let mems: [PartitionMemory; 2] = [
+            PartitionMemory {
                 entry_point: FLASH_BASE,
                 stack_base: RAM_BASE,
                 stack_size: STACK_SIZE_BYTES,
                 mpu_region: MpuRegion::new(0, 0, 0),
                 peripheral_regions: Vec::new(),
-            })
-            .expect("push P0 config");
-        configs
-            .push(PartitionConfig {
-                id: 1,
+            },
+            PartitionMemory {
                 entry_point: FLASH_BASE + PARTITION_OFFSET,
                 stack_base: RAM_BASE + PARTITION_OFFSET,
                 stack_size: STACK_SIZE_BYTES,
@@ -2754,18 +2732,13 @@ mod tests {
                     SENTINEL_DATA_PERMISSIONS,
                 ),
                 peripheral_regions: Vec::new(),
-            })
-            .expect("push P1 config");
+            },
+        ];
 
         // Create kernel and box it to simulate boot placement.
         let mut kernel = Box::new(
-            Kernel::<HarnessConfig>::new(
-                schedule,
-                &configs,
-                #[cfg(feature = "dynamic-mpu")]
-                crate::virtual_device::DeviceRegistry::new(),
-            )
-            .expect("Kernel::new"),
+            Kernel::<HarnessConfig>::create_from_memory(schedule, &mems)
+                .expect("create_from_memory"),
         );
 
         // Grab core_stack_base for P0 (the fixup target).

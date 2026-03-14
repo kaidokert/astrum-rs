@@ -283,7 +283,7 @@ mod tests {
 
     use crate::config::KernelConfig;
     use crate::kernel_config_types;
-    use crate::partition::PartitionConfig;
+    use crate::partition::PartitionMemory;
     use crate::scheduler::{ScheduleEntry, ScheduleTable};
 
     struct TestConfig;
@@ -322,17 +322,15 @@ mod tests {
         schedule.add(ScheduleEntry::new(1, 10)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
-        let configs = [
-            PartitionConfig {
-                id: 0,
+        let mems = [
+            PartitionMemory {
                 entry_point: 0x0800_1000,
                 stack_base: 0x2000_0000,
                 stack_size: 1024,
                 mpu_region: MpuRegion::new(0x2000_0000, 1024, 0x03),
                 peripheral_regions: heapless::Vec::new(),
             },
-            PartitionConfig {
-                id: 1,
+            PartitionMemory {
                 entry_point: 0x0800_2000,
                 stack_base: 0x2000_1000,
                 stack_size: 1024,
@@ -340,15 +338,8 @@ mod tests {
                 peripheral_regions: heapless::Vec::new(),
             },
         ];
-        #[cfg(not(feature = "dynamic-mpu"))]
-        {
-            Kernel::<TestConfig>::new(schedule, &configs).expect("kernel creation failed")
-        }
-        #[cfg(feature = "dynamic-mpu")]
-        {
-            let registry = crate::virtual_device::DeviceRegistry::new();
-            Kernel::<TestConfig>::new(schedule, &configs, registry).expect("kernel creation failed")
-        }
+        // create_from_memory auto-creates a default DeviceRegistry for dynamic-mpu builds.
+        Kernel::<TestConfig>::create_from_memory(schedule, &mems).expect("kernel creation failed")
     }
 
     /// Mutex to serialize tests that manipulate the global `SYSTICK_HANDLER`.
