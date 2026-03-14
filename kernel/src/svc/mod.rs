@@ -1958,64 +1958,71 @@ where
             }
             #[cfg(feature = "ipc-blackboard")]
             Some(SyscallId::BbDisplay) => {
-                validated_ptr!(self, frame.r3, frame.r2 as usize, {
-                    // SAFETY: (1) validated_ptr confirmed [r3, r3+r2) lies within
-                    // the calling partition's MPU data region. (2) Slice length
-                    // is user-provided but validated against MPU bounds.
-                    // (3) The partition owns this memory as enforced by MPU.
-                    let d = unsafe {
-                        core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
-                    };
-                    match self
-                        .ports
-                        .blackboards_mut()
-                        .display_blackboard(frame.r1 as usize, d)
-                    {
-                        Ok(woken) => {
-                            for &wpid in woken.iter() {
-                                try_transition(
-                                    self.core.partitions_mut(),
-                                    wpid,
-                                    PartitionState::Ready,
-                                );
+                match self.check_user_ptr(frame.r3, frame.r2 as usize) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        // SAFETY: (1) check_user_ptr confirmed [r3, r3+r2) lies within
+                        // the calling partition's MPU data region. (2) Slice length
+                        // is user-provided but validated against MPU bounds.
+                        // (3) The partition owns this memory as enforced by MPU.
+                        let d = unsafe {
+                            core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
+                        };
+                        match self
+                            .ports
+                            .blackboards_mut()
+                            .display_blackboard(frame.r1 as usize, d)
+                        {
+                            Ok(woken) => {
+                                for &wpid in woken.iter() {
+                                    try_transition(
+                                        self.core.partitions_mut(),
+                                        wpid,
+                                        PartitionState::Ready,
+                                    );
+                                }
+                                0
                             }
-                            0
+                            Err(_) => SvcError::InvalidResource.to_u32(),
                         }
-                        Err(_) => SvcError::InvalidResource.to_u32(),
                     }
-                })
+                }
             }
             #[cfg(feature = "ipc-blackboard")]
             Some(SyscallId::BbRead) => {
-                validated_ptr!(self, frame.r3, C::BM, {
-                    // SAFETY: (1) validated_ptr confirmed [r3, r3+BM) lies within
-                    // the calling partition's MPU data region. (2) Slice length is
-                    // C::BM, a KernelConfig constant. (3) The partition owns this
-                    // memory as enforced by MPU isolation.
-                    let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
-                    let pid = self.current_partition;
-                    let tick = self.tick.get();
-                    match self.ports.blackboards_mut().read_blackboard_timed(
-                        frame.r1 as usize,
-                        pid,
-                        b,
-                        frame.r2,
-                        tick,
-                    ) {
-                        Ok(crate::blackboard::ReadBlackboardOutcome::Read { msg_len }) => {
-                            msg_len as u32
+                match self.check_user_ptr(frame.r3, C::BM) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        // SAFETY: (1) check_user_ptr confirmed [r3, r3+BM) lies within
+                        // the calling partition's MPU data region. (2) Slice length is
+                        // C::BM, a KernelConfig constant. (3) The partition owns this
+                        // memory as enforced by MPU isolation.
+                        let b =
+                            unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
+                        let pid = self.current_partition;
+                        let tick = self.tick.get();
+                        match self.ports.blackboards_mut().read_blackboard_timed(
+                            frame.r1 as usize,
+                            pid,
+                            b,
+                            frame.r2,
+                            tick,
+                        ) {
+                            Ok(crate::blackboard::ReadBlackboardOutcome::Read { msg_len }) => {
+                                msg_len as u32
+                            }
+                            Ok(crate::blackboard::ReadBlackboardOutcome::ReaderBlocked) => {
+                                try_transition(
+                                    self.core.partitions_mut(),
+                                    pid,
+                                    PartitionState::Waiting,
+                                );
+                                self.trigger_deschedule()
+                            }
+                            Err(_) => SvcError::InvalidResource.to_u32(),
                         }
-                        Ok(crate::blackboard::ReadBlackboardOutcome::ReaderBlocked) => {
-                            try_transition(
-                                self.core.partitions_mut(),
-                                pid,
-                                PartitionState::Waiting,
-                            );
-                            self.trigger_deschedule()
-                        }
-                        Err(_) => SvcError::InvalidResource.to_u32(),
                     }
-                })
+                }
             }
             #[cfg(feature = "ipc-blackboard")]
             Some(SyscallId::BbClear) => {
