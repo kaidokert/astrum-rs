@@ -19,7 +19,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -37,7 +36,6 @@ kernel::bind_interrupts!(IrqTestConfig, 70,
 );
 
 const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = IrqTestConfig::STACK_WORDS;
 
 /// Incremented by the partition after each successful `SYS_EVT_WAIT` return.
 static WAIT_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -93,10 +91,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ IrqTestConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_dispatch_test: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k =
-        Kernel::<IrqTestConfig>::create(sched, &cfgs).expect("irq_dispatch_test: Kernel::create");
+    let k = Kernel::<IrqTestConfig>::create_sentinels(sched)
+        .expect("irq_dispatch_test: Kernel::create");
 
     store_kernel(k);
 

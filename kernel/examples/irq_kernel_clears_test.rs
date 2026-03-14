@@ -27,7 +27,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::irq_dispatch::{ClearStrategy, IrqClearModel};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -48,7 +47,6 @@ kernel::bind_interrupts!(KClearsConfig, 70,
 );
 
 const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = KClearsConfig::STACK_WORDS;
 
 /// Incremented by the partition after each successful event_wait.
 static WAIT_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -103,9 +101,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ KClearsConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_kernel_clears_test: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k = Kernel::<KClearsConfig>::create(sched, &cfgs)
+    let k = Kernel::<KClearsConfig>::create_sentinels(sched)
         .expect("irq_kernel_clears_test: Kernel::create");
 
     // store_kernel, enable_bound_irqs, and boot are macro-generated.
