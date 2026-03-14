@@ -13,6 +13,7 @@ pub mod msg;
 pub mod queuing;
 #[cfg(feature = "ipc-sampling")]
 pub mod sampling;
+pub mod scheduler;
 pub mod sleep;
 pub mod sync;
 
@@ -20,10 +21,10 @@ use core::cell::RefCell;
 
 use cortex_m::interrupt::Mutex;
 
+use self::scheduler as svc_scheduler;
 use crate::blackboard::BlackboardPool;
 use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
-use crate::svc_scheduler;
 
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
