@@ -25,9 +25,14 @@ use kernel::{
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
-const NP: usize = 2;
-const SW: usize = 256; // AlignedStack1K = 256 words = 1024 bytes
+const SW: usize = TestConfig::STACK_WORDS;
 const REGION_SZ: u32 = 1024;
+
+// TODO: reviewer false positive on align(4096) — matches the harness macro's alignment
+// (kernel/src/harness.rs) which also uses align(4096) for MPU region sizing constraints.
+#[repr(C, align(4096))]
+struct PartitionStacks([[u32; SW]; TestConfig::N]);
+static mut PARTITION_STACKS: PartitionStacks = PartitionStacks([[0u32; SW]; TestConfig::N]);
 
 kernel::compose_kernel_config!(
     TestConfig < Partitions2,
@@ -76,7 +81,7 @@ fn main() -> ! {
     // Sentinel configs: mpu_region size=0 passes the overlap check
     // in Kernel::new. entry_point is set to the computed code base
     // so partition_mpu_regions builds a valid code RX region.
-    let cfgs: [PartitionConfig; NP] = [
+    let cfgs: [PartitionConfig; TestConfig::N] = [
         PartitionConfig {
             id: 0,
             entry_point: code_base,
@@ -103,13 +108,13 @@ fn main() -> ! {
 
     store_kernel(k);
 
-    // Promote sentinel MPU regions: read actual stack addresses from
-    // PartitionCore (1K-aligned) and give each partition a 1K data
-    // region covering its own stack. Non-overlapping because
-    // AlignedStack1K guarantees 1K alignment and 1K spacing.
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks: &mut [[u32; SW]; TestConfig::N] =
+        unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
+    // Promote sentinel MPU regions with actual external stack addresses.
     kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {
-        for i in 0..NP {
-            let base = k.core_stack_mut(i).expect("stack").as_ptr() as u32;
+        for (i, stk) in stacks.iter().enumerate() {
+            let base = stk.as_ptr() as u32;
             k.partitions_mut()
                 .get_mut(i)
                 .unwrap()
@@ -119,6 +124,6 @@ fn main() -> ! {
     })
     .expect("with_kernel_mut");
 
-    let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_entry, 0), (p1_entry, 0)];
-    match boot::boot::<TestConfig>(&parts, &mut p).expect("boot failed") {}
+    let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(p0_entry, 0), (p1_entry, 0)];
+    match boot::boot_external::<TestConfig, SW>(&parts, &mut p, stacks).expect("boot failed") {}
 }

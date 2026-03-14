@@ -534,7 +534,8 @@ where
                 .partitions_mut()
                 .get_mut(i)
                 .ok_or(BootError::StackRegionError { partition_index: i })?;
-            pcb.set_stack_fields(base, size);
+            pcb.set_stack_fields(base, size)
+                .map_err(|_| BootError::StackRegionError { partition_index: i })?;
             fix_mpu_data_region_if_sentinel(pcb, base);
             k.sync_stack_limit(i);
         }

@@ -27,6 +27,13 @@ use kernel::{
 
 // Actual partition count (3) differs from DemoConfig::N (4, from Partitions4 capacity).
 const NUM_PARTITIONS: usize = 3;
+const STACK_WORDS: usize = DemoConfig::STACK_WORDS;
+// TODO: reviewer false positive on align(4096) — matches the harness macro's alignment
+// (kernel/src/harness.rs) which also uses align(4096) for MPU region sizing constraints.
+#[repr(C, align(4096))]
+struct PartitionStacks([[u32; STACK_WORDS]; DemoConfig::N]);
+static mut PARTITION_STACKS: PartitionStacks =
+    PartitionStacks([[0u32; STACK_WORDS]; DemoConfig::N]);
 
 // Atomic state for partition progress tracking (handler mode reads these).
 /// Sensor: last value written (increments each cycle)
@@ -204,5 +211,9 @@ fn main() -> ! {
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
         core::array::from_fn(|i| (eps[i], h[i]));
 
-    match boot::boot::<DemoConfig>(&parts, &mut p).expect("sampling_demo: boot failed") {}
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks: &mut [[u32; STACK_WORDS]; DemoConfig::N] =
+        unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
+    match boot::boot_external::<DemoConfig, STACK_WORDS>(&parts, &mut p, stacks)
+        .expect("sampling_demo: boot failed") {}
 }

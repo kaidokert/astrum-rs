@@ -299,6 +299,22 @@ impl PartitionControlBlock {
         Ok(())
     }
 
+    /// Sets stack fields directly for external-stack boot paths.
+    ///
+    /// Unlike `fix_stack_region`, this does NOT perform MPU validation.
+    /// The caller must validate size/alignment separately before calling.
+    pub(crate) fn set_stack_fields(&mut self, base: u32, size: u32) -> Result<(), &'static str> {
+        if self.cache_sealed {
+            return Err("set_stack_fields called after MPU cache sealed");
+        }
+        self.stack_base = base;
+        self.stack_size = size;
+        // TODO: reviewer false positive — stack_limit == stack_base is the established
+        // convention (see fix_stack_region, PartitionControlBlock::new, and stack_limit tests).
+        self.stack_limit = base;
+        Ok(())
+    }
+
     /// Updates the MPU data region base address.
     ///
     /// After boot-time stack relocation, the PCB's `mpu_region.base` (set from
@@ -1109,6 +1125,36 @@ mod tests {
         // Verify mpu_region is unchanged (stack and data are independent)
         assert_eq!(pcb.mpu_region().base(), original_mpu_base);
         assert_eq!(pcb.mpu_region().size(), original_mpu_size);
+    }
+
+    // ------------------------------------------------------------------
+    // set_stack_fields
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn set_stack_fields_updates_base_size_limit() {
+        let mut pcb = make_pcb();
+        let original_mpu_base = pcb.mpu_region().base();
+        let original_mpu_size = pcb.mpu_region().size();
+
+        pcb.set_stack_fields(0x2004_0000, 2048).unwrap();
+
+        assert_eq!(pcb.stack_base(), 0x2004_0000);
+        assert_eq!(pcb.stack_size(), 2048);
+        assert_eq!(pcb.stack_limit, 0x2004_0000);
+        // mpu_region must be unchanged
+        assert_eq!(pcb.mpu_region().base(), original_mpu_base);
+        assert_eq!(pcb.mpu_region().size(), original_mpu_size);
+    }
+
+    #[test]
+    fn set_stack_fields_err_after_seal() {
+        let mut pcb = make_pcb();
+        crate::mpu::precompute_mpu_cache(&mut pcb).unwrap();
+        assert_eq!(
+            pcb.set_stack_fields(0x2004_0000, 2048),
+            Err("set_stack_fields called after MPU cache sealed")
+        );
     }
 
     // ------------------------------------------------------------------

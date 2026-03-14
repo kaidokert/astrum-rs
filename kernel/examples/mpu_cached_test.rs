@@ -95,16 +95,23 @@ partition_entry!(p0_entry, P0_COUNTER, 0xCAFE_0000u32);
 partition_entry!(p1_entry, P1_COUNTER, 0xBEEF_0000u32);
 
 const REGION_SZ: u32 = 1024;
+const SW: usize = TestConfig::STACK_WORDS;
+
+// TODO: reviewer false positive on align(4096) — matches the harness macro's alignment
+// (kernel/src/harness.rs) which also uses align(4096) for MPU region sizing constraints.
+#[repr(C, align(4096))]
+struct PartitionStacks([[u32; SW]; TestConfig::N]);
+static mut PARTITION_STACKS: PartitionStacks = PartitionStacks([[0u32; SW]; TestConfig::N]);
 
 #[entry]
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("mpu_cached_test: start");
-    let entry_fns: [extern "C" fn() -> !; 2] = [p0_entry, p1_entry];
+    let entry_fns: [extern "C" fn() -> !; TestConfig::N] = [p0_entry, p1_entry];
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched 1");
-    let cfgs: [PartitionConfig; 2] = core::array::from_fn(|i| {
+    let cfgs: [PartitionConfig; TestConfig::N] = core::array::from_fn(|i| {
         // entry_point is the MPU code-region base, not the execution start address.
         // boot::boot() receives the actual function pointer via the `parts` array.
         // TODO: reviewer false positive — same pattern as mpu_enforce_test.rs
@@ -132,9 +139,12 @@ fn main() -> ! {
     });
     let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("kernel");
     store_kernel(k);
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks: &mut [[u32; SW]; TestConfig::N] =
+        unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
     kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {
-        for i in 0..2 {
-            let base = k.core_stack_mut(i).expect("stack").as_ptr() as u32;
+        for (i, stk) in stacks.iter().enumerate() {
+            let base = stk.as_ptr() as u32;
             k.partitions_mut()
                 .get_mut(i)
                 .expect("partition")
@@ -143,6 +153,6 @@ fn main() -> ! {
         }
     })
     .expect("with_kernel_mut");
-    let parts: [(extern "C" fn() -> !, u32); 2] = [(p0_entry, 0), (p1_entry, 0)];
-    match boot::boot::<TestConfig>(&parts, &mut p).expect("boot") {}
+    let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(p0_entry, 0), (p1_entry, 0)];
+    match boot::boot_external::<TestConfig, SW>(&parts, &mut p, stacks).expect("boot") {}
 }

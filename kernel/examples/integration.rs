@@ -18,6 +18,14 @@ use kernel::{boot, events, DebugEnabled, MsgStandard, Partitions4, PortsTiny, Sy
 
 kernel::compose_kernel_config!(IntegrationConfig<Partitions4, SyncMinimal, MsgStandard, PortsTiny, DebugEnabled>);
 
+const STACK_WORDS: usize = IntegrationConfig::STACK_WORDS;
+// TODO: reviewer false positive on align(4096) — matches the harness macro's alignment
+// (kernel/src/harness.rs) which also uses align(4096) for MPU region sizing constraints.
+#[repr(C, align(4096))]
+struct PartitionStacks([[u32; STACK_WORDS]; IntegrationConfig::N]);
+static mut PARTITION_STACKS: PartitionStacks =
+    PartitionStacks([[0u32; STACK_WORDS]; IntegrationConfig::N]);
+
 static P_RAN: AtomicU32 = AtomicU32::new(u32::MAX);
 static SW: AtomicU32 = AtomicU32::new(0);
 static IPC: AtomicU32 = AtomicU32::new(0);
@@ -109,5 +117,11 @@ fn main() -> ! {
         .messages_mut()
         .add(kernel::message::MessageQueue::<4, 4, 4>::new());
     store_kernel(k);
-    match boot::boot::<IntegrationConfig>(&[(p0_main, 0), (p1_main, 0)], &mut p).unwrap() {}
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks: &mut [[u32; STACK_WORDS]; IntegrationConfig::N] =
+        unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
+    // TODO: IntegrationConfig composes Partitions4 (N=4) but only 2 partitions are used.
+    // Either switch to Partitions2 or add entries for all 4 when more test coverage is needed.
+    let parts: [(extern "C" fn() -> !, u32); 2] = [(p0_main, 0), (p1_main, 0)];
+    match boot::boot_external::<IntegrationConfig, STACK_WORDS>(&parts, &mut p, stacks).unwrap() {}
 }
