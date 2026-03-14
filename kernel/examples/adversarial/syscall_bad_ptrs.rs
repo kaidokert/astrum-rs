@@ -14,12 +14,13 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::{
     kpanic as _,
-    partition::{MpuRegion, PartitionConfig},
+    partition::PartitionMemory,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::SYS_SAMPLING_WRITE,
-    DebugEnabled, MsgMinimal, Partitions2, PortsSmall, SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions2, PortsSmall, StackStorage as _,
+    SyncMinimal,
 };
 
 // ---------------------------------------------------------------------------
@@ -37,10 +38,6 @@ const TEST_NAME: &str = "syscall_bad_ptrs";
 // ---------------------------------------------------------------------------
 
 const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = 256;
-
-/// Stack size in bytes (must be power of 2 for MPU).
-const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 
 kernel::compose_kernel_config!(
     TestConfig < Partitions2,
@@ -111,24 +108,10 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 2))
         .expect("schedule entry must fit");
 
-    // Build partition configs. Stack bases are derived from internal
-    // PartitionCore stacks by Kernel::new(), so we use dummy values here.
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| PartitionConfig {
-        id: i as u8,
-        entry_point: 0, // Not used by Kernel::new
-        stack_base: 0,  // Ignored: internal stack used
-        stack_size: STACK_SIZE,
-        mpu_region: MpuRegion::new(0, 0, 0), // Base/size overridden by Kernel::new
-        peripheral_regions: heapless::Vec::new(),
-    });
+    let mut stack0 = AlignedStack1K::ZERO;
+    let mems: [PartitionMemory; NUM_PARTITIONS] = [PartitionMemory::sentinel(&mut stack0.0)];
 
-    // Create the unified kernel with schedule and partitions.
-    #[cfg(feature = "dynamic-mpu")]
-    let mut k =
-        Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-            .expect("kernel creation");
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let mut k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel creation");
+    let mut k = Kernel::<TestConfig>::create_from_memory(sched, &mems).expect("kernel creation");
 
     let port_id = k
         .sampling_mut()

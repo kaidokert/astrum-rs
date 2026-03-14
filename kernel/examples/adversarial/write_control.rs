@@ -23,10 +23,11 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::{
     kpanic as _,
-    partition::{MpuRegion, PartitionConfig},
+    partition::PartitionMemory,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, StackStorage as _,
+    SyncMinimal,
 };
 
 /// Test name for reporting.
@@ -35,7 +36,6 @@ const TEST_NAME: &str = "write_control";
 kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsMinimal, DebugEnabled>);
 
 const NUM_PARTITIONS: usize = TestConfig::N;
-const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 
 // 0 = pending, 1 = pass, 2 = fail (partition not unpriv), 3 = fail (escalated)
 static RESULT: AtomicU32 = AtomicU32::new(0);
@@ -110,23 +110,10 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 2))
         .expect("static schedule entry must fit");
 
-    // Build partition configs. Stack bases are derived from internal
-    // PartitionCore stacks by Kernel::new(), so we use dummy values here.
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| PartitionConfig {
-        id: i as u8,
-        entry_point: 0, // Not used by Kernel::new
-        stack_base: 0,  // Ignored: internal stack used
-        stack_size: (STACK_WORDS * 4) as u32,
-        mpu_region: MpuRegion::new(0, 0, 0), // Base/size overridden by Kernel::new
-        peripheral_regions: heapless::Vec::new(),
-    });
+    let mut stack0 = AlignedStack1K::ZERO;
+    let mems: [PartitionMemory; NUM_PARTITIONS] = [PartitionMemory::sentinel(&mut stack0.0)];
 
-    // Create the unified kernel with schedule and partitions.
-    #[cfg(feature = "dynamic-mpu")]
-    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-        .expect("kernel creation");
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel creation");
+    let k = Kernel::<TestConfig>::create_from_memory(sched, &mems).expect("kernel creation");
 
     store_kernel(k);
 

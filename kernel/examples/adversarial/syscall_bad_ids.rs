@@ -20,11 +20,12 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::{
     kpanic as _,
-    partition::PartitionConfig,
+    partition::PartitionMemory,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::{SYS_EVT_SET, SYS_QUEUING_SEND},
-    DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, StackStorage as _,
+    SyncMinimal,
 };
 
 // ---------------------------------------------------------------------------
@@ -52,10 +53,6 @@ const TEST_NAME: &str = "syscall_bad_ids";
 kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsMinimal, DebugEnabled>);
 
 const NUM_PARTITIONS: usize = TestConfig::N;
-const STACK_WORDS: usize = TestConfig::STACK_WORDS;
-
-/// Stack size in bytes (must be power of 2 for MPU).
-const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 
 // 0 = pending, 1 = pass, 2 = fail (EVT_SET), 3 = fail (QUEUING_SEND)
 static RESULT: AtomicU32 = AtomicU32::new(0);
@@ -114,15 +111,11 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 2))
         .expect("schedule entry must fit");
 
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
-        core::array::from_fn(|i| PartitionConfig::sentinel(i as u8, STACK_SIZE));
+    let mut stack0 = AlignedStack1K::ZERO;
+    let mems: [PartitionMemory; NUM_PARTITIONS] = [PartitionMemory::sentinel(&mut stack0.0)];
 
     // Create kernel (no ports needed - we're testing invalid IDs).
-    #[cfg(feature = "dynamic-mpu")]
-    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-        .expect("kernel creation");
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel creation");
+    let k = Kernel::<TestConfig>::create_from_memory(sched, &mems).expect("kernel creation");
 
     store_kernel(k);
 
