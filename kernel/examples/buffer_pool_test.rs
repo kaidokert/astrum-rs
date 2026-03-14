@@ -116,7 +116,7 @@ extern "C" fn partition_p1_entry() -> ! {
         P1_ALLOC_SLOT.store(slot, Ordering::Release);
 
         // Copy MAGIC into a stack-local buffer so the pointer lies within
-        // the partition's MPU data region (validated_ptr rejects flash/rodata
+        // the partition's MPU data region (check_user_ptr rejects flash/rodata
         // pointers that fall outside the partition's RAM region).
         let magic_local: [u8; 4] = MAGIC;
 

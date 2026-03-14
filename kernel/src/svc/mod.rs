@@ -294,24 +294,6 @@ pub fn all_accessible_regions<const N: usize>(
     result
 }
 
-/// Validate a user pointer and, on success, execute the body expression.
-///
-/// Returns `SvcError::InvalidPointer` when `validate_user_ptr` fails;
-/// otherwise evaluates `$body` (which must produce `u32`).
-///
-/// Uses `$self.partitions()` (immutable borrow) for validation, then
-/// releases the borrow before executing `$body` so that `$body` may
-/// freely call `$self.partitions_mut()`.
-macro_rules! validated_ptr {
-    ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
-        if !validate_user_ptr($self.partitions(), $self.current_partition, $ptr, $len) {
-            SvcError::InvalidPointer.to_u32()
-        } else {
-            $body
-        }
-    };
-}
-
 #[cfg(test)]
 use crate::events as ev_data;
 use crate::scheduler::ScheduleEvent;
@@ -1003,7 +985,7 @@ where
     ///
     /// Tracks dynamic MPU windows for all partitions. When a buffer is lent
     /// to a partition via the buffer pool, it should be registered here.
-    /// The `validated_ptr_dynamic!` macro queries this strategy to validate
+    /// The `check_user_ptr_dynamic` method queries this strategy to validate
     /// pointers against both static MPU regions and dynamic windows.
     #[cfg(feature = "dynamic-mpu")]
     pub dynamic_strategy: crate::mpu_strategy::DynamicStrategy,
@@ -2271,40 +2253,44 @@ where
                 let (timeout_ticks, buf_len) = unpack_packed_r2(frame.r2);
                 let data_len = buf_len as usize;
                 let timeout = timeout_ticks as u64;
-                validated_ptr!(self, frame.r3, data_len, {
-                    // SAFETY: validated_ptr confirmed [r3, r3+data_len) lies within
-                    // the calling partition's MPU data region.
-                    let d = unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, data_len) };
-                    let pid = self.current_partition;
-                    let tick = self.tick.get();
-                    match self.msg.queuing_mut().send_routed(
-                        frame.r1 as usize,
-                        pid,
-                        d,
-                        timeout,
-                        tick,
-                    ) {
-                        Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
-                            if let Some(wpid) = w {
+                match self.check_user_ptr(frame.r3, data_len) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        // SAFETY: check_user_ptr confirmed [r3, r3+data_len) lies within
+                        // the calling partition's MPU data region.
+                        let d =
+                            unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, data_len) };
+                        let pid = self.current_partition;
+                        let tick = self.tick.get();
+                        match self.msg.queuing_mut().send_routed(
+                            frame.r1 as usize,
+                            pid,
+                            d,
+                            timeout,
+                            tick,
+                        ) {
+                            Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
+                                if let Some(wpid) = w {
+                                    try_transition(
+                                        self.core.partitions_mut(),
+                                        wpid,
+                                        PartitionState::Ready,
+                                    );
+                                }
+                                0
+                            }
+                            Ok(SendQueuingOutcome::SenderBlocked { .. }) => {
                                 try_transition(
                                     self.core.partitions_mut(),
-                                    wpid,
-                                    PartitionState::Ready,
+                                    pid,
+                                    PartitionState::Waiting,
                                 );
+                                self.trigger_deschedule()
                             }
-                            0
+                            Err(_) => SvcError::InvalidResource.to_u32(),
                         }
-                        Ok(SendQueuingOutcome::SenderBlocked { .. }) => {
-                            try_transition(
-                                self.core.partitions_mut(),
-                                pid,
-                                PartitionState::Waiting,
-                            );
-                            self.trigger_deschedule()
-                        }
-                        Err(_) => SvcError::InvalidResource.to_u32(),
                     }
-                })
+                }
             }
             Some(SyscallId::DebugPrint) => {
                 let (ptr, len) = (frame.r1, frame.r2 as usize);
