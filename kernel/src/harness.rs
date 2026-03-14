@@ -474,7 +474,7 @@ macro_rules! define_unified_harness {
         /// Delegates to [`boot::boot_external`] using `__PARTITION_STACKS`.
         fn boot(
             partitions: &[(extern "C" fn() -> !, u32)],
-            peripherals: &mut cortex_m::Peripherals,
+            mut peripherals: cortex_m::Peripherals,
         ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
             // SAFETY: `boot()` is called exactly once from `main()` before
             // any exception handlers run.  No other code accesses

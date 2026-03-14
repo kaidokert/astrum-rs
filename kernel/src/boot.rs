@@ -270,7 +270,7 @@ pub fn is_stack_aapcs_aligned(sp: u32) -> bool {
 #[cfg(not(test))]
 pub fn boot<C: KernelConfig>(
     partitions: &[(extern "C" fn() -> !, u32)],
-    peripherals: &mut cortex_m::Peripherals,
+    mut peripherals: cortex_m::Peripherals,
 ) -> Result<Never, BootError>
 where
     [(); C::N]:,
@@ -465,7 +465,7 @@ where
 #[cfg(not(test))]
 pub fn boot_external<C: KernelConfig, const SW: usize>(
     partitions: &[(extern "C" fn() -> !, u32)],
-    peripherals: &mut cortex_m::Peripherals,
+    mut peripherals: cortex_m::Peripherals,
     stacks: &mut [[u32; SW]],
 ) -> Result<Never, BootError>
 where
