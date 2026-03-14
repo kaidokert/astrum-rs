@@ -73,7 +73,7 @@ macro_rules! _unified_handle_tick {
             }
         }
         $crate::_detect_dropped_ticks!($kernel);
-        let event = $crate::svc_scheduler::advance_schedule_tick(&mut $kernel);
+        let event = $crate::svc::scheduler::advance_schedule_tick(&mut $kernel);
         if let Some(pid) = event {
             $kernel.set_next_partition(pid);
             cortex_m::peripheral::SCB::set_pendsv();
@@ -99,7 +99,7 @@ macro_rules! _unified_handle_tick {
             }
         }
         $crate::_detect_dropped_ticks!($kernel);
-        let event = $crate::svc_scheduler::advance_schedule_tick(&mut $kernel);
+        let event = $crate::svc::scheduler::advance_schedule_tick(&mut $kernel);
         $crate::_unified_handle_tick_event!($kernel, event, $tick, $strategy);
         #[cfg(feature = "dynamic-mpu")]
         $kernel.fallback_revoke_expired_buffers();

@@ -204,7 +204,7 @@ where
 
     let prev_next = kernel.next_partition();
     let prev_active = kernel.active_partition;
-    let event = crate::svc_scheduler::advance_schedule_tick(kernel);
+    let event = crate::svc::scheduler::advance_schedule_tick(kernel);
     if let ScheduleEvent::PartitionSwitch(pid) = event {
         if kernel.partition_sp().get(pid as usize) != Some(&0xDEAD0001) {
             #[cfg(not(test))]
@@ -266,7 +266,7 @@ where
     use crate::partition::PartitionState;
     use crate::scheduler::ScheduleEvent;
 
-    let event = crate::svc_scheduler::advance_schedule_tick(kernel);
+    let event = crate::svc::scheduler::advance_schedule_tick(kernel);
     let current_tick = kernel.tick().get();
     match event {
         ScheduleEvent::PartitionSwitch(pid) => {

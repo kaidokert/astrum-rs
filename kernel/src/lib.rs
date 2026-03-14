@@ -80,7 +80,6 @@ pub mod semaphore;
 pub mod split_isr;
 pub mod state;
 pub mod svc;
-pub use svc::scheduler as svc_scheduler;
 pub mod sync_pools;
 pub mod syscall;
 pub mod systick;

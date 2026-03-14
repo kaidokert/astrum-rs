@@ -1249,14 +1249,14 @@ mod tests {
     fn tick_path_alignment_check_no_panic() {
         let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
         let align = core::mem::align_of::<Kernel<HarnessConfig>>();
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
         for tick in 0..20 {
             // Mirror _unified_handle_tick! macro body: check alignment
             // before advancing the schedule on every tick.
             let addr = h.kernel() as *const _ as usize;
             crate::invariants::assert_storage_alignment(addr, align);
 
-            let event = crate::svc_scheduler::advance_schedule_tick(h.kernel_mut());
+            let event = crate::svc::scheduler::advance_schedule_tick(h.kernel_mut());
             if let ScheduleEvent::PartitionSwitch(pid) = event {
                 assert!((pid as usize) < 2, "tick {tick}: invalid pid {pid}");
             }
@@ -1270,7 +1270,7 @@ mod tests {
     #[test]
     fn advance_schedule_skips_waiting() {
         let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         // Transition P1 to Waiting (simulating a blocking syscall).
         h.switch_to(1);
@@ -1283,7 +1283,7 @@ mod tests {
 
         // Advance 10 ticks to cross into P1's slot (each slot is 10 ticks).
         for i in 0..10 {
-            let event = crate::svc_scheduler::advance_schedule_tick(h.kernel_mut());
+            let event = crate::svc::scheduler::advance_schedule_tick(h.kernel_mut());
             // The scheduler must not emit a PartitionSwitch to the Waiting P1.
             assert_ne!(
                 event,
@@ -1299,7 +1299,7 @@ mod tests {
     #[test]
     fn yield_current_slot_skips_waiting() {
         let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         // Transition P1 to Waiting.
         h.switch_to(1);
@@ -1771,7 +1771,7 @@ mod tests {
     #[test]
     fn process_pending_yield_advances_schedule_after_sys_yield() {
         let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         // P0 is Running, P1 is Ready.
         assert_eq!(
@@ -1810,7 +1810,7 @@ mod tests {
     #[test]
     fn process_pending_yield_noop_when_not_requested() {
         let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         assert!(!h.kernel().yield_requested);
         assert_eq!(
@@ -1839,7 +1839,7 @@ mod tests {
     #[test]
     fn blocking_ipc_deschedule_round_trip() {
         let mut h = KernelTestHarness::with_semaphores(&[0]).expect("harness setup");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         let st = |h: &KernelTestHarness, i| h.kernel().partitions().get(i).unwrap().state();
 
@@ -1921,7 +1921,7 @@ mod tests {
             .semaphores_mut()
             .add(Semaphore::new(0, 1))
             .expect("add semaphore");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
         let check = |h: &KernelTestHarness| {
@@ -1975,7 +1975,7 @@ mod tests {
         // P1 is Waiting → skipped. 200 ticks covers 4+ major frames.
         let mut transitions = 0u32;
         for _ in 0..200 {
-            let event = crate::svc_scheduler::advance_schedule_tick(h.kernel_mut());
+            let event = crate::svc::scheduler::advance_schedule_tick(h.kernel_mut());
             check(&h);
             if let ScheduleEvent::PartitionSwitch(pid) = event {
                 transitions += 1;
@@ -2006,7 +2006,7 @@ mod tests {
             .semaphores_mut()
             .add(Semaphore::new(0, 1))
             .expect("add semaphore");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
         let check = |h: &KernelTestHarness| {
@@ -2071,7 +2071,7 @@ mod tests {
 
         let mut transitions = 0u32;
         for _ in 0..200 {
-            let event = crate::svc_scheduler::advance_schedule_tick(h.kernel_mut());
+            let event = crate::svc::scheduler::advance_schedule_tick(h.kernel_mut());
             check(&h);
             if let ScheduleEvent::PartitionSwitch(pid) = event {
                 transitions += 1;
@@ -2105,7 +2105,7 @@ mod tests {
             .semaphores_mut()
             .add(Semaphore::new(0, 1))
             .expect("add semaphore");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
         let check = |h: &KernelTestHarness| {
@@ -2202,7 +2202,7 @@ mod tests {
         // 340 ticks = 8+ major frames with wrap-around.
         let mut transitions = 0u32;
         for _ in 0..340 {
-            let event = crate::svc_scheduler::advance_schedule_tick(h.kernel_mut());
+            let event = crate::svc::scheduler::advance_schedule_tick(h.kernel_mut());
             check(&h);
             if let ScheduleEvent::PartitionSwitch(pid) = event {
                 transitions += 1;
@@ -2236,7 +2236,7 @@ mod tests {
             .semaphores_mut()
             .add(Semaphore::new(0, 1))
             .expect("add semaphore");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
         let check = |h: &KernelTestHarness| {
@@ -2302,7 +2302,7 @@ mod tests {
         let mut transitions = 0u32;
         let mut seen = [false; 4];
         for _ in 0..340 {
-            let event = crate::svc_scheduler::advance_schedule_tick(h.kernel_mut());
+            let event = crate::svc::scheduler::advance_schedule_tick(h.kernel_mut());
             check(&h);
             if let ScheduleEvent::PartitionSwitch(pid) = event {
                 transitions += 1;
@@ -2568,10 +2568,10 @@ mod tests {
 
         // Start the schedule and drive 60 ticks — 3 full major frames for
         // 2 partitions with 10-tick slots each (20 ticks per major frame).
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
         let total_ticks: u32 = 60;
         for tick in 1..=total_ticks {
-            crate::svc_scheduler::advance_schedule_tick(h.kernel_mut());
+            crate::svc::scheduler::advance_schedule_tick(h.kernel_mut());
 
             // After every tick, verify all partitions' MPU regions are intact.
             for i in 0..n {
@@ -2835,7 +2835,7 @@ mod tests {
             .semaphores_mut()
             .add(Semaphore::new(0, 1))
             .expect("add semaphore");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
         let check = |h: &KernelTestHarness| {
@@ -2884,7 +2884,7 @@ mod tests {
         // Phase 4: 40 ticks (1 major frame) with P1 still Waiting.
         let mut transitions = 0u32;
         for _ in 0..40 {
-            let event = crate::svc_scheduler::advance_schedule_tick(h.kernel_mut());
+            let event = crate::svc::scheduler::advance_schedule_tick(h.kernel_mut());
             check(&h);
             if let ScheduleEvent::PartitionSwitch(pid) = event {
                 transitions += 1;
@@ -2910,7 +2910,7 @@ mod tests {
         // Phase 6: 300 ticks (7+ major frames) — all 4 now schedulable.
         let mut seen = [false; 4];
         for _ in 0..300 {
-            let event = crate::svc_scheduler::advance_schedule_tick(h.kernel_mut());
+            let event = crate::svc::scheduler::advance_schedule_tick(h.kernel_mut());
             check(&h);
             if let ScheduleEvent::PartitionSwitch(pid) = event {
                 transitions += 1;
@@ -2954,7 +2954,7 @@ mod tests {
             .semaphores_mut()
             .add(Semaphore::new(0, 1))
             .expect("add semaphore");
-        crate::svc_scheduler::start_schedule(h.kernel_mut());
+        crate::svc::scheduler::start_schedule(h.kernel_mut());
 
         let st = |h: &KernelTestHarness, i: usize| h.kernel().partitions().get(i).unwrap().state();
         let check = |h: &KernelTestHarness| {
@@ -3014,7 +3014,7 @@ mod tests {
         let mut transitions = 0u32;
         let mut seen = [false; 4];
         for _ in 0..340 {
-            let event = crate::svc_scheduler::advance_schedule_tick(h.kernel_mut());
+            let event = crate::svc::scheduler::advance_schedule_tick(h.kernel_mut());
             check(&h);
             if let ScheduleEvent::PartitionSwitch(pid) = event {
                 transitions += 1;

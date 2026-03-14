@@ -420,7 +420,7 @@ where
     }
 
     let first = crate::state::with_kernel_mut::<C, _, _>(|k| {
-        crate::svc_scheduler::start_schedule(k).inspect(|&pid| k.set_next_partition(pid))
+        crate::svc::scheduler::start_schedule(k).inspect(|&pid| k.set_next_partition(pid))
     })
     .map_err(|_| BootError::KernelNotInitialized)?
     .ok_or(BootError::NoReadyPartition)?;
@@ -577,7 +577,7 @@ where
     }
 
     crate::state::with_kernel_mut::<C, _, _>(|k| {
-        crate::svc_scheduler::start_schedule(k).inspect(|&pid| k.set_next_partition(pid))
+        crate::svc::scheduler::start_schedule(k).inspect(|&pid| k.set_next_partition(pid))
     })
     .map_err(|_| BootError::KernelNotInitialized)?
     .ok_or(BootError::NoReadyPartition)?;
