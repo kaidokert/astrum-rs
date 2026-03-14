@@ -1,6 +1,6 @@
 //! Kernel boot initialization.
 
-#[cfg(not(test))]
+#[allow(unused_imports)]
 use crate::{
     blackboard::BlackboardPool,
     config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps},
@@ -459,6 +459,52 @@ where
     loop {
         cortex_m::asm::wfi();
     }
+}
+
+/// Build a [`Kernel`] from caller-provided `stacks` via
+/// [`Kernel::new_external()`](crate::svc::Kernel::new_external)
+/// with sentinel entry points and MPU regions.
+pub fn create_kernel_from_stacks<C: KernelConfig, const SW: usize>(
+    sched: ScheduleTable<{ C::SCHED }>,
+    stacks: &mut [[u32; SW]],
+    n: usize,
+) -> Result<crate::svc::Kernel<C>, BootError>
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+    C::Core:
+        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
+    C::Sync: SyncOps<
+        SemPool = SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: MsgOps<
+        MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: PortsOps<
+        SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    use crate::partition::{ExternalPartitionMemory, MpuRegion};
+    let sentinel_mpu = MpuRegion::new(0, 0, 0);
+    let mut memories: heapless::Vec<ExternalPartitionMemory<'_>, { C::N }> = heapless::Vec::new();
+    for (i, stk) in stacks.iter_mut().enumerate().take(n) {
+        let mem = ExternalPartitionMemory::new(&mut stk[..], 0, sentinel_mpu, i as u8)
+            .map_err(|_| BootError::StackInitFailed { partition_index: i })?;
+        memories
+            .push(mem)
+            .map_err(|_| BootError::StackInitFailed { partition_index: i })?;
+    }
+    crate::svc::Kernel::<C>::new_external(sched, &memories)
+        .map_err(|_| BootError::KernelNotInitialized)
 }
 
 /// Like [`boot`] but uses caller-provided `stacks` instead of internal storage.

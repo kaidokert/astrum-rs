@@ -942,12 +942,15 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         if base.checked_add(size_bytes).is_none() {
             return Err(ConfigError::StackOverflow { partition_id });
         }
-        validate_mpu_region(mpu_region.base(), mpu_region.size()).map_err(|detail| {
-            ConfigError::MpuRegionInvalid {
-                partition_id,
-                detail,
-            }
-        })?;
+        // Size==0 sentinel: boot_external() patches via fix_mpu_data_region_if_sentinel().
+        if mpu_region.size() > 0 {
+            validate_mpu_region(mpu_region.base(), mpu_region.size()).map_err(|detail| {
+                ConfigError::MpuRegionInvalid {
+                    partition_id,
+                    detail,
+                }
+            })?;
+        }
         Ok(Self {
             stack,
             entry_point,
@@ -3002,10 +3005,17 @@ mod tests {
             ExternalPartitionMemory::new(sub, 0, valid_mpu, 2).unwrap_err(),
             ConfigError::StackBaseNotAligned { partition_id: 2 }
         );
-        // Invalid MPU region (size 0)
+        // Invalid MPU region (non-power-of-two size)
         let mut buf2 = Align256([0u32; 64]);
-        let err = ExternalPartitionMemory::new(&mut buf2.0, 0, MpuRegion::new(0, 0, 0), 1);
+        let err = ExternalPartitionMemory::new(&mut buf2.0, 0, MpuRegion::new(0, 33, 0), 1);
         assert!(matches!(err, Err(ConfigError::MpuRegionInvalid { .. })));
+    }
+
+    #[test]
+    fn ext_pmem_sentinel_mpu_accepted() {
+        let mut buf = Align256([0u32; 64]);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0, MpuRegion::new(0, 0, 0), 1).unwrap();
+        assert_eq!(epm.mpu_region().size(), 0);
     }
 
     #[test]

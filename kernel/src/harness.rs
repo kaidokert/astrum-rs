@@ -468,13 +468,28 @@ macro_rules! define_unified_harness {
              <$Config as $crate::config::KernelConfig>::N],
         );
 
+        /// Create a sentinel kernel via `new_external()` from
+        /// `__PARTITION_STACKS` and store it.
+        #[allow(dead_code)]
+        fn init_kernel(
+            sched: $crate::scheduler::ScheduleTable<
+                { <$Config as $crate::config::KernelConfig>::SCHED }>,
+            n: usize,
+        ) -> Result<(), $crate::harness::BootError> {
+            let stacks = unsafe { &mut __PARTITION_STACKS.0 };
+            let k = $crate::boot::create_kernel_from_stacks::<$Config,
+                { <$Config as $crate::config::KernelConfig>::STACK_WORDS }>(
+                sched, stacks, n,
+            )?;
+            store_kernel(k);
+            Ok(())
+        }
+
         /// Initialize stacks, priorities, start schedule, enable SysTick, enter idle loop.
-        /// Returns `Err(BootError)` on stack init or schedule failure.
-        ///
         /// Delegates to [`boot::boot_external`] using `__PARTITION_STACKS`.
         fn boot(
             partitions: &[(extern "C" fn() -> !, u32)],
-            mut peripherals: cortex_m::Peripherals,
+            peripherals: cortex_m::Peripherals,
         ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
             // SAFETY: `boot()` is called exactly once from `main()` before
             // any exception handlers run.  No other code accesses
