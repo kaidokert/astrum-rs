@@ -907,6 +907,99 @@ impl PartitionMemory {
     }
 }
 
+/// Partition memory descriptor that borrows caller-provided stack memory.
+#[derive(Debug)]
+pub struct ExternalPartitionMemory<'mem> {
+    stack: &'mem mut [u32],
+    entry_point: u32,
+    mpu_region: MpuRegion,
+    peripheral_regions: Vec<MpuRegion, 2>,
+}
+
+impl<'mem> ExternalPartitionMemory<'mem> {
+    /// Create from a mutable `u32` slice, validating stack size/alignment
+    /// and the MPU region.
+    pub fn new(
+        stack: &'mem mut [u32],
+        entry_point: u32,
+        mpu_region: MpuRegion,
+        partition_id: u8,
+    ) -> Result<Self, ConfigError> {
+        let size_bytes: u32 = stack
+            .len()
+            .checked_mul(core::mem::size_of::<u32>())
+            .and_then(|b| u32::try_from(b).ok())
+            .ok_or(ConfigError::StackSizeInvalid { partition_id })?;
+        if size_bytes < 32 || !size_bytes.is_power_of_two() {
+            return Err(ConfigError::StackSizeInvalid { partition_id });
+        }
+        let base = stack.as_ptr() as u32;
+        // Safety: size_bytes is validated as non-zero power-of-two above,
+        // so (size_bytes - 1) is a valid alignment mask.
+        if base & (size_bytes - 1) != 0 {
+            return Err(ConfigError::StackBaseNotAligned { partition_id });
+        }
+        if base.checked_add(size_bytes).is_none() {
+            return Err(ConfigError::StackOverflow { partition_id });
+        }
+        validate_mpu_region(mpu_region.base(), mpu_region.size()).map_err(|detail| {
+            ConfigError::MpuRegionInvalid {
+                partition_id,
+                detail,
+            }
+        })?;
+        Ok(Self {
+            stack,
+            entry_point,
+            mpu_region,
+            peripheral_regions: Vec::new(),
+        })
+    }
+
+    /// Convenience constructor from a [`StackStorage`] implementer.
+    pub fn from_aligned_stack<S: StackStorage>(
+        storage: &'mem mut S,
+        entry_point: u32,
+        mpu_region: MpuRegion,
+        partition_id: u8,
+    ) -> Result<Self, ConfigError> {
+        Self::new(
+            storage.as_u32_slice_mut(),
+            entry_point,
+            mpu_region,
+            partition_id,
+        )
+    }
+
+    /// Builder: attach peripheral MPU regions.
+    pub fn with_peripheral_regions(mut self, regions: &[MpuRegion]) -> Self {
+        for r in regions {
+            let _ = self.peripheral_regions.push(*r);
+        }
+        self
+    }
+
+    pub fn entry_point(&self) -> u32 {
+        self.entry_point
+    }
+    pub fn mpu_region(&self) -> &MpuRegion {
+        &self.mpu_region
+    }
+    pub fn peripheral_regions(&self) -> &Vec<MpuRegion, 2> {
+        &self.peripheral_regions
+    }
+    pub fn stack_base(&self) -> u32 {
+        self.stack.as_ptr() as u32
+    }
+    pub fn stack_size_bytes(&self) -> u32 {
+        self.stack
+            .len()
+            .checked_mul(core::mem::size_of::<u32>())
+            .and_then(|b| u32::try_from(b).ok())
+            .expect("stack_size_bytes: validated in new()")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2864,5 +2957,77 @@ mod tests {
             (pm.peripheral_regions[0], pm.peripheral_regions[1]),
             (r1, r2)
         );
+    }
+
+    // ------------------------------------------------------------------
+    // ExternalPartitionMemory
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn ext_pmem_new_valid() {
+        let mut buf = Align256([0u32; 64]);
+        let expected_base = buf.0.as_ptr() as u32;
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1000, mpu, 3).unwrap();
+        assert_eq!(epm.entry_point(), 0x0800_1000);
+        assert_eq!(epm.stack_size_bytes(), 256);
+        assert_eq!(epm.stack_base(), expected_base);
+        assert_eq!(*epm.mpu_region(), mpu);
+        assert!(epm.peripheral_regions().is_empty());
+    }
+
+    #[test]
+    fn ext_pmem_validation_rejections() {
+        let valid_mpu = MpuRegion::new(0, 32, 0);
+        // Size too small: 4 words = 16 bytes
+        let mut small = [0u32; 4];
+        assert_eq!(
+            ExternalPartitionMemory::new(&mut small, 0, valid_mpu, 5).unwrap_err(),
+            ConfigError::StackSizeInvalid { partition_id: 5 }
+        );
+        // Non-power-of-two: 48 words = 192 bytes
+        #[repr(C)]
+        struct B([u32; 48]);
+        let mut b = B([0u32; 48]);
+        assert_eq!(
+            ExternalPartitionMemory::new(&mut b.0, 0, valid_mpu, 7).unwrap_err(),
+            ConfigError::StackSizeInvalid { partition_id: 7 }
+        );
+        // Misaligned base
+        #[repr(C, align(512))]
+        struct A([u32; 128]);
+        let mut buf = A([0u32; 128]);
+        let sub = &mut buf.0[16..80]; // 64 words = 256 bytes at non-256-aligned offset
+        assert_eq!(
+            ExternalPartitionMemory::new(sub, 0, valid_mpu, 2).unwrap_err(),
+            ConfigError::StackBaseNotAligned { partition_id: 2 }
+        );
+        // Invalid MPU region (size 0)
+        let mut buf2 = Align256([0u32; 64]);
+        let err = ExternalPartitionMemory::new(&mut buf2.0, 0, MpuRegion::new(0, 0, 0), 1);
+        assert!(matches!(err, Err(ConfigError::MpuRegionInvalid { .. })));
+    }
+
+    #[test]
+    fn ext_pmem_from_aligned_stack() {
+        use crate::partition_core::AlignedStack256B;
+        let mut storage = AlignedStack256B::default();
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let epm =
+            ExternalPartitionMemory::from_aligned_stack(&mut storage, 0x0800_0000, mpu, 0).unwrap();
+        assert_eq!(epm.stack_size_bytes(), 256);
+        assert_eq!(epm.entry_point(), 0x0800_0000);
+    }
+
+    #[test]
+    fn ext_pmem_with_peripheral_regions() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let periph = MpuRegion::new(0x4000_0000, 256, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1000, mpu, 0)
+            .unwrap()
+            .with_peripheral_regions(&[periph]);
+        assert_eq!(epm.peripheral_regions().len(), 1);
+        assert_eq!(epm.peripheral_regions()[0], periph);
     }
 }
