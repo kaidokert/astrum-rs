@@ -1427,11 +1427,6 @@ where
 
     // -------------------------------------------------------------------------
     // User-pointer validation helpers
-    // (method counterparts of `validated_ptr!` / `validated_ptr_dynamic!`
-    //  macros defined above — kept here because methods must live inside the
-    //  impl block; see macros near line 298 for the macro equivalents.)
-    // TODO: move closer to validated_ptr! macros if the impl block is ever
-    // split or the macros are converted to inherent methods.
     // -------------------------------------------------------------------------
 
     /// Validate that `ptr..ptr+len` lies in memory accessible to the current
@@ -2228,43 +2223,48 @@ where
             Some(SyscallId::QueuingRecvTimed) => {
                 let (timeout_ticks, buf_len) = unpack_packed_r2(arg2);
                 let rlen = core::cmp::min(buf_len as usize, C::QM);
-                validated_ptr!(self, arg3, rlen, {
-                    // SAFETY: validated_ptr confirmed [r3, r3+rlen) lies within
-                    // the calling partition's MPU data region.
-                    let b = unsafe { core::slice::from_raw_parts_mut(arg3 as *mut u8, rlen) };
-                    let pid = self.current_partition;
-                    let tick = self.tick.get();
-                    match self.msg.queuing_mut().receive_queuing_message(
-                        arg1 as usize,
-                        pid,
-                        b,
-                        timeout_ticks as u64,
-                        tick,
-                    ) {
-                        Ok(RecvQueuingOutcome::Received {
-                            msg_len,
-                            wake_sender: w,
-                        }) => {
-                            if let Some(wpid) = w {
+                match self.check_user_ptr(arg3, rlen) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        // SAFETY: (1) check_user_ptr confirmed [r3, r3+rlen) lies
+                        // within the calling partition's MPU data region.
+                        // (2) len clamped to C::QM. (3) The partition owns this
+                        // memory as enforced by MPU isolation.
+                        let b = unsafe { core::slice::from_raw_parts_mut(arg3 as *mut u8, rlen) };
+                        let pid = self.current_partition;
+                        let tick = self.tick.get();
+                        match self.msg.queuing_mut().receive_queuing_message(
+                            arg1 as usize,
+                            pid,
+                            b,
+                            timeout_ticks as u64,
+                            tick,
+                        ) {
+                            Ok(RecvQueuingOutcome::Received {
+                                msg_len,
+                                wake_sender: w,
+                            }) => {
+                                if let Some(wpid) = w {
+                                    try_transition(
+                                        self.core.partitions_mut(),
+                                        wpid,
+                                        PartitionState::Ready,
+                                    );
+                                }
+                                msg_len as u32
+                            }
+                            Ok(RecvQueuingOutcome::ReceiverBlocked { .. }) => {
                                 try_transition(
                                     self.core.partitions_mut(),
-                                    wpid,
-                                    PartitionState::Ready,
+                                    pid,
+                                    PartitionState::Waiting,
                                 );
+                                self.trigger_deschedule()
                             }
-                            msg_len as u32
+                            Err(_) => SvcError::InvalidResource.to_u32(),
                         }
-                        Ok(RecvQueuingOutcome::ReceiverBlocked { .. }) => {
-                            try_transition(
-                                self.core.partitions_mut(),
-                                pid,
-                                PartitionState::Waiting,
-                            );
-                            self.trigger_deschedule()
-                        }
-                        Err(_) => SvcError::InvalidResource.to_u32(),
                     }
-                })
+                }
             }
             #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingSendTimed) => {
