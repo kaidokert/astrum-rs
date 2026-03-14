@@ -64,6 +64,8 @@ pub enum BootError {
     BootMpuInitFailed { reason: &'static str },
     /// Kernel state not initialized when boot() was called.
     KernelNotInitialized,
+    /// Too many partitions for the kernel configuration.
+    TooManyPartitions { given: usize, max: usize },
 }
 
 impl core::fmt::Display for BootError {
@@ -140,6 +142,9 @@ impl core::fmt::Display for BootError {
             }
             Self::KernelNotInitialized => {
                 write!(f, "kernel state not initialized")
+            }
+            Self::TooManyPartitions { given, max } => {
+                write!(f, "too many partitions: {given} given, max {max}")
             }
         }
     }
@@ -356,7 +361,7 @@ where
                 crate::mpu::precompute_mpu_cache(pcb)
                     .map_err(|_| BootError::MpuCachePopulationFailed { partition_index: i })?;
                 debug_assert!(
-                    pcb.cached_base_regions()[0] != (0, 0),
+                    pcb.cached_base_regions().first() != Some(&(0, 0)),
                     "partition {} cached_base_regions[0] is all-zeros after precompute",
                     i
                 );
@@ -446,6 +451,156 @@ where
         } else {
             SystClkSource::External
         });
+    peripherals.SYST.set_reload(C::SYSTICK_CYCLES - 1);
+    peripherals.SYST.clear_current();
+    peripherals.SYST.enable_counter();
+    peripherals.SYST.enable_interrupt();
+    SCB::set_pendsv();
+    loop {
+        cortex_m::asm::wfi();
+    }
+}
+
+/// Like [`boot`] but uses caller-provided `stacks` instead of internal storage.
+#[cfg(not(test))]
+pub fn boot_external<C: KernelConfig, const SW: usize>(
+    partitions: &[(extern "C" fn() -> !, u32)],
+    peripherals: &mut cortex_m::Peripherals,
+    stacks: &mut [[u32; SW]],
+) -> Result<Never, BootError>
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+    C::Core:
+        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
+    C::Sync: SyncOps<
+        SemPool = SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: MsgOps<
+        MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: PortsOps<
+        SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    use core::ptr::addr_of;
+    use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
+
+    #[cfg(klog_backend = "rtt")]
+    rtt_target::rtt_init_print!();
+
+    if partitions.len() > C::N {
+        return Err(BootError::TooManyPartitions {
+            given: partitions.len(),
+            max: C::N,
+        });
+    }
+
+    let storage_addr = addr_of!(crate::state::UNIFIED_KERNEL_STORAGE) as u32;
+    check_storage_alignment(storage_addr, crate::state::KERNEL_ALIGNMENT as u32)?;
+
+    crate::state::with_kernel_mut::<C, _, _>(|k| {
+        for (i, &(ep, hint)) in partitions.iter().enumerate() {
+            let stk = stacks
+                .get_mut(i)
+                .ok_or(BootError::StackInitFailed { partition_index: i })?;
+            let base = stk.as_ptr() as u32;
+            let size = u32::try_from(SW)
+                .ok()
+                .and_then(|s| s.checked_mul(4))
+                .ok_or(BootError::StackSizeOverflow { partition_index: i })?;
+            check_stack_mpu_size(i, size)?;
+            check_stack_mpu_alignment(i, base, size)?;
+            let ix =
+                crate::context::init_stack_frame(&mut stk[..], ep as *const () as u32, Some(hint))
+                    .ok_or(BootError::StackInitFailed { partition_index: i })?;
+            let sp = u32::try_from(ix)
+                .ok()
+                .and_then(|v| v.checked_mul(4))
+                .and_then(|offset| base.checked_add(offset))
+                .ok_or(BootError::StackSizeOverflow { partition_index: i })?;
+            k.set_sp(i, sp);
+            // Set PCB stack fields directly and apply sentinel MPU fixup.
+            let pcb = k
+                .partitions_mut()
+                .get_mut(i)
+                .ok_or(BootError::StackRegionError { partition_index: i })?;
+            pcb.set_stack_fields(base, size);
+            fix_mpu_data_region_if_sentinel(pcb, base);
+            k.sync_stack_limit(i);
+        }
+        check_sentinel_mpu_enforce(k.partitions().as_slice(), C::MPU_ENFORCE)?;
+        for i in 0..partitions.len() {
+            if let Some(pcb) = k.partitions_mut().get_mut(i) {
+                crate::mpu::precompute_mpu_cache(pcb)
+                    .map_err(|_| BootError::MpuCachePopulationFailed { partition_index: i })?;
+                debug_assert!(
+                    pcb.cached_base_regions().first() != Some(&(0, 0)),
+                    "partition {} cached_base_regions[0] is all-zeros after precompute",
+                    i
+                );
+            }
+        }
+        // No assert_pcb_addresses_in_storage — stacks are external.
+        Ok::<(), BootError>(())
+    })
+    .map_err(|_| BootError::KernelNotInitialized)??;
+
+    const { crate::config::assert_priority_order::<C>() }
+    const { crate::config::assert_systick_reload::<C>() }
+
+    // SAFETY: Called once before scheduler starts; exclusive SCB access.
+    unsafe {
+        peripherals
+            .SCB
+            .aircr
+            .write(AIRCR_VECTKEY | AIRCR_PRIGROUP_0);
+        peripherals
+            .SCB
+            .set_priority(SystemHandler::SVCall, C::SVCALL_PRIORITY);
+        peripherals
+            .SCB
+            .set_priority(SystemHandler::PendSV, C::PENDSV_PRIORITY);
+        peripherals
+            .SCB
+            .set_priority(SystemHandler::SysTick, C::SYSTICK_PRIORITY);
+    }
+
+    crate::state::with_kernel_mut::<C, _, _>(|k| {
+        crate::svc_scheduler::start_schedule(k).inspect(|&pid| k.set_next_partition(pid))
+    })
+    .map_err(|_| BootError::KernelNotInitialized)?
+    .ok_or(BootError::NoReadyPartition)?;
+
+    {
+        extern "Rust" {
+            fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) -> Result<(), &'static str>;
+        }
+        // SAFETY: __boot_mpu_init is generated by define_unified_harness!
+        // and called exactly once before the first context switch.
+        unsafe { __boot_mpu_init(&peripherals.MPU) }
+            .map_err(|reason| BootError::BootMpuInitFailed { reason })?;
+    }
+
+    peripherals
+        .SYST
+        .set_clock_source(if C::USE_PROCESSOR_CLOCK {
+            SystClkSource::Core
+        } else {
+            SystClkSource::External
+        });
+    // TODO(panic-free): SYSTICK_CYCLES - 1 can underflow if SYSTICK_CYCLES == 0;
+    // assert_systick_reload (const-evaluated above) prevents this, but a
+    // saturating_sub would be strictly panic-free.
     peripherals.SYST.set_reload(C::SYSTICK_CYCLES - 1);
     peripherals.SYST.clear_current();
     peripherals.SYST.enable_counter();
