@@ -20,7 +20,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -33,7 +32,6 @@ kernel::bind_interrupts!(StressConfig, 70,
 );
 
 const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = StressConfig::STACK_WORDS;
 const PASS_THRESHOLD: u32 = 5;
 const TIMEOUT_TICK: u32 = 30;
 
@@ -100,10 +98,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ StressConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_repend_stress: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
     let k =
-        Kernel::<StressConfig>::create(sched, &cfgs).expect("irq_repend_stress: Kernel::create");
+        Kernel::<StressConfig>::create_sentinels(sched).expect("irq_repend_stress: Kernel::create");
 
     store_kernel(k);
 

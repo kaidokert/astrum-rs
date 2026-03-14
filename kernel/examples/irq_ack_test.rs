@@ -20,7 +20,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -33,7 +32,6 @@ kernel::bind_interrupts!(AckTestConfig, 70,
 );
 
 const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = AckTestConfig::STACK_WORDS;
 
 /// Incremented by the partition after each successful wait+ack cycle.
 static ACK_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -92,9 +90,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ AckTestConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_ack_test: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k = Kernel::<AckTestConfig>::create(sched, &cfgs).expect("irq_ack_test: Kernel::create");
+    let k = Kernel::<AckTestConfig>::create_sentinels(sched).expect("irq_ack_test: Kernel::create");
 
     store_kernel(k);
 
