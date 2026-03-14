@@ -14,7 +14,6 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
 use kernel::svc::Kernel;
@@ -24,8 +23,6 @@ kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
-const NUM_PARTITIONS: usize = TestConfig::N;
-const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 const TIMEOUT_TICKS: u32 = 50;
 
 const NOT_YET: u32 = 0xDEAD_C0DE;
@@ -101,13 +98,11 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_sem_test: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let mut k = Kernel::<TestConfig>::create(sched, &cfgs).expect("plib_sem_test: kernel");
+    let mut k = Kernel::<TestConfig>::create_sentinels(sched).expect("plib_sem_test: kernel");
     k.semaphores_mut()
         .add(Semaphore::new(0, 1))
         .expect("plib_sem_test: add semaphore");
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("plib_sem_test: boot") {}
+    match boot(&[(p0_main, 0), (p1_main, 0)], &mut p).expect("plib_sem_test: boot") {}
 }

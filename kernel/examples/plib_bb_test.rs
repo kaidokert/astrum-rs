@@ -13,7 +13,6 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsSmall, SyncMinimal};
@@ -22,8 +21,6 @@ kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsSmall, DebugEnabled>
 );
 
-const NUM_PARTITIONS: usize = TestConfig::N;
-const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 const TIMEOUT_TICKS: u32 = 50;
 
 const PAYLOAD: [u8; 4] = [0xBB, 0x0A, 0xBD, 0x01];
@@ -115,13 +112,11 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_bb_test: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let mut k = Kernel::<TestConfig>::create(sched, &cfgs).expect("plib_bb_test: kernel");
+    let mut k = Kernel::<TestConfig>::create_sentinels(sched).expect("plib_bb_test: kernel");
     k.blackboards_mut()
         .create()
         .expect("plib_bb_test: create blackboard");
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("plib_bb_test: boot") {}
+    match boot(&[(p0_main, 0), (p1_main, 0)], &mut p).expect("plib_bb_test: boot") {}
 }
