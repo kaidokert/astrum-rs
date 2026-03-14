@@ -83,12 +83,9 @@ pub mod svc;
 #[cfg(feature = "dynamic-mpu")]
 pub mod svc_buf;
 pub mod svc_debug;
-#[cfg(feature = "ipc-message")]
-pub mod svc_msg;
 #[cfg(feature = "ipc-queuing")]
 pub mod svc_queuing;
 pub mod svc_scheduler;
-pub mod svc_sync;
 pub mod sync_pools;
 pub mod syscall;
 pub mod systick;

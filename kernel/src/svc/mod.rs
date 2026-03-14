@@ -4,11 +4,14 @@ pub mod blackboard;
 pub mod buffer;
 pub mod events;
 pub mod irq;
+#[cfg(feature = "ipc-message")]
+pub mod msg;
 #[cfg(feature = "ipc-queuing")]
 pub mod queuing;
 #[cfg(feature = "ipc-sampling")]
 pub mod sampling;
 pub mod sleep;
+pub mod sync;
 
 use core::cell::RefCell;
 
@@ -1719,12 +1722,8 @@ where
             }
             Some(SyscallId::SemWait) => {
                 let pt = self.core.partitions_mut();
-                let (r, block) = crate::svc_sync::handle_sem_wait(
-                    self.sync.semaphores_mut(),
-                    pt,
-                    arg1 as usize,
-                    caller,
-                );
+                let (r, block) =
+                    sync::handle_sem_wait(self.sync.semaphores_mut(), pt, arg1 as usize, caller);
                 if block {
                     self.trigger_deschedule();
                 }
@@ -1732,20 +1731,12 @@ where
             }
             Some(SyscallId::SemSignal) => {
                 let pt = self.core.partitions_mut();
-                crate::svc_sync::handle_sem_signal(
-                    self.sync.semaphores_mut(),
-                    pt,
-                    frame.r1 as usize,
-                )
+                sync::handle_sem_signal(self.sync.semaphores_mut(), pt, frame.r1 as usize)
             }
             Some(SyscallId::MutexLock) => {
                 let pt = self.core.partitions_mut();
-                let (r, block) = crate::svc_sync::handle_mtx_lock(
-                    self.sync.mutexes_mut(),
-                    pt,
-                    arg1 as usize,
-                    caller,
-                );
+                let (r, block) =
+                    sync::handle_mtx_lock(self.sync.mutexes_mut(), pt, arg1 as usize, caller);
                 if block {
                     self.trigger_deschedule();
                 }
@@ -1753,19 +1744,14 @@ where
             }
             Some(SyscallId::MutexUnlock) => {
                 let pt = self.core.partitions_mut();
-                crate::svc_sync::handle_mtx_unlock(
-                    self.sync.mutexes_mut(),
-                    pt,
-                    frame.r1 as usize,
-                    caller,
-                )
+                sync::handle_mtx_unlock(self.sync.mutexes_mut(), pt, frame.r1 as usize, caller)
             }
             #[cfg(feature = "ipc-message")]
             Some(SyscallId::MsgSend) => validated_ptr!(self, arg3, C::QM, {
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
                 let (r, blk) = unsafe {
-                    crate::svc_msg::handle_msg_send(
+                    msg::handle_msg_send(
                         self.msg.messages_mut(),
                         self.core.partitions_mut(),
                         arg1 as usize,
@@ -1785,7 +1771,7 @@ where
                 // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
                 // the calling partition's MPU data region.
                 let (r, blk) = unsafe {
-                    crate::svc_msg::handle_msg_recv(
+                    msg::handle_msg_recv(
                         self.msg.messages_mut(),
                         self.core.partitions_mut(),
                         arg1 as usize,
