@@ -312,41 +312,6 @@ macro_rules! validated_ptr {
     };
 }
 
-/// Validate a user pointer for syscalls that may involve dynamically-mapped buffers.
-///
-/// When `dynamic-mpu` feature is enabled, uses [`validate_user_ptr_dynamic`] which
-/// checks both static MPU regions and dynamic MPU windows assigned to the partition.
-/// When `dynamic-mpu` is disabled, falls back to standard [`validate_user_ptr`].
-///
-/// Same interface as [`validated_ptr!`]: returns `SvcError::InvalidPointer`
-/// when validation fails; otherwise evaluates `$body`.
-#[cfg(feature = "dynamic-mpu")]
-macro_rules! validated_ptr_dynamic {
-    ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
-        if !validate_user_ptr_dynamic(
-            $self.partitions(),
-            &$self.dynamic_strategy,
-            $self.current_partition,
-            $ptr,
-            $len,
-        ) {
-            SvcError::InvalidPointer.to_u32()
-        } else {
-            $body
-        }
-    };
-}
-
-/// Fallback implementation when `dynamic-mpu` is disabled.
-/// Uses standard pointer validation (same as `validated_ptr!`).
-#[cfg(not(feature = "dynamic-mpu"))]
-#[allow(unused_macros)]
-macro_rules! validated_ptr_dynamic {
-    ($self:ident, $ptr:expr, $len:expr, $body:expr) => {
-        validated_ptr!($self, $ptr, $len, $body)
-    };
-}
-
 #[cfg(test)]
 use crate::events as ev_data;
 use crate::scheduler::ScheduleEvent;
@@ -2125,33 +2090,39 @@ where
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferWrite) => {
-                validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
-                    // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2) is in caller's MPU region.
-                    unsafe {
-                        buf::handle_buf_write(
-                            &mut self.buffers,
-                            frame.r1 as usize,
-                            self.current_partition,
-                            frame.r3 as *const u8,
-                            frame.r2 as usize,
-                        )
+                match self.check_user_ptr_dynamic(frame.r3, frame.r2 as usize) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        // SAFETY: check_user_ptr_dynamic confirmed [r3, r3+r2) is in caller's MPU region.
+                        unsafe {
+                            buf::handle_buf_write(
+                                &mut self.buffers,
+                                frame.r1 as usize,
+                                self.current_partition,
+                                frame.r3 as *const u8,
+                                frame.r2 as usize,
+                            )
+                        }
                     }
-                })
+                }
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferRead) => {
-                validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
-                    // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2) is in caller's MPU region.
-                    unsafe {
-                        buf::handle_buf_read(
-                            &mut self.buffers,
-                            frame.r1 as usize,
-                            self.current_partition,
-                            frame.r3 as *mut u8,
-                            frame.r2 as usize,
-                        )
+                match self.check_user_ptr_dynamic(frame.r3, frame.r2 as usize) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        // SAFETY: check_user_ptr_dynamic confirmed [r3, r3+r2) is in caller's MPU region.
+                        unsafe {
+                            buf::handle_buf_read(
+                                &mut self.buffers,
+                                frame.r1 as usize,
+                                self.current_partition,
+                                frame.r3 as *mut u8,
+                                frame.r2 as usize,
+                            )
+                        }
                     }
-                })
+                }
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevOpen) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
@@ -2160,29 +2131,35 @@ where
             }),
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevRead) => {
-                validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
-                    let len = frame.r2 as usize;
-                    let buf_ptr = frame.r3 as *mut u8;
-                    self.dev_dispatch(frame.r1 as u8, |dev, pid| {
-                        // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2) lies
-                        // within the calling partition's accessible memory regions.
-                        let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, len) };
-                        Ok(dev.read(pid, buf)? as u32)
-                    })
-                })
+                let len = frame.r2 as usize;
+                match self.check_user_ptr_dynamic(frame.r3, len) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        let buf_ptr = frame.r3 as *mut u8;
+                        self.dev_dispatch(frame.r1 as u8, |dev, pid| {
+                            // SAFETY: check_user_ptr_dynamic confirmed [r3, r3+r2) lies
+                            // within the calling partition's accessible memory regions.
+                            let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, len) };
+                            Ok(dev.read(pid, buf)? as u32)
+                        })
+                    }
+                }
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevWrite) => {
-                validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
-                    let len = frame.r2 as usize;
-                    let data_ptr = frame.r3 as *const u8;
-                    self.dev_dispatch(frame.r1 as u8, |dev, pid| {
-                        // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2) lies
-                        // within the calling partition's accessible memory regions.
-                        let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
-                        Ok(dev.write(pid, data)? as u32)
-                    })
-                })
+                let len = frame.r2 as usize;
+                match self.check_user_ptr_dynamic(frame.r3, len) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        let data_ptr = frame.r3 as *const u8;
+                        self.dev_dispatch(frame.r1 as u8, |dev, pid| {
+                            // SAFETY: check_user_ptr_dynamic confirmed [r3, r3+r2) lies
+                            // within the calling partition's accessible memory regions.
+                            let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+                            Ok(dev.write(pid, data)? as u32)
+                        })
+                    }
+                }
             }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevIoctl) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
