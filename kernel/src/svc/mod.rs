@@ -1,7 +1,10 @@
 #[cfg(feature = "ipc-blackboard")]
 pub mod blackboard;
 #[cfg(feature = "dynamic-mpu")]
+pub mod buf;
+#[cfg(feature = "dynamic-mpu")]
 pub mod buffer;
+pub mod debug;
 pub mod events;
 pub mod irq;
 #[cfg(feature = "ipc-message")]
@@ -1973,7 +1976,7 @@ where
                 r
             }
             #[cfg(feature = "dynamic-mpu")]
-            Some(SyscallId::BufferAlloc) => crate::svc_buf::handle_buf_alloc(
+            Some(SyscallId::BufferAlloc) => buf::handle_buf_alloc(
                 &mut self.buffers,
                 self.current_partition,
                 frame.r1,
@@ -1981,7 +1984,7 @@ where
                 self.tick.get(),
             ),
             #[cfg(feature = "dynamic-mpu")]
-            Some(SyscallId::BufferRelease) => crate::svc_buf::handle_buf_release(
+            Some(SyscallId::BufferRelease) => buf::handle_buf_release(
                 &mut self.buffers,
                 frame.r1 as usize,
                 self.current_partition,
@@ -2048,7 +2051,7 @@ where
                 validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
                     // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2) is in caller's MPU region.
                     unsafe {
-                        crate::svc_buf::handle_buf_write(
+                        buf::handle_buf_write(
                             &mut self.buffers,
                             frame.r1 as usize,
                             self.current_partition,
@@ -2063,7 +2066,7 @@ where
                 validated_ptr_dynamic!(self, frame.r3, frame.r2 as usize, {
                     // SAFETY: validated_ptr_dynamic confirmed [r3, r3+r2) is in caller's MPU region.
                     unsafe {
-                        crate::svc_buf::handle_buf_read(
+                        buf::handle_buf_read(
                             &mut self.buffers,
                             frame.r1 as usize,
                             self.current_partition,
@@ -2251,14 +2254,14 @@ where
                 } else {
                     // SAFETY: validate_user_ptr confirmed [ptr, ptr+len) in partition memory.
                     let data = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
-                    crate::svc_debug::handle_debug_print(data)
+                    debug::handle_debug_print(data)
                 }
             }
-            Some(SyscallId::DebugExit) => crate::svc_debug::handle_debug_exit(frame.r1),
+            Some(SyscallId::DebugExit) => debug::handle_debug_exit(frame.r1),
             #[cfg(feature = "partition-debug")]
             Some(SyscallId::DebugNotify) => {
                 let pid = self.current_partition as usize;
-                crate::svc_debug::handle_debug_notify(self.partitions_mut(), pid)
+                debug::handle_debug_notify(self.partitions_mut(), pid)
             }
             #[cfg(feature = "partition-debug")]
             Some(SyscallId::DebugWrite) => {
@@ -2269,7 +2272,7 @@ where
                     let pid = self.current_partition as usize;
                     // SAFETY: validate_user_ptr confirmed [ptr, ptr+len) in partition memory.
                     let data = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
-                    crate::svc_debug::handle_debug_write(self.partitions_mut(), pid, data)
+                    debug::handle_debug_write(self.partitions_mut(), pid, data)
                 }
             }
             Some(SyscallId::IrqAck) => {

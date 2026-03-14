@@ -80,9 +80,6 @@ pub mod semaphore;
 pub mod split_isr;
 pub mod state;
 pub mod svc;
-#[cfg(feature = "dynamic-mpu")]
-pub mod svc_buf;
-pub mod svc_debug;
 #[cfg(feature = "ipc-queuing")]
 pub mod svc_queuing;
 pub mod svc_scheduler;
