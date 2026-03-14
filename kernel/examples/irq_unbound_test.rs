@@ -9,7 +9,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -24,7 +23,6 @@ kernel::bind_interrupts!(UnboundConfig, 70,
 );
 
 const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = UnboundConfig::STACK_WORDS;
 
 static WAIT_COUNT: AtomicU32 = AtomicU32::new(0);
 
@@ -88,10 +86,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ UnboundConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_unbound_test: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
     let k =
-        Kernel::<UnboundConfig>::create(sched, &cfgs).expect("irq_unbound_test: Kernel::create");
+        Kernel::<UnboundConfig>::create_sentinels(sched).expect("irq_unbound_test: Kernel::create");
 
     store_kernel(k);
 
@@ -111,5 +107,5 @@ fn main() -> ! {
     }
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0)];
-    match boot(&parts, &mut p).expect("irq_unbound_test: boot") {}
+    match boot(&parts, p).expect("irq_unbound_test: boot") {}
 }

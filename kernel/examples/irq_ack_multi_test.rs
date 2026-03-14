@@ -101,5 +101,5 @@ fn main() -> ! {
     store_kernel(k);
     enable_bound_irqs(&mut p.NVIC, AckMultiConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("irq_ack_multi_test: boot") {}
+    match boot(&parts, p).expect("irq_ack_multi_test: boot") {}
 }

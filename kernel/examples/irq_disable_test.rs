@@ -111,5 +111,5 @@ fn main() -> ! {
     store_kernel(k);
     enable_bound_irqs(&mut p.NVIC, Cfg::IRQ_DEFAULT_PRIORITY).unwrap();
     let parts: [(extern "C" fn() -> !, u32); 1] = [(p0_main, 0)];
-    match boot(&parts, &mut p).expect("boot") {}
+    match boot(&parts, p).expect("boot") {}
 }

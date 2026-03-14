@@ -8,7 +8,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::{Kernel, SvcError};
 use kernel::syscall::SYS_EVT_WAIT;
@@ -23,8 +22,6 @@ kernel::bind_interrupts!(SimulIrqConfig, 70,
 );
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = SimulIrqConfig::STACK_WORDS;
-
 /// Incremented by partition 0 after each successful `event_wait` return.
 static P0_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Incremented by partition 1 after each successful `event_wait` return.
@@ -109,11 +106,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ SimulIrqConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_simultaneous_test: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k = Kernel::<SimulIrqConfig>::create(sched, &cfgs)
+    let k = Kernel::<SimulIrqConfig>::create_sentinels(sched)
         .expect("irq_simultaneous_test: Kernel::create");
-
     // store_kernel, enable_bound_irqs, and boot are macro-generated.
     store_kernel(k);
 
@@ -121,5 +115,5 @@ fn main() -> ! {
     enable_bound_irqs(&mut p.NVIC, SimulIrqConfig::IRQ_DEFAULT_PRIORITY).unwrap();
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("irq_simultaneous_test: boot") {}
+    match boot(&parts, p).expect("irq_simultaneous_test: boot") {}
 }

@@ -124,5 +124,5 @@ fn main() -> ! {
     store_kernel(k);
     enable_bound_irqs(&mut p.NVIC, CustomHandlerConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     let parts: [(extern "C" fn() -> !, u32); CustomHandlerConfig::N] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("custom_handler: boot") {}
+    match boot(&parts, p).expect("custom_handler: boot") {}
 }
