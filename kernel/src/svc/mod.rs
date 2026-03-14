@@ -1072,11 +1072,6 @@ where
     pub sleep_queue: crate::waitqueue::SleepQueue<{ C::N }>,
 }
 
-/// Helper function to align an address down to an 8-byte boundary.
-const fn align_down_8(addr: u32) -> u32 {
-    addr & !7
-}
-
 impl<C: KernelConfig> Default for Kernel<C>
 where
     [(); C::N]:,
@@ -1281,30 +1276,23 @@ where
                     },
                 )?;
             }
-            // Use internal stack from PartitionCore instead of PartitionConfig.
-            // This ensures MPU regions protect the actual stack memory.
-            let internal_stack = core
-                .stack_mut(i)
-                .ok_or(ConfigError::StackInitFailed { partition_id: c.id })?;
-            // WARNING: this address is stale after the struct is moved into
-            // UNIFIED_KERNEL_STORAGE; boot.rs patches it via fix_stack_region().
-            let internal_stack_base = internal_stack.as_ptr() as u32;
-            let internal_stack_size = (internal_stack.len() * 4) as u32;
-            let sp = align_down_8(internal_stack_base.wrapping_add(internal_stack_size));
+            // Use sentinel stack values (0, 0).  boot_external() will
+            // patch in the real addresses once the kernel is in its final
+            // storage location, eliminating the stale-address window.
             let mpu_region = c.mpu_region;
             let pcb = PartitionControlBlock::new(
                 c.id,
                 c.entry_point,
-                internal_stack_base,
-                sp,
+                0, // sentinel stack_base — patched by boot_external()
+                0, // sentinel sp — patched by boot_external()
                 mpu_region,
             )
             .with_peripheral_regions(&c.peripheral_regions);
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
             }
-            // Initialize partition_sp from the PCB stack pointer.
-            core.set_sp(i, sp);
+            // Sentinel sp=0; boot_external() sets the real value.
+            core.set_sp(i, 0);
         }
         #[cfg(debug_assertions)]
         crate::invariants::assert_no_overlapping_mpu_regions(core.partitions().as_slice());
@@ -3516,23 +3504,15 @@ mod tests {
             registry,
         )
         .unwrap();
-        // Verify PCB uses internal stack (not config values).
-        let pcb0 = k.partitions().get(0).unwrap();
-        assert_ne!(pcb0.stack_base(), 0x2000_0000);
+        // with_config uses sentinel stack values; boot_external patches later.
+        assert_eq!(k.partitions().get(0).unwrap().stack_base(), 0);
+        assert_eq!(k.partition_sp()[0], 0);
+        assert_eq!(k.partition_sp()[1], 0);
         assert_eq!(k.partition_sp()[2], 0); // Unused slots zero-initialized.
     }
 
-    /// Regression test for stale stack_base bug: verifies PCB stack_base fields
-    /// match the actual internal stack addresses from PartitionCore after
-    /// fix_stack_region is called.
-    ///
-    /// The kernel must be placed in its final memory location before calling
-    /// fix_stack_region, since the internal stack addresses depend on where
-    /// the kernel struct lives in memory. This test demonstrates the pattern:
-    /// 1. Create kernel via Kernel::new()
-    /// 2. Place kernel in final location (here: let binding on stack)
-    /// 3. Call fix_stack_region for each partition to sync PCB stack fields
-    /// 4. Verify PCB stack_base matches actual internal stack addresses
+    /// Verifies with_config() stores sentinel PCB stack values (0), and
+    /// fix_stack_region patches them to actual internal stack addresses.
     #[test]
     fn pcb_stack_base_matches_actual_internal_stack() {
         use crate::partition::PartitionConfig;
@@ -3574,10 +3554,12 @@ mod tests {
         )
         .unwrap();
 
-        // After Kernel::new() returns and the kernel is placed in its final
-        // location, call fix_stack_region to sync PCB stack fields with actual
-        // internal stack addresses. This mimics what boot() does after placing
-        // the kernel in UNIFIED_KERNEL_STORAGE.
+        // Sentinel values present before fix_stack_region.
+        assert_eq!(k.partitions().get(0).unwrap().stack_base(), 0);
+        assert_eq!(k.partitions().get(1).unwrap().stack_base(), 0);
+
+        // fix_stack_region syncs PCB stack fields with actual internal
+        // stack addresses. This mimics what boot_external() does.
         for i in 0..2 {
             let stk = k.core_stack_mut(i).expect("partition stack exists");
             let base = stk.as_ptr() as u32;

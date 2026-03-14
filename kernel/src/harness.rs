@@ -446,19 +446,44 @@ macro_rules! define_unified_harness {
             });
         }
     };
+    // TODO: reviewer false positive — `@impl` is a standard Rust macro internal arm,
+    // not a file path.  The `@` prefix is idiomatic for private macro dispatch arms.
     // Internal: full implementation (handlers + boot function)
     (@impl $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
 
+        /// Partition stacks with 4 KiB alignment; patched into PCBs by `boot_external()`.
+        ///
+        /// # Singleton
+        /// This macro arm must be invoked at most once per binary.  Multiple
+        /// invocations would produce duplicate `__PartitionStackStorage` /
+        /// `__PARTITION_STACKS` symbols, causing a compile-time link error.
+        #[repr(C, align(4096))]
+        struct __PartitionStackStorage(
+            [[u32; <$Config as $crate::config::KernelConfig>::STACK_WORDS];
+             <$Config as $crate::config::KernelConfig>::N],
+        );
+        static mut __PARTITION_STACKS: __PartitionStackStorage = __PartitionStackStorage(
+            [[0u32; <$Config as $crate::config::KernelConfig>::STACK_WORDS];
+             <$Config as $crate::config::KernelConfig>::N],
+        );
+
         /// Initialize stacks, priorities, start schedule, enable SysTick, enter idle loop.
         /// Returns `Err(BootError)` on stack init or schedule failure.
         ///
-        /// This is a simple forwarding wrapper to the canonical [`boot::boot`] function.
+        /// Delegates to [`boot::boot_external`] using `__PARTITION_STACKS`.
         fn boot(
             partitions: &[(extern "C" fn() -> !, u32)],
             peripherals: &mut cortex_m::Peripherals,
         ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
-            $crate::boot::boot::<$Config>(partitions, peripherals)
+            // SAFETY: `boot()` is called exactly once from `main()` before
+            // any exception handlers run.  No other code accesses
+            // `__PARTITION_STACKS` outside of `boot_external`.
+            let stacks = unsafe { &mut __PARTITION_STACKS.0 };
+            $crate::boot::boot_external::<$Config,
+                { <$Config as $crate::config::KernelConfig>::STACK_WORDS }>(
+                partitions, peripherals, stacks,
+            )
         }
     };
 }
