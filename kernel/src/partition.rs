@@ -3,6 +3,7 @@ use heapless::Vec;
 #[cfg(feature = "partition-debug")]
 use crate::debug::DebugBuffer;
 use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
+use crate::partition_core::StackStorage;
 
 /// Default data-region RASR attributes: full read-write access with
 /// Normal memory (TEX=0, S=1, C=1, B=0).  The RASR enable bit and size
@@ -808,6 +809,85 @@ impl<const N: usize> PartitionTable<N> {
     /// Returns a mutable slice of all partition control blocks.
     pub fn as_slice_mut(&mut self) -> &mut [PartitionControlBlock] {
         &mut self.partitions
+    }
+}
+
+/// Externally-provided partition memory descriptor.
+#[derive(Debug, Clone)]
+pub struct PartitionMemory {
+    pub stack_base: u32,
+    pub stack_size: u32,
+    pub entry_point: u32,
+    pub mpu_region: MpuRegion,
+    pub peripheral_regions: Vec<MpuRegion, 2>,
+}
+
+impl PartitionMemory {
+    fn slice_addr_size(stack: &mut [u32]) -> (u32, u32) {
+        (stack.as_ptr() as u32, (stack.len() as u32) * 4)
+    }
+
+    /// Create from a stack slice; validates size (power-of-two >= 32) and alignment.
+    pub fn from_stack(
+        stack: &mut [u32],
+        entry_point: u32,
+        mpu_region: MpuRegion,
+    ) -> Result<Self, ConfigError> {
+        let (stack_base, stack_size) = Self::slice_addr_size(stack);
+        if stack_size < 32 || !stack_size.is_power_of_two() {
+            return Err(ConfigError::StackSizeInvalid { partition_id: 0 });
+        }
+        if stack_base & (stack_size - 1) != 0 {
+            return Err(ConfigError::StackBaseNotAligned { partition_id: 0 });
+        }
+        Ok(Self {
+            stack_base,
+            stack_size,
+            entry_point,
+            mpu_region,
+            peripheral_regions: Vec::new(),
+        })
+    }
+
+    /// Sentinel for QEMU tests: entry_point=0, zero mpu_region.
+    pub fn sentinel(stack: &mut [u32]) -> Self {
+        let (stack_base, stack_size) = Self::slice_addr_size(stack);
+        Self {
+            stack_base,
+            stack_size,
+            entry_point: 0,
+            mpu_region: MpuRegion::new(0, 0, 0),
+            peripheral_regions: Vec::new(),
+        }
+    }
+
+    /// Batch sentinel creation from a stack array.
+    pub fn sentinel_array_from_stacks<S: StackStorage, const N: usize>(
+        stacks: &mut [S; N],
+    ) -> [Self; N] {
+        let mut ptrs: [(*mut u32, usize); N] = [(core::ptr::null_mut(), 0); N];
+        for (i, s) in stacks.iter_mut().enumerate() {
+            let sl = s.as_u32_slice_mut();
+            ptrs[i] = (sl.as_mut_ptr(), sl.len());
+        }
+        core::array::from_fn(|i| {
+            let (ptr, len) = ptrs[i];
+            Self {
+                stack_base: ptr as u32,
+                stack_size: (len as u32) * 4,
+                entry_point: 0,
+                mpu_region: MpuRegion::new(0, 0, 0),
+                peripheral_regions: Vec::new(),
+            }
+        })
+    }
+
+    /// Builder: attach peripheral MPU regions.
+    pub fn with_peripheral_regions(mut self, regions: &[MpuRegion]) -> Self {
+        for r in regions {
+            let _ = self.peripheral_regions.push(*r);
+        }
+        self
     }
 }
 
@@ -2657,5 +2737,86 @@ mod tests {
         // Waiting → Ready (starvation still 0)
         pcb.transition(PartitionState::Ready).unwrap();
         assert_eq!(pcb.starvation_count(), 0);
+    }
+
+    #[repr(C, align(256))]
+    struct Align256([u32; 64]);
+
+    #[test]
+    fn pmem_from_stack_valid() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let pm = PartitionMemory::from_stack(&mut buf.0, 0x0800_1000, mpu).unwrap();
+        assert_eq!(pm.entry_point, 0x0800_1000);
+        assert_eq!(pm.stack_size, 256);
+        assert_eq!(pm.stack_base, buf.0.as_ptr() as u32);
+        assert_eq!(pm.mpu_region, mpu);
+    }
+
+    #[test]
+    fn pmem_rejects_bad_size() {
+        let zero = MpuRegion::new(0, 0, 0);
+        // 48 words = 192 bytes: not power of two
+        #[repr(C, align(256))]
+        struct B([u32; 48]);
+        let mut b = B([0u32; 48]);
+        assert_eq!(
+            PartitionMemory::from_stack(&mut b.0, 0, zero).unwrap_err(),
+            ConfigError::StackSizeInvalid { partition_id: 0 }
+        );
+        // 4 words = 16 bytes: below minimum 32
+        #[repr(C, align(16))]
+        struct C([u32; 4]);
+        let mut c = C([0u32; 4]);
+        assert_eq!(
+            PartitionMemory::from_stack(&mut c.0, 0, zero).unwrap_err(),
+            ConfigError::StackSizeInvalid { partition_id: 0 }
+        );
+    }
+
+    #[test]
+    fn pmem_rejects_misalignment() {
+        #[repr(C, align(512))]
+        struct A([u32; 128]);
+        let mut buf = A([0u32; 128]);
+        let sub = &mut buf.0[16..80]; // 256 bytes at non-256-aligned offset
+        assert_eq!(
+            PartitionMemory::from_stack(sub, 0, MpuRegion::new(0, 0, 0)).unwrap_err(),
+            ConfigError::StackBaseNotAligned { partition_id: 0 }
+        );
+    }
+
+    #[test]
+    fn pmem_sentinel() {
+        let mut buf = Align256([0u32; 64]);
+        let pm = PartitionMemory::sentinel(&mut buf.0);
+        assert_eq!(pm.entry_point, 0);
+        assert_eq!(pm.mpu_region, MpuRegion::new(0, 0, 0));
+        assert_eq!(pm.stack_size, 256);
+    }
+
+    #[test]
+    fn pmem_sentinel_array_from_stacks() {
+        use crate::partition_core::AlignedStack256B;
+        let mut stacks = [AlignedStack256B::default(); 3];
+        let arr = PartitionMemory::sentinel_array_from_stacks(&mut stacks);
+        for pm in &arr {
+            assert_eq!((pm.entry_point, pm.stack_size), (0, 256));
+            assert_eq!(pm.mpu_region, MpuRegion::new(0, 0, 0));
+        }
+    }
+
+    #[test]
+    fn pmem_with_peripheral_regions() {
+        let mut buf = Align256([0u32; 64]);
+        let (r1, r2) = (
+            MpuRegion::new(0x4000_0000, 4096, 0x0300_0000),
+            MpuRegion::new(0x4000_1000, 4096, 0x0300_0000),
+        );
+        let pm = PartitionMemory::sentinel(&mut buf.0).with_peripheral_regions(&[r1, r2]);
+        assert_eq!(
+            (pm.peripheral_regions[0], pm.peripheral_regions[1]),
+            (r1, r2)
+        );
     }
 }
