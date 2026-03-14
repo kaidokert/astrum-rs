@@ -1171,6 +1171,39 @@ where
         )
     }
 
+    /// Create a `Kernel` from caller-provided [`PartitionMemory`] descriptors.
+    ///
+    /// Partition IDs are derived from array indices (0, 1, 2, …).
+    /// `stack_base` and `stack_size` from each [`PartitionMemory`] are
+    /// **ignored** — PCBs are created with sentinel stack values (0, 0)
+    /// that [`boot_external()`](crate::boot::boot_external) patches later.
+    pub fn create_from_memory(
+        schedule: ScheduleTable<{ C::SCHED }>,
+        memories: &[crate::partition::PartitionMemory],
+    ) -> Result<Self, ConfigError> {
+        let mut configs: heapless::Vec<PartitionConfig, { C::N }> = heapless::Vec::new();
+        for (i, m) in memories.iter().enumerate() {
+            let cfg = PartitionConfig {
+                id: i as u8,
+                entry_point: m.entry_point,
+                stack_base: 0,
+                stack_size: 0,
+                mpu_region: m.mpu_region,
+                peripheral_regions: m.peripheral_regions.clone(),
+            };
+            configs
+                .push(cfg)
+                .map_err(|_| ConfigError::PartitionTableFull)?;
+        }
+        Self::with_config(
+            schedule,
+            &configs,
+            #[cfg(feature = "dynamic-mpu")]
+            crate::virtual_device::DeviceRegistry::new(),
+            &[],
+        )
+    }
+
     /// Create a `Kernel` with a pre-configured IRQ binding table.
     ///
     /// Identical to [`new`](Self::new) but also accepts an
@@ -3552,6 +3585,89 @@ mod tests {
             "Expected MpuRegionInvalid with BaseNotAligned, got: {:?}",
             err,
         );
+    }
+
+    /// Helper: build a single-partition kernel via `create_from_memory`.
+    fn mem_kernel(entry: u32, mpu: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
+        use crate::partition::PartitionMemory;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let m = PartitionMemory {
+            stack_base: 0x2000_0000,
+            stack_size: 1024,
+            entry_point: entry,
+            mpu_region: mpu,
+            peripheral_regions: heapless::Vec::new(),
+        };
+        Kernel::<TestConfig>::create_from_memory(sched, &[m])
+    }
+
+    #[test]
+    fn create_from_memory_pcb_fields_and_sentinels() {
+        let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
+        let k = mem_kernel(0x0800_1000, mpu).expect("should succeed");
+        let pcb = k.partitions().get(0).expect("partition 0 must exist");
+        assert_eq!(pcb.id(), 0);
+        assert_eq!(pcb.entry_point(), 0x0800_1000);
+        assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
+        assert_eq!(pcb.mpu_region().size(), 1024);
+        assert_eq!(pcb.stack_base(), 0, "sentinel stack_base");
+        assert_eq!(pcb.stack_size(), 0, "sentinel stack_size");
+        // Sentinel mpu_region (size==0) also accepted
+        let k2 = mem_kernel(0, MpuRegion::new(0, 0, 0)).unwrap();
+        assert_eq!(k2.partitions().get(0).unwrap().mpu_region().size(), 0);
+    }
+
+    #[test]
+    fn create_from_memory_validates_mpu_and_schedule() {
+        // Invalid MPU region rejected
+        let err = mem_kernel(0, MpuRegion::new(0, 17, 0))
+            .err()
+            .expect("should fail");
+        assert!(matches!(
+            err,
+            ConfigError::MpuRegionInvalid {
+                partition_id: 0,
+                ..
+            }
+        ));
+        // Empty schedule rejected
+        use crate::partition::PartitionMemory;
+        let m = PartitionMemory {
+            stack_base: 0,
+            stack_size: 256,
+            entry_point: 0,
+            mpu_region: MpuRegion::new(0, 0, 0),
+            peripheral_regions: heapless::Vec::new(),
+        };
+        let err = Kernel::<TestConfig>::create_from_memory(ScheduleTable::<4>::new(), &[m]);
+        assert!(matches!(err, Err(ConfigError::ScheduleEmpty)));
+    }
+
+    #[test]
+    fn create_from_memory_two_partitions_ids_from_indices() {
+        use crate::partition::PartitionMemory;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 5)).unwrap();
+        sched.add(ScheduleEntry::new(1, 5)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let mk = |ep: u32| PartitionMemory {
+            stack_base: 0,
+            stack_size: 256,
+            entry_point: ep,
+            mpu_region: MpuRegion::new(0, 0, 0),
+            peripheral_regions: heapless::Vec::new(),
+        };
+        let k =
+            Kernel::<TestConfig>::create_from_memory(sched, &[mk(0x0800_0000), mk(0x0800_1000)])
+                .expect("two partitions should succeed");
+        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
+        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
+        assert_eq!(k.partitions().get(1).unwrap().id(), 1);
+        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1000);
     }
 
     #[test]
