@@ -1410,6 +1410,51 @@ where
     }
 
     // -------------------------------------------------------------------------
+    // User-pointer validation helpers
+    // (method counterparts of `validated_ptr!` / `validated_ptr_dynamic!`
+    //  macros defined above — kept here because methods must live inside the
+    //  impl block; see macros near line 298 for the macro equivalents.)
+    // TODO: move closer to validated_ptr! macros if the impl block is ever
+    // split or the macros are converted to inherent methods.
+    // -------------------------------------------------------------------------
+
+    /// Validate that `ptr..ptr+len` lies in memory accessible to the current
+    /// partition's static MPU regions. Returns `Ok(())` on success or
+    /// `Err(SvcError::InvalidPointer.to_u32())` on failure.
+    #[inline(always)]
+    pub fn check_user_ptr(&self, ptr: u32, len: usize) -> Result<(), u32> {
+        validate_user_ptr(self.partitions(), self.current_partition, ptr, len)
+            .then_some(())
+            .ok_or(SvcError::InvalidPointer.to_u32())
+    }
+
+    /// Validate that `ptr..ptr+len` lies in memory accessible to the current
+    /// partition, including dynamically-mapped MPU windows when `dynamic-mpu`
+    /// is enabled. Falls back to [`check_user_ptr`](Self::check_user_ptr)
+    /// when the feature is disabled.
+    #[inline(always)]
+    #[cfg(feature = "dynamic-mpu")]
+    pub fn check_user_ptr_dynamic(&self, ptr: u32, len: usize) -> Result<(), u32> {
+        validate_user_ptr_dynamic(
+            self.partitions(),
+            &self.dynamic_strategy,
+            self.current_partition,
+            ptr,
+            len,
+        )
+        .then_some(())
+        .ok_or(SvcError::InvalidPointer.to_u32())
+    }
+
+    /// Fallback: delegates to [`check_user_ptr`](Self::check_user_ptr) when
+    /// `dynamic-mpu` is disabled.
+    #[inline(always)]
+    #[cfg(not(feature = "dynamic-mpu"))]
+    pub fn check_user_ptr_dynamic(&self, ptr: u32, len: usize) -> Result<(), u32> {
+        self.check_user_ptr(ptr, len)
+    }
+
+    // -------------------------------------------------------------------------
     // Facade methods delegating to self.sync (SyncPools)
     // -------------------------------------------------------------------------
 
@@ -2963,6 +3008,8 @@ mod tests {
     use crate::kernel_config_types;
     use crate::message::MessageQueue;
     use crate::mpu::MpuError;
+    #[cfg(feature = "dynamic-mpu")]
+    use crate::mpu_strategy::MpuStrategy;
     use crate::partition::{MpuRegion, PartitionControlBlock};
     use crate::partition_core::AlignedStack4K;
     use crate::scheduler::ScheduleEntry;
@@ -6348,6 +6395,76 @@ mod tests {
 
         // P1 not in partition table → empty
         assert!(all_accessible_regions(&t, &s, 1).is_empty());
+    }
+
+    // ---- check_user_ptr / check_user_ptr_dynamic method tests ----
+
+    #[test]
+    fn check_user_ptr_ok_and_err() {
+        let k = kernel(0, 0, 0);
+        // Static regions accepted by both check_user_ptr and check_user_ptr_dynamic.
+        assert_eq!(k.check_user_ptr(0x2000_0000, 4), Ok(()));
+        assert_eq!(k.check_user_ptr(0x2000_0800, 16), Ok(()));
+        assert_eq!(k.check_user_ptr_dynamic(0x2000_0000, 4), Ok(()));
+        assert_eq!(k.check_user_ptr_dynamic(0x2000_0800, 16), Ok(()));
+        // Out-of-bounds addresses rejected.
+        assert_eq!(
+            k.check_user_ptr(0x0000_1000, 4),
+            Err(SvcError::InvalidPointer.to_u32())
+        );
+        assert_eq!(
+            k.check_user_ptr(0x4000_0000, 4),
+            Err(SvcError::InvalidPointer.to_u32())
+        );
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn check_user_ptr_dynamic_accepts_dynamic_window() {
+        let k = kernel(0, 0, 0);
+        let window_base: u32 = 0x3000_0000;
+        let window_size: u32 = 256;
+        k.dynamic_strategy
+            .add_window(window_base, window_size, 0, 0)
+            .expect("add_window failed: MPU window slots exhausted or invalid config");
+        // Static-only rejects the dynamic window.
+        assert_eq!(
+            k.check_user_ptr(window_base, 4),
+            Err(SvcError::InvalidPointer.to_u32())
+        );
+        // Dynamic validation accepts it.
+        assert_eq!(k.check_user_ptr_dynamic(window_base, 4), Ok(()));
+        assert_eq!(
+            k.check_user_ptr_dynamic(window_base, window_size as usize),
+            Ok(())
+        );
+    }
+
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn check_user_ptr_dynamic_rejects_wrong_owner_and_revocation() {
+        let k = kernel(0, 0, 0);
+        // Window owned by partition 1 — inaccessible to partition 0.
+        k.dynamic_strategy
+            .add_window(0x3000_0000, 256, 0, 1)
+            .expect("add_window for partition 1 failed unexpectedly");
+        assert_eq!(
+            k.check_user_ptr_dynamic(0x3000_0000, 4),
+            Err(SvcError::InvalidPointer.to_u32())
+        );
+
+        // Window owned by partition 0, then revoked.
+        let k2 = kernel(0, 0, 0);
+        let rid = k2
+            .dynamic_strategy
+            .add_window(0x3000_0000, 256, 0, 0)
+            .expect("add_window for partition 0 failed unexpectedly");
+        assert_eq!(k2.check_user_ptr_dynamic(0x3000_0000, 4), Ok(()));
+        k2.dynamic_strategy.remove_window(rid);
+        assert_eq!(
+            k2.check_user_ptr_dynamic(0x3000_0000, 4),
+            Err(SvcError::InvalidPointer.to_u32())
+        );
     }
 
     // ---- Pointer validation rejection via Kernel::dispatch ----
