@@ -1772,87 +1772,99 @@ where
                 sync::handle_mtx_unlock(self.sync.mutexes_mut(), pt, frame.r1 as usize, caller)
             }
             #[cfg(feature = "ipc-message")]
-            Some(SyscallId::MsgSend) => validated_ptr!(self, arg3, C::QM, {
-                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
-                // the calling partition's MPU data region.
-                let (r, blk) = unsafe {
-                    msg::handle_msg_send(
-                        self.msg.messages_mut(),
-                        self.core.partitions_mut(),
-                        arg1 as usize,
-                        arg2 as usize,
-                        arg3 as *const u8,
-                        C::QM,
-                    )
+            Some(SyscallId::MsgSend) => match self.check_user_ptr(arg3, C::QM) {
+                Err(e) => e,
+                Ok(()) => {
+                    // SAFETY: check_user_ptr confirmed [r3, r3+QM) lies within
+                    // the calling partition's MPU data region.
+                    let (r, blk) = unsafe {
+                        msg::handle_msg_send(
+                            self.msg.messages_mut(),
+                            self.core.partitions_mut(),
+                            arg1 as usize,
+                            arg2 as usize,
+                            arg3 as *const u8,
+                            C::QM,
+                        )
+                    }
+                    .into_svc_return();
+                    if blk {
+                        self.trigger_deschedule();
+                    }
+                    r
                 }
-                .into_svc_return();
-                if blk {
-                    self.trigger_deschedule();
-                }
-                r
-            }),
+            },
             #[cfg(feature = "ipc-message")]
-            Some(SyscallId::MsgRecv) => validated_ptr!(self, arg3, C::QM, {
-                // SAFETY: validated_ptr confirmed [r3, r3+QM) lies within
-                // the calling partition's MPU data region.
-                let (r, blk) = unsafe {
-                    msg::handle_msg_recv(
-                        self.msg.messages_mut(),
-                        self.core.partitions_mut(),
-                        arg1 as usize,
-                        arg2 as usize,
-                        arg3 as *mut u8,
-                        C::QM,
-                    )
+            Some(SyscallId::MsgRecv) => match self.check_user_ptr(arg3, C::QM) {
+                Err(e) => e,
+                Ok(()) => {
+                    // SAFETY: check_user_ptr confirmed [r3, r3+QM) lies within
+                    // the calling partition's MPU data region.
+                    let (r, blk) = unsafe {
+                        msg::handle_msg_recv(
+                            self.msg.messages_mut(),
+                            self.core.partitions_mut(),
+                            arg1 as usize,
+                            arg2 as usize,
+                            arg3 as *mut u8,
+                            C::QM,
+                        )
+                    }
+                    .into_svc_return();
+                    if blk {
+                        self.trigger_deschedule();
+                    }
+                    r
                 }
-                .into_svc_return();
-                if blk {
-                    self.trigger_deschedule();
-                }
-                r
-            }),
+            },
             #[cfg(feature = "ipc-sampling")]
             Some(SyscallId::SamplingWrite) => {
-                validated_ptr!(self, frame.r3, frame.r2 as usize, {
-                    // SAFETY: (1) validated_ptr confirmed [r3, r3+r2) lies within
-                    // the calling partition's MPU data region. (2) Slice length
-                    // is user-provided but validated against MPU bounds.
-                    // (3) The partition owns this memory as enforced by MPU.
-                    let d = unsafe {
-                        core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
-                    };
-                    let tick = self.tick.get();
-                    match self.ports.sampling_mut().write_sampling_message(
-                        frame.r1 as usize,
-                        d,
-                        tick,
-                    ) {
-                        Ok(()) => 0,
-                        Err(_) => SvcError::InvalidResource.to_u32(),
+                match self.check_user_ptr(frame.r3, frame.r2 as usize) {
+                    Err(e) => e,
+                    Ok(()) => {
+                        // SAFETY: (1) check_user_ptr confirmed [r3, r3+r2) lies within
+                        // the calling partition's MPU data region. (2) Slice length
+                        // is user-provided but validated against MPU bounds.
+                        // (3) The partition owns this memory as enforced by MPU.
+                        let d = unsafe {
+                            core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
+                        };
+                        let tick = self.tick.get();
+                        match self.ports.sampling_mut().write_sampling_message(
+                            frame.r1 as usize,
+                            d,
+                            tick,
+                        ) {
+                            Ok(()) => 0,
+                            Err(_) => SvcError::InvalidResource.to_u32(),
+                        }
                     }
-                })
+                }
             }
             #[cfg(feature = "ipc-sampling")]
-            Some(SyscallId::SamplingRead) => validated_ptr!(self, frame.r3, C::SM, {
-                let tick = self.tick.get();
-                // SAFETY: validated_ptr! confirmed [r3, r3+SM) is in-bounds.
-                let r = unsafe {
-                    sampling::handle_sampling_read(
-                        self.ports.sampling_mut(),
-                        frame.r1 as usize,
-                        frame.r3 as *mut u8,
-                        C::SM,
-                        tick,
-                    )
-                };
-                match r {
-                    Ok((sz, v)) => {
-                        frame.r1 = v as u32;
-                        sz
+            Some(SyscallId::SamplingRead) => match self.check_user_ptr(frame.r3, C::SM) {
+                Err(e) => e,
+                Ok(()) => {
+                    let tick = self.tick.get();
+                    // SAFETY: check_user_ptr confirmed [r3, r3+SM) is in-bounds.
+                    let r = unsafe {
+                        sampling::handle_sampling_read(
+                            self.ports.sampling_mut(),
+                            frame.r1 as usize,
+                            frame.r3 as *mut u8,
+                            C::SM,
+                            tick,
+                        )
+                    };
+                    match r {
+                        Ok((sz, v)) => {
+                            frame.r1 = v as u32;
+                            sz
+                        }
+                        Err(code) => code,
                     }
-                    Err(code) => code,
                 }
-            }),
+            },
             #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingSend) => {
                 validated_ptr!(self, frame.r3, frame.r2 as usize, {
