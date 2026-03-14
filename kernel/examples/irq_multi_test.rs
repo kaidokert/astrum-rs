@@ -18,7 +18,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::{Kernel, SvcError};
 use kernel::syscall::SYS_EVT_WAIT;
@@ -33,8 +32,6 @@ kernel::bind_interrupts!(MultiIrqConfig, 70,
 );
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = MultiIrqConfig::STACK_WORDS;
-
 /// Incremented by partition 0 after each successful `event_wait` return.
 static P0_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Incremented by partition 1 after each successful `event_wait` return.
@@ -97,10 +94,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ MultiIrqConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_multi_test: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k = Kernel::<MultiIrqConfig>::create(sched, &cfgs).expect("irq_multi_test: Kernel::create");
-
+    let k =
+        Kernel::<MultiIrqConfig>::create_sentinels(sched).expect("irq_multi_test: Kernel::create");
     store_kernel(k);
 
     // Unmask bound IRQs so software-triggered pends fire.

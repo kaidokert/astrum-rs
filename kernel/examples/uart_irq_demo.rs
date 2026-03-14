@@ -12,7 +12,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::split_isr::StaticIsrRing;
 use kernel::svc::Kernel;
@@ -143,10 +142,9 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("uart_demo: take");
     hprintln!("uart_demo: start");
     let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("sched");
-    let cfgs = PartitionConfig::sentinel_array::<1>(Cfg::STACK_WORDS);
-    let k = Kernel::<Cfg>::create(sched, &cfgs).expect("kernel");
+    let k = Kernel::<Cfg>::create_sentinels(sched).expect("kernel");
     store_kernel(k);
     enable_bound_irqs(&mut p.NVIC, Cfg::IRQ_DEFAULT_PRIORITY).unwrap();
     let parts: [(extern "C" fn() -> !, u32); 1] = [(p0_main, 0)];
-    match boot(&parts, &mut p).expect("boot") {}
+    match boot(&parts, p).expect("boot") {}
 }

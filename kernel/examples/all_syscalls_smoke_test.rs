@@ -10,7 +10,6 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::message::MessageQueue;
-use kernel::partition::PartitionConfig;
 use kernel::sampling::PortDirection;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
@@ -104,11 +103,10 @@ extern "C" fn partition_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("Peripherals::take");
     hprintln!("all_syscalls_smoke_test: start");
     let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("round_robin");
-    let cfgs = PartitionConfig::sentinel_array::<{ Cfg::N }>(Cfg::STACK_WORDS);
-    let mut k = Kernel::<Cfg>::create(sched, &cfgs).expect("Kernel::create");
+    let mut k = Kernel::<Cfg>::create_sentinels(sched).expect("Kernel::create");
     k.semaphores_mut().add(Semaphore::new(0, 1)).expect("sem");
     let s = k
         .sampling_mut()
@@ -123,5 +121,5 @@ fn main() -> ! {
     k.messages_mut().add(MessageQueue::new()).expect("mq");
     store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); Cfg::N] = [(partition_main, 0)];
-    match boot(&parts, &mut p).expect("boot") {}
+    match boot(&parts, p).expect("boot") {}
 }

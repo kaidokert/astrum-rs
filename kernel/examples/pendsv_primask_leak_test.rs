@@ -9,7 +9,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
@@ -26,7 +25,6 @@ kernel::compose_kernel_config!(
 );
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = Config::STACK_WORDS;
 
 /// Minimum tick count before declaring success (~10 major frames).
 const CHECK_TICK: u32 = 20;
@@ -131,18 +129,16 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("primask_leak: Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("primask_leak: Peripherals::take");
     hprintln!("pendsv_primask_leak_test: start");
 
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("primask_leak: sched");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k = Kernel::<Config>::create(sched, &cfgs).expect("primask_leak: Kernel::create");
+    let k = Kernel::<Config>::create_sentinels(sched).expect("primask_leak: Kernel::create");
 
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("primask_leak: boot") {}
+    match boot(&parts, p).expect("primask_leak: boot") {}
 }
