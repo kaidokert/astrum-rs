@@ -23,16 +23,12 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
-
-const NUM_PARTITIONS: usize = TestConfig::N;
-const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 
 /// Partition stores CONTROL reading here; 0 = not yet read.
 static CONTROL_VAL: AtomicU32 = AtomicU32::new(0);
@@ -88,18 +84,10 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 2))
         .expect("static schedule entry must fit");
 
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
-        [PartitionConfig::sentinel(0, (STACK_WORDS * 4) as u32)];
-
-    // Create the unified kernel with schedule and partitions.
-    #[cfg(feature = "dynamic-mpu")]
-    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-        .expect("kernel creation");
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel creation");
+    let k = Kernel::<TestConfig>::create_sentinels(sched).expect("kernel creation");
 
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
+    let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
     match boot(&parts, &mut p).expect("priv_drop_test: boot failed") {}
 }

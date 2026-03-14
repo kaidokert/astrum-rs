@@ -21,7 +21,6 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
@@ -36,8 +35,6 @@ kernel::compose_kernel_config!(
     }
 );
 
-const NUM_PARTITIONS: usize = Smoke4KConfig::N;
-const STACK_WORDS: usize = Smoke4KConfig::STACK_WORDS;
 const TIMEOUT_TICKS: u32 = 50;
 
 /// SYS_YIELD success return code.
@@ -102,12 +99,11 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Smoke4KConfig::SCHED }>::round_robin(2, 3)
         .expect("qemu_smoke_4k: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k = Kernel::<Smoke4KConfig>::create(sched, &cfgs).expect("qemu_smoke_4k: Kernel::create");
+    let k =
+        Kernel::<Smoke4KConfig>::create_sentinels(sched).expect("qemu_smoke_4k: create_sentinels");
 
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [(extern "C" fn() -> !, u32); Smoke4KConfig::N] = [(p0_main, 0), (p1_main, 0)];
     match boot(&parts, &mut p).expect("qemu_smoke_4k: boot") {}
 }

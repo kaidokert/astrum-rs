@@ -14,7 +14,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -25,9 +24,6 @@ kernel::compose_kernel_config!(Config<Partitions1, SyncMinimal, MsgMinimal, Port
 kernel::bind_interrupts!(Config, 70,
     0 => (0, 0x01),
 );
-
-const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = Config::STACK_WORDS;
 
 /// Set to 1 once we verify the IRQ remained pending inside SysTick.
 static PEND_VERIFIED: AtomicU32 = AtomicU32::new(0);
@@ -103,9 +99,8 @@ fn main() -> ! {
 
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(1, 3).expect("round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k = Kernel::<Config>::create(sched, &cfgs).expect("Kernel::create");
+    let k =
+        Kernel::<Config>::create_sentinels(sched).expect("systick_preempt_test: create_sentinels");
 
     store_kernel(k);
 
@@ -113,6 +108,6 @@ fn main() -> ! {
     // priority, numerically just above SYSTICK_PRIORITY.
     enable_bound_irqs(&mut p.NVIC, Config::MIN_APP_IRQ_PRIORITY).unwrap();
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0)];
+    let parts: [(extern "C" fn() -> !, u32); Config::N] = [(p0_main, 0)];
     match boot(&parts, &mut p).expect("boot") {}
 }

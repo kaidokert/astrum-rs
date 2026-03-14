@@ -9,7 +9,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
@@ -37,9 +36,6 @@ kernel::bind_interrupts!(CustomHandlerConfig, 70,
     60 => (0, 0x01, handler: custom_irq60_handler),
     61 => (1, 0x02),
 );
-
-const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = CustomHandlerConfig::STACK_WORDS;
 
 static ISR_COUNTER: AtomicU32 = AtomicU32::new(0);
 static P0_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -124,10 +120,9 @@ fn main() -> ! {
     hprintln!("custom_handler: start");
     let sched = ScheduleTable::<{ CustomHandlerConfig::SCHED }>::round_robin(2, 3)
         .expect("custom_handler: round_robin");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let k = Kernel::<CustomHandlerConfig>::create(sched, &cfgs).expect("custom_handler: create");
+    let k = Kernel::<CustomHandlerConfig>::create_sentinels(sched).expect("custom_handler: create");
     store_kernel(k);
     enable_bound_irqs(&mut p.NVIC, CustomHandlerConfig::IRQ_DEFAULT_PRIORITY).unwrap();
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [(extern "C" fn() -> !, u32); CustomHandlerConfig::N] = [(p0_main, 0), (p1_main, 0)];
     match boot(&parts, &mut p).expect("custom_handler: boot") {}
 }

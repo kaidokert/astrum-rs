@@ -17,15 +17,12 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(SmokeConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-const NUM_PARTITIONS: usize = SmokeConfig::N;
-const STACK_WORDS: usize = SmokeConfig::STACK_WORDS;
 const TIMEOUT_TICKS: u32 = 20;
 
 /// SYS_YIELD success return code.
@@ -79,12 +76,10 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ SmokeConfig::SCHED }>::round_robin(1, 3)
         .expect("smoke_test: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k = Kernel::<SmokeConfig>::create(sched, &cfgs).expect("smoke_test: Kernel::create");
+    let k = Kernel::<SmokeConfig>::create_sentinels(sched).expect("smoke_test: create_sentinels");
 
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
+    let parts: [(extern "C" fn() -> !, u32); SmokeConfig::N] = [(partition_main, 0)];
     match boot(&parts, &mut p).expect("smoke_test: boot") {}
 }

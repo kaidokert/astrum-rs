@@ -20,7 +20,6 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::PartitionConfig;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -40,8 +39,6 @@ kernel::compose_kernel_config!(
     }
 );
 
-const NUM_PARTITIONS: usize = TestConfig::N;
-const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 /// Tick at which we first check for detected dropped ticks.
 const CHECK_TICK: u32 = 10;
 /// Hard timeout to avoid hanging if detection never fires.
@@ -83,13 +80,12 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3)
         .expect("dropped_tick_test: round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-
-    let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("dropped_tick_test: Kernel::create");
+    let k =
+        Kernel::<TestConfig>::create_sentinels(sched).expect("dropped_tick_test: create_sentinels");
 
     // store_kernel and boot are provided by the define_unified_harness! macro.
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
+    let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
     match boot(&parts, &mut p).expect("dropped_tick_test: boot") {}
 }
