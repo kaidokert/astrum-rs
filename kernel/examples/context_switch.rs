@@ -62,7 +62,7 @@ extern "C" fn partition_1_entry() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().unwrap();
+    let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("context_switch: setting up two partitions");
 
     let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();
@@ -83,5 +83,5 @@ fn main() -> ! {
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
         [(partition_0_entry, 0), (partition_1_entry, 0)];
-    match boot(&parts, &mut p).expect("context_switch: boot failed") {}
+    match boot(&parts, p).expect("context_switch: boot failed") {}
 }

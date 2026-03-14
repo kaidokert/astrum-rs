@@ -70,7 +70,7 @@ extern "C" fn partition_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("smoke_test: Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("smoke_test: Peripherals::take");
     hprintln!("smoke_test: start");
 
     let sched = ScheduleTable::<{ SmokeConfig::SCHED }>::round_robin(1, 3)
@@ -81,5 +81,5 @@ fn main() -> ! {
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); SmokeConfig::N] = [(partition_main, 0)];
-    match boot(&parts, &mut p).expect("smoke_test: boot") {}
+    match boot(&parts, p).expect("smoke_test: boot") {}
 }

@@ -66,5 +66,5 @@ fn main() -> ! {
     enable_bound_irqs(&mut p.NVIC, IvtConfig::IRQ_DEFAULT_PRIORITY).unwrap();
 
     let parts: [(extern "C" fn() -> !, u32); IvtConfig::N] = [(p0_main, 0)];
-    match boot(&parts, &mut p).expect("qemu_custom_ivt: boot") {}
+    match boot(&parts, p).expect("qemu_custom_ivt: boot") {}
 }

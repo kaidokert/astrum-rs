@@ -107,7 +107,7 @@ extern "C" fn p1_main() -> ! {
 // (via `define_unified_kernel!`) — they are not explicit imports.
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("qemu_smoke: Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("qemu_smoke: Peripherals::take");
     hprintln!("qemu_smoke: start");
 
     let sched = ScheduleTable::<{ SmokeConfig::SCHED }>::round_robin(2, 3)
@@ -124,5 +124,5 @@ fn main() -> ! {
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("qemu_smoke: boot") {}
+    match boot(&parts, p).expect("qemu_smoke: boot") {}
 }

@@ -93,7 +93,7 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("qemu_smoke_4k: Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("qemu_smoke_4k: Peripherals::take");
     hprintln!("qemu_smoke_4k: start");
 
     let sched = ScheduleTable::<{ Smoke4KConfig::SCHED }>::round_robin(2, 3)
@@ -105,5 +105,5 @@ fn main() -> ! {
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); Smoke4KConfig::N] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("qemu_smoke_4k: boot") {}
+    match boot(&parts, p).expect("qemu_smoke_4k: boot") {}
 }

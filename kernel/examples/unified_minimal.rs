@@ -34,7 +34,7 @@ extern "C" fn partition_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().unwrap();
+    let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("unified_minimal: start");
 
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
@@ -54,5 +54,5 @@ fn main() -> ! {
 
     hprintln!("unified_minimal: calling boot");
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
-    match boot(&parts, &mut p).expect("unified_minimal: boot failed") {}
+    match boot(&parts, p).expect("unified_minimal: boot failed") {}
 }

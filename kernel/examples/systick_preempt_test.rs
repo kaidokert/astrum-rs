@@ -109,5 +109,5 @@ fn main() -> ! {
     enable_bound_irqs(&mut p.NVIC, Config::MIN_APP_IRQ_PRIORITY).unwrap();
 
     let parts: [(extern "C" fn() -> !, u32); Config::N] = [(p0_main, 0)];
-    match boot(&parts, &mut p).expect("boot") {}
+    match boot(&parts, p).expect("boot") {}
 }
