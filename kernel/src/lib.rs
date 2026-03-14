@@ -80,8 +80,6 @@ pub mod semaphore;
 pub mod split_isr;
 pub mod state;
 pub mod svc;
-#[cfg(feature = "ipc-queuing")]
-pub mod svc_queuing;
 pub mod svc_scheduler;
 pub mod sync_pools;
 pub mod syscall;
