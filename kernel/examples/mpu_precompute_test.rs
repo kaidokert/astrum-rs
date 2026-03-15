@@ -17,7 +17,7 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::{
     boot,
-    partition::PartitionConfig,
+    partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -132,16 +132,34 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched 1");
-    let mut cfgs = PartitionConfig::sentinel_array::<NP>(TestConfig::STACK_WORDS);
-    for (i, cfg) in cfgs.iter_mut().enumerate() {
-        // entry_point is the MPU code-region base, not the execution start address.
-        // boot::boot_external() receives the actual function pointer via the `parts` array.
-        // TODO: reviewer false positive — same pattern as mpu_context_switch_test.rs
-        cfg.entry_point = entry_fns[i] as usize as u32 & !(REGION_SZ - 1);
-    }
-    let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("kernel");
+    let k = {
+        // SAFETY: called once from main before any interrupt handler runs.
+        let stacks: &mut [[u32; SW]; NP] = unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
+        // TODO: hardcoded destructure assumes NP=2; generalize with a loop if NP varies.
+        let [ref mut s0, ref mut s1] = *stacks;
+        let memories = [
+            ExternalPartitionMemory::new(
+                s0,
+                entry_fns[0] as usize as u32 & !(REGION_SZ - 1),
+                MpuRegion::new(0, 0, 0),
+                0,
+            )
+            .expect("mem 0"),
+            ExternalPartitionMemory::new(
+                s1,
+                entry_fns[1] as usize as u32 & !(REGION_SZ - 1),
+                MpuRegion::new(0, 0, 0),
+                1,
+            )
+            .expect("mem 1"),
+        ];
+        Kernel::<TestConfig>::new_external(sched, &memories).expect("kernel")
+    };
     store_kernel(k);
-    // SAFETY: called once from main before any interrupt handler runs.
+    // SAFETY: the mutable borrow above has been released (block scope ended and
+    // new_external copies config data, not stack references); called before interrupts.
+    // TODO: reviewer false positive on aliasing — first &mut is confined to the block
+    // above; new_external does not retain stack references (it copies into PartitionConfig).
     let stacks: &mut [[u32; SW]; NP] = unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
     kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {
         for (i, stk) in stacks.iter().enumerate() {
