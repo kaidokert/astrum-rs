@@ -2,7 +2,10 @@ use crate::config::KernelConfig;
 use crate::context::ExceptionFrame;
 use crate::kernel_config_types;
 use crate::message::MessageQueue;
-use crate::partition::{ConfigError, MpuRegion, PartitionMemory, PartitionState, TransitionError};
+use crate::partition::{
+    ConfigError, ExternalPartitionMemory, MpuRegion, PartitionState, TransitionError,
+};
+use crate::partition_core::{AlignedStack1K, StackStorage};
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
 use crate::semaphore::Semaphore;
 use crate::svc::{Kernel, YieldResult};
@@ -75,23 +78,25 @@ impl KernelTestHarness {
         schedule
             .add_system_window(10)
             .map_err(|_| HarnessError::ScheduleFull)?;
-        let mut mems: Vec<PartitionMemory, { HarnessConfig::N }> = Vec::new();
-        for i in 0..n {
+        let mut stacks = [AlignedStack1K::default(); HarnessConfig::N];
+        let mut mems: Vec<ExternalPartitionMemory<'_>, { HarnessConfig::N }> = Vec::new();
+        for (i, stack) in stacks.iter_mut().enumerate().take(n) {
             let o = (i as u32) * PARTITION_OFFSET;
-            mems.push(PartitionMemory {
-                entry_point: FLASH_BASE + o,
-                stack_base: RAM_BASE + o,
-                stack_size: STACK_SIZE_BYTES,
-                mpu_region: MpuRegion::new(RAM_BASE + o, STACK_SIZE_BYTES, 0),
-                peripheral_regions: peripheral_fn(i),
-            })
-            .map_err(|_| HarnessError::ConfigsFull)?;
+            let mem = ExternalPartitionMemory::new(
+                stack.as_u32_slice_mut(),
+                FLASH_BASE + o,
+                MpuRegion::new(RAM_BASE + o, STACK_SIZE_BYTES, 0),
+                i as u8,
+            )
+            .map_err(HarnessError::KernelInit)?
+            // TODO: reviewer false positive — with_peripheral_regions() copies MpuRegion values
+            // into an owned Vec<MpuRegion, 2>; the temporary from peripheral_fn(i) only needs
+            // to live for the duration of this statement, which it does.
+            .with_peripheral_regions(&peripheral_fn(i));
+            mems.push(mem).map_err(|_| HarnessError::ConfigsFull)?;
         }
-        // create_from_memory auto-creates a default DeviceRegistry on dynamic-mpu builds,
-        // replacing the explicit DeviceRegistry::new() that Kernel::new() required.
-        let mut kernel = Box::new(
-            Kernel::create_from_memory(schedule, &mems).map_err(HarnessError::KernelInit)?,
-        );
+        let mut kernel =
+            Box::new(Kernel::new_external(schedule, &mems).map_err(HarnessError::KernelInit)?);
         // Only partition 0 starts Running; others remain Ready (at-most-one-Running invariant).
         kernel
             .partitions_mut()
@@ -216,25 +221,25 @@ impl KernelTestHarness {
         schedule
             .add_system_window(10)
             .map_err(|_| HarnessError::ScheduleFull)?;
-        let mems: [PartitionMemory; 2] = [
-            PartitionMemory {
-                entry_point: FLASH_BASE,
-                stack_base: RAM_BASE,
-                stack_size: STACK_SIZE_BYTES,
-                mpu_region: MpuRegion::new(0, 0, 0),
-                peripheral_regions: Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: FLASH_BASE + PARTITION_OFFSET,
-                stack_base: RAM_BASE + PARTITION_OFFSET,
-                stack_size: STACK_SIZE_BYTES,
-                mpu_region: MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
-                peripheral_regions: Vec::new(),
-            },
-        ];
-        let mut kernel = Box::new(
-            Kernel::create_from_memory(schedule, &mems).map_err(HarnessError::KernelInit)?,
-        );
+        let mut stack0 = AlignedStack1K::default();
+        let mut stack1 = AlignedStack1K::default();
+        let mem0 = ExternalPartitionMemory::new(
+            stack0.as_u32_slice_mut(),
+            FLASH_BASE,
+            MpuRegion::new(0, 0, 0),
+            0,
+        )
+        .map_err(HarnessError::KernelInit)?;
+        let mem1 = ExternalPartitionMemory::new(
+            stack1.as_u32_slice_mut(),
+            FLASH_BASE + PARTITION_OFFSET,
+            MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
+            1,
+        )
+        .map_err(HarnessError::KernelInit)?;
+        let mems = [mem0, mem1];
+        let mut kernel =
+            Box::new(Kernel::new_external(schedule, &mems).map_err(HarnessError::KernelInit)?);
         // Verify Kernel::new preserved P1's user-configured base before fixup.
         assert_eq!(
             kernel.partitions().get(1).map(|p| p.mpu_region().base()),
@@ -2704,32 +2709,31 @@ mod tests {
 
         // P0: sentinel mpu_region (size==0).
         // P1: user-configured mpu_region.
-        let mems: [PartitionMemory; 2] = [
-            PartitionMemory {
-                entry_point: FLASH_BASE,
-                stack_base: RAM_BASE,
-                stack_size: STACK_SIZE_BYTES,
-                mpu_region: MpuRegion::new(0, 0, 0),
-                peripheral_regions: Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: FLASH_BASE + PARTITION_OFFSET,
-                stack_base: RAM_BASE + PARTITION_OFFSET,
-                stack_size: STACK_SIZE_BYTES,
-                mpu_region: MpuRegion::new(
-                    original_config_base,
-                    original_config_size,
-                    SENTINEL_DATA_PERMISSIONS,
-                ),
-                peripheral_regions: Vec::new(),
-            },
-        ];
+        let mut stack0 = AlignedStack1K::default();
+        let mut stack1 = AlignedStack1K::default();
+        let mem0 = ExternalPartitionMemory::new(
+            stack0.as_u32_slice_mut(),
+            FLASH_BASE,
+            MpuRegion::new(0, 0, 0),
+            0,
+        )
+        .expect("mem0");
+        let mem1 = ExternalPartitionMemory::new(
+            stack1.as_u32_slice_mut(),
+            FLASH_BASE + PARTITION_OFFSET,
+            MpuRegion::new(
+                original_config_base,
+                original_config_size,
+                SENTINEL_DATA_PERMISSIONS,
+            ),
+            1,
+        )
+        .expect("mem1");
+        let mems = [mem0, mem1];
 
         // Create kernel and box it to simulate boot placement.
-        let mut kernel = Box::new(
-            Kernel::<HarnessConfig>::create_from_memory(schedule, &mems)
-                .expect("create_from_memory"),
-        );
+        let mut kernel =
+            Box::new(Kernel::<HarnessConfig>::new_external(schedule, &mems).expect("new_external"));
 
         // Grab the actual stack address for P0 (the fixup target).
         // core_stack_base() is needed here as test setup: it provides the
