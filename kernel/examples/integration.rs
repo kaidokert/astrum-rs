@@ -11,18 +11,18 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::message::SendOutcome;
 use kernel::mpu;
-use kernel::partition::{MpuRegion, PartitionConfig, PartitionState};
+use kernel::partition::{ExternalPartitionMemory, MpuRegion, PartitionState};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
-use kernel::{boot, events, DebugEnabled, MsgStandard, Partitions4, PortsTiny, SyncMinimal};
+use kernel::{
+    boot, events, AlignedStack1K, DebugEnabled, MsgStandard, Partitions4, PortsTiny,
+    StackStorage as _, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(IntegrationConfig<Partitions4, SyncMinimal, MsgStandard, PortsTiny, DebugEnabled>);
 
-const STACK_WORDS: usize = IntegrationConfig::STACK_WORDS;
-#[repr(C, align(4096))]
-struct PartitionStacks([[u32; STACK_WORDS]; IntegrationConfig::N]);
-static mut PARTITION_STACKS: PartitionStacks =
-    PartitionStacks([[0u32; STACK_WORDS]; IntegrationConfig::N]);
+static mut STACKS: [AlignedStack1K; IntegrationConfig::N] =
+    [AlignedStack1K::ZERO; IntegrationConfig::N];
 
 static P_RAN: AtomicU32 = AtomicU32::new(u32::MAX);
 static SW: AtomicU32 = AtomicU32::new(0);
@@ -84,10 +84,6 @@ kernel::define_unified_harness!(no_boot, IntegrationConfig, |tick, k| {
     }
 });
 
-fn pcfg(id: u8) -> PartitionConfig {
-    PartitionConfig::new(id, 0, MpuRegion::new(0, 0, 0))
-}
-
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().unwrap();
@@ -95,25 +91,28 @@ fn main() -> ! {
     let mut s: ScheduleTable<8> = ScheduleTable::new();
     s.add(ScheduleEntry::new(0, 3)).unwrap();
     s.add(ScheduleEntry::new(1, 3)).unwrap();
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let mut k = Kernel::<IntegrationConfig>::with_config(s, &[pcfg(0), pcfg(1)], &[]).unwrap();
-    #[cfg(feature = "dynamic-mpu")]
-    let mut k = Kernel::<IntegrationConfig>::with_config(
-        s,
-        &[pcfg(0), pcfg(1)],
-        kernel::virtual_device::DeviceRegistry::new(),
-        &[],
-    )
-    .unwrap();
+    const NUM_PARTS: usize = 2;
+    let entry_fns: [extern "C" fn() -> !; NUM_PARTS] = [p0_main, p1_main];
+    let mut k = {
+        // SAFETY: called once from main before any interrupt handler runs.
+        let ptr = &raw mut STACKS;
+        let stacks = unsafe { &mut *ptr };
+        let mut stk_iter = stacks.iter_mut();
+        let memories: [_; NUM_PARTS] = core::array::from_fn(|i| {
+            ExternalPartitionMemory::from_aligned_stack(
+                stk_iter.next().unwrap(),
+                entry_fns[i] as *const () as u32,
+                MpuRegion::new(0, 0, 0),
+                i as u8,
+            )
+            .unwrap()
+        });
+        Kernel::<IntegrationConfig>::new(s, &memories).unwrap()
+    };
     let _ = k
         .messages_mut()
         .add(kernel::message::MessageQueue::<4, 4, 4>::new());
     store_kernel(k);
-    // SAFETY: called once from main before any interrupt handler runs.
-    let stacks: &mut [[u32; STACK_WORDS]; IntegrationConfig::N] =
-        unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
-    // TODO: IntegrationConfig composes Partitions4 (N=4) but only 2 partitions are used.
-    // Either switch to Partitions2 or add entries for all 4 when more test coverage is needed.
-    let parts: [(extern "C" fn() -> !, u32); 2] = [(p0_main, 0), (p1_main, 0)];
-    match boot::boot_external::<IntegrationConfig, STACK_WORDS>(&parts, p, stacks).unwrap() {}
+    // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
+    match unsafe { boot::boot_preconfigured::<IntegrationConfig>(p) }.unwrap() {}
 }

@@ -13,21 +13,21 @@ use cortex_m_rt::exception;
 use kernel::{
     boot,
     kexit, klog,
+    partition::{ExternalPartitionMemory, MpuRegion},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgSmall, Partitions2, PortsTiny, SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgSmall, Partitions2, PortsTiny, StackStorage as _, SyncMinimal,
 };
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
-const SW: usize = Cfg::STACK_WORDS;
-#[repr(C, align(4096))]
-struct PartitionStacks([[u32; SW]; Cfg::N]);
-static mut PARTITION_STACKS: PartitionStacks = PartitionStacks([[0u32; SW]; Cfg::N]);
+static mut STACKS: [AlignedStack1K; Cfg::N] = [AlignedStack1K::ZERO; Cfg::N];
 static P0_SENT: AtomicU32 = AtomicU32::new(0);
 static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);
 static PARTS_RAN: AtomicU32 = AtomicU32::new(0);
+static SRC_PORT: AtomicU32 = AtomicU32::new(0);
+static DST_PORT: AtomicU32 = AtomicU32::new(0);
 kernel::define_unified_harness!(no_boot, Cfg, |tick, k| {
     let addr = k as *const _ as usize;
     if (addr & (kernel::state::KERNEL_ALIGNMENT - 1)) != 0 { kexit!(failure); }
@@ -40,16 +40,16 @@ kernel::define_unified_harness!(no_boot, Cfg, |tick, k| {
         if tick > 100 { klog!("FAIL: timeout"); kexit!(failure); }
     }
 });
-extern "C" fn p0_main_body(r0: u32) -> ! {
+extern "C" fn p0_main() -> ! {
     PARTS_RAN.fetch_or(1, Ordering::Release);
-    let (port, msg) = (plib::QueuingPortId::new(r0 >> 16), [0xDE_u8, 0xAD, 0xBE, 0xEF]);
+    let port = plib::QueuingPortId::new(SRC_PORT.load(Ordering::Acquire));
+    let msg = [0xDE_u8, 0xAD, 0xBE, 0xEF];
     if plib::sys_queuing_send(port, &msg).is_ok() { P0_SENT.store(1, Ordering::Release); }
     loop { plib::sys_yield().expect("sys_yield"); }
 }
-kernel::partition_trampoline!(p0_main => p0_main_body);
-extern "C" fn p1_main_body(r0: u32) -> ! {
+extern "C" fn p1_main() -> ! {
     PARTS_RAN.fetch_or(2, Ordering::Release);
-    let port = plib::QueuingPortId::new(r0 & 0xFFFF);
+    let port = plib::QueuingPortId::new(DST_PORT.load(Ordering::Acquire));
     loop {
         let mut buf = [0u8; 4];
         if plib::sys_queuing_recv(port, &mut buf).is_ok() && buf == [0xDE, 0xAD, 0xBE, 0xEF] {
@@ -59,7 +59,6 @@ extern "C" fn p1_main_body(r0: u32) -> ! {
     }
     loop { plib::sys_yield().expect("sys_yield"); }
 }
-kernel::partition_trampoline!(p1_main => p1_main_body);
 #[cortex_m_rt::entry]
 #[allow(clippy::never_loop)] // kexit! diverges via inner loop on catch-all backend
 fn main() -> ! {
@@ -75,9 +74,25 @@ fn main() -> ! {
     if sched.add(ScheduleEntry::new(1, 2)).is_err() { loop { kexit!(failure); } }
     #[cfg(feature = "dynamic-mpu")]
     if sched.add_system_window(1).is_err() { loop { kexit!(failure); } }
-    let mut k = match Kernel::<Cfg>::create_sentinels(sched) {
-        Ok(k) => k,
-        Err(_) => loop { kexit!(failure); },
+    let entry_fns: [extern "C" fn() -> !; Cfg::N] = [p0_main, p1_main];
+    let mut k = {
+        // SAFETY: called once from main before any interrupt handler runs.
+        let ptr = &raw mut STACKS;
+        let stacks = unsafe { &mut *ptr };
+        let mut stk_iter = stacks.iter_mut();
+        let memories: [_; Cfg::N] = core::array::from_fn(|i| {
+            match ExternalPartitionMemory::from_aligned_stack(
+                stk_iter.next().expect("stack"),
+                entry_fns[i] as *const () as u32,
+                MpuRegion::new(0, 0, 0),
+                i as u8,
+            ) {
+                Ok(m) => m, Err(_) => loop { kexit!(failure); },
+            }
+        });
+        match Kernel::<Cfg>::new(sched, &memories) {
+            Ok(k) => k, Err(_) => loop { kexit!(failure); },
+        }
     };
     let src = match k.queuing_mut().create_port(PortDirection::Source) {
         Ok(id) => id,
@@ -88,13 +103,11 @@ fn main() -> ! {
         Err(_) => loop { kexit!(failure); },
     };
     if k.queuing_mut().connect_ports(src, dst).is_err() { loop { kexit!(failure); } }
+    SRC_PORT.store(src as u32, Ordering::Release);
+    DST_PORT.store(dst as u32, Ordering::Release);
     store_kernel(k);
-    // SAFETY: called once from main before any interrupt handler runs.
-    let stacks: &mut [[u32; SW]; Cfg::N] =
-        unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
-    let parts: [(extern "C" fn() -> !, u32); Cfg::N] =
-        [(p0_main, (src as u32) << 16), (p1_main, dst as u32)];
-    match boot::boot_external::<Cfg, SW>(&parts, p, stacks) {
+    // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
+    match unsafe { boot::boot_preconfigured::<Cfg>(p) } {
         Ok(never) => match never {},
         Err(_) => loop { kexit!(failure); },
     }

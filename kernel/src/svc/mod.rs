@@ -1092,6 +1092,10 @@ where
         if memories.len() > C::N {
             return Err(ConfigError::PartitionTableFull);
         }
+        // TODO: memories.len() < C::N creates fewer partitions than C::N.
+        // This is intentional: with_config creates exactly memories.len()
+        // partitions, each fully initialized.  Schedule validation catches
+        // any entry referencing a non-existent partition index.
         let mut configs: heapless::Vec<PartitionConfig, { C::N }> = heapless::Vec::new();
         for (i, m) in memories.iter().enumerate() {
             let cfg = PartitionConfig {
@@ -1104,13 +1108,24 @@ where
                 .push(cfg)
                 .map_err(|_| ConfigError::PartitionTableFull)?;
         }
-        Self::with_config(
+        let mut kernel = Self::with_config(
             schedule,
             &configs,
             #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
             &[],
-        )
+        )?;
+        // Patch stack_base and stack_size from ExternalPartitionMemory into
+        // each PCB so that boot_preconfigured() can read them directly.
+        for (i, m) in memories.iter().enumerate() {
+            if let Some(pcb) = kernel.partitions_mut().get_mut(i) {
+                pcb.set_stack_fields(m.stack_base(), m.stack_size_bytes())
+                    .map_err(|_| ConfigError::StackSizeInvalid {
+                        partition_id: i as u8,
+                    })?;
+            }
+        }
+        Ok(kernel)
     }
 
     /// Create a `Kernel` with `C::N` sentinel partitions.
@@ -3462,8 +3477,8 @@ mod tests {
         assert_eq!(pcb.entry_point(), 0x0800_1000);
         assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
         assert_eq!(pcb.mpu_region().size(), 1024);
-        assert_eq!(pcb.stack_base(), 0, "sentinel stack_base");
-        assert_eq!(pcb.stack_size(), 0, "sentinel stack_size");
+        assert_ne!(pcb.stack_base(), 0, "stack_base populated by Kernel::new");
+        assert_ne!(pcb.stack_size(), 0, "stack_size populated by Kernel::new");
         // Sentinel mpu_region (size==0) also accepted
         let k2 = mem_kernel(0, MpuRegion::new(0, 0, 0)).unwrap();
         assert_eq!(k2.partitions().get(0).unwrap().mpu_region().size(), 0);
@@ -3514,8 +3529,8 @@ mod tests {
         assert_eq!(pcb.entry_point(), 0x0800_1000);
         assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
         assert_eq!(pcb.mpu_region().size(), 1024);
-        assert_eq!(pcb.stack_base(), 0, "sentinel stack_base");
-        assert_eq!(pcb.stack_size(), 0, "sentinel stack_size");
+        assert_ne!(pcb.stack_base(), 0, "stack_base populated by Kernel::new");
+        assert_eq!(pcb.stack_size(), 256, "stack_size from AlignedStack256B");
         assert!(
             pcb.peripheral_regions().is_empty(),
             "no peripheral regions configured"
