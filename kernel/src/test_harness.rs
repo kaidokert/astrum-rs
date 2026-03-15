@@ -5,17 +5,13 @@ use crate::message::MessageQueue;
 use crate::partition::{
     ConfigError, ExternalPartitionMemory, MpuRegion, PartitionState, TransitionError,
 };
-use crate::partition_core::{AlignedStack1K, PartitionCore, StackStorage};
+use crate::partition_core::{AlignedStack1K, StackStorage};
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
 use crate::semaphore::Semaphore;
 use crate::svc::{Kernel, YieldResult};
 use heapless::Vec;
 
 pub struct HarnessConfig;
-
-/// Concrete core type for the test harness, used to call inherent methods
-/// (e.g. `stack_base`) that are not on the `CoreOps` trait.
-type HarnessCore = PartitionCore<{ HarnessConfig::N }, { HarnessConfig::SCHED }, AlignedStack1K>;
 
 impl KernelConfig for HarnessConfig {
     const N: usize = 4;
@@ -59,6 +55,7 @@ pub enum HarnessError {
 
 pub struct KernelTestHarness {
     kernel: Box<Kernel<HarnessConfig>>,
+    _stacks: Box<[AlignedStack1K; HarnessConfig::N]>,
 }
 
 impl KernelTestHarness {
@@ -114,13 +111,10 @@ impl KernelTestHarness {
         // On 64-bit test hosts, addresses captured during Kernel::new become
         // stale when the struct moves. Boxing pins the kernel on the heap so
         // the stack addresses are stable for writing into the PCBs.
-        // TODO: Kernel is not move-safe due to internal self-references to stack
-        // buffers. Ideally Kernel::new should return a pinned/boxed type or use
-        // relative offsets, eliminating this post-move fixup.
+        drop(mems);
+        let stacks = Box::new(stacks);
         for i in 0..n {
-            let base = (&kernel.core as &HarnessCore)
-                .stack_base(i)
-                .ok_or(HarnessError::PartitionNotFound)?;
+            let base = stacks[i].as_u32_slice().as_ptr() as u32;
             let sp = base.wrapping_add(STACK_SIZE_BYTES);
             kernel.set_sp(i, sp);
             assert!(
@@ -132,7 +126,10 @@ impl KernelTestHarness {
                 "fix_mpu_data_region failed for partition {i}"
             );
         }
-        Ok(Self { kernel })
+        Ok(Self {
+            kernel,
+            _stacks: stacks,
+        })
     }
 
     pub fn with_partitions(n: usize) -> Result<Self, HarnessError> {
@@ -225,17 +222,17 @@ impl KernelTestHarness {
         schedule
             .add_system_window(10)
             .map_err(|_| HarnessError::ScheduleFull)?;
-        let mut stack0 = AlignedStack1K::default();
-        let mut stack1 = AlignedStack1K::default();
+        let mut stacks = Box::new([AlignedStack1K::default(); HarnessConfig::N]);
+        let (head, tail) = stacks.split_at_mut(1);
         let mem0 = ExternalPartitionMemory::new(
-            stack0.as_u32_slice_mut(),
+            head[0].as_u32_slice_mut(),
             FLASH_BASE,
             MpuRegion::new(0, 0, 0),
             0,
         )
         .map_err(HarnessError::KernelInit)?;
         let mem1 = ExternalPartitionMemory::new(
-            stack1.as_u32_slice_mut(),
+            tail[0].as_u32_slice_mut(),
             FLASH_BASE + PARTITION_OFFSET,
             MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
             1,
@@ -261,10 +258,9 @@ impl KernelTestHarness {
         // Post-move fixup: replicate boot.rs's inline sentinel guard.
         // Only sentinel partitions (size==0) get their MPU base updated;
         // user-configured partitions keep their original base.
+        drop(mems);
         for i in 0..n {
-            let base = (&kernel.core as &HarnessCore)
-                .stack_base(i)
-                .ok_or(HarnessError::PartitionNotFound)?;
+            let base = stacks[i].as_u32_slice().as_ptr() as u32;
             let sp = base.wrapping_add(STACK_SIZE_BYTES);
             kernel.set_sp(i, sp);
             assert!(
@@ -282,7 +278,10 @@ impl KernelTestHarness {
                 );
             }
         }
-        Ok(Self { kernel })
+        Ok(Self {
+            kernel,
+            _stacks: stacks,
+        })
     }
 
     /// Create a harness with two partitions and one message queue.
@@ -2713,17 +2712,17 @@ mod tests {
 
         // P0: sentinel mpu_region (size==0).
         // P1: user-configured mpu_region.
-        let mut stack0 = AlignedStack1K::default();
-        let mut stack1 = AlignedStack1K::default();
+        let mut stacks = Box::new([AlignedStack1K::default(); 2]);
+        let (head, tail) = stacks.split_at_mut(1);
         let mem0 = ExternalPartitionMemory::new(
-            stack0.as_u32_slice_mut(),
+            head[0].as_u32_slice_mut(),
             FLASH_BASE,
             MpuRegion::new(0, 0, 0),
             0,
         )
         .expect("mem0");
         let mem1 = ExternalPartitionMemory::new(
-            stack1.as_u32_slice_mut(),
+            tail[0].as_u32_slice_mut(),
             FLASH_BASE + PARTITION_OFFSET,
             MpuRegion::new(
                 original_config_base,
@@ -2738,13 +2737,10 @@ mod tests {
         // Create kernel and box it to simulate boot placement.
         let mut kernel =
             Box::new(Kernel::<HarnessConfig>::new_external(schedule, &mems).expect("new_external"));
+        drop(mems);
 
-        // Grab the actual stack address for P0 (the fixup target).
-        // Direct field access provides the real post-move address to pass
-        // into fix_mpu_data_region.
-        let fixup_base = (&kernel.core as &HarnessCore)
-            .stack_base(0)
-            .expect("partition 0 stack");
+        // Use the external (boxed) stack address for P0 (the fixup target).
+        let fixup_base = stacks[0].as_u32_slice().as_ptr() as u32;
 
         // Run selective fixup loop mirroring boot.rs:296-302.
         for i in 0..2usize {
