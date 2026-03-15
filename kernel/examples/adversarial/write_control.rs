@@ -125,6 +125,5 @@ fn main() -> ! {
 
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
-    match boot(&parts, p).expect("write_control: boot failed") {}
+    match boot(p).expect("write_control: boot failed") {}
 }

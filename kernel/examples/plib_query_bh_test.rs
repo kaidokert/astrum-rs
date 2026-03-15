@@ -132,7 +132,8 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(0, 3)).expect("add P0");
     sched.add_system_window(1).expect("sys0");
 
-    let cfgs = PartitionConfig::sentinel_array::<1>();
+    let mut cfgs = PartitionConfig::sentinel_array::<1>();
+    cfgs[0].entry_point = partition_main as *const () as u32;
     #[cfg(not(feature = "dynamic-mpu"))]
     let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
     #[cfg(feature = "dynamic-mpu")]
@@ -145,5 +146,5 @@ fn main() -> ! {
     .expect("kernel");
     store_kernel(k);
 
-    match boot(&[(partition_main, 0)], p).expect("boot") {}
+    match boot(p).expect("boot") {}
 }

@@ -139,7 +139,6 @@ fn main() -> ! {
     );
 
     // Build partition array for boot().
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(test_partition_main, 0)];
 
-    match boot(&parts, p).expect("syscall_bad_ids: boot failed") {}
+    match boot(p).expect("syscall_bad_ids: boot failed") {}
 }

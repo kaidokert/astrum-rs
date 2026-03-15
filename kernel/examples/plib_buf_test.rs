@@ -149,7 +149,9 @@ fn main() -> ! {
         .add(ScheduleEntry::new(1, 3))
         .expect("plib_buf_test: add P1");
     sched.add_system_window(1).expect("plib_buf_test: sys1");
-    let cfgs = PartitionConfig::sentinel_array::<2>();
+    let mut cfgs = PartitionConfig::sentinel_array::<2>();
+    cfgs[0].entry_point = p0_main as *const () as u32;
+    cfgs[1].entry_point = p1_idle as *const () as u32;
     #[cfg(not(feature = "dynamic-mpu"))]
     let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("plib_buf_test: kernel");
     #[cfg(feature = "dynamic-mpu")]
@@ -162,5 +164,5 @@ fn main() -> ! {
     .expect("plib_buf_test: kernel");
     store_kernel(k);
 
-    match boot(&[(p0_main, 0), (p1_idle, 0)], p).expect("plib_buf_test: boot") {}
+    match boot(p).expect("plib_buf_test: boot") {}
 }

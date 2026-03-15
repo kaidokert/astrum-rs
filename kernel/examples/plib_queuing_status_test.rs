@@ -53,7 +53,8 @@ extern "C" fn p0_main() -> ! {
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("peripherals");
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("sched");
-    let cfgs = PartitionConfig::sentinel_array::<{ TestConfig::N }>();
+    let mut cfgs = PartitionConfig::sentinel_array::<{ TestConfig::N }>();
+    cfgs[0].entry_point = p0_main as *const () as u32;
     #[cfg(not(feature = "dynamic-mpu"))]
     let mut k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
     #[cfg(feature = "dynamic-mpu")]
@@ -74,5 +75,5 @@ fn main() -> ! {
         .expect("dst port");
     k.queuing_mut().connect_ports(src, dst).expect("connect");
     store_kernel(k);
-    match boot(&[(p0_main, 0)], p).expect("boot") {}
+    match boot(p).expect("boot") {}
 }
