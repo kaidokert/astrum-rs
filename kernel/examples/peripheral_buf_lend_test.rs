@@ -15,10 +15,9 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     buf_syscall,
     mpu_strategy::MpuStrategy,
-    partition::{MpuRegion, PartitionConfig},
+    partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    virtual_device::DeviceRegistry,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 
@@ -112,7 +111,7 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals already taken");
+    let p = cortex_m::Peripherals::take().expect("peripherals already taken");
     hprintln!("peripheral_buf_lend_test: start");
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 3)).expect("sched P0");
@@ -120,19 +119,22 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 3)).expect("sched P1");
     sched.add_system_window(1).expect("sys1");
 
-    // P0: sentinel + UART0 peripheral region.
-    let mut p0_cfg = PartitionConfig::sentinel(0, (TestConfig::STACK_WORDS * 4) as u32);
-    p0_cfg
-        .peripheral_regions
-        .push(MpuRegion::new(UART0_BASE, UART0_SIZE, 0))
-        .expect("peripheral region");
-
-    let cfgs: [PartitionConfig; NP] = [
-        p0_cfg,
-        PartitionConfig::sentinel(1, (TestConfig::STACK_WORDS * 4) as u32),
-    ];
-    let k = Kernel::<TestConfig>::new(sched, &cfgs, DeviceRegistry::new()).expect("kernel");
+    // Build partition descriptors with P0 having a UART0 peripheral region.
+    let k = {
+        // SAFETY: called once from main before any interrupt handler runs.
+        let stacks = unsafe {
+            &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; TestConfig::STACK_WORDS]; NP]>()
+        };
+        let [ref mut s0, ref mut s1] = *stacks;
+        let memories = [
+            ExternalPartitionMemory::new(s0, 0, MpuRegion::new(0, 0, 0), 0)
+                .expect("mem 0")
+                .with_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)]),
+            ExternalPartitionMemory::new(s1, 0, MpuRegion::new(0, 0, 0), 1).expect("mem 1"),
+        ];
+        Kernel::<TestConfig>::new_external(sched, &memories).expect("kernel")
+    };
     store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("boot") {}
+    match boot(&parts, p).expect("boot") {}
 }

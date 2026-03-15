@@ -15,10 +15,9 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     buf_syscall,
     mpu_strategy::MpuStrategy,
-    partition::PartitionConfig,
+    partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    virtual_device::DeviceRegistry,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 
@@ -118,10 +117,18 @@ fn main() -> ! {
         .add(ScheduleEntry::new(1, 3))
         .expect("add P1 schedule entry");
     sched.add_system_window(1).expect("sys1");
-    let cfgs: [PartitionConfig; NP] = core::array::from_fn(|i| {
-        PartitionConfig::sentinel(i as u8, (TestConfig::STACK_WORDS * 4) as u32)
-    });
-    let k = Kernel::<TestConfig>::new(sched, &cfgs, DeviceRegistry::new()).expect("kernel");
+    let k = {
+        // SAFETY: called once from main before any interrupt handler runs.
+        let stacks = unsafe {
+            &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; TestConfig::STACK_WORDS]; NP]>()
+        };
+        let [ref mut s0, ref mut s1] = *stacks;
+        let memories = [
+            ExternalPartitionMemory::new(s0, 0, MpuRegion::new(0, 0, 0), 0).expect("mem 0"),
+            ExternalPartitionMemory::new(s1, 0, MpuRegion::new(0, 0, 0), 1).expect("mem 1"),
+        ];
+        Kernel::<TestConfig>::new_external(sched, &memories).expect("kernel")
+    };
     store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_main, 0), (p1_main, 0)];
     match boot(&parts, p).expect("boot") {}

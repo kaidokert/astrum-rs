@@ -32,7 +32,7 @@ use kernel::syscall::{SYS_BUF_ALLOC, SYS_BUF_RELEASE, SYS_BUF_WRITE};
 use kernel::{
     mpu,
     mpu_strategy::{DynamicStrategy, MpuStrategy},
-    partition::{MpuRegion, PartitionConfig},
+    partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -40,7 +40,6 @@ use kernel::{
 
 const NP: usize = 2;
 const STACK_WORDS: usize = 256;
-const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 const DATA_BASES: [u32; NP] = [0x2000_0000, 0x2000_8000];
 const DATA_SIZES: [u32; NP] = [4096, 4096];
 const P2: u8 = 1;
@@ -196,7 +195,7 @@ fn SysTick() {
 
     // Drive scheduler using the unified Kernel, configure R4 via DynamicStrategy.
     with_kernel_mut(|k| {
-        let event = kernel::svc_scheduler::advance_schedule_tick(k);
+        let event = kernel::svc::scheduler::advance_schedule_tick(k);
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             if let Some(pcb) = k.partitions().get(pid as usize) {
                 let dyn_region = pcb.cached_dynamic_region();
@@ -303,22 +302,32 @@ fn main() -> ! {
         }
     }
 
-    // Build partition configs
+    // Build partition descriptors from existing stack arrays.
     // SAFETY: before interrupts; single-core exclusive access.
-    let cfgs: [PartitionConfig; NP] = unsafe {
-        core::array::from_fn(|i| PartitionConfig {
-            id: i as u8,
-            entry_point: 0,
-            stack_base: STACKS[i].0.as_ptr() as u32,
-            stack_size: STACK_SIZE,
-            mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SIZES[i], 0),
-            peripheral_regions: heapless::Vec::new(),
-        })
-    };
+    // SAFETY: cast through raw pointer avoids `deref_addrof` lint while
+    // remaining equivalent to `&mut STACKS`.
+    let stacks: &mut [AlignedStack; NP] =
+        unsafe { &mut *(&raw mut STACKS).cast::<[AlignedStack; NP]>() };
+    let [s0, s1] = stacks;
+    let memories = [
+        ExternalPartitionMemory::new(
+            &mut s0.0,
+            0,
+            MpuRegion::new(DATA_BASES[0], DATA_SIZES[0], 0),
+            0,
+        )
+        .expect("partition memory 0"),
+        ExternalPartitionMemory::new(
+            &mut s1.0,
+            0,
+            MpuRegion::new(DATA_BASES[1], DATA_SIZES[1], 0),
+            1,
+        )
+        .expect("partition memory 1"),
+    ];
 
-    // Create the unified kernel with schedule and partitions
-    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-        .expect("kernel creation");
+    // Create the unified kernel with new_external()
+    let k = Kernel::<TestConfig>::new_external(sched, &memories).expect("kernel creation");
     store_kernel(k);
 
     // Seal the MPU cache so cached_dynamic_region() returns valid data.
