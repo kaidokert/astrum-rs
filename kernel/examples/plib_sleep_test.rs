@@ -10,7 +10,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::{PartitionConfig, PartitionState};
+use kernel::partition::PartitionState;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
@@ -20,7 +20,6 @@ kernel::compose_kernel_config!(
 );
 
 const NUM_PARTITIONS: usize = TestConfig::N;
-const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 const TIMEOUT_TICKS: u32 = 30;
 const SLEEP_TICKS: u16 = 5;
 const NOT_YET: u32 = 0xDEAD_C0DE;
@@ -115,15 +114,14 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
     hprintln!("plib_sleep_test: start");
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_sleep_test: round_robin");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("plib_sleep_test: kernel");
+    let k = Kernel::<TestConfig>::create_sentinels(sched).expect("plib_sleep_test: kernel");
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("plib_sleep_test: boot") {}
+    match boot(&parts, p).expect("plib_sleep_test: boot") {}
 }

@@ -16,7 +16,7 @@ use cortex_m_rt::{entry, exception}; // `exception` is used by `define_unified_h
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::{PartitionConfig, STARVATION_THRESHOLD};
+use kernel::partition::STARVATION_THRESHOLD;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
 use kernel::svc::Kernel;
@@ -27,7 +27,6 @@ kernel::compose_kernel_config!(
 );
 
 const NUM_PARTITIONS: usize = Config::N;
-const STACK_WORDS: usize = Config::STACK_WORDS;
 // P2 is unscheduled but stays Ready — it accumulates starvation when P0
 // yields past Waiting P1 (increment_starvation_for_ready_partitions).
 const OBSERVER_PID: usize = 2;
@@ -101,14 +100,13 @@ extern "C" fn p2_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("Peripherals::take");
     hprintln!("starvation_counter_test: start");
     // round_robin(2,1) schedules P0 and P1 only. P2 stays Ready but never
     // runs, so increment_starvation_for_ready_partitions() (which iterates
     // ALL partitions regardless of schedule membership) will count P2.
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(2, 1).expect("round_robin");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let mut k = Kernel::<Config>::create(sched, &cfgs).expect("Kernel::create");
+    let mut k = Kernel::<Config>::create_sentinels(sched).expect("Kernel::create");
     k.semaphores_mut()
         .add(Semaphore::new(0, 1))
         .expect("add semaphore");
@@ -116,5 +114,5 @@ fn main() -> ! {
     store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
         [(p0_main, 0), (p1_main, 0), (p2_main, 0)];
-    match boot(&parts, &mut p).expect("boot") {}
+    match boot(&parts, p).expect("boot") {}
 }
