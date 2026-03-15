@@ -466,18 +466,18 @@ macro_rules! define_unified_harness {
              <$Config as $crate::config::KernelConfig>::N],
         );
 
-        /// Create a sentinel kernel via `new()` from
-        /// `__PARTITION_STACKS` and store it.
+        /// Create a kernel via `new()` from
+        /// `__PARTITION_STACKS` with the given entry points and store it.
         #[allow(dead_code)]
         fn init_kernel(
             sched: $crate::scheduler::ScheduleTable<
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
-            n: usize,
+            entries: &[(extern "C" fn() -> !, u32)],
         ) -> Result<(), $crate::harness::BootError> {
             let stacks = unsafe { &mut __PARTITION_STACKS.0 };
             let k = $crate::boot::create_kernel_from_stacks::<$Config,
                 { <$Config as $crate::config::KernelConfig>::STACK_WORDS }>(
-                sched, stacks, n,
+                sched, stacks, entries,
             )?;
             store_kernel(k);
             Ok(())

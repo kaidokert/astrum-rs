@@ -268,11 +268,11 @@ pub fn is_stack_aapcs_aligned(sp: u32) -> bool {
 
 /// Build a [`Kernel`] from caller-provided `stacks` via
 /// [`Kernel::new()`](crate::svc::Kernel::new)
-/// with sentinel entry points and MPU regions.
+/// with the given entry points and sentinel MPU regions.
 pub fn create_kernel_from_stacks<C: KernelConfig, const SW: usize>(
     sched: ScheduleTable<{ C::SCHED }>,
     stacks: &mut [[u32; SW]],
-    n: usize,
+    entries: &[(extern "C" fn() -> !, u32)],
 ) -> Result<crate::svc::Kernel<C>, BootError>
 where
     [(); C::N]:,
@@ -301,8 +301,9 @@ where
     use crate::partition::{ExternalPartitionMemory, MpuRegion};
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
     let mut memories: heapless::Vec<ExternalPartitionMemory<'_>, { C::N }> = heapless::Vec::new();
-    for (i, stk) in stacks.iter_mut().enumerate().take(n) {
-        let mem = ExternalPartitionMemory::new(&mut stk[..], 0, sentinel_mpu, i as u8)
+    for (i, (stk, &(ep, _hint))) in stacks.iter_mut().zip(entries.iter()).enumerate() {
+        let entry = ep as *const () as u32;
+        let mem = ExternalPartitionMemory::new(&mut stk[..], entry, sentinel_mpu, i as u8)
             .map_err(|_| BootError::StackInitFailed { partition_index: i })?;
         memories
             .push(mem)
