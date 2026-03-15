@@ -1162,20 +1162,44 @@ where
     /// [`DeviceRegistry::new()`] is used.  Addresses are patched later
     /// by [`boot_external()`](crate::boot::boot_external).
     pub fn create_sentinels(schedule: ScheduleTable<{ C::SCHED }>) -> Result<Self, ConfigError> {
-        /// Stack size in words for sentinel partitions (no real stack needed).
-        const SENTINEL_STACK_WORDS: usize = 0;
-        let cfgs = PartitionConfig::sentinel_array::<{ C::N }>(SENTINEL_STACK_WORDS);
-        Self::with_config(
-            schedule,
-            &cfgs,
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+
+        if schedule.is_empty() {
+            return Err(ConfigError::ScheduleEmpty);
+        }
+        for entry in schedule.entries().iter() {
+            #[cfg(feature = "dynamic-mpu")]
+            if entry.is_system_window {
+                continue;
+            }
+            if entry.partition_index as usize >= C::N {
+                return Err(ConfigError::PartitionTableFull);
+            }
+        }
+
+        let mut core = C::Core::default();
+        *core.schedule_mut() = schedule;
+        for i in 0..C::N {
+            let id = u8::try_from(i).map_err(|_| ConfigError::PartitionTableFull)?;
+            let pcb = PartitionControlBlock::new(
+                id,
+                0, // sentinel entry_point
+                0, // sentinel stack_base
+                0, // sentinel sp
+                MpuRegion::new(0, 0, 0),
+            );
+            if core.partitions_mut().add(pcb).is_err() {
+                return Err(ConfigError::PartitionTableFull);
+            }
+            core.set_sp(i, 0);
+        }
+
+        Ok(Self::init_kernel_struct(
+            core,
+            &[],
             #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
-            &[],
-        )
-        .map_err(|e| match e {
-            ConfigError::ScheduleIndexOutOfBounds { .. } => ConfigError::PartitionTableFull,
-            other => other,
-        })
+        ))
     }
 
     /// Create a `Kernel` with a pre-configured IRQ binding table.
@@ -1303,7 +1327,28 @@ where
         }
         #[cfg(debug_assertions)]
         crate::invariants::assert_no_overlapping_mpu_regions(core.partitions().as_slice());
-        Ok(Self {
+        Ok(Self::init_kernel_struct(
+            core,
+            irq_bindings,
+            #[cfg(feature = "dynamic-mpu")]
+            registry,
+        ))
+    }
+
+    /// Construct a `Kernel` from a fully-populated `Core` and IRQ bindings.
+    ///
+    /// This is the single place where the `Kernel` struct literal is built.
+    /// Both `with_config()` and `create_sentinels()` delegate here after
+    /// populating the core's partition table and schedule.
+    fn init_kernel_struct(
+        core: C::Core,
+        irq_bindings: &'static [crate::irq_dispatch::IrqBinding],
+        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
+            'static,
+            { C::DR },
+        >,
+    ) -> Self {
+        Self {
             active_partition: None,
             tick: TickCounter::new(),
             current_partition: 255, // sentinel for "no partition running yet"
@@ -1335,7 +1380,7 @@ where
             ports: C::Ports::default(),
             irq_bindings,
             sleep_queue: crate::waitqueue::SleepQueue::new(),
-        })
+        }
     }
 
     /// Create a `Kernel` with empty partition table and schedule.
@@ -8047,6 +8092,37 @@ mod tests {
         s.add(ScheduleEntry::new(4, 100)).unwrap();
         let result = try_create_sentinels!(TestConfig, s);
         assert!(matches!(result, Err(ConfigError::PartitionTableFull)));
+    }
+
+    #[test]
+    fn init_kernel_struct_returns_valid_kernel() {
+        let mut core = <TestConfig as KernelConfig>::Core::default();
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        *core.schedule_mut() = s;
+        let pcb = PartitionControlBlock::new(0, 0, 0, 0, MpuRegion::new(0, 0, 0));
+        assert!(core.partitions_mut().add(pcb).is_ok());
+        let k = Kernel::<TestConfig>::init_kernel_struct(
+            core,
+            &[],
+            #[cfg(feature = "dynamic-mpu")]
+            crate::virtual_device::DeviceRegistry::new(),
+        );
+        assert_eq!(k.current_partition, 255);
+        assert!(k.active_partition.is_none());
+        assert_eq!(k.partitions().len(), 1);
+        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
+        // Verify schedule was preserved through init_kernel_struct
+        assert_eq!(k.schedule().entries().len(), 1);
+        assert_eq!(k.schedule().entries()[0].partition_index, 0);
+        assert_eq!(k.schedule().entries()[0].duration_ticks, 100);
+    }
+
+    #[test]
+    fn create_sentinels_empty_schedule_fails() {
+        let s = ScheduleTable::new();
+        let result = Kernel::<TestConfig>::create_sentinels(s);
+        assert!(matches!(result, Err(ConfigError::ScheduleEmpty)));
     }
 
     #[test]
