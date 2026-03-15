@@ -507,6 +507,11 @@ macro_rules! define_unified_harness {
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
             entries: &[(extern "C" fn() -> !, u32)],
         ) -> Result<(), $crate::harness::BootError> {
+            // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
+            // by this macro arm, which is invoked at most once per binary (enforced
+            // by the linker via duplicate symbol errors).  `init_kernel()` is called
+            // exactly once from `main()` before interrupts are enabled, so there are
+            // no concurrent accesses.
             let stacks = unsafe { &mut __PARTITION_STACKS.0 };
             let k = $crate::boot::create_kernel_from_stacks::<$Config,
                 { <$Config as $crate::config::KernelConfig>::STACK_WORDS }>(
