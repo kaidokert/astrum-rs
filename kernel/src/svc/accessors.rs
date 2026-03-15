@@ -1,9 +1,9 @@
-use super::Kernel;
+use super::{try_transition, Kernel};
 use crate::blackboard::BlackboardPool;
 use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::message::MessagePool;
 use crate::mutex::MutexPool;
-use crate::partition::{PartitionControlBlock, PartitionTable};
+use crate::partition::{PartitionControlBlock, PartitionState, PartitionTable};
 use crate::queuing::QueuingPortPool;
 use crate::sampling::SamplingPortPool;
 use crate::scheduler::ScheduleTable;
@@ -74,5 +74,62 @@ where
     #[inline(always)]
     pub fn partition_slice_mut(&mut self) -> &mut [PartitionControlBlock] {
         CoreOps::partition_slice_mut(&mut self.core)
+    }
+
+    /// Returns an immutable reference to the schedule table.
+    #[inline(always)]
+    pub fn schedule(&self) -> &ScheduleTable<{ C::SCHED }> {
+        self.core.schedule()
+    }
+
+    /// Returns a mutable reference to the schedule table.
+    #[inline(always)]
+    pub fn schedule_mut(&mut self) -> &mut ScheduleTable<{ C::SCHED }> {
+        self.core.schedule_mut()
+    }
+
+    /// Returns the current partition index stored in core.
+    #[inline(always)]
+    pub fn core_current_partition(&self) -> u8 {
+        self.core.current_partition()
+    }
+
+    /// Sets the current partition index in core.
+    #[inline(always)]
+    pub fn set_core_current_partition(&mut self, id: u8) {
+        self.core.set_current_partition(id);
+    }
+
+    /// Returns the next partition index.
+    #[inline(always)]
+    pub fn next_partition(&self) -> u8 {
+        self.core.next_partition()
+    }
+
+    /// Sets the next partition index and transitions it to Running state.
+    ///
+    /// Single point where the scheduler selects a partition to run. The state
+    /// transition to Running happens exactly once per scheduling decision.
+    ///
+    /// If the partition cannot transition (already Running or incompatible
+    /// state), the transition is silently skipped — a Running partition needs
+    /// no transition, and a Waiting one will yield and be rescheduled.
+    pub fn set_next_partition(&mut self, id: u8) {
+        // Transition the incoming partition to Running so syscalls can block it.
+        // This is the authoritative location for this state transition.
+        let _ = try_transition(self.partitions_mut(), id, PartitionState::Running);
+        self.core.set_next_partition(id);
+    }
+
+    /// Gets the stack pointer for a partition by index.
+    #[inline(always)]
+    pub fn get_sp(&self, index: usize) -> Option<u32> {
+        self.core.get_sp(index)
+    }
+
+    /// Sets the stack pointer for a partition by index. Returns true if valid.
+    #[inline(always)]
+    pub fn set_sp(&mut self, index: usize, sp: u32) -> bool {
+        self.core.set_sp(index, sp)
     }
 }

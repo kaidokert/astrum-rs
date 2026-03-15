@@ -2406,67 +2406,6 @@ where
         }
     }
 
-    /// Returns an immutable reference to the schedule table.
-    #[inline(always)]
-    pub fn schedule(&self) -> &ScheduleTable<{ C::SCHED }> {
-        self.core.schedule()
-    }
-
-    /// Returns a mutable reference to the schedule table.
-    #[inline(always)]
-    pub fn schedule_mut(&mut self) -> &mut ScheduleTable<{ C::SCHED }> {
-        self.core.schedule_mut()
-    }
-
-    /// Returns the current partition index stored in core.
-    #[inline(always)]
-    pub fn core_current_partition(&self) -> u8 {
-        self.core.current_partition()
-    }
-
-    /// Sets the current partition index in core.
-    #[inline(always)]
-    pub fn set_core_current_partition(&mut self, id: u8) {
-        self.core.set_current_partition(id);
-    }
-
-    /// Returns the next partition index.
-    #[inline(always)]
-    pub fn next_partition(&self) -> u8 {
-        self.core.next_partition()
-    }
-
-    /// Sets the next partition index and transitions it to Running state.
-    ///
-    /// This is the single point where the scheduler "selects" a partition to run.
-    /// The state transition to Running is encapsulated here to ensure it happens
-    /// exactly once when a partition is scheduled, regardless of whether this is
-    /// called from boot, SysTick, or yield handling.
-    ///
-    /// If the partition cannot transition to Running (e.g., it's already Running
-    /// or in an incompatible state), the transition is silently skipped. This is
-    /// safe because:
-    /// - A partition already Running doesn't need a transition
-    /// - A Waiting partition will yield immediately and be rescheduled when ready
-    pub fn set_next_partition(&mut self, id: u8) {
-        // Transition the incoming partition to Running so syscalls can block it.
-        // This is the authoritative location for this state transition.
-        let _ = try_transition(self.partitions_mut(), id, PartitionState::Running);
-        self.core.set_next_partition(id);
-    }
-
-    /// Gets the stack pointer for a partition by index.
-    #[inline(always)]
-    pub fn get_sp(&self, index: usize) -> Option<u32> {
-        self.core.get_sp(index)
-    }
-
-    /// Sets the stack pointer for a partition by index. Returns true if valid.
-    #[inline(always)]
-    pub fn set_sp(&mut self, index: usize, sp: u32) -> bool {
-        self.core.set_sp(index, sp)
-    }
-
     /// Updates the PCB stack region fields for a partition.
     ///
     /// Returns `true` if the partition exists and the region was updated,
