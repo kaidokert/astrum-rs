@@ -1119,39 +1119,6 @@ where
         )
     }
 
-    /// Create a `Kernel` from caller-provided [`PartitionMemory`] descriptors.
-    ///
-    /// Partition IDs are derived from array indices (0, 1, 2, …).
-    /// `stack_base` and `stack_size` from each [`PartitionMemory`] are
-    /// **ignored** — PCBs are created with sentinel stack values (0, 0)
-    /// that [`boot_external()`](crate::boot::boot_external) patches later.
-    pub fn create_from_memory(
-        schedule: ScheduleTable<{ C::SCHED }>,
-        memories: &[crate::partition::PartitionMemory],
-    ) -> Result<Self, ConfigError> {
-        let mut configs: heapless::Vec<PartitionConfig, { C::N }> = heapless::Vec::new();
-        for (i, m) in memories.iter().enumerate() {
-            let cfg = PartitionConfig {
-                id: i as u8,
-                entry_point: m.entry_point,
-                stack_base: 0,
-                stack_size: 0,
-                mpu_region: m.mpu_region,
-                peripheral_regions: m.peripheral_regions.clone(),
-            };
-            configs
-                .push(cfg)
-                .map_err(|_| ConfigError::PartitionTableFull)?;
-        }
-        Self::with_config(
-            schedule,
-            &configs,
-            #[cfg(feature = "dynamic-mpu")]
-            crate::virtual_device::DeviceRegistry::new(),
-            &[],
-        )
-    }
-
     /// Create a `Kernel` from caller-provided [`ExternalPartitionMemory`] descriptors.
     ///
     /// Partition IDs are derived from array indices (0, 1, 2, …).
@@ -3077,23 +3044,21 @@ mod tests {
     use crate::mpu::MpuError;
     #[cfg(feature = "dynamic-mpu")]
     use crate::mpu_strategy::MpuStrategy;
-    use crate::partition::{
-        ExternalPartitionMemory, MpuRegion, PartitionControlBlock, PartitionMemory,
-    };
-    use crate::partition_core::AlignedStack4K;
+    use crate::partition::{ExternalPartitionMemory, MpuRegion, PartitionControlBlock};
+    use crate::partition_core::{AlignedStack1K, AlignedStack4K};
     use crate::scheduler::ScheduleEntry;
     use crate::scheduler::ScheduleEvent;
     use crate::semaphore::Semaphore;
     use crate::syscall::SYS_GET_PARTITION_ID;
     use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_IRQ_ACK, SYS_YIELD};
 
-    /// Build a `Kernel` from `PartitionMemory` slices via `create_from_memory`.
+    /// Build a `Kernel` from `ExternalPartitionMemory` slices via `new_external`.
     /// No system-window is added — callers must include one for `dynamic-mpu` builds.
-    fn kernel_from_mems(
+    fn kernel_from_ext(
         schedule: ScheduleTable<4>,
-        mems: &[PartitionMemory],
+        mems: &[ExternalPartitionMemory<'_>],
     ) -> Kernel<TestConfig> {
-        Kernel::<TestConfig>::create_from_memory(schedule, mems).unwrap()
+        Kernel::<TestConfig>::new_external(schedule, mems).unwrap()
     }
 
     // ---- unpack_packed_r2 unit tests ----
@@ -3531,14 +3496,9 @@ mod tests {
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
-        let mem = PartitionMemory {
-            stack_base: 0,
-            stack_size: 0,
-            entry_point: 0x0800_0000,
-            mpu_region: region,
-            peripheral_regions: heapless::Vec::new(),
-        };
-        Kernel::<TestConfig>::create_from_memory(schedule, core::slice::from_ref(&mem))
+        let mut stk = AlignedStack1K::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stk, 0x0800_0000, region, 0)?;
+        Kernel::<TestConfig>::new_external(schedule, core::slice::from_ref(&mem))
     }
 
     /// Kernel::new() succeeds when a partition uses mpu_region size==0
@@ -3602,24 +3562,19 @@ mod tests {
         );
     }
 
-    /// Helper: build a single-partition kernel via `create_from_memory`.
+    /// Helper: build a single-partition kernel via `new_external`.
     fn mem_kernel(entry: u32, mpu: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
-        let m = PartitionMemory {
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            entry_point: entry,
-            mpu_region: mpu,
-            peripheral_regions: heapless::Vec::new(),
-        };
-        Kernel::<TestConfig>::create_from_memory(sched, &[m])
+        let mut stk = AlignedStack1K::default();
+        let m = ExternalPartitionMemory::from_aligned_stack(&mut stk, entry, mpu, 0)?;
+        Kernel::<TestConfig>::new_external(sched, &[m])
     }
 
     #[test]
-    fn create_from_memory_pcb_fields_and_sentinels() {
+    fn mem_kernel_pcb_fields_and_sentinels() {
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         let k = mem_kernel(0x0800_1000, mpu).expect("should succeed");
         let pcb = k.partitions().get(0).expect("partition 0 must exist");
@@ -3635,7 +3590,7 @@ mod tests {
     }
 
     #[test]
-    fn create_from_memory_validates_mpu_and_schedule() {
+    fn mem_kernel_validates_mpu_and_schedule() {
         // Invalid MPU region rejected
         let err = mem_kernel(0, MpuRegion::new(0, 17, 0))
             .err()
@@ -3648,38 +3603,12 @@ mod tests {
             }
         ));
         // Empty schedule rejected
-        let m = PartitionMemory {
-            stack_base: 0,
-            stack_size: 256,
-            entry_point: 0,
-            mpu_region: MpuRegion::new(0, 0, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
-        let err = Kernel::<TestConfig>::create_from_memory(ScheduleTable::<4>::new(), &[m]);
+        let mut stk = AlignedStack1K::default();
+        let m =
+            ExternalPartitionMemory::from_aligned_stack(&mut stk, 0, MpuRegion::new(0, 0, 0), 0)
+                .unwrap();
+        let err = Kernel::<TestConfig>::new_external(ScheduleTable::<4>::new(), &[m]);
         assert!(matches!(err, Err(ConfigError::ScheduleEmpty)));
-    }
-
-    #[test]
-    fn create_from_memory_two_partitions_ids_from_indices() {
-        let mut sched = ScheduleTable::<4>::new();
-        sched.add(ScheduleEntry::new(0, 5)).unwrap();
-        sched.add(ScheduleEntry::new(1, 5)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
-        sched.add_system_window(1).unwrap();
-        let mk = |ep: u32| PartitionMemory {
-            stack_base: 0,
-            stack_size: 256,
-            entry_point: ep,
-            mpu_region: MpuRegion::new(0, 0, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
-        let k =
-            Kernel::<TestConfig>::create_from_memory(sched, &[mk(0x0800_0000), mk(0x0800_1000)])
-                .expect("two partitions should succeed");
-        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
-        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
-        assert_eq!(k.partitions().get(1).unwrap().id(), 1);
-        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1000);
     }
 
     // ---- new_external unit tests ----
@@ -7809,17 +7738,18 @@ mod tests {
 
     #[test]
     fn kernel_new_validates_and_creates() {
-        let mem = PartitionMemory {
-            stack_base: 0,
-            stack_size: 0,
-            entry_point: 0x0800_0000,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
+        let mut stk = AlignedStack1K::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            0x0800_0000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            0,
+        )
+        .unwrap();
         // Test empty schedule rejection
         let empty: ScheduleTable<4> = ScheduleTable::new();
         assert!(matches!(
-            Kernel::<TestConfig>::create_from_memory(empty, core::slice::from_ref(&mem)),
+            Kernel::<TestConfig>::new_external(empty, core::slice::from_ref(&mem)),
             Err(ConfigError::ScheduleEmpty)
         ));
         // Test valid config succeeds
@@ -7827,7 +7757,7 @@ mod tests {
         s.add(ScheduleEntry::new(0, 100)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         s.add_system_window(1).unwrap();
-        let k = Kernel::<TestConfig>::create_from_memory(s, core::slice::from_ref(&mem)).unwrap();
+        let k = Kernel::<TestConfig>::new_external(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().len(), 1);
         assert_eq!(k.active_partition(), None);
     }
@@ -7838,79 +7768,76 @@ mod tests {
         s.add(ScheduleEntry::new(0, 100)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         s.add_system_window(1).unwrap();
-        let mem = PartitionMemory {
-            stack_base: 0,
-            stack_size: 0,
-            entry_point: 0,
-            mpu_region: MpuRegion::new(0, 0, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
-        let k = Kernel::<TestConfig>::create_from_memory(s, core::slice::from_ref(&mem)).unwrap();
+        let mut stk = AlignedStack1K::default();
+        let mem =
+            ExternalPartitionMemory::from_aligned_stack(&mut stk, 0, MpuRegion::new(0, 0, 0), 0)
+                .unwrap();
+        let k = Kernel::<TestConfig>::new_external(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().len(), 1);
         assert_eq!(k.active_partition(), None);
     }
 
-    /// Kernel::create_from_memory() constructs mpu_region from internal_stack_base.
-    /// Both stack_base and mpu_region.base are captured from the same
-    /// address, so they must be equal (even if stale after a move).
+    /// Kernel::new_external() preserves mpu_region from config.
     #[test]
-    fn kernel_new_mpu_region_base_matches_internal_stack() {
+    fn kernel_new_mpu_region_base_matches_config() {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_0000,
-                stack_base: 0x2000_0000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_1000,
-                stack_base: 0x2000_1000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_1000, 1024, 0x0306_0000),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0000,
+                MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_1000,
+                MpuRegion::new(0x2000_1000, 1024, 0x0306_0000),
+                1,
+            )
+            .unwrap(),
         ];
         let k = try_kernel_new_mem(s, &mems).unwrap();
         for (i, mem) in mems.iter().enumerate() {
             let pcb = k.partitions().get(i).unwrap();
             // User-configured (size>0): base preserved from config.
-            assert_eq!(pcb.mpu_region().base(), mem.mpu_region.base());
-            assert_eq!(pcb.mpu_region().size(), mem.mpu_region.size());
-            assert_eq!(pcb.mpu_region().permissions(), mem.mpu_region.permissions());
+            assert_eq!(pcb.mpu_region().base(), mem.mpu_region().base());
+            assert_eq!(pcb.mpu_region().size(), mem.mpu_region().size());
+            assert_eq!(
+                pcb.mpu_region().permissions(),
+                mem.mpu_region().permissions()
+            );
         }
     }
 
-    // NOTE: try_kernel_new (PartitionConfig bridge) removed — callers
-    // now construct PartitionMemory directly and call try_kernel_new_mem.
-
     #[test]
     fn kernel_new_allows_overlapping_data_regions() {
-        // Only the data (MPU) regions overlap here. The stack addresses from
-        // PartitionMemory are ignored — Kernel::create_from_memory uses internal
-        // stacks at unrelated addresses. Since Data-vs-Data is the only overlap
-        // and is permitted for shared-memory IPC, this should succeed.
+        // Only the data (MPU) regions overlap here. Since Data-vs-Data is the
+        // only overlap and is permitted for shared-memory IPC, this should succeed.
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_0000,
-                stack_base: 0x2000_0000,
-                stack_size: 4096,
-                mpu_region: MpuRegion::new(0x2000_0000, 16384, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_2000,
-                stack_base: 0x2000_2000,
-                stack_size: 4096,
-                mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0000,
+                MpuRegion::new(0x2000_0000, 16384, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_2000,
+                MpuRegion::new(0x2000_2000, 4096, 0),
+                1,
+            )
+            .unwrap(),
         ];
         let _k = try_kernel_new_mem(s, &mems).unwrap();
     }
@@ -7920,21 +7847,23 @@ mod tests {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_0000,
-                stack_base: 0x2000_0000,
-                stack_size: 4096,
-                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_1000,
-                stack_base: 0x2000_1000,
-                stack_size: 4096,
-                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0000,
+                MpuRegion::new(0x2000_0000, 4096, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_1000,
+                MpuRegion::new(0x2000_1000, 4096, 0),
+                1,
+            )
+            .unwrap(),
         ];
         let k = try_kernel_new_mem(s, &mems).unwrap();
         assert_eq!(k.partitions().len(), 2);
@@ -7953,11 +7882,11 @@ mod tests {
     /// `SYSTEM_WINDOW_MAX_GAP_TICKS` (100).
     fn try_kernel_new_mem(
         schedule: ScheduleTable<4>,
-        memories: &[PartitionMemory],
+        memories: &[ExternalPartitionMemory<'_>],
     ) -> Result<Kernel<TestConfig>, ConfigError> {
         #[cfg(not(feature = "dynamic-mpu"))]
         {
-            Kernel::<TestConfig>::create_from_memory(schedule, memories)
+            Kernel::<TestConfig>::new_external(schedule, memories)
         }
         #[cfg(feature = "dynamic-mpu")]
         {
@@ -7965,7 +7894,7 @@ mod tests {
             schedule
                 .add_system_window(1)
                 .expect("schedule must have room for system window");
-            Kernel::<TestConfig>::create_from_memory(schedule, memories)
+            Kernel::<TestConfig>::new_external(schedule, memories)
         }
     }
 
@@ -7974,27 +7903,29 @@ mod tests {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_0000,
-                stack_base: 0x2000_0000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_1000,
-                stack_base: 0x2000_1000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0000,
+                MpuRegion::new(0x2000_0000, 4096, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_1000,
+                MpuRegion::new(0x2000_1000, 4096, 0),
+                1,
+            )
+            .unwrap(),
         ];
         let k = try_kernel_new_mem(s, &mems).unwrap();
         assert_eq!(k.partitions().len(), 2);
         assert_eq!(k.partitions().get(0).unwrap().id(), 0);
         assert_eq!(k.partitions().get(1).unwrap().id(), 1);
-        // Verify data-carrying fields were mapped correctly from PartitionMemory.
+        // Verify data-carrying fields were mapped correctly from ExternalPartitionMemory.
         assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
         assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1000);
     }
@@ -8123,24 +8054,28 @@ mod tests {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
 
-        let mem = PartitionMemory {
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
+        let mut stk = AlignedStack1K::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            0x0800_0000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            0,
+        )
+        .unwrap();
 
         let k = try_kernel_new_mem(s, core::slice::from_ref(&mem)).unwrap();
 
         assert_eq!(k.partitions().len(), 1);
         let pcb = k.partitions().get(0).unwrap();
         assert_eq!(pcb.id(), 0);
-        assert_eq!(pcb.entry_point(), mem.entry_point);
+        assert_eq!(pcb.entry_point(), mem.entry_point());
         // User-configured (size>0): base preserved from config.
-        assert_eq!(pcb.mpu_region().base(), mem.mpu_region.base());
-        assert_eq!(pcb.mpu_region().size(), mem.mpu_region.size());
-        assert_eq!(pcb.mpu_region().permissions(), mem.mpu_region.permissions());
+        assert_eq!(pcb.mpu_region().base(), mem.mpu_region().base());
+        assert_eq!(pcb.mpu_region().size(), mem.mpu_region().size());
+        assert_eq!(
+            pcb.mpu_region().permissions(),
+            mem.mpu_region().permissions()
+        );
     }
 
     #[test]
@@ -8150,28 +8085,31 @@ mod tests {
         s.add(ScheduleEntry::new(1, 30)).unwrap();
         s.add(ScheduleEntry::new(2, 30)).unwrap();
 
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
+        let mut stk2 = AlignedStack1K::default();
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_0000,
-                stack_base: 0x2000_0000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_1000,
-                stack_base: 0x2000_1000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_2000,
-                stack_base: 0x2000_2000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0000,
+                MpuRegion::new(0x2000_0000, 4096, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_1000,
+                MpuRegion::new(0x2000_1000, 4096, 0),
+                1,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk2,
+                0x0800_2000,
+                MpuRegion::new(0x2000_2000, 4096, 0),
+                2,
+            )
+            .unwrap(),
         ];
 
         let k = try_kernel_new_mem(s, &mems).unwrap();
@@ -8180,11 +8118,14 @@ mod tests {
         for (i, mem) in mems.iter().enumerate() {
             let pcb = k.partitions().get(i).unwrap();
             assert_eq!(pcb.id(), i as u8);
-            assert_eq!(pcb.entry_point(), mem.entry_point);
+            assert_eq!(pcb.entry_point(), mem.entry_point());
             // User-configured (size>0): base preserved from config.
-            assert_eq!(pcb.mpu_region().base(), mem.mpu_region.base());
-            assert_eq!(pcb.mpu_region().size(), mem.mpu_region.size());
-            assert_eq!(pcb.mpu_region().permissions(), mem.mpu_region.permissions());
+            assert_eq!(pcb.mpu_region().base(), mem.mpu_region().base());
+            assert_eq!(pcb.mpu_region().size(), mem.mpu_region().size());
+            assert_eq!(
+                pcb.mpu_region().permissions(),
+                mem.mpu_region().permissions()
+            );
         }
     }
 
@@ -8195,16 +8136,17 @@ mod tests {
         let mut s = ScheduleTable::<4>::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
 
-        let mem = PartitionMemory {
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
+        let mut stk = AlignedStack1K::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            0x0800_0000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            0,
+        )
+        .unwrap();
 
-        // Call create_from_memory directly (not try_kernel_new which adds a system window)
-        let result = Kernel::<TestConfig>::create_from_memory(s, core::slice::from_ref(&mem));
+        // Call new_external directly (not try_kernel_new_mem which adds a system window)
+        let result = Kernel::<TestConfig>::new_external(s, core::slice::from_ref(&mem));
 
         assert!(matches!(result, Err(ConfigError::NoSystemWindow)));
     }
@@ -8219,15 +8161,16 @@ mod tests {
         s.add_system_window(1).unwrap();
         // Note: s.start() is intentionally not called here; Kernel::new calls it internally.
 
-        let mem = PartitionMemory {
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
+        let mut stk = AlignedStack1K::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            0x0800_0000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            0,
+        )
+        .unwrap();
 
-        let result = Kernel::<TestConfig>::create_from_memory(s, core::slice::from_ref(&mem));
+        let result = Kernel::<TestConfig>::new_external(s, core::slice::from_ref(&mem));
 
         assert!(matches!(
             result,
@@ -8248,15 +8191,16 @@ mod tests {
         s.add(ScheduleEntry::new(0, 100)).unwrap();
         s.add_system_window(1).unwrap();
 
-        let mem = PartitionMemory {
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
+        let mut stk = AlignedStack1K::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            0x0800_0000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            0,
+        )
+        .unwrap();
 
-        let result = Kernel::<TestConfig>::create_from_memory(s, core::slice::from_ref(&mem));
+        let result = Kernel::<TestConfig>::new_external(s, core::slice::from_ref(&mem));
 
         // Should succeed: max_gap (100) is not greater than threshold (100).
         assert!(result.is_ok());
@@ -8270,16 +8214,15 @@ mod tests {
     fn kernel_new_rejects_peripheral_region_size_too_small() {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
-        let mut mem = PartitionMemory {
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
-        let _ = mem
-            .peripheral_regions
-            .push(MpuRegion::new(0x4000_0000, 16, 0x03));
+        let mut stk = AlignedStack1K::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            0x0800_0000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            0,
+        )
+        .unwrap()
+        .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 16, 0x03)]);
         let result = try_kernel_new_mem(s, core::slice::from_ref(&mem));
         assert!(matches!(
             result,
@@ -8295,16 +8238,15 @@ mod tests {
     fn kernel_new_rejects_peripheral_region_not_power_of_two() {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
-        let mut mem = PartitionMemory {
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
-        let _ = mem
-            .peripheral_regions
-            .push(MpuRegion::new(0x4000_0000, 100, 0x03));
+        let mut stk = AlignedStack1K::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            0x0800_0000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            0,
+        )
+        .unwrap()
+        .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 100, 0x03)]);
         let result = try_kernel_new_mem(s, core::slice::from_ref(&mem));
         assert!(matches!(
             result,
@@ -8320,17 +8262,16 @@ mod tests {
     fn kernel_new_rejects_peripheral_region_base_misaligned() {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
-        let mut mem = PartitionMemory {
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
+        let mut stk = AlignedStack1K::default();
         // base 0x4000_0100 is not aligned to size 4096 (0x1000)
-        let _ = mem
-            .peripheral_regions
-            .push(MpuRegion::new(0x4000_0100, 4096, 0x03));
+        let mem = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            0x0800_0000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            0,
+        )
+        .unwrap()
+        .with_peripheral_regions(&[MpuRegion::new(0x4000_0100, 4096, 0x03)]);
         let result = try_kernel_new_mem(s, core::slice::from_ref(&mem));
         assert!(matches!(
             result,
@@ -8346,16 +8287,15 @@ mod tests {
     fn kernel_new_accepts_valid_peripheral_region() {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
-        let mut mem = PartitionMemory {
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        };
-        let _ = mem
-            .peripheral_regions
-            .push(MpuRegion::new(0x4000_0000, 4096, 0x03));
+        let mut stk = AlignedStack1K::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            0x0800_0000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            0,
+        )
+        .unwrap()
+        .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0x03)]);
         let k = try_kernel_new_mem(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().get(0).unwrap().peripheral_regions().len(), 1);
         assert_eq!(
@@ -8382,6 +8322,10 @@ mod tests {
     const INTER_P1_TICKS: usize = 2 + 1 + 5;
 
     /// Helper to create a Kernel with a started schedule and partitions.
+    // NOTE: local stacks are safe here — Kernel has no lifetime parameter and
+    // new_external() copies all data out of ExternalPartitionMemory.
+    // TODO: reviewer false positive — returning borrows of locals is not an
+    // issue because Kernel does not retain references to the stacks.
     fn kernel_with_schedule() -> Kernel<TestConfig> {
         // Create 2-slot schedule: P0 for 5 ticks, P1 for 3 ticks
         let mut schedule = ScheduleTable::<4>::new();
@@ -8390,25 +8334,25 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
         schedule.start();
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_0000,
-                stack_base: 0x2000_0000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_1000,
-                stack_base: 0x2000_1000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0000,
+                MpuRegion::new(0x2000_0000, 4096, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_1000,
+                MpuRegion::new(0x2000_1000, 4096, 0),
+                1,
+            )
+            .unwrap(),
         ];
-        let mut k = kernel_from_mems(schedule, &mems);
-        // Mutexes are pre-allocated at pool capacity by SyncPools::default();
-        // no add() method exists.
+        let mut k = Kernel::<TestConfig>::new_external(schedule, &mems).unwrap();
         let _ = &mut k;
         k
     }
@@ -8727,30 +8671,33 @@ mod tests {
             schedule.add_system_window(1).unwrap();
         }
         schedule.start();
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
+        let mut stk2 = AlignedStack1K::default();
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_0000,
-                stack_base: 0x2000_0000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_1000,
-                stack_base: 0x2000_1000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_2000,
-                stack_base: 0x2000_2000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0000,
+                MpuRegion::new(0x2000_0000, 4096, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_1000,
+                MpuRegion::new(0x2000_1000, 4096, 0),
+                1,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk2,
+                0x0800_2000,
+                MpuRegion::new(0x2000_2000, 4096, 0),
+                2,
+            )
+            .unwrap(),
         ];
-        kernel_from_mems(schedule, &mems)
+        Kernel::<TestConfig>::new_external(schedule, &mems).unwrap()
     }
 
     /// Ready partition accumulates starvation when another partition's
@@ -9328,37 +9275,41 @@ mod tests {
         schedule.add(ScheduleEntry::new(3, 3)).unwrap();
         schedule.start();
 
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
+        let mut stk2 = AlignedStack1K::default();
+        let mut stk3 = AlignedStack1K::default();
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_0000,
-                stack_base: 0x2000_0000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_1000,
-                stack_base: 0x2000_1000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_2000,
-                stack_base: 0x2000_2000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_2000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_3000,
-                stack_base: 0x2000_3000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_3000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0000,
+                MpuRegion::new(0x2000_0000, 4096, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_1000,
+                MpuRegion::new(0x2000_1000, 4096, 0),
+                1,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk2,
+                0x0800_2000,
+                MpuRegion::new(0x2000_2000, 4096, 0),
+                2,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk3,
+                0x0800_3000,
+                MpuRegion::new(0x2000_3000, 4096, 0),
+                3,
+            )
+            .unwrap(),
         ];
-        let mut k = kernel_from_mems(schedule, &mems);
+        let mut k = kernel_from_ext(schedule, &mems);
 
         // Transition P1 and P2 to Waiting (Ready -> Running -> Waiting).
         for pid in [1u8, 2] {
@@ -11593,14 +11544,15 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
         schedule.start();
-        let mems = [PartitionMemory {
-            entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
-            mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-            peripheral_regions: heapless::Vec::new(),
-        }];
-        let mut k = kernel_from_mems(schedule, &mems);
+        let mut stk0 = AlignedStack1K::default();
+        let mems = [ExternalPartitionMemory::from_aligned_stack(
+            &mut stk0,
+            0x0800_0000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            0,
+        )
+        .unwrap()];
+        let mut k = kernel_from_ext(schedule, &mems);
 
         k.set_next_partition(0);
         k.active_partition = Some(0);
@@ -11794,23 +11746,25 @@ mod tests {
         schedule.add(ScheduleEntry::new(1, 3)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_0000,
-                stack_base: 0x2000_0000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_0000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_1000,
-                stack_base: 0x2000_1000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_1000, 4096, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0000,
+                MpuRegion::new(0x2000_0000, 4096, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_1000,
+                MpuRegion::new(0x2000_1000, 4096, 0),
+                1,
+            )
+            .unwrap(),
         ];
-        kernel_from_mems(schedule, &mems)
+        kernel_from_ext(schedule, &mems)
     }
 
     #[test]
@@ -12533,21 +12487,23 @@ mod tests {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_0000,
-                stack_base: 0x2000_0000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0, 0, 0),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_1000,
-                stack_base: 0x2000_1000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0000,
+                MpuRegion::new(0, 0, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_1000,
+                MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
+                1,
+            )
+            .unwrap(),
         ];
         let mut k = try_kernel_new_mem(s, &mems).unwrap();
         for i in 0..2 {
@@ -12653,7 +12609,7 @@ mod tests {
     }
 
     // TODO: with_irq_bindings tests below still use PartitionConfig because
-    // Kernel::with_irq_bindings() has no PartitionMemory equivalent yet.
+    // Kernel::with_irq_bindings() has no ExternalPartitionMemory equivalent yet.
     #[test]
     fn with_irq_bindings_stores_bindings() {
         let mut s: ScheduleTable<4> = ScheduleTable::new();
