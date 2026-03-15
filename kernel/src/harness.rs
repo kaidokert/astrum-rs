@@ -186,6 +186,39 @@ macro_rules! _unified_handle_yield {
     }};
 }
 
+/// Declare aligned partition stacks for `no_boot` examples.
+///
+/// Returns `&mut [AlignedStack1K; $count]` backed by a module-level static.
+/// Validates at compile time that `AlignedStack1K::WORDS` matches the
+/// config's `STACK_WORDS`, preserving the single source of truth for
+/// partition stack sizes.
+///
+/// # Safety
+///
+/// Must be called exactly once, from `main()`, before any interrupt runs.
+/// The returned mutable reference is valid for `'static` but must not alias.
+///
+/// # Example
+///
+/// ```ignore
+/// let stacks = kernel::partition_stacks!(TestConfig, NP);
+/// ```
+#[macro_export]
+macro_rules! partition_stacks {
+    ($Config:ty, $count:expr) => {{
+        // Compile-time: stack type must match configured stack word count.
+        const _: () = assert!(
+            <$crate::AlignedStack1K as $crate::StackStorage>::WORDS
+                == <$Config as $crate::config::KernelConfig>::STACK_WORDS,
+            "AlignedStack1K::WORDS does not match config STACK_WORDS"
+        );
+        static mut _PARTITION_STACKS: [$crate::AlignedStack1K; $count] =
+            [$crate::AlignedStack1K::ZERO; $count];
+        // SAFETY: caller guarantees single-threaded pre-interrupt context.
+        unsafe { &mut *(&raw mut _PARTITION_STACKS) }
+    }};
+}
+
 /// Unified harness: uses linker-controlled kernel state for SVC dispatch and SysTick scheduling.
 /// Generates PendSV, SysTick, boot(). Stacks are in `PartitionCore`.
 ///
@@ -450,7 +483,7 @@ macro_rules! define_unified_harness {
     (@impl $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
 
-        /// Partition stacks with 4 KiB alignment; patched into PCBs by `boot_external()`.
+        /// Partition stacks with 4 KiB alignment; used by `init_kernel()` to build PCBs.
         ///
         /// # Singleton
         /// This macro arm must be invoked at most once per binary.  Multiple
@@ -483,20 +516,20 @@ macro_rules! define_unified_harness {
             Ok(())
         }
 
-        /// Initialize stacks, priorities, start schedule, enable SysTick, enter idle loop.
-        /// Delegates to [`boot::boot_external`] using `__PARTITION_STACKS`.
+        /// Boot the kernel from pre-configured PCBs.
+        ///
+        /// Call [`init_kernel`] first to create and store the kernel,
+        /// then call this to configure exceptions and enter the idle loop.
+        /// Delegates to [`boot::boot_preconfigured`].
         fn boot(
-            partitions: &[(extern "C" fn() -> !, u32)],
             peripherals: cortex_m::Peripherals,
         ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
-            // SAFETY: `boot()` is called exactly once from `main()` before
-            // any exception handlers run.  No other code accesses
-            // `__PARTITION_STACKS` outside of `boot_external`.
-            let stacks = unsafe { &mut __PARTITION_STACKS.0 };
-            $crate::boot::boot_external::<$Config,
-                { <$Config as $crate::config::KernelConfig>::STACK_WORDS }>(
-                partitions, peripherals, stacks,
-            )
+            // SAFETY: `init_kernel()` has been called, so the kernel is
+            // fully configured with entry points and stack pointers.
+            // `boot()` is called exactly once from `main()`.
+            unsafe {
+                $crate::boot::boot_preconfigured::<$Config>(peripherals)
+            }
         }
     };
 }

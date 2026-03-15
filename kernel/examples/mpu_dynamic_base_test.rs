@@ -19,21 +19,13 @@ use kernel::{
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, StackStorage as _, SyncMinimal,
 };
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
 const NP: usize = 2;
-const SW: usize = TestConfig::STACK_WORDS;
 const REGION_SZ: u32 = 1024;
-
-// TODO: PartitionStacks boilerplate is duplicated across mpu_cached_dynamic_test,
-// mpu_dynamic_base_test, and mpu_periph_precompute_test — consolidate into a shared
-// macro or common test utilities module.
-#[repr(C, align(4096))]
-struct PartitionStacks([[u32; SW]; TestConfig::N]);
-static mut PARTITION_STACKS: PartitionStacks = PartitionStacks([[0u32; SW]; TestConfig::N]);
 
 static P0_COUNTER: AtomicU32 = AtomicU32::new(0);
 static P1_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -116,48 +108,26 @@ fn main() -> ! {
     sched.add_system_window(1).expect("syswin 1");
     hprintln!("  schedule built ({} entries)", 4);
     let k = {
-        // SAFETY: called once from main before any interrupt handler runs.
-        let stacks: &mut [[u32; SW]; NP] = unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
-        // TODO: hardcoded destructure assumes NP=2; generalize with a loop if NP varies.
-        let [ref mut s0, ref mut s1] = *stacks;
-        let memories = [
-            ExternalPartitionMemory::new(
-                s0,
-                entry_fns[0] as usize as u32 & !(REGION_SZ - 1),
-                MpuRegion::new(0, 0, 0),
-                0,
+        let stacks = kernel::partition_stacks!(TestConfig, NP);
+        let stacks_ptr = stacks.as_mut_ptr();
+        let memories: [_; NP] = core::array::from_fn(|i| {
+            // SAFETY: i < NP, stacks has NP elements, each index visited once.
+            let stk = unsafe { &mut *stacks_ptr.add(i) };
+            let base = stk.as_u32_slice().as_ptr() as u32;
+            ExternalPartitionMemory::from_aligned_stack(
+                stk,
+                entry_fns[i] as usize as u32,
+                MpuRegion::new(base, REGION_SZ, 0),
+                i as u8,
             )
-            .expect("mem 0"),
-            ExternalPartitionMemory::new(
-                s1,
-                entry_fns[1] as usize as u32 & !(REGION_SZ - 1),
-                MpuRegion::new(0, 0, 0),
-                1,
-            )
-            .expect("mem 1"),
-        ];
+            .expect("mem")
+        });
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
     hprintln!("  kernel created");
     store_kernel(k);
     hprintln!("  kernel stored");
-    // SAFETY: the mutable borrow above has been released (block scope ended and
-    // new copies config data, not stack references); called before interrupts.
-    let stacks: &mut [[u32; SW]; TestConfig::N] =
-        unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
-    kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {
-        for (i, stk) in stacks.iter().enumerate() {
-            let base = stk.as_ptr() as u32;
-            k.partitions_mut()
-                .get_mut(i)
-                .expect("partition")
-                .promote_sentinel_mpu(base, REGION_SZ, 0)
-                .expect("promote sentinel");
-        }
-    })
-    .expect("with_kernel_mut");
-    hprintln!("  MPU promoted");
-    let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_entry, 0), (p1_entry, 0)];
-    hprintln!("  calling boot::boot_external");
-    match boot::boot_external::<TestConfig, SW>(&parts, p, stacks).expect("boot") {}
+    // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
+    hprintln!("  calling boot::boot_preconfigured");
+    match unsafe { boot::boot_preconfigured::<TestConfig>(p) }.expect("boot") {}
 }

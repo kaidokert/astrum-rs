@@ -19,18 +19,15 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::{
     boot,
+    partition::{ExternalPartitionMemory, MpuRegion},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
+    StackStorage as _,
 };
 
 // Actual partition count (3) differs from DemoConfig::N (4, from Partitions4 capacity).
 const NUM_PARTITIONS: usize = 3;
-const STACK_WORDS: usize = DemoConfig::STACK_WORDS;
-#[repr(C, align(4096))]
-struct PartitionStacks([[u32; STACK_WORDS]; DemoConfig::N]);
-static mut PARTITION_STACKS: PartitionStacks =
-    PartitionStacks([[0u32; STACK_WORDS]; DemoConfig::N]);
 
 // Atomic state for partition progress tracking (handler mode reads these).
 /// Sensor: last value written (increments each cycle)
@@ -95,8 +92,15 @@ kernel::define_unified_harness!(no_boot, DemoConfig, |tick, _k| {
     }
 });
 
-extern "C" fn sensor_main_body(r0: u32) -> ! {
-    let (src, mut v) = (plib::SamplingPortId::new(r0 >> 16), 0u8);
+// Port IDs stored by main() before boot, read by partition entry functions.
+static SENSOR_SRC: AtomicU32 = AtomicU32::new(0);
+static CONTROL_SRC: AtomicU32 = AtomicU32::new(0);
+static CONTROL_DST: AtomicU32 = AtomicU32::new(0);
+static DISPLAY_DST: AtomicU32 = AtomicU32::new(0);
+
+extern "C" fn sensor_main() -> ! {
+    let src = plib::SamplingPortId::new(SENSOR_SRC.load(Ordering::Acquire));
+    let mut v = 0u8;
     loop {
         v = v.wrapping_add(1);
         if plib::sys_sampling_write(src, &[v]).is_ok() {
@@ -105,13 +109,9 @@ extern "C" fn sensor_main_body(r0: u32) -> ! {
         let _ = plib::sys_yield();
     }
 }
-kernel::partition_trampoline!(sensor_main => sensor_main_body);
-extern "C" fn control_main_body(r0: u32) -> ! {
-    let packed = r0;
-    let (src, dst) = (
-        plib::SamplingPortId::new(packed >> 16),
-        plib::SamplingPortId::new(packed & 0xFFFF),
-    );
+extern "C" fn control_main() -> ! {
+    let src = plib::SamplingPortId::new(CONTROL_SRC.load(Ordering::Acquire));
+    let dst = plib::SamplingPortId::new(CONTROL_DST.load(Ordering::Acquire));
     loop {
         let mut buf = [0u8; 1];
         let v = match plib::sys_sampling_read(dst, &mut buf) {
@@ -126,9 +126,8 @@ extern "C" fn control_main_body(r0: u32) -> ! {
         let _ = plib::sys_yield();
     }
 }
-kernel::partition_trampoline!(control_main => control_main_body);
-extern "C" fn display_main_body(r0: u32) -> ! {
-    let dst = plib::SamplingPortId::new(r0 & 0xFFFF);
+extern "C" fn display_main() -> ! {
+    let dst = plib::SamplingPortId::new(DISPLAY_DST.load(Ordering::Acquire));
     let mut cyc: u32 = 0;
     loop {
         let mut buf = [0u8; 1];
@@ -141,13 +140,11 @@ extern "C" fn display_main_body(r0: u32) -> ! {
             }
             _ => {}
         }
-        // Track cycle count; SysTick handler checks this for completion
         cyc += 1;
         let _ = plib::sys_yield();
         DISPLAY_CYCLES.store(cyc, Ordering::Release);
     }
 }
-kernel::partition_trampoline!(display_main => display_main_body);
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().unwrap();
@@ -159,9 +156,27 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let mut k = Kernel::<DemoConfig>::create_sentinels(sched).expect("kernel creation");
+    let entry_fns: [extern "C" fn() -> !; NUM_PARTITIONS] =
+        [sensor_main, control_main, display_main];
+    let k = {
+        let stacks = kernel::partition_stacks!(DemoConfig, NUM_PARTITIONS);
+        let stacks_ptr = stacks.as_mut_ptr();
+        let memories: [_; NUM_PARTITIONS] = core::array::from_fn(|i| {
+            // SAFETY: i < NUM_PARTITIONS, stacks has NUM_PARTITIONS elements, each index visited once.
+            let stk = unsafe { &mut *stacks_ptr.add(i) };
+            ExternalPartitionMemory::from_aligned_stack(
+                stk,
+                entry_fns[i] as *const () as u32,
+                MpuRegion::new(0, 0, 0),
+                i as u8,
+            )
+            .expect("mem")
+        });
+        Kernel::<DemoConfig>::new(sched, &memories).expect("kernel")
+    };
 
     // Create and connect sampling ports.
+    let mut k = k;
     let s0 = k
         .sampling_mut()
         .create_port(PortDirection::Source, 10)
@@ -185,22 +200,13 @@ fn main() -> ! {
         .connect_ports(s1, d1)
         .expect("connect s1->d1");
 
+    // Store port IDs in atomics so partition entry functions can read them.
+    SENSOR_SRC.store(s0 as u32, Ordering::Release);
+    CONTROL_SRC.store(s1 as u32, Ordering::Release);
+    CONTROL_DST.store(d0 as u32, Ordering::Release);
+    DISPLAY_DST.store(d1 as u32, Ordering::Release);
+
     store_kernel(k);
-
-    // Pack port IDs into a single u32 passed to each partition via r0.
-    // See queuing_demo and blackboard_demo for the same convention.
-    let h: [u32; NUM_PARTITIONS] = [
-        (s0 as u32) << 16,
-        ((s1 as u32) << 16) | d0 as u32,
-        d1 as u32,
-    ];
-    let eps: [extern "C" fn() -> !; NUM_PARTITIONS] = [sensor_main, control_main, display_main];
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
-        core::array::from_fn(|i| (eps[i], h[i]));
-
-    // SAFETY: called once from main before any interrupt handler runs.
-    let stacks: &mut [[u32; STACK_WORDS]; DemoConfig::N] =
-        unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
-    match boot::boot_external::<DemoConfig, STACK_WORDS>(&parts, p, stacks)
-        .expect("sampling_demo: boot failed") {}
+    // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
+    match unsafe { boot::boot_preconfigured::<DemoConfig>(p) }.expect("boot") {}
 }
