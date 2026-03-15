@@ -14,7 +14,7 @@
 
 #![no_std]
 #![no_main]
-#![allow(incomplete_features, clippy::deref_addrof)]
+#![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
 use core::cell::RefCell;
@@ -24,7 +24,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     hw_uart::HwUartBackend,
     mpu_strategy::DynamicStrategy,
-    partition::{MpuRegion, PartitionConfig},
+    partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::{Kernel, YieldResult},
     uart_hal::UartRegs,
@@ -127,7 +127,9 @@ kernel::define_pendsv!();
 #[exception]
 fn SysTick() {
     with_kernel_mut(|k| {
-        let event = kernel::svc_scheduler::advance_schedule_tick(k);
+        // TODO: svc_scheduler→svc::scheduler rename is an out-of-scope refactor;
+        // should be split into a separate PR if not required for this migration.
+        let event = kernel::svc::scheduler::advance_schedule_tick(k);
         let current_tick = k.tick().get();
         match event {
             ScheduleEvent::PartitionSwitch(pid) => {
@@ -145,10 +147,11 @@ fn SysTick() {
     });
 }
 
-fn boot(partitions: &[(extern "C" fn() -> !, u32)], peripherals: &mut cortex_m::Peripherals) -> ! {
+fn boot(partitions: &[(extern "C" fn() -> !, u32)], mut peripherals: cortex_m::Peripherals) -> ! {
     use cortex_m::peripheral::scb::SystemHandler;
     use cortex_m::peripheral::syst::SystClkSource;
     use cortex_m::peripheral::SCB;
+    #[allow(clippy::deref_addrof)]
     // SAFETY: called once from main before the scheduler starts (interrupts
     // disabled). STACKS, PARTITION_SP are only written here and read later
     // by PendSV; no concurrent access is possible at this point.
@@ -360,7 +363,7 @@ fn finish() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().unwrap();
+    let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("uart1_loopback: start");
 
     // Build schedule: P1(3) → system window(1) → P2(3) → system window(1)
@@ -378,28 +381,23 @@ fn main() -> ! {
         }
     }
 
-    // Build partition configs
-    // SAFETY: called once before the scheduler starts (interrupts disabled,
-    // single-core). STACKS are only written here; no concurrent access.
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = unsafe {
-        let stacks_ref = &*(&raw const STACKS);
-        core::array::from_fn(|i| {
-            let base = stacks_ref[i].0.as_ptr() as u32;
-            PartitionConfig {
-                id: i as u8,
-                entry_point: 0,
-                stack_base: base,
-                stack_size: STACK_BYTES,
-                mpu_region: MpuRegion::new(base, STACK_BYTES, 0),
-                peripheral_regions: heapless::Vec::new(),
-            }
-        })
+    // Build partition memories and create kernel
+    #[allow(clippy::deref_addrof)]
+    let mut kern = {
+        // SAFETY: called once before the scheduler starts (interrupts disabled,
+        // single-core). STACKS are only written here; no concurrent access.
+        let stacks: &mut [AlignedStack; NUM_PARTITIONS] = unsafe { &mut *(&raw mut STACKS) };
+        let [ref mut s0, ref mut s1] = *stacks;
+        let base0 = s0.0.as_ptr() as u32;
+        let base1 = s1.0.as_ptr() as u32;
+        let memories = [
+            ExternalPartitionMemory::new(&mut s0.0, 0, MpuRegion::new(base0, STACK_BYTES, 0), 0)
+                .expect("ext mem"),
+            ExternalPartitionMemory::new(&mut s1.0, 0, MpuRegion::new(base1, STACK_BYTES, 0), 1)
+                .expect("ext mem"),
+        ];
+        Kernel::<DemoConfig>::new_external(sched, &memories).expect("kernel creation")
     };
-
-    // Create unified kernel with schedule and partitions
-    let mut kern =
-        Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-            .expect("kernel creation");
 
     // Set up HW UART backend with software loopback
     let regs = UartRegs::new(0x4000_D000);
@@ -433,8 +431,7 @@ fn main() -> ! {
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
     #[allow(clippy::diverging_sub_expression, unreachable_code)]
     {
-        let _result: Result<kernel::harness::Never, kernel::harness::BootError> =
-            boot(&parts, &mut p);
+        let _result: Result<kernel::harness::Never, kernel::harness::BootError> = boot(&parts, p);
         match _result {
             Ok(never) => match never {},
             Err(_e) => loop {

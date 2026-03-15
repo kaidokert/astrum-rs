@@ -21,15 +21,15 @@
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    partition::PartitionConfig,
+    partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     virtual_device::VirtualDevice,
-    DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions4, PortsTiny, StackStorage as _,
+    SyncMinimal,
 };
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = DemoConfig::STACK_WORDS;
 
 /// UART-A device ID (used by P1).
 const UART_A: plib::DeviceId = plib::DeviceId::new(0);
@@ -147,7 +147,7 @@ fn assert_or_fail(cond: bool, msg: &str) {
 // ---------------------------------------------------------------------------
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().unwrap();
+    let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("virtual_uart_demo: start");
 
     // Schedule: P1(2) → system window(1) → P2(2) → system window(1)
@@ -157,13 +157,25 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 2)).unwrap();
     sched.add_system_window(1).unwrap();
 
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
-        core::array::from_fn(|i| PartitionConfig::sentinel(i as u8, (STACK_WORDS * 4) as u32));
+    // Partition stacks must be `static` so they persist for the lifetime of
+    // the system — local variables would be clobbered once the kernel starts
+    // using MSP for exception frames.
+    static mut STACKS: [AlignedStack1K; NUM_PARTITIONS] = [AlignedStack1K::ZERO; NUM_PARTITIONS];
+    let sentinel_mpu = MpuRegion::new(0, 0, 0);
+    #[allow(clippy::deref_addrof)]
+    let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = {
+        // SAFETY: called once from main before the scheduler starts (interrupts
+        // disabled, single-core). No concurrent access to STACKS.
+        let stacks: &mut [AlignedStack1K; NUM_PARTITIONS] = unsafe { &mut *(&raw mut STACKS) };
+        let [ref mut s0, ref mut s1] = *stacks;
+        [
+            ExternalPartitionMemory::new(&mut s0.0, 0, sentinel_mpu, 0).expect("ext mem"),
+            ExternalPartitionMemory::new(&mut s1.0, 0, sentinel_mpu, 1).expect("ext mem"),
+        ]
+    };
 
     // Create the unified kernel with schedule and partitions.
-    let mut k =
-        Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-            .expect("kernel creation");
+    let mut k = Kernel::<DemoConfig>::new_external(sched, &mems).expect("kernel creation");
 
     // Register the uart_pair backends in the device registry so that
     // dev_dispatch can route SYS_DEV_* syscalls to UART-A and UART-B.
@@ -183,5 +195,5 @@ fn main() -> ! {
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
 
-    match boot(&parts, &mut p).expect("virtual_uart_demo: boot failed") {}
+    match boot(&parts, p).expect("virtual_uart_demo: boot failed") {}
 }

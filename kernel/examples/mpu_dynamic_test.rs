@@ -26,7 +26,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     mpu::{self, build_rasr, encode_size, AP_FULL_ACCESS, RBAR_ADDR_MASK},
     mpu_strategy::{DynamicStrategy, MpuStrategy},
-    partition::{MpuRegion, PartitionConfig},
+    partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -36,7 +36,6 @@ kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, 
 
 const NP: usize = TestConfig::N;
 const STACK_WORDS: usize = TestConfig::STACK_WORDS;
-const STACK_SIZE: u32 = (STACK_WORDS * 4) as u32;
 /// Partition 0: 4 KiB data region at 0x2000_0000.
 /// Partition 1: 8 KiB data region at 0x2000_8000.
 const DATA_BASES: [u32; NP] = [0x2000_0000, 0x2000_8000];
@@ -156,7 +155,9 @@ fn SysTick() {
     }
 
     with_kernel_mut(|k| {
-        let event = kernel::svc_scheduler::advance_schedule_tick(k);
+        // TODO: svc_scheduler→svc::scheduler rename is an out-of-scope refactor;
+        // should be split into a separate PR if not required for this migration.
+        let event = kernel::svc::scheduler::advance_schedule_tick(k);
         if let ScheduleEvent::PartitionSwitch(pid) = event {
             if let Some(pcb) = k.partitions().get(pid as usize) {
                 let dyn_region = pcb.cached_dynamic_region();
@@ -200,28 +201,33 @@ fn main() -> ! {
         }
     }
 
-    // Build partition configs
-    // SAFETY: before interrupts; single-core exclusive.
+    // Build partition memories and create kernel
     // stack_base/stack_size point at the actual partition stacks (STACKS
     // array), not the data regions. mpu_region carries the data-region
     // descriptor that DynamicStrategy programs into MPU R4.
-    let cfgs: [PartitionConfig; NP] = unsafe {
-        core::array::from_fn(|i| {
-            let stk_base = STACKS[i].0.as_ptr() as u32;
-            PartitionConfig {
-                id: i as u8,
-                entry_point: 0,
-                stack_base: stk_base,
-                stack_size: STACK_SIZE,
-                mpu_region: MpuRegion::new(DATA_BASES[i], DATA_SIZES[i], 0),
-                peripheral_regions: heapless::Vec::new(),
-            }
-        })
+    #[allow(clippy::deref_addrof)]
+    let k = {
+        // SAFETY: before interrupts; single-core exclusive.
+        let stacks: &mut [AlignedStack; NP] = unsafe { &mut *(&raw mut STACKS) };
+        let [ref mut s0, ref mut s1] = *stacks;
+        let memories = [
+            ExternalPartitionMemory::new(
+                &mut s0.0,
+                0,
+                MpuRegion::new(DATA_BASES[0], DATA_SIZES[0], 0),
+                0,
+            )
+            .expect("ext mem"),
+            ExternalPartitionMemory::new(
+                &mut s1.0,
+                0,
+                MpuRegion::new(DATA_BASES[1], DATA_SIZES[1], 0),
+                1,
+            )
+            .expect("ext mem"),
+        ];
+        Kernel::<TestConfig>::new_external(sched, &memories).expect("kernel creation")
     };
-
-    // Create unified kernel
-    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-        .expect("kernel creation");
     store_kernel(k);
 
     // Seal the MPU cache so cached_dynamic_region() returns valid data.
@@ -233,6 +239,7 @@ fn main() -> ! {
     });
 
     // Initialize partition stacks
+    #[allow(clippy::deref_addrof)]
     // SAFETY: before interrupts; single-core exclusive.
     unsafe {
         for i in 0..NP {
