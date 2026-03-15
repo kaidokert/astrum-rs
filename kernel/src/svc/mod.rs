@@ -1,3 +1,4 @@
+pub mod accessors;
 #[cfg(feature = "ipc-blackboard")]
 pub mod blackboard;
 #[cfg(feature = "dynamic-mpu")]
@@ -1183,7 +1184,6 @@ where
         >,
         irq_bindings: &'static [crate::irq_dispatch::IrqBinding],
     ) -> Result<Self, ConfigError> {
-        use crate::partition::PartitionControlBlock;
         if schedule.is_empty() {
             return Err(ConfigError::ScheduleEmpty);
         }
@@ -2384,34 +2384,6 @@ where
     #[inline(always)]
     fn assert_dispatch_invariants(&self) {}
 
-    // -------------------------------------------------------------------------
-    // Schedule and partition accessors
-    // -------------------------------------------------------------------------
-
-    /// Returns an immutable reference to the partition table.
-    #[inline(always)]
-    pub fn partitions(&self) -> &PartitionTable<{ C::N }> {
-        self.core.partitions()
-    }
-
-    /// Returns a mutable reference to the partition table.
-    #[inline(always)]
-    pub fn partitions_mut(&mut self) -> &mut PartitionTable<{ C::N }> {
-        self.core.partitions_mut()
-    }
-
-    /// Returns a reference to the partition control block at `index`, if valid.
-    #[inline(always)]
-    pub fn pcb(&self, index: usize) -> Option<&PartitionControlBlock> {
-        self.partitions().get(index)
-    }
-
-    /// Returns a mutable reference to the partition control block at `index`, if valid.
-    #[inline(always)]
-    pub fn pcb_mut(&mut self, index: usize) -> Option<&mut PartitionControlBlock> {
-        self.partitions_mut().get_mut(index)
-    }
-
     /// Increment starvation counters for all Ready partitions that are not
     /// the currently active partition. Called when a schedule slot is wasted
     /// on a Waiting partition.
@@ -2432,24 +2404,6 @@ where
                 }
             }
         }
-    }
-
-    /// Returns the number of partitions currently registered.
-    #[inline(always)]
-    pub fn partition_count(&self) -> usize {
-        self.partitions().len()
-    }
-
-    /// Returns a slice of all partition control blocks.
-    #[inline(always)]
-    pub fn partition_slice(&self) -> &[PartitionControlBlock] {
-        CoreOps::partition_slice(&self.core)
-    }
-
-    /// Returns a mutable slice of all partition control blocks.
-    #[inline(always)]
-    pub fn partition_slice_mut(&mut self) -> &mut [PartitionControlBlock] {
-        CoreOps::partition_slice_mut(&mut self.core)
     }
 
     /// Returns an immutable reference to the schedule table.
