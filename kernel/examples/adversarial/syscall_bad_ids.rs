@@ -20,7 +20,7 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::{
     kpanic as _,
-    partition::PartitionMemory,
+    partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::{SYS_EVT_SET, SYS_QUEUING_SEND},
@@ -102,7 +102,7 @@ extern "C" fn test_partition_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
     hprintln!("{}: start", TEST_NAME);
 
     // Build schedule: partition runs for 2 ticks per slot.
@@ -112,10 +112,18 @@ fn main() -> ! {
         .expect("schedule entry must fit");
 
     let mut stack0 = AlignedStack1K::ZERO;
-    let mems: [PartitionMemory; NUM_PARTITIONS] = [PartitionMemory::sentinel(&mut stack0.0)];
+    let sentinel_mpu = MpuRegion::new(0, 0, 0);
+    let mem0 = ExternalPartitionMemory::new(
+        &mut stack0.0,
+        test_partition_main as *const () as u32,
+        sentinel_mpu,
+        0,
+    )
+    .expect("ext mem");
+    let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0];
 
     // Create kernel (no ports needed - we're testing invalid IDs).
-    let k = Kernel::<TestConfig>::create_from_memory(sched, &mems).expect("kernel creation");
+    let k = Kernel::<TestConfig>::new_external(sched, &mems).expect("kernel creation");
 
     store_kernel(k);
 
@@ -133,5 +141,5 @@ fn main() -> ! {
     // Build partition array for boot().
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(test_partition_main, 0)];
 
-    match boot(&parts, &mut p).expect("syscall_bad_ids: boot failed") {}
+    match boot(&parts, p).expect("syscall_bad_ids: boot failed") {}
 }
