@@ -261,23 +261,6 @@ where
         false
     }
 
-    /// Returns a reference to all partition stacks.
-    pub fn stacks(&self) -> &[S; N] {
-        &self.stacks
-    }
-
-    /// Returns a mutable reference to all partition stacks.
-    pub fn stacks_mut(&mut self) -> &mut [S; N] {
-        &mut self.stacks
-    }
-
-    /// Returns a mutable reference to a specific partition's stack array.
-    ///
-    /// Returns `None` if the index is out of bounds.
-    pub fn stack_mut(&mut self, index: usize) -> Option<&mut [u32]> {
-        self.stacks.get_mut(index).map(|s| s.as_u32_slice_mut())
-    }
-
     /// Returns the base address of a partition's stack as an integer.
     ///
     /// Returns `None` if the index is out of bounds.
@@ -290,16 +273,6 @@ where
     /// Returns the stack size in bytes for each partition.
     pub fn stack_size(&self) -> usize {
         S::SIZE_BYTES
-    }
-
-    /// Returns the initial stack pointer for a partition.
-    ///
-    /// The initial SP points to the top of the stack (stack base + size)
-    /// since Cortex-M stacks grow downward. Returns `None` if the index
-    /// is out of bounds.
-    pub fn stack_ptr_init(&self, index: usize) -> Option<u32> {
-        self.stack_base(index)
-            .map(|base| base.wrapping_add(self.stack_size() as u32))
     }
 
     /// Returns the currently active partition index, if any.
@@ -419,14 +392,6 @@ where
     }
     fn set_yield_requested(&mut self, requested: bool) {
         self.yield_requested = requested;
-    }
-    fn stack_mut(&mut self, index: usize) -> Option<&mut [u32]> {
-        self.stacks.get_mut(index).map(|s| s.as_u32_slice_mut())
-    }
-    fn stack_base(&self, index: usize) -> Option<u32> {
-        self.stacks
-            .get(index)
-            .map(|s| s.as_u32_slice().as_ptr() as u32)
     }
     fn partition_slice(&self) -> &[PartitionControlBlock] {
         self.partitions.as_slice()

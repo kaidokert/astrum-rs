@@ -2605,16 +2605,6 @@ where
         self.core.set_yield_requested(requested);
     }
 
-    /// Returns the base address of a partition's stack storage array.
-    ///
-    /// This is the actual host-memory address of the `PartitionCore` stack,
-    /// as distinct from the PCB `stack_base` field (which comes from
-    /// `PartitionConfig`). Returns `None` if `index` is out of bounds.
-    #[inline(always)]
-    pub fn core_stack_base(&self, index: usize) -> Option<u32> {
-        self.core.stack_base(index)
-    }
-
     #[cfg(feature = "dynamic-mpu")]
     pub(crate) fn mpu_tick_bookkeeping(&mut self, system_window: bool) {
         if system_window {

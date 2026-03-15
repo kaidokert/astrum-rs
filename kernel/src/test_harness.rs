@@ -5,13 +5,17 @@ use crate::message::MessageQueue;
 use crate::partition::{
     ConfigError, ExternalPartitionMemory, MpuRegion, PartitionState, TransitionError,
 };
-use crate::partition_core::{AlignedStack1K, StackStorage};
+use crate::partition_core::{AlignedStack1K, PartitionCore, StackStorage};
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
 use crate::semaphore::Semaphore;
 use crate::svc::{Kernel, YieldResult};
 use heapless::Vec;
 
 pub struct HarnessConfig;
+
+/// Concrete core type for the test harness, used to call inherent methods
+/// (e.g. `stack_base`) that are not on the `CoreOps` trait.
+type HarnessCore = PartitionCore<{ HarnessConfig::N }, { HarnessConfig::SCHED }, AlignedStack1K>;
 
 impl KernelConfig for HarnessConfig {
     const N: usize = 4;
@@ -109,13 +113,13 @@ impl KernelTestHarness {
         // Reconcile mpu_region bases with actual core stack addresses.
         // On 64-bit test hosts, addresses captured during Kernel::new become
         // stale when the struct moves. Boxing pins the kernel on the heap so
-        // core_stack_base() returns stable addresses we can write into the PCBs.
+        // the stack addresses are stable for writing into the PCBs.
         // TODO: Kernel is not move-safe due to internal self-references to stack
         // buffers. Ideally Kernel::new should return a pinned/boxed type or use
         // relative offsets, eliminating this post-move fixup.
         for i in 0..n {
-            let base = kernel
-                .core_stack_base(i)
+            let base = (&kernel.core as &HarnessCore)
+                .stack_base(i)
                 .ok_or(HarnessError::PartitionNotFound)?;
             let sp = base.wrapping_add(STACK_SIZE_BYTES);
             kernel.set_sp(i, sp);
@@ -258,8 +262,8 @@ impl KernelTestHarness {
         // Only sentinel partitions (size==0) get their MPU base updated;
         // user-configured partitions keep their original base.
         for i in 0..n {
-            let base = kernel
-                .core_stack_base(i)
+            let base = (&kernel.core as &HarnessCore)
+                .stack_base(i)
                 .ok_or(HarnessError::PartitionNotFound)?;
             let sp = base.wrapping_add(STACK_SIZE_BYTES);
             kernel.set_sp(i, sp);
@@ -2736,11 +2740,11 @@ mod tests {
             Box::new(Kernel::<HarnessConfig>::new_external(schedule, &mems).expect("new_external"));
 
         // Grab the actual stack address for P0 (the fixup target).
-        // core_stack_base() is needed here as test setup: it provides the
-        // real post-move address to pass into fix_mpu_data_region.
-        let fixup_base = kernel
-            .core_stack_base(0)
-            .expect("core_stack_base(0) must exist");
+        // Direct field access provides the real post-move address to pass
+        // into fix_mpu_data_region.
+        let fixup_base = (&kernel.core as &HarnessCore)
+            .stack_base(0)
+            .expect("partition 0 stack");
 
         // Run selective fixup loop mirroring boot.rs:296-302.
         for i in 0..2usize {
