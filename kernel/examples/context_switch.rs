@@ -13,7 +13,6 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    partition::PartitionConfig,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -21,8 +20,8 @@ use kernel::{
 
 kernel::compose_kernel_config!(DemoConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
+// TODO: reviewer false positive — NUM_PARTITIONS is used in the `parts` array type below.
 const NUM_PARTITIONS: usize = DemoConfig::N;
-const STACK_WORDS: usize = DemoConfig::STACK_WORDS;
 const TARGET_SWITCHES: u32 = 6;
 
 static PARTITION_RUNNING: AtomicU32 = AtomicU32::new(u32::MAX);
@@ -69,14 +68,7 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(0, 2)).expect("sched entry 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched entry 1");
 
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] =
-        core::array::from_fn(|i| PartitionConfig::sentinel(i as u8, (STACK_WORDS * 4) as u32));
-
-    #[cfg(feature = "dynamic-mpu")]
-    let k = Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-        .expect("kernel creation");
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let k = Kernel::<DemoConfig>::new(sched, &cfgs).expect("kernel creation");
+    let k = Kernel::<DemoConfig>::create_sentinels(sched).expect("kernel creation");
 
     store_kernel(k);
     hprintln!("context_switch: triggering first PendSV");

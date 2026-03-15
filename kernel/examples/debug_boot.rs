@@ -40,7 +40,6 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::{
     context::init_stack_frame,
-    partition::{MpuRegion, PartitionConfig},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -128,31 +127,8 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched");
 
-    // Build partition configs
-    // SAFETY: single-core Cortex-M, interrupts not yet enabled — exclusive
-    // access to all static-mut variables (STACKS). Exception priorities are
-    // configured before SysTick is enabled.
-    let cfgs: [PartitionConfig; TestConfig::N] = unsafe {
-        core::array::from_fn(|i| {
-            let b = STACKS[i].0.as_ptr() as u32;
-            PartitionConfig {
-                id: i as u8,
-                entry_point: 0,
-                stack_base: b,
-                stack_size: (TestConfig::STACK_WORDS * 4) as u32,
-                mpu_region: MpuRegion::new(b, (TestConfig::STACK_WORDS * 4) as u32, 0),
-                peripheral_regions: heapless::Vec::new(),
-            }
-        })
-    };
-
     // Create kernel
-    #[cfg(feature = "dynamic-mpu")]
-    let mut k =
-        Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-            .expect("kernel");
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let mut k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel");
+    let mut k = Kernel::<TestConfig>::create_sentinels(sched).expect("kernel");
     hprintln!("debug_boot: kernel created");
 
     // Start schedule and get first partition (BEFORE storing kernel)

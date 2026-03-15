@@ -18,7 +18,7 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    partition::{MpuRegion, PartitionConfig},
+    partition::MpuRegion,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -27,7 +27,6 @@ use kernel::{
 kernel::compose_kernel_config!(PassthroughConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 const NUM_PARTITIONS: usize = 1;
-const STACK_WORDS: usize = PassthroughConfig::STACK_WORDS;
 
 /// UART0 register block on lm3s6965evb.
 const UART0_BASE: u32 = 0x4000_C000;
@@ -75,39 +74,21 @@ extern "C" fn partition_main() -> ! {
 fn main() -> ! {
     // TODO: .unwrap()/.expect() are acceptable in QEMU examples but should
     // be replaced with proper error handling if this logic moves into the kernel.
-    let mut p = cortex_m::Peripherals::take().unwrap();
+    let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("peripheral_passthrough: start");
 
     let mut sched = ScheduleTable::<{ PassthroughConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched");
 
-    let mut periph = heapless::Vec::<MpuRegion, 2>::new();
-    periph
-        .push(MpuRegion::new(UART0_BASE, UART0_SIZE, 0))
-        .expect("peripheral region");
-
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = [PartitionConfig {
-        id: 0,
-        entry_point: 0,
-        stack_base: 0,
-        stack_size: (STACK_WORDS * 4) as u32,
-        mpu_region: MpuRegion::new(0, 0, 0),
-        peripheral_regions: periph,
-    }];
-
-    #[cfg(feature = "dynamic-mpu")]
-    let k = Kernel::<PassthroughConfig>::new(
-        sched,
-        &cfgs,
-        kernel::virtual_device::DeviceRegistry::new(),
-    )
-    .expect("kernel");
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let k = Kernel::<PassthroughConfig>::new(sched, &cfgs).expect("kernel");
+    let mut k = Kernel::<PassthroughConfig>::create_sentinels(sched).expect("kernel");
+    k.partitions_mut()
+        .get_mut(0)
+        .expect("partition 0")
+        .set_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)]);
 
     store_kernel(k);
     hprintln!("peripheral_passthrough: booting");
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
-    match boot(&parts, &mut p).expect("boot failed") {}
+    match boot(&parts, p).expect("boot failed") {}
 }
