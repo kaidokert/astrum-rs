@@ -1078,47 +1078,6 @@ where
         BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     >,
 {
-    /// Create a new `Kernel` with the given schedule and partition configs.
-    ///
-    /// Forwards to [`with_config`](Self::with_config). Provided for backward
-    /// compatibility — all existing `Kernel::<Config>::new()` call sites
-    /// continue to work unchanged.
-    pub fn new(
-        schedule: ScheduleTable<{ C::SCHED }>,
-        configs: &[PartitionConfig],
-        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
-            'static,
-            { C::DR },
-        >,
-    ) -> Result<Self, ConfigError> {
-        Self::with_config(
-            schedule,
-            configs,
-            #[cfg(feature = "dynamic-mpu")]
-            registry,
-            &[],
-        )
-    }
-
-    /// Create a `Kernel` without requiring a `DeviceRegistry` argument.
-    ///
-    #[cfg_attr(
-        feature = "dynamic-mpu",
-        doc = "When `dynamic-mpu` is enabled, constructs a default [`DeviceRegistry::new()`] internally."
-    )]
-    /// Otherwise identical to [`new`](Self::new).
-    pub fn create(
-        schedule: ScheduleTable<{ C::SCHED }>,
-        configs: &[PartitionConfig],
-    ) -> Result<Self, ConfigError> {
-        Self::new(
-            schedule,
-            configs,
-            #[cfg(feature = "dynamic-mpu")]
-            crate::virtual_device::DeviceRegistry::new(),
-        )
-    }
-
     /// Create a `Kernel` from caller-provided [`ExternalPartitionMemory`] descriptors.
     ///
     /// Partition IDs are derived from array indices (0, 1, 2, …).
@@ -1200,30 +1159,6 @@ where
             #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
         ))
-    }
-
-    /// Create a `Kernel` with a pre-configured IRQ binding table.
-    ///
-    /// Identical to [`new`](Self::new) but also accepts an
-    /// `&'static [IrqBinding]` slice that is stored directly in the kernel,
-    /// removing the need for a separate [`store_irq_bindings`](Self::store_irq_bindings)
-    /// call after construction.
-    pub fn with_irq_bindings(
-        schedule: ScheduleTable<{ C::SCHED }>,
-        configs: &[PartitionConfig],
-        bindings: &'static [crate::irq_dispatch::IrqBinding],
-        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
-            'static,
-            { C::DR },
-        >,
-    ) -> Result<Self, ConfigError> {
-        Self::with_config(
-            schedule,
-            configs,
-            #[cfg(feature = "dynamic-mpu")]
-            registry,
-            bindings,
-        )
     }
 
     /// Primary constructor for custom kernel configurations.
@@ -12684,29 +12619,24 @@ mod tests {
         assert_eq!(k.irq_bindings.len(), 3);
     }
 
-    // TODO: with_irq_bindings tests below still use PartitionConfig because
-    // Kernel::with_irq_bindings() has no ExternalPartitionMemory equivalent yet.
     #[test]
     fn with_irq_bindings_stores_bindings() {
-        let mut s: ScheduleTable<4> = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 50)).unwrap();
-        s.add(ScheduleEntry::new(1, 50)).unwrap();
+        use crate::partition_core::AlignedStack256B;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 50)).unwrap();
+        sched.add(ScheduleEntry::new(1, 50)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
-        s.add_system_window(1).unwrap();
-        let cfgs = [
-            PartitionConfig::sentinel(0, 1024),
-            PartitionConfig::sentinel(1, 1024),
-        ];
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let k = Kernel::<TestConfig>::with_irq_bindings(s, &cfgs, &IRQ_ACK_TEST_BINDINGS).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
-        let k = Kernel::<TestConfig>::with_irq_bindings(
-            s,
-            &cfgs,
-            &IRQ_ACK_TEST_BINDINGS,
-            crate::virtual_device::DeviceRegistry::new(),
-        )
-        .unwrap();
+        sched.add_system_window(1).unwrap();
+        let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
+        let mut stack0 = AlignedStack256B::default();
+        let mut stack1 = AlignedStack256B::default();
+        let m0 =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0000, mpu, 0).unwrap();
+        let m1 =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1000, mpu, 1).unwrap();
+        let mut k = Kernel::<TestConfig>::new_external(sched, &[m0, m1])
+            .expect("two partitions should succeed");
+        k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
         assert_eq!(k.irq_bindings.len(), 3);
         assert_eq!(k.irq_bindings[0].irq_num, 5);
         assert_eq!(k.irq_bindings[1].irq_num, 10);
@@ -12715,28 +12645,23 @@ mod tests {
 
     #[test]
     fn with_irq_bindings_irq_ack_dispatch_succeeds() {
+        use crate::partition_core::AlignedStack256B;
         use crate::syscall::SYS_IRQ_ACK;
-        let mut s: ScheduleTable<4> = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 50)).unwrap();
-        s.add(ScheduleEntry::new(1, 50)).unwrap();
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 50)).unwrap();
+        sched.add(ScheduleEntry::new(1, 50)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
-        s.add_system_window(1).unwrap();
-        let cfgs = [
-            PartitionConfig::sentinel(0, 1024),
-            PartitionConfig::sentinel(1, 1024),
-        ];
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let mut k =
-            Kernel::<TestConfig>::with_irq_bindings(s, &cfgs, &IRQ_ACK_TEST_BINDINGS).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
-        let mut k = Kernel::<TestConfig>::with_irq_bindings(
-            s,
-            &cfgs,
-            &IRQ_ACK_TEST_BINDINGS,
-            crate::virtual_device::DeviceRegistry::new(),
-        )
-        .unwrap();
-        // No store_irq_bindings call needed — bindings set at construction.
+        sched.add_system_window(1).unwrap();
+        let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
+        let mut stack0 = AlignedStack256B::default();
+        let mut stack1 = AlignedStack256B::default();
+        let m0 =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0000, mpu, 0).unwrap();
+        let m1 =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1000, mpu, 1).unwrap();
+        let mut k = Kernel::<TestConfig>::new_external(sched, &[m0, m1])
+            .expect("two partitions should succeed");
+        k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
         k.current_partition = 0;
         let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0);
         assert_eq!(result, 0, "IrqAck should succeed for partition 0, IRQ 5");
