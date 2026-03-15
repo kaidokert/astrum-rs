@@ -134,10 +134,10 @@ macro_rules! define_pendsv {
         const _: () = {
             type K = $crate::svc::Kernel<$Config>;
             type C = <$Config as $crate::config::KernelConfig>::Core;
-            // `stacks` must be last so offset_of!(C, stacks) == metadata size.
-            assert!(C::STACKS_IS_LAST_FIELD,
-                "PartitionCore layout violated: `stacks` must be the last field (#[repr(C)])");
-            assert!(::core::mem::offset_of!(K, core) + ::core::mem::offset_of!(C, stacks)
+            // TODO: size_of::<C> is conservative — alignment padding may
+            // cause this to fire before the actual last-accessed field
+            // exceeds the limit. Revisit if this becomes a problem.
+            assert!(::core::mem::offset_of!(K, core) + ::core::mem::size_of::<C>()
                     < $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT,
                 "Core metadata region exceeds literal-pool offset limit: reduce partition count");
         };
@@ -420,37 +420,25 @@ mod tests {
         assert_eq!(*base, expected);
     }
 
-    /// Verifies that a large partition config produces a Core metadata
-    /// region that exceeds the literal-pool offset limit, proving the
+    /// Verifies that a large partition config produces a Core whose
+    /// `size_of` exceeds the literal-pool offset limit, proving the
     /// compile-time guard in `define_pendsv!(@assert_offsets)` is necessary.
     // Compile-fail coverage: tests/ui/oversized_partition_config.rs
     // verifies that `define_pendsv!` with 500 partitions triggers the
     // compile-time assertion via trybuild.
-    ///
-    /// Uses an independent computation (offset of last PendSV-accessed
-    /// array + array size) rather than mirroring the guard's
-    /// `offset_of!(C, stacks)` logic.
     #[test]
     fn core_metadata_guard_catches_large_partition_config() {
-        use crate::partition_core::{AlignedStack1K, PartitionCore};
+        use crate::partition_core::PartitionCore;
 
         // 500 partitions: PartitionTable<500> stores 500 PartitionControlBlocks
         // inline (each ~100+ bytes), which alone exceeds the 65536-byte limit.
-        // The partition_sp[500] and partition_stack_limits[500] arrays add
-        // another ~4000 bytes on top of that.
-        type BigCore = PartitionCore<500, 4, AlignedStack1K>;
-
-        // Independent check: the end of the last PendSV-accessed array
-        // (partition_stack_limits) must exceed the literal-pool offset limit.
-        // This proves the guard is necessary without using offset_of!(stacks).
-        let stack_limits_end = core::mem::offset_of!(BigCore, partition_stack_limits)
-            + core::mem::size_of::<[u32; 500]>();
+        type BigCore = PartitionCore<500, 4>;
 
         assert!(
-            stack_limits_end > super::LITERAL_POOL_OFFSET_LIMIT,
-            "BigCore partition_stack_limits end ({} bytes) must exceed \
+            core::mem::size_of::<BigCore>() > super::LITERAL_POOL_OFFSET_LIMIT,
+            "BigCore size ({} bytes) must exceed \
              LITERAL_POOL_OFFSET_LIMIT ({}) to prove the guard is necessary",
-            stack_limits_end,
+            core::mem::size_of::<BigCore>(),
             super::LITERAL_POOL_OFFSET_LIMIT
         );
     }

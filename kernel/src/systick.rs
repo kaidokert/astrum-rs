@@ -283,7 +283,8 @@ mod tests {
 
     use crate::config::KernelConfig;
     use crate::kernel_config_types;
-    use crate::partition::PartitionMemory;
+    use crate::partition::{ExternalPartitionMemory, MpuRegion};
+    use crate::partition_core::AlignedStack256B;
     use crate::scheduler::{ScheduleEntry, ScheduleTable};
 
     struct TestConfig;
@@ -315,31 +316,37 @@ mod tests {
         kernel_config_types!();
     }
 
+    // Lifetime note: `stk0`/`stk1` are local but this is sound because
+    // `Kernel<C>` has no lifetime parameter — `new_external` copies
+    // descriptor data into PCBs (with sentinel stack fields) and does
+    // not retain borrows from `ExternalPartitionMemory`.
     fn make_test_kernel() -> Kernel<TestConfig> {
-        use crate::partition::MpuRegion;
         let mut schedule = ScheduleTable::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         schedule.add(ScheduleEntry::new(1, 10)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
+        let mut stk0 = AlignedStack256B::default();
+        let mut stk1 = AlignedStack256B::default();
+        // MpuRegion with size=0 is a sentinel meaning "no user-configured data
+        // region"; boot_external() patches it from the actual stack address.
         let mems = [
-            PartitionMemory {
-                entry_point: 0x0800_1000,
-                stack_base: 0x2000_0000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_0000, 1024, 0x03),
-                peripheral_regions: heapless::Vec::new(),
-            },
-            PartitionMemory {
-                entry_point: 0x0800_2000,
-                stack_base: 0x2000_1000,
-                stack_size: 1024,
-                mpu_region: MpuRegion::new(0x2000_1000, 1024, 0x03),
-                peripheral_regions: heapless::Vec::new(),
-            },
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_1000,
+                MpuRegion::new(0, 0, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_2000,
+                MpuRegion::new(0, 0, 0),
+                1,
+            )
+            .unwrap(),
         ];
-        // create_from_memory auto-creates a default DeviceRegistry for dynamic-mpu builds.
-        Kernel::<TestConfig>::create_from_memory(schedule, &mems).expect("kernel creation failed")
+        Kernel::<TestConfig>::new_external(schedule, &mems).expect("kernel creation failed")
     }
 
     /// Mutex to serialize tests that manipulate the global `SYSTICK_HANDLER`.
