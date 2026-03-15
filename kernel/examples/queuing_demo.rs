@@ -19,7 +19,6 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    partition::PartitionConfig,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
@@ -355,7 +354,7 @@ kernel::partition_trampoline!(worker_main => worker_main_body);
 // ---------------------------------------------------------------------------
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().unwrap();
+    let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("queuing_demo: start");
 
     // Build schedule: each partition runs for 2 ticks per slot.
@@ -364,17 +363,7 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let cfgs: [PartitionConfig; DemoConfig::N] = core::array::from_fn(|i| {
-        PartitionConfig::sentinel(i as u8, (DemoConfig::STACK_WORDS * 4) as u32)
-    });
-
-    // Create the unified kernel with schedule and partitions.
-    #[cfg(feature = "dynamic-mpu")]
-    let mut k =
-        Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-            .expect("kernel creation");
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let mut k = Kernel::<DemoConfig>::new(sched, &cfgs).expect("kernel creation");
+    let mut k = Kernel::<DemoConfig>::create_sentinels(sched).expect("kernel creation");
 
     // Command channel: commander (Source cs) -> worker (Destination cd)
     let cs = k
@@ -414,5 +403,5 @@ fn main() -> ! {
     let parts: [(extern "C" fn() -> !, u32); DemoConfig::N] =
         core::array::from_fn(|i| (eps[i], hints[i]));
 
-    match boot(&parts, &mut p).expect("queuing_demo: boot failed") {}
+    match boot(&parts, p).expect("queuing_demo: boot failed") {}
 }

@@ -19,7 +19,6 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::{
     boot,
-    partition::PartitionConfig,
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
@@ -153,7 +152,7 @@ extern "C" fn display_main_body(r0: u32) -> ! {
 kernel::partition_trampoline!(display_main => display_main_body);
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().unwrap();
+    let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("sampling_demo: start");
 
     // Build schedule: each partition runs for 2 ticks per slot.
@@ -162,17 +161,7 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let cfgs: [PartitionConfig; NUM_PARTITIONS] = core::array::from_fn(|i| {
-        PartitionConfig::sentinel(i as u8, (DemoConfig::STACK_WORDS * 4) as u32)
-    });
-
-    // Create the unified kernel with schedule and partitions.
-    #[cfg(feature = "dynamic-mpu")]
-    let mut k =
-        Kernel::<DemoConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-            .expect("kernel creation");
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let mut k = Kernel::<DemoConfig>::new(sched, &cfgs).expect("kernel creation");
+    let mut k = Kernel::<DemoConfig>::create_sentinels(sched).expect("kernel creation");
 
     // Create and connect sampling ports.
     let s0 = k
@@ -214,6 +203,6 @@ fn main() -> ! {
     // SAFETY: called once from main before any interrupt handler runs.
     let stacks: &mut [[u32; STACK_WORDS]; DemoConfig::N] =
         unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
-    match boot::boot_external::<DemoConfig, STACK_WORDS>(&parts, &mut p, stacks)
+    match boot::boot_external::<DemoConfig, STACK_WORDS>(&parts, p, stacks)
         .expect("sampling_demo: boot failed") {}
 }
