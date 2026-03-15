@@ -267,7 +267,7 @@ pub fn is_stack_aapcs_aligned(sp: u32) -> bool {
 }
 
 /// Build a [`Kernel`] from caller-provided `stacks` via
-/// [`Kernel::new_external()`](crate::svc::Kernel::new_external)
+/// [`Kernel::new()`](crate::svc::Kernel::new)
 /// with sentinel entry points and MPU regions.
 pub fn create_kernel_from_stacks<C: KernelConfig, const SW: usize>(
     sched: ScheduleTable<{ C::SCHED }>,

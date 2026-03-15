@@ -1113,15 +1113,6 @@ where
         )
     }
 
-    /// Deprecated alias for [`new()`](Self::new).
-    #[deprecated(note = "use Kernel::new() instead")]
-    pub fn new_external(
-        schedule: ScheduleTable<{ C::SCHED }>,
-        memories: &[crate::partition::ExternalPartitionMemory<'_>],
-    ) -> Result<Self, ConfigError> {
-        Self::new(schedule, memories)
-    }
-
     /// Create a `Kernel` with `C::N` sentinel partitions.
     ///
     /// Each partition gets `id = index`, `entry_point = 0`, `stack = 0`,
@@ -2922,7 +2913,6 @@ mod tests {
 
     /// Build a `Kernel` from `ExternalPartitionMemory` slices via `new`.
     /// No system-window is added — callers must include one for `dynamic-mpu` builds.
-    #[allow(deprecated)]
     fn kernel_from_ext(
         schedule: ScheduleTable<4>,
         mems: &[ExternalPartitionMemory<'_>],
@@ -3388,7 +3378,7 @@ mod tests {
         schedule.add_system_window(1).unwrap();
         let mut stk = AlignedStack1K::default();
         let mem = ExternalPartitionMemory::from_aligned_stack(&mut stk, 0x0800_0000, region, 0)?;
-        Kernel::<TestConfig>::new_external(schedule, core::slice::from_ref(&mem))
+        Kernel::<TestConfig>::new(schedule, core::slice::from_ref(&mem))
     }
 
     /// Kernel::new() succeeds when a partition uses mpu_region size==0
@@ -3452,7 +3442,7 @@ mod tests {
         );
     }
 
-    /// Helper: build a single-partition kernel via `new_external`.
+    /// Helper: build a single-partition kernel via `new`.
     fn mem_kernel(entry: u32, mpu: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
@@ -3460,7 +3450,7 @@ mod tests {
         sched.add_system_window(1).unwrap();
         let mut stk = AlignedStack1K::default();
         let m = ExternalPartitionMemory::from_aligned_stack(&mut stk, entry, mpu, 0)?;
-        Kernel::<TestConfig>::new_external(sched, &[m])
+        Kernel::<TestConfig>::new(sched, &[m])
     }
 
     #[test]
@@ -3497,13 +3487,13 @@ mod tests {
         let m =
             ExternalPartitionMemory::from_aligned_stack(&mut stk, 0, MpuRegion::new(0, 0, 0), 0)
                 .unwrap();
-        let err = Kernel::<TestConfig>::new_external(ScheduleTable::<4>::new(), &[m]);
+        let err = Kernel::<TestConfig>::new(ScheduleTable::<4>::new(), &[m]);
         assert!(matches!(err, Err(ConfigError::ScheduleEmpty)));
     }
 
-    // ---- new_external unit tests ----
+    // ---- Kernel::new() with ExternalPartitionMemory unit tests ----
 
-    /// Helper: build a single-partition kernel via `new_external`.
+    /// Helper: build a single-partition kernel via `new`.
     fn ext_kernel(entry: u32, mpu: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
         use crate::partition_core::AlignedStack256B;
         let mut sched = ScheduleTable::<4>::new();
@@ -3512,11 +3502,11 @@ mod tests {
         sched.add_system_window(1).unwrap();
         let mut stack = AlignedStack256B::default();
         let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, entry, mpu, 0)?;
-        Kernel::<TestConfig>::new_external(sched, core::slice::from_ref(&mem))
+        Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
     }
 
     #[test]
-    fn new_external_pcb_fields_and_sentinels() {
+    fn kernel_new_pcb_fields_and_sentinels() {
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         let k = ext_kernel(0x0800_1000, mpu).expect("should succeed");
         let pcb = k.partitions().get(0).expect("partition 0 must exist");
@@ -3533,20 +3523,17 @@ mod tests {
     }
 
     #[test]
-    fn new_external_validates_schedule() {
+    fn kernel_new_validates_schedule() {
         use crate::partition_core::AlignedStack256B;
         let mut stack = AlignedStack256B::default();
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0, mpu, 0).unwrap();
-        let err = Kernel::<TestConfig>::new_external(
-            ScheduleTable::<4>::new(),
-            core::slice::from_ref(&mem),
-        );
+        let err = Kernel::<TestConfig>::new(ScheduleTable::<4>::new(), core::slice::from_ref(&mem));
         assert!(matches!(err, Err(ConfigError::ScheduleEmpty)));
     }
 
     #[test]
-    fn new_external_two_partitions_ids_from_indices() {
+    fn kernel_new_two_partitions_ids_from_indices() {
         use crate::partition_core::AlignedStack256B;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 5)).unwrap();
@@ -3560,8 +3547,7 @@ mod tests {
             ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0000, mpu, 0).unwrap();
         let m1 =
             ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1000, mpu, 1).unwrap();
-        let k = Kernel::<TestConfig>::new_external(sched, &[m0, m1])
-            .expect("two partitions should succeed");
+        let k = Kernel::<TestConfig>::new(sched, &[m0, m1]).expect("two partitions should succeed");
         assert_eq!(k.partitions().get(0).unwrap().id(), 0);
         assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
         assert_eq!(k.partitions().get(1).unwrap().id(), 1);
@@ -3569,7 +3555,7 @@ mod tests {
     }
 
     #[test]
-    fn new_external_partition_count_limit() {
+    fn kernel_new_partition_count_limit() {
         use crate::partition_core::AlignedStack256B;
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         // Build 5 ExternalPartitionMemory descriptors — exceeds TestConfig::N (4).
@@ -3585,7 +3571,7 @@ mod tests {
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
-        let err = Kernel::<TestConfig>::new_external(sched, &mems);
+        let err = Kernel::<TestConfig>::new(sched, &mems);
         assert!(matches!(err, Err(ConfigError::PartitionTableFull)));
     }
 
@@ -7638,7 +7624,7 @@ mod tests {
         // Test empty schedule rejection
         let empty: ScheduleTable<4> = ScheduleTable::new();
         assert!(matches!(
-            Kernel::<TestConfig>::new_external(empty, core::slice::from_ref(&mem)),
+            Kernel::<TestConfig>::new(empty, core::slice::from_ref(&mem)),
             Err(ConfigError::ScheduleEmpty)
         ));
         // Test valid config succeeds
@@ -7646,7 +7632,7 @@ mod tests {
         s.add(ScheduleEntry::new(0, 100)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
         s.add_system_window(1).unwrap();
-        let k = Kernel::<TestConfig>::new_external(s, core::slice::from_ref(&mem)).unwrap();
+        let k = Kernel::<TestConfig>::new(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().len(), 1);
         assert_eq!(k.active_partition(), None);
     }
@@ -7661,12 +7647,12 @@ mod tests {
         let mem =
             ExternalPartitionMemory::from_aligned_stack(&mut stk, 0, MpuRegion::new(0, 0, 0), 0)
                 .unwrap();
-        let k = Kernel::<TestConfig>::new_external(s, core::slice::from_ref(&mem)).unwrap();
+        let k = Kernel::<TestConfig>::new(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().len(), 1);
         assert_eq!(k.active_partition(), None);
     }
 
-    /// Kernel::new_external() preserves mpu_region from config.
+    /// Kernel::new() preserves mpu_region from config.
     #[test]
     fn kernel_new_mpu_region_base_matches_config() {
         let mut s = ScheduleTable::new();
@@ -7775,7 +7761,7 @@ mod tests {
     ) -> Result<Kernel<TestConfig>, ConfigError> {
         #[cfg(not(feature = "dynamic-mpu"))]
         {
-            Kernel::<TestConfig>::new_external(schedule, memories)
+            Kernel::<TestConfig>::new(schedule, memories)
         }
         #[cfg(feature = "dynamic-mpu")]
         {
@@ -7783,7 +7769,7 @@ mod tests {
             schedule
                 .add_system_window(1)
                 .expect("schedule must have room for system window");
-            Kernel::<TestConfig>::new_external(schedule, memories)
+            Kernel::<TestConfig>::new(schedule, memories)
         }
     }
 
@@ -8065,8 +8051,8 @@ mod tests {
         )
         .unwrap();
 
-        // Call new_external directly (not try_kernel_new_mem which adds a system window)
-        let result = Kernel::<TestConfig>::new_external(s, core::slice::from_ref(&mem));
+        // Call new directly (not try_kernel_new_mem which adds a system window)
+        let result = Kernel::<TestConfig>::new(s, core::slice::from_ref(&mem));
 
         assert!(matches!(result, Err(ConfigError::NoSystemWindow)));
     }
@@ -8090,7 +8076,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = Kernel::<TestConfig>::new_external(s, core::slice::from_ref(&mem));
+        let result = Kernel::<TestConfig>::new(s, core::slice::from_ref(&mem));
 
         assert!(matches!(
             result,
@@ -8120,7 +8106,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = Kernel::<TestConfig>::new_external(s, core::slice::from_ref(&mem));
+        let result = Kernel::<TestConfig>::new(s, core::slice::from_ref(&mem));
 
         // Should succeed: max_gap (100) is not greater than threshold (100).
         assert!(result.is_ok());
@@ -8243,7 +8229,7 @@ mod tests {
 
     /// Helper to create a Kernel with a started schedule and partitions.
     // NOTE: local stacks are safe here — Kernel has no lifetime parameter and
-    // new_external() copies all data out of ExternalPartitionMemory.
+    // new() copies all data out of ExternalPartitionMemory.
     fn kernel_with_schedule() -> Kernel<TestConfig> {
         // Create 2-slot schedule: P0 for 5 ticks, P1 for 3 ticks
         let mut schedule = ScheduleTable::<4>::new();
@@ -8270,7 +8256,7 @@ mod tests {
             )
             .unwrap(),
         ];
-        let mut k = Kernel::<TestConfig>::new_external(schedule, &mems).unwrap();
+        let mut k = Kernel::<TestConfig>::new(schedule, &mems).unwrap();
         let _ = &mut k;
         k
     }
@@ -8615,7 +8601,7 @@ mod tests {
             )
             .unwrap(),
         ];
-        Kernel::<TestConfig>::new_external(schedule, &mems).unwrap()
+        Kernel::<TestConfig>::new(schedule, &mems).unwrap()
     }
 
     /// Ready partition accumulates starvation when another partition's
@@ -12541,8 +12527,8 @@ mod tests {
             ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0000, mpu, 0).unwrap();
         let m1 =
             ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1000, mpu, 1).unwrap();
-        let mut k = Kernel::<TestConfig>::new_external(sched, &[m0, m1])
-            .expect("two partitions should succeed");
+        let mut k =
+            Kernel::<TestConfig>::new(sched, &[m0, m1]).expect("two partitions should succeed");
         k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
         assert_eq!(k.irq_bindings.len(), 3);
         assert_eq!(k.irq_bindings[0].irq_num, 5);
@@ -12566,8 +12552,8 @@ mod tests {
             ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0000, mpu, 0).unwrap();
         let m1 =
             ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1000, mpu, 1).unwrap();
-        let mut k = Kernel::<TestConfig>::new_external(sched, &[m0, m1])
-            .expect("two partitions should succeed");
+        let mut k =
+            Kernel::<TestConfig>::new(sched, &[m0, m1]).expect("two partitions should succeed");
         k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
         k.current_partition = 0;
         let result = dispatch_r0(&mut k, SYS_IRQ_ACK, 5, 0);

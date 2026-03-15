@@ -121,8 +121,7 @@ fn main() -> ! {
     let mem1 = ExternalPartitionMemory::new(&mut stack1.0, 0, sentinel_mpu, 1).expect("ext mem 1");
     let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0, mem1];
 
-    #[allow(deprecated)]
-    let mut k = Kernel::<TestConfig>::new_external(sched, &mems).expect("kernel creation");
+    let mut k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");
 
     // Create a source port (partition will "write" to it).
     let port_id = k
