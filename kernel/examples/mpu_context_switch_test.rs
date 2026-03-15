@@ -103,7 +103,7 @@ kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals");
+    let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("mpu_context_switch_test: start");
     let entry_fns: [extern "C" fn() -> !; TestConfig::N] = [p0_entry, p1_entry];
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
@@ -112,7 +112,7 @@ fn main() -> ! {
     let mut cfgs = PartitionConfig::sentinel_array::<{ TestConfig::N }>(TestConfig::STACK_WORDS);
     for (i, cfg) in cfgs.iter_mut().enumerate() {
         // entry_point is the MPU code-region base, not the execution start address.
-        // boot::boot() receives the actual function pointer via the `parts` array.
+        // boot::boot_external() receives the actual function pointer via the `parts` array.
         // TODO: reviewer false positive — same pattern as mpu_cached_test.rs
         cfg.entry_point = entry_fns[i] as usize as u32 & !(REGION_SZ - 1);
     }
@@ -135,5 +135,5 @@ fn main() -> ! {
     })
     .expect("with_kernel_mut");
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(p0_entry, 0), (p1_entry, 0)];
-    match boot::boot_external::<TestConfig, SW>(&parts, &mut p, stacks).expect("boot") {}
+    match boot::boot_external::<TestConfig, SW>(&parts, p, stacks).expect("boot") {}
 }

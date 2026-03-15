@@ -93,7 +93,7 @@
 //!
 //! The [`USE_PROCESSOR_CLOCK`](KernelConfig::USE_PROCESSOR_CLOCK)
 //! constant controls this selection. When `true` (the default),
-//! [`boot()`](crate::boot::boot) sets `CLKSOURCE = 1` (processor
+//! [`boot_external()`](crate::boot::boot_external) sets `CLKSOURCE = 1` (processor
 //! clock). When `false`, it sets `CLKSOURCE = 0` (external reference).
 //!
 //! To use an external reference clock instead, a BSP should:

@@ -105,7 +105,7 @@ static mut PARTITION_STACKS: PartitionStacks = PartitionStacks([[0u32; SW]; Test
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals");
+    let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("mpu_cached_test: start");
     let entry_fns: [extern "C" fn() -> !; TestConfig::N] = [p0_entry, p1_entry];
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
@@ -113,7 +113,7 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 2)).expect("sched 1");
     let cfgs: [PartitionConfig; TestConfig::N] = core::array::from_fn(|i| {
         // entry_point is the MPU code-region base, not the execution start address.
-        // boot::boot() receives the actual function pointer via the `parts` array.
+        // boot::boot_external() receives the actual function pointer via the `parts` array.
         // TODO: reviewer false positive — same pattern as mpu_enforce_test.rs
         let code_region_base = (entry_fns[i] as *const () as usize as u32) & !(REGION_SZ - 1);
         let mut peripheral_regions: heapless::Vec<MpuRegion, 2> = heapless::Vec::new();
@@ -154,5 +154,5 @@ fn main() -> ! {
     })
     .expect("with_kernel_mut");
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(p0_entry, 0), (p1_entry, 0)];
-    match boot::boot_external::<TestConfig, SW>(&parts, &mut p, stacks).expect("boot") {}
+    match boot::boot_external::<TestConfig, SW>(&parts, p, stacks).expect("boot") {}
 }

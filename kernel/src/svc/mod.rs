@@ -915,7 +915,7 @@ pub fn dispatch_syscall<const N: usize>(
 // after placement**, not during construction.  The correct pattern is:
 //
 //   1. Construct with stale / sentinel values (e.g. base = 0, size = 0).
-//   2. After placement in `boot()`, call the appropriate `fix_*()` method
+//   2. After placement in `boot_external()`, call the appropriate `fix_*()` method
 //      which recomputes the address from the live storage location.
 //   3. Verify the patched address falls within the `UNIFIED_KERNEL_STORAGE`
 //      range.
@@ -2666,12 +2666,6 @@ where
     #[inline(always)]
     pub fn core_stack_base(&self, index: usize) -> Option<u32> {
         self.core.stack_base(index)
-    }
-
-    /// Returns a mutable reference to a partition's stack array.
-    #[inline(always)]
-    pub fn core_stack_mut(&mut self, index: usize) -> Option<&mut [u32]> {
-        self.core.stack_mut(index)
     }
 
     #[cfg(feature = "dynamic-mpu")]
