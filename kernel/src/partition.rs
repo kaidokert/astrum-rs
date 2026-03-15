@@ -796,6 +796,22 @@ impl<const N: usize> PartitionTable<N> {
 /// Canonical public alias for [`ExternalPartitionMemory`].
 pub type PartitionMemory<'mem> = ExternalPartitionMemory<'mem>;
 
+/// Validate stack base alignment and address-space overflow.
+/// Assumes `size_bytes` has already been checked as a valid power-of-two >= 32.
+fn validate_stack_geometry(
+    base: u32,
+    size_bytes: u32,
+    partition_id: u8,
+) -> Result<(), ConfigError> {
+    if base & (size_bytes - 1) != 0 {
+        return Err(ConfigError::StackBaseNotAligned { partition_id });
+    }
+    if base.checked_add(size_bytes).is_none() {
+        return Err(ConfigError::StackOverflow { partition_id });
+    }
+    Ok(())
+}
+
 /// Partition memory descriptor that borrows caller-provided stack memory.
 #[derive(Debug)]
 pub struct ExternalPartitionMemory<'mem> {
@@ -823,14 +839,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
             return Err(ConfigError::StackSizeInvalid { partition_id });
         }
         let base = stack.as_ptr() as u32;
-        // Safety: size_bytes is validated as non-zero power-of-two above,
-        // so (size_bytes - 1) is a valid alignment mask.
-        if base & (size_bytes - 1) != 0 {
-            return Err(ConfigError::StackBaseNotAligned { partition_id });
-        }
-        if base.checked_add(size_bytes).is_none() {
-            return Err(ConfigError::StackOverflow { partition_id });
-        }
+        validate_stack_geometry(base, size_bytes, partition_id)?;
         // Size==0 sentinel: boot_external() patches via fix_mpu_data_region_if_sentinel().
         if mpu_region.size() > 0 {
             validate_mpu_region(mpu_region.base(), mpu_region.size()).map_err(|detail| {
@@ -2844,5 +2853,144 @@ mod tests {
             .with_peripheral_regions(&[periph]);
         assert_eq!(epm.peripheral_regions().len(), 1);
         assert_eq!(epm.peripheral_regions()[0], periph);
+    }
+
+    // ------------------------------------------------------------------
+    // ExternalPartitionMemory – additional edge-case coverage
+    // ------------------------------------------------------------------
+
+    /// Helper macro: define a `#[repr(C, align(N))]` buffer for test use.
+    macro_rules! aligned_test_buf {
+        ($name:ident, $align:expr, $words:expr) => {
+            #[repr(C, align($align))]
+            struct $name([u32; $words]);
+        };
+    }
+
+    aligned_test_buf!(TestBuf32, 32, 8); // 32 bytes
+    aligned_test_buf!(TestBuf16, 16, 4); // 16 bytes
+    aligned_test_buf!(TestBuf512, 512, 128); // 512 bytes
+
+    #[test]
+    fn ext_pmem_minimum_valid_stack_size_32_bytes() {
+        let mut buf = TestBuf32([0u32; 8]); // 8 words = 32 bytes
+        let mpu = MpuRegion::new(0, 0, 0); // sentinel
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 1).unwrap();
+        assert_eq!(epm.stack_size_bytes(), 32);
+    }
+
+    #[test]
+    fn ext_pmem_zero_size_stack_rejected() {
+        let mut empty: [u32; 0] = [];
+        let mpu = MpuRegion::new(0, 0, 0);
+        assert_eq!(
+            ExternalPartitionMemory::new(&mut empty, 0, mpu, 9).unwrap_err(),
+            ConfigError::StackSizeInvalid { partition_id: 9 }
+        );
+    }
+
+    #[test]
+    fn ext_pmem_stack_size_below_32_rejected() {
+        // 4 words = 16 bytes: valid power-of-two but below minimum
+        let mut buf = TestBuf16([0u32; 4]);
+        assert_eq!(
+            ExternalPartitionMemory::new(&mut buf.0, 0, MpuRegion::new(0, 0, 0), 4).unwrap_err(),
+            ConfigError::StackSizeInvalid { partition_id: 4 }
+        );
+    }
+
+    #[test]
+    fn ext_pmem_non_power_of_two_rejected() {
+        // 12 words = 48 bytes: >=32 but not a power of two.
+        // No alignment macro needed — `#[repr(C)]` suffices for a rejection test.
+        #[repr(C)]
+        struct NonPow2Buf([u32; 12]);
+        let mut buf = NonPow2Buf([0u32; 12]);
+        assert_eq!(
+            ExternalPartitionMemory::new(&mut buf.0, 0, MpuRegion::new(0, 0, 0), 6).unwrap_err(),
+            ConfigError::StackSizeInvalid { partition_id: 6 }
+        );
+    }
+
+    #[test]
+    fn ext_pmem_misaligned_base_rejected() {
+        let mut buf = TestBuf512([0u32; 128]);
+        // 64 words = 256 bytes starting at word offset 1 → misaligned for 256
+        let sub = &mut buf.0[1..65];
+        assert_eq!(
+            ExternalPartitionMemory::new(sub, 0, MpuRegion::new(0, 0, 0), 3).unwrap_err(),
+            ConfigError::StackBaseNotAligned { partition_id: 3 }
+        );
+    }
+
+    #[test]
+    fn ext_pmem_address_overflow_rejected() {
+        // Directly test the extracted validate_stack_geometry() helper with a
+        // base address near u32::MAX so that base + size_bytes wraps — no
+        // unsafe needed.
+        assert_eq!(
+            validate_stack_geometry(0xFFFF_FF00, 256, 8).unwrap_err(),
+            ConfigError::StackOverflow { partition_id: 8 }
+        );
+    }
+
+    /// Macro to generate a `from_aligned_stack` round-trip test for each
+    /// `AlignedStack*` type, ensuring every macro-generated variant works.
+    macro_rules! aligned_stack_round_trip_test {
+        ($test_name:ident, $stack_ty:ident, $size:expr) => {
+            #[test]
+            fn $test_name() {
+                use crate::partition_core::$stack_ty;
+                let mut storage = $stack_ty::default();
+                let mpu = MpuRegion::new(0x2000_0000, $size, 0);
+                let epm =
+                    ExternalPartitionMemory::from_aligned_stack(&mut storage, 0x0800_4000, mpu, 2)
+                        .unwrap();
+                assert_eq!(epm.stack_size_bytes(), $size);
+                assert_eq!(epm.entry_point(), 0x0800_4000);
+                assert_eq!(*epm.mpu_region(), mpu);
+            }
+        };
+    }
+
+    aligned_stack_round_trip_test!(ext_pmem_from_aligned_stack_256b, AlignedStack256B, 256);
+    aligned_stack_round_trip_test!(ext_pmem_from_aligned_stack_512b, AlignedStack512B, 512);
+    aligned_stack_round_trip_test!(ext_pmem_from_aligned_stack_1k, AlignedStack1K, 1024);
+    aligned_stack_round_trip_test!(ext_pmem_from_aligned_stack_2k, AlignedStack2K, 2048);
+    aligned_stack_round_trip_test!(ext_pmem_from_aligned_stack_4k, AlignedStack4K, 4096);
+
+    #[test]
+    fn ext_pmem_peripheral_regions_caps_at_two() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let r1 = MpuRegion::new(0x4000_0000, 256, 0);
+        let r2 = MpuRegion::new(0x4000_1000, 256, 0);
+        let r3 = MpuRegion::new(0x4000_2000, 256, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 0)
+            .unwrap()
+            .with_peripheral_regions(&[r1, r2, r3]);
+        // heapless::Vec<_, 2> silently drops the third push
+        assert_eq!(epm.peripheral_regions().len(), 2);
+        assert_eq!(epm.peripheral_regions()[0], r1);
+        assert_eq!(epm.peripheral_regions()[1], r2);
+    }
+
+    #[test]
+    fn ext_pmem_accessors_return_correct_values() {
+        let mut buf = Align256([0u32; 64]);
+        let expected_base = buf.0.as_ptr() as u32;
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0x0306_0000);
+        let periph = MpuRegion::new(0x4000_0000, 256, 0x03);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_ABCD, mpu, 5)
+            .unwrap()
+            .with_peripheral_regions(&[periph]);
+        assert_eq!(epm.entry_point(), 0x0800_ABCD);
+        assert_eq!(epm.stack_base(), expected_base);
+        assert_eq!(epm.stack_size_bytes(), 256);
+        assert_eq!(epm.mpu_region().base(), 0x2000_0000);
+        assert_eq!(epm.mpu_region().size(), 256);
+        assert_eq!(epm.mpu_region().permissions(), 0x0306_0000);
+        assert_eq!(epm.peripheral_regions().len(), 1);
+        assert_eq!(epm.peripheral_regions()[0].base(), 0x4000_0000);
     }
 }
