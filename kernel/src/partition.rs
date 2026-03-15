@@ -528,8 +528,6 @@ impl PartitionControlBlock {
 pub struct PartitionConfig {
     pub id: u8,
     pub entry_point: u32,
-    pub stack_base: u32,
-    pub stack_size: u32,
     pub mpu_region: MpuRegion,
     /// Optional peripheral register block regions for user-space drivers.
     /// Supports up to 2 peripheral regions (Approach D).
@@ -539,21 +537,13 @@ pub struct PartitionConfig {
 impl PartitionConfig {
     /// Create a fully specified partition config with no peripheral regions.
     ///
-    /// Use this when the partition has real stack addresses and MPU regions
-    /// known at build time.  `peripheral_regions` defaults to empty; chain
-    /// field assignment if peripherals are needed.
-    pub fn new(
-        id: u8,
-        entry_point: u32,
-        stack_base: u32,
-        stack_size: u32,
-        mpu_region: MpuRegion,
-    ) -> Self {
+    /// Use this when the partition has real MPU regions known at build time.
+    /// `peripheral_regions` defaults to empty; chain field assignment if
+    /// peripherals are needed.
+    pub fn new(id: u8, entry_point: u32, mpu_region: MpuRegion) -> Self {
         Self {
             id,
             entry_point,
-            stack_base,
-            stack_size,
             mpu_region,
             peripheral_regions: Vec::new(),
         }
@@ -561,15 +551,12 @@ impl PartitionConfig {
 
     /// Create a sentinel (default) partition config.
     ///
-    /// Sets `entry_point`, `stack_base`, and `mpu_region` to zero sentinels,
-    /// with an empty `peripheral_regions` vector.  Only `id` and `stack_size`
-    /// (in bytes) are caller-supplied.
-    pub fn sentinel(id: u8, stack_size_bytes: u32) -> Self {
+    /// Sets `entry_point` and `mpu_region` to zero sentinels, with an empty
+    /// `peripheral_regions` vector.  Only `id` is caller-supplied.
+    pub fn sentinel(id: u8) -> Self {
         Self {
             id,
             entry_point: 0,
-            stack_base: 0,
-            stack_size: stack_size_bytes,
             mpu_region: MpuRegion::new(0, 0, 0),
             peripheral_regions: Vec::new(),
         }
@@ -577,55 +564,25 @@ impl PartitionConfig {
 
     /// Create an array of `N` sentinel partition configs.
     ///
-    /// Each element gets `id = index` and
-    /// `stack_size = stack_words * size_of::<u32>()` bytes.
+    /// Each element gets `id = index` with zero entry point and MPU region.
     ///
     /// # Panics
     ///
-    /// Panics if `N > 256` (partition ID is `u8`) or if the byte-level
-    /// stack size overflows `u32`.
-    pub fn sentinel_array<const N: usize>(stack_words: usize) -> [PartitionConfig; N] {
+    /// Panics if `N > 256` (partition ID is `u8`).
+    pub fn sentinel_array<const N: usize>() -> [PartitionConfig; N] {
         assert!(
             N <= 256,
             "sentinel_array: N must be <= 256 (partition ID is u8)"
         );
-        let stack_bytes: u32 = stack_words
-            .checked_mul(core::mem::size_of::<u32>())
-            .and_then(|b| u32::try_from(b).ok())
-            .expect("sentinel_array: stack size in bytes overflows u32");
-        core::array::from_fn(|i| Self::sentinel(i as u8, stack_bytes))
+        core::array::from_fn(|i| Self::sentinel(i as u8))
     }
 
     /// Validate all fields of this partition configuration.
     ///
     /// Checks performed (in order):
-    /// 1. `stack_size` must be a power of two and >= 32.
-    /// 2. `stack_base` must be aligned to `stack_size`.
-    /// 3. `stack_base + stack_size` must not overflow `u32`.
-    /// 4. The MPU region `(base, size)` must pass [`validate_mpu_region`].
-    /// 5. Each peripheral region `(base, size)` must pass [`validate_mpu_region`].
+    /// 1. The MPU region `(base, size)` must pass [`validate_mpu_region`].
+    /// 2. Each peripheral region `(base, size)` must pass [`validate_mpu_region`].
     pub fn validate(&self) -> Result<(), ConfigError> {
-        // Stack size: power of two and >= 32
-        if self.stack_size < 32 || !self.stack_size.is_power_of_two() {
-            return Err(ConfigError::StackSizeInvalid {
-                partition_id: self.id,
-            });
-        }
-
-        // Stack base alignment
-        if self.stack_base & (self.stack_size - 1) != 0 {
-            return Err(ConfigError::StackBaseNotAligned {
-                partition_id: self.id,
-            });
-        }
-
-        // Stack overflow check
-        if self.stack_base.checked_add(self.stack_size).is_none() {
-            return Err(ConfigError::StackOverflow {
-                partition_id: self.id,
-            });
-        }
-
         // MPU region validation
         validate_mpu_region(self.mpu_region.base(), self.mpu_region.size()).map_err(|detail| {
             ConfigError::MpuRegionInvalid {
@@ -662,6 +619,8 @@ pub enum ConfigError {
     },
     /// A partition's MPU region failed validation.
     MpuRegionInvalid { partition_id: u8, detail: MpuError },
+    // TODO: reviewer false positive — these variants are still used by
+    // ExternalPartitionMemory::new() for stack validation on external memory.
     /// A partition's stack size is not a power of two or is less than 32.
     StackSizeInvalid { partition_id: u8 },
     /// A partition's stack base is not aligned to its stack size.
@@ -2083,8 +2042,6 @@ mod tests {
         PartitionConfig {
             id: 0,
             entry_point: 0x0800_0000,
-            stack_base: 0x2000_0000,
-            stack_size: 1024,
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
             peripheral_regions: Vec::new(),
         }
@@ -2093,65 +2050,6 @@ mod tests {
     #[test]
     fn validate_accepts_valid_config() {
         assert_eq!(valid_config().validate(), Ok(()));
-    }
-
-    #[test]
-    fn validate_accepts_minimum_stack_size() {
-        let mut cfg = valid_config();
-        cfg.stack_size = 32;
-        cfg.stack_base = 0x2000_0000; // aligned to 32
-        assert_eq!(cfg.validate(), Ok(()));
-    }
-
-    #[test]
-    fn validate_rejects_stack_size_not_power_of_two() {
-        let mut cfg = valid_config();
-        cfg.stack_size = 100;
-        assert_eq!(
-            cfg.validate(),
-            Err(ConfigError::StackSizeInvalid { partition_id: 0 })
-        );
-    }
-
-    #[test]
-    fn validate_rejects_stack_size_too_small() {
-        let mut cfg = valid_config();
-        cfg.stack_size = 16;
-        assert_eq!(
-            cfg.validate(),
-            Err(ConfigError::StackSizeInvalid { partition_id: 0 })
-        );
-    }
-
-    #[test]
-    fn validate_rejects_stack_size_zero() {
-        let mut cfg = valid_config();
-        cfg.stack_size = 0;
-        assert_eq!(
-            cfg.validate(),
-            Err(ConfigError::StackSizeInvalid { partition_id: 0 })
-        );
-    }
-
-    #[test]
-    fn validate_rejects_misaligned_stack_base() {
-        let mut cfg = valid_config();
-        cfg.stack_base = 0x2000_0100; // not aligned to 1024
-        assert_eq!(
-            cfg.validate(),
-            Err(ConfigError::StackBaseNotAligned { partition_id: 0 })
-        );
-    }
-
-    #[test]
-    fn validate_rejects_stack_overflow() {
-        let mut cfg = valid_config();
-        cfg.stack_size = 0x8000_0000;
-        cfg.stack_base = 0x8000_0000; // aligned, but base + size = 2^32 overflow
-        assert_eq!(
-            cfg.validate(),
-            Err(ConfigError::StackOverflow { partition_id: 0 })
-        );
     }
 
     #[test]
@@ -2184,11 +2082,14 @@ mod tests {
     fn validate_preserves_partition_id_in_error() {
         let mut cfg = valid_config();
         cfg.id = 7;
-        cfg.stack_size = 16;
-        assert_eq!(
+        cfg.mpu_region = MpuRegion::new(0x2000_0000, 100, 0);
+        assert!(matches!(
             cfg.validate(),
-            Err(ConfigError::StackSizeInvalid { partition_id: 7 })
-        );
+            Err(ConfigError::MpuRegionInvalid {
+                partition_id: 7,
+                ..
+            })
+        ));
     }
 
     // ------------------------------------------------------------------
@@ -2251,11 +2152,9 @@ mod tests {
     #[test]
     fn config_new_field_values_match() {
         let mpu = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
-        let cfg = PartitionConfig::new(2, 0x0800_1000, 0x2000_0000, 1024, mpu);
+        let cfg = PartitionConfig::new(2, 0x0800_1000, mpu);
         assert_eq!(cfg.id, 2);
         assert_eq!(cfg.entry_point, 0x0800_1000);
-        assert_eq!(cfg.stack_base, 0x2000_0000);
-        assert_eq!(cfg.stack_size, 1024);
         assert_eq!(cfg.mpu_region.base(), 0x2000_0000);
         assert_eq!(cfg.mpu_region.size(), 4096);
         assert_eq!(cfg.mpu_region.permissions(), 0x0306_0000);
@@ -2264,14 +2163,14 @@ mod tests {
     #[test]
     fn config_new_peripheral_regions_empty() {
         let mpu = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
-        let cfg = PartitionConfig::new(0, 0x0800_0000, 0x2000_0000, 1024, mpu);
+        let cfg = PartitionConfig::new(0, 0x0800_0000, mpu);
         assert!(cfg.peripheral_regions.is_empty());
     }
 
     #[test]
     fn config_new_valid_inputs_pass_validate() {
         let mpu = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
-        let cfg = PartitionConfig::new(0, 0x0800_0000, 0x2000_0000, 1024, mpu);
+        let cfg = PartitionConfig::new(0, 0x0800_0000, mpu);
         assert_eq!(cfg.validate(), Ok(()));
     }
 
@@ -2281,34 +2180,28 @@ mod tests {
 
     #[test]
     fn sentinel_field_values_are_correct() {
-        let cfg = PartitionConfig::sentinel(3, 1024);
+        let cfg = PartitionConfig::sentinel(3);
         assert_eq!(cfg.id, 3);
         assert_eq!(cfg.entry_point, 0);
-        assert_eq!(cfg.stack_base, 0);
-        assert_eq!(cfg.stack_size, 1024);
         assert_eq!(cfg.mpu_region, MpuRegion::new(0, 0, 0));
         assert!(cfg.peripheral_regions.is_empty());
     }
 
     #[test]
     fn sentinel_mpu_region_is_zero() {
-        let cfg = PartitionConfig::sentinel(0, 512);
+        let cfg = PartitionConfig::sentinel(0);
         assert_eq!(cfg.mpu_region.base(), 0);
         assert_eq!(cfg.mpu_region.size(), 0);
         assert_eq!(cfg.mpu_region.permissions(), 0);
     }
 
     #[test]
-    fn sentinel_different_ids_and_sizes() {
+    fn sentinel_different_ids() {
         for id in [0u8, 1, 7, 255] {
-            for size in [32u32, 256, 4096] {
-                let cfg = PartitionConfig::sentinel(id, size);
-                assert_eq!(cfg.id, id);
-                assert_eq!(cfg.stack_size, size);
-                assert_eq!(cfg.entry_point, 0);
-                assert_eq!(cfg.stack_base, 0);
-                assert!(cfg.peripheral_regions.is_empty());
-            }
+            let cfg = PartitionConfig::sentinel(id);
+            assert_eq!(cfg.id, id);
+            assert_eq!(cfg.entry_point, 0);
+            assert!(cfg.peripheral_regions.is_empty());
         }
     }
 
@@ -2317,37 +2210,26 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn sentinel_array_ids_and_stack_sizes() {
-        let arr = PartitionConfig::sentinel_array::<4>(256);
-        let word = core::mem::size_of::<u32>() as u32;
+    fn sentinel_array_ids() {
+        let arr = PartitionConfig::sentinel_array::<4>();
         for (i, cfg) in arr.iter().enumerate() {
             assert_eq!(cfg.id, i as u8);
-            assert_eq!(cfg.stack_size, 256 * word);
             assert_eq!(cfg.entry_point, 0);
-            assert_eq!(cfg.stack_base, 0);
             assert!(cfg.peripheral_regions.is_empty());
         }
     }
 
     #[test]
     fn sentinel_array_single_element() {
-        let arr = PartitionConfig::sentinel_array::<1>(128);
-        let word = core::mem::size_of::<u32>() as u32;
+        let arr = PartitionConfig::sentinel_array::<1>();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0].id, 0);
-        assert_eq!(arr[0].stack_size, 128 * word);
     }
 
     #[test]
     #[should_panic(expected = "N must be <= 256")]
     fn sentinel_array_rejects_n_over_256() {
-        let _ = PartitionConfig::sentinel_array::<257>(64);
-    }
-
-    #[test]
-    #[should_panic(expected = "stack size in bytes overflows u32")]
-    fn sentinel_array_rejects_overflow() {
-        let _ = PartitionConfig::sentinel_array::<1>(usize::MAX);
+        let _ = PartitionConfig::sentinel_array::<257>();
     }
 
     // ------------------------------------------------------------------

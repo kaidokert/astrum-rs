@@ -1096,8 +1096,6 @@ where
             let cfg = PartitionConfig {
                 id: u8::try_from(i).map_err(|_| ConfigError::PartitionTableFull)?,
                 entry_point: m.entry_point(),
-                stack_base: 0,
-                stack_size: 0,
                 mpu_region: *m.mpu_region(),
                 peripheral_regions: m.peripheral_regions().clone(),
             };
@@ -1220,9 +1218,7 @@ where
                     actual_id: c.id,
                 });
             }
-            // Note: We skip c.validate() here because stack_base and stack_size
-            // from PartitionConfig are NOT used — they are replaced with values
-            // derived from the internal PartitionCore stack. We must still validate
+            // Note: We skip c.validate() here. We must still validate
             // mpu_region and peripheral_regions, which ARE used in the final PCB.
             // Size==0 is a sentinel meaning "no user-configured data region".
             if c.mpu_region.size() > 0 {
@@ -3015,7 +3011,7 @@ mod tests {
     #[cfg(feature = "dynamic-mpu")]
     use crate::mpu_strategy::MpuStrategy;
     use crate::partition::{ExternalPartitionMemory, MpuRegion, PartitionControlBlock};
-    use crate::partition_core::{AlignedStack1K, AlignedStack4K};
+    use crate::partition_core::AlignedStack1K;
     use crate::scheduler::ScheduleEntry;
     use crate::scheduler::ScheduleEvent;
     use crate::semaphore::Semaphore;
@@ -12004,7 +12000,7 @@ mod tests {
             #[cfg(feature = "dynamic-mpu")]
             const BP: usize = 4;
 
-            kernel_config_types!(AlignedStack4K);
+            kernel_config_types!();
         }
 
         static BUF: DebugRingBuffer<64> = DebugRingBuffer::new();
