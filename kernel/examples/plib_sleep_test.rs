@@ -12,7 +12,6 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::partition::PartitionState;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
@@ -119,9 +118,8 @@ fn main() -> ! {
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_sleep_test: round_robin");
-    let k = Kernel::<TestConfig>::create_sentinels(sched).expect("plib_sleep_test: kernel");
-    store_kernel(k);
-
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("plib_sleep_test: boot") {}
+    init_kernel(sched, &parts).expect("plib_sleep_test: kernel");
+
+    match boot(p).expect("plib_sleep_test: boot") {}
 }

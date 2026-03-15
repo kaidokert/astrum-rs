@@ -159,10 +159,10 @@ fn main() -> ! {
     }
 
     // Build partition memories and create kernel
-    #[allow(clippy::deref_addrof)]
     let k = {
         // SAFETY: before interrupts; single-core exclusive.
-        let stacks: &mut [AlignedStack; NP] = unsafe { &mut *(&raw mut STACKS) };
+        let ptr = &raw mut STACKS;
+        let stacks: &mut [AlignedStack; NP] = unsafe { &mut *ptr };
         let [ref mut s0, ref mut s1] = *stacks;
         let memories = [
             ExternalPartitionMemory::new(
@@ -195,7 +195,6 @@ fn main() -> ! {
     // Initialize partition stacks (sets up initial exception frames and
     // PARTITION_SP for the PendSV assembly handler — not redundant with
     // kernel creation which only records stack metadata in partition configs).
-    #[allow(clippy::deref_addrof)]
     // SAFETY: before interrupts; single-core exclusive.
     unsafe {
         for i in 0..NP {

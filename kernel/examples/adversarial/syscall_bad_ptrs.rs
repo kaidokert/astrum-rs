@@ -121,7 +121,7 @@ fn main() -> ! {
 
     let mut k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");
 
-    let port_id = k
+    let _port_id = k
         .sampling_mut()
         .create_port(PortDirection::Source, 10)
         .expect("create port");
@@ -137,8 +137,6 @@ fn main() -> ! {
     );
 
     // Build partition array for boot().
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
-        [(test_partition_main, port_id as u32)];
 
-    match boot(&parts, p).expect("syscall_bad_ptrs: boot failed") {}
+    match boot(p).expect("syscall_bad_ptrs: boot failed") {}
 }

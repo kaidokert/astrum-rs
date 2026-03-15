@@ -120,19 +120,28 @@ fn main() -> ! {
     // Build partition descriptors with P0 having a UART0 peripheral region.
     let k = {
         // SAFETY: called once from main before any interrupt handler runs.
-        let stacks = unsafe {
-            &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; TestConfig::STACK_WORDS]; NP]>()
-        };
+        let ptr = (&raw mut __PARTITION_STACKS).cast::<[[u32; TestConfig::STACK_WORDS]; NP]>();
+        let stacks = unsafe { &mut *ptr };
         let [ref mut s0, ref mut s1] = *stacks;
         let memories = [
-            ExternalPartitionMemory::new(s0, 0, MpuRegion::new(0, 0, 0), 0)
-                .expect("mem 0")
-                .with_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)]),
-            ExternalPartitionMemory::new(s1, 0, MpuRegion::new(0, 0, 0), 1).expect("mem 1"),
+            ExternalPartitionMemory::new(
+                s0,
+                p0_main as *const () as u32,
+                MpuRegion::new(0, 0, 0),
+                0,
+            )
+            .expect("mem 0")
+            .with_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)]),
+            ExternalPartitionMemory::new(
+                s1,
+                p1_main as *const () as u32,
+                MpuRegion::new(0, 0, 0),
+                1,
+            )
+            .expect("mem 1"),
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
     store_kernel(k);
-    let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("boot") {}
+    match boot(p).expect("boot") {}
 }

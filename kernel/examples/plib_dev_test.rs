@@ -11,7 +11,6 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
-use kernel::svc::Kernel;
 use kernel::virtual_device::VirtualDevice;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 
@@ -107,8 +106,7 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 3))
         .expect("plib_dev_test: add P0");
     sched.add_system_window(1).expect("plib_dev_test: sys0");
-    let k = Kernel::<TestConfig>::create_sentinels(sched).expect("plib_dev_test: kernel");
-    store_kernel(k);
+    init_kernel(sched, &[(partition_main, 0)]).expect("plib_dev_test: kernel");
 
     // Register UART-A (device 0) so SYS_DEV_* syscalls can reach it.
     // TODO: the 'static lifetime cast is architecturally suspect; replace with
@@ -125,5 +123,5 @@ fn main() -> ! {
         }
     });
 
-    match boot(&[(partition_main, 0)], p).expect("plib_dev_test: boot") {}
+    match boot(p).expect("plib_dev_test: boot") {}
 }

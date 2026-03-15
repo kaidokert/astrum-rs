@@ -162,15 +162,17 @@ fn main() -> ! {
     // using MSP for exception frames.
     static mut STACKS: [AlignedStack1K; NUM_PARTITIONS] = [AlignedStack1K::ZERO; NUM_PARTITIONS];
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
-    #[allow(clippy::deref_addrof)]
     let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = {
         // SAFETY: called once from main before the scheduler starts (interrupts
         // disabled, single-core). No concurrent access to STACKS.
-        let stacks: &mut [AlignedStack1K; NUM_PARTITIONS] = unsafe { &mut *(&raw mut STACKS) };
+        let ptr = &raw mut STACKS;
+        let stacks: &mut [AlignedStack1K; NUM_PARTITIONS] = unsafe { &mut *ptr };
         let [ref mut s0, ref mut s1] = *stacks;
         [
-            ExternalPartitionMemory::new(&mut s0.0, 0, sentinel_mpu, 0).expect("ext mem"),
-            ExternalPartitionMemory::new(&mut s1.0, 0, sentinel_mpu, 1).expect("ext mem"),
+            ExternalPartitionMemory::new(&mut s0.0, p1_main as *const () as u32, sentinel_mpu, 0)
+                .expect("ext mem"),
+            ExternalPartitionMemory::new(&mut s1.0, p2_main as *const () as u32, sentinel_mpu, 1)
+                .expect("ext mem"),
         ]
     };
 
@@ -193,7 +195,5 @@ fn main() -> ! {
 
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
-
-    match boot(&parts, p).expect("virtual_uart_demo: boot failed") {}
+    match boot(p).expect("virtual_uart_demo: boot failed") {}
 }

@@ -116,7 +116,9 @@ fn main() -> ! {
     let sched =
         ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1).expect("round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
+    let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
+    cfgs[0].entry_point = p0_main as *const () as u32;
+    cfgs[1].entry_point = p1_main as *const () as u32;
     #[cfg(not(feature = "dynamic-mpu"))]
     let mut k = Kernel::<Config>::with_config(sched, &cfgs, &[]).expect("Kernel::create");
     #[cfg(feature = "dynamic-mpu")]
@@ -135,6 +137,5 @@ fn main() -> ! {
 
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("boot") {}
+    match boot(p).expect("boot") {}
 }

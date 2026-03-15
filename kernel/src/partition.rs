@@ -633,6 +633,8 @@ pub enum ConfigError {
     },
     /// Failed to access internal stack for a partition during initialization.
     StackInitFailed { partition_id: u8 },
+    /// The number of memories passed to `Kernel::new` does not match `C::N`.
+    PartitionCountMismatch { expected: usize, actual: usize },
     /// A partition's peripheral region failed MPU validation.
     PeripheralRegionInvalid {
         partition_id: u8,
@@ -692,6 +694,9 @@ impl core::fmt::Display for ConfigError {
                 "partition {partition_id}: stack base + stack size overflows u32"
             ),
             Self::PartitionTableFull => write!(f, "partition table is full"),
+            Self::PartitionCountMismatch { expected, actual } => {
+                write!(f, "expected {expected} partition memories, got {actual}")
+            }
             Self::PartitionIdMismatch {
                 index,
                 expected_id,

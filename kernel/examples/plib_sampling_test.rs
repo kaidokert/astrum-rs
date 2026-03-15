@@ -103,7 +103,9 @@ fn main() -> ! {
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_sampling_test: round_robin");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
+    let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
+    cfgs[0].entry_point = p0_main as *const () as u32;
+    cfgs[1].entry_point = p1_main as *const () as u32;
     #[cfg(not(feature = "dynamic-mpu"))]
     let mut k =
         Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("plib_sampling_test: kernel");
@@ -128,6 +130,5 @@ fn main() -> ! {
     k.sampling_mut().connect_ports(src, dst).expect("connect");
     store_kernel(k);
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("plib_sampling_test: boot") {}
+    match boot(p).expect("plib_sampling_test: boot") {}
 }

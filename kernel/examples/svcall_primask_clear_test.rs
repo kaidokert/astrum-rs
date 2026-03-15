@@ -152,7 +152,9 @@ fn main() -> ! {
     hprintln!("svcall_primask_clear_test: start");
     let sched =
         ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1).expect("svcall: sched");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
+    let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
+    cfgs[0].entry_point = p0_main as *const () as u32;
+    cfgs[1].entry_point = p1_main as *const () as u32;
     #[cfg(not(feature = "dynamic-mpu"))]
     let k = Kernel::<Config>::with_config(sched, &cfgs, &[]).expect("svcall: kernel");
     #[cfg(feature = "dynamic-mpu")]
@@ -168,6 +170,5 @@ fn main() -> ! {
     // Override the macro-generated dispatch hook with our verifying wrapper
     // that reads PRIMASK/BASEPRI from Handler mode before delegating.
     kernel::svc::set_dispatch_hook(verifying_dispatch_hook);
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("svcall: boot") {}
+    match boot(p).expect("svcall: boot") {}
 }

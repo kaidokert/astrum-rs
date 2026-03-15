@@ -13,7 +13,6 @@ use kernel::message::MessageQueue;
 use kernel::sampling::PortDirection;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsSmall, SyncMinimal};
 
 kernel::compose_kernel_config!(Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsSmall, DebugEnabled>);
@@ -105,20 +104,21 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("Peripherals::take");
     hprintln!("all_syscalls_smoke_test: start");
     let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("round_robin");
-    let mut k = Kernel::<Cfg>::create_sentinels(sched).expect("Kernel::create");
-    k.semaphores_mut().add(Semaphore::new(0, 1)).expect("sem");
-    let s = k
-        .sampling_mut()
-        .create_port(PortDirection::Source, 4)
-        .expect("src");
-    let d = k
-        .sampling_mut()
-        .create_port(PortDirection::Destination, 4)
-        .expect("dst");
-    k.sampling_mut().connect_ports(s, d).expect("connect");
-    k.blackboards_mut().create().expect("bb");
-    k.messages_mut().add(MessageQueue::new()).expect("mq");
-    store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); Cfg::N] = [(partition_main, 0)];
-    match boot(&parts, p).expect("boot") {}
+    init_kernel(sched, &parts).expect("Kernel::create");
+    with_kernel_mut(|k| {
+        k.semaphores_mut().add(Semaphore::new(0, 1)).expect("sem");
+        let s = k
+            .sampling_mut()
+            .create_port(PortDirection::Source, 4)
+            .expect("src");
+        let d = k
+            .sampling_mut()
+            .create_port(PortDirection::Destination, 4)
+            .expect("dst");
+        k.sampling_mut().connect_ports(s, d).expect("connect");
+        k.blackboards_mut().create().expect("bb");
+        k.messages_mut().add(MessageQueue::new()).expect("mq");
+    });
+    match boot(p).expect("boot") {}
 }

@@ -24,7 +24,6 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal,
 };
 
@@ -84,10 +83,8 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 2))
         .expect("static schedule entry must fit");
 
-    let k = Kernel::<TestConfig>::create_sentinels(sched).expect("kernel creation");
-
-    store_kernel(k);
-
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
-    match boot(&parts, p).expect("priv_drop_test: boot failed") {}
+    init_kernel(sched, &parts).expect("kernel creation");
+
+    match boot(p).expect("priv_drop_test: boot failed") {}
 }

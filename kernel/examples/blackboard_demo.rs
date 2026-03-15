@@ -250,5 +250,10 @@ fn main() -> ! {
     let parts: [(extern "C" fn() -> !, u32); DemoConfig::N] =
         core::array::from_fn(|i| (eps[i], hints[i]));
 
-    match boot(&parts, p).expect("blackboard_demo: boot failed") {}
+    // Use boot_external directly: this example creates resources on the kernel
+    // before boot, so r0 hints depend on runtime resource IDs and cannot be
+    // passed to init_kernel() ahead of time.
+    let stacks = unsafe { &mut *core::ptr::addr_of_mut!(__PARTITION_STACKS.0) };
+    match kernel::boot::boot_external::<DemoConfig, { DemoConfig::STACK_WORDS }>(&parts, p, stacks)
+        .expect("blackboard_demo: boot") {}
 }

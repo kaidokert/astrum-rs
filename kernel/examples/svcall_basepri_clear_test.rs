@@ -143,13 +143,16 @@ fn main() -> ! {
     let mut stk0 = AlignedStack1K::ZERO;
     let mut stk1 = AlignedStack1K::ZERO;
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
-    let mem0 = ExternalPartitionMemory::new(&mut stk0.0, 0, sentinel_mpu, 0).expect("ext mem");
-    let mem1 = ExternalPartitionMemory::new(&mut stk1.0, 0, sentinel_mpu, 1).expect("ext mem");
+    let mem0 =
+        ExternalPartitionMemory::new(&mut stk0.0, p0_main as *const () as u32, sentinel_mpu, 0)
+            .expect("ext mem");
+    let mem1 =
+        ExternalPartitionMemory::new(&mut stk1.0, p1_main as *const () as u32, sentinel_mpu, 1)
+            .expect("ext mem");
     let k = Kernel::<Config>::new(sched, &[mem0, mem1]).expect("basepri: kernel");
     store_kernel(k);
     // Override dispatch with our verifying wrapper that reads BASEPRI
     // from Handler mode before delegating.
     kernel::svc::set_dispatch_hook(verifying_dispatch_hook);
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("basepri: boot") {}
+    match boot(p).expect("basepri: boot") {}
 }

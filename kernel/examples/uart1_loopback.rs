@@ -151,14 +151,15 @@ fn boot(partitions: &[(extern "C" fn() -> !, u32)], mut peripherals: cortex_m::P
     use cortex_m::peripheral::scb::SystemHandler;
     use cortex_m::peripheral::syst::SystClkSource;
     use cortex_m::peripheral::SCB;
-    #[allow(clippy::deref_addrof)]
     // SAFETY: called once from main before the scheduler starts (interrupts
     // disabled). STACKS, PARTITION_SP are only written here and read later
     // by PendSV; no concurrent access is possible at this point.
     // Exception priorities are set via the valid SCB peripheral reference.
     unsafe {
-        let stacks = &mut *(&raw mut STACKS);
-        let partition_sp = &mut *(&raw mut PARTITION_SP);
+        let ptr = &raw mut STACKS;
+        let stacks = &mut *ptr;
+        let ptr2 = &raw mut PARTITION_SP;
+        let partition_sp = &mut *ptr2;
         for (i, &(ep, hint)) in partitions.iter().enumerate() {
             let stk = &mut stacks[i].0;
             let ix = kernel::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
@@ -382,11 +383,11 @@ fn main() -> ! {
     }
 
     // Build partition memories and create kernel
-    #[allow(clippy::deref_addrof)]
     let mut kern = {
         // SAFETY: called once before the scheduler starts (interrupts disabled,
         // single-core). STACKS are only written here; no concurrent access.
-        let stacks: &mut [AlignedStack; NUM_PARTITIONS] = unsafe { &mut *(&raw mut STACKS) };
+        let ptr = &raw mut STACKS;
+        let stacks: &mut [AlignedStack; NUM_PARTITIONS] = unsafe { &mut *ptr };
         let [ref mut s0, ref mut s1] = *stacks;
         let base0 = s0.0.as_ptr() as u32;
         let base1 = s1.0.as_ptr() as u32;

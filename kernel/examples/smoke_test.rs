@@ -18,7 +18,6 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(SmokeConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -76,10 +75,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ SmokeConfig::SCHED }>::round_robin(1, 3)
         .expect("smoke_test: round_robin");
 
-    let k = Kernel::<SmokeConfig>::create_sentinels(sched).expect("smoke_test: create_sentinels");
-
-    store_kernel(k);
-
     let parts: [(extern "C" fn() -> !, u32); SmokeConfig::N] = [(partition_main, 0)];
-    match boot(&parts, p).expect("smoke_test: boot") {}
+    init_kernel(sched, &parts).expect("smoke_test: create_sentinels");
+
+    match boot(p).expect("smoke_test: boot") {}
 }

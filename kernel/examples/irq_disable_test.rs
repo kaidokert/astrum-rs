@@ -13,7 +13,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -107,9 +106,8 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("take");
     hprintln!("irq_disable_test: start");
     let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("sched");
-    let k = Kernel::<Cfg>::create_sentinels(sched).expect("create");
-    store_kernel(k);
-    enable_bound_irqs(&mut p.NVIC, Cfg::IRQ_DEFAULT_PRIORITY).unwrap();
     let parts: [(extern "C" fn() -> !, u32); 1] = [(p0_main, 0)];
-    match boot(&parts, p).expect("boot") {}
+    init_kernel(sched, &parts).expect("create");
+    enable_bound_irqs(&mut p.NVIC, Cfg::IRQ_DEFAULT_PRIORITY).unwrap();
+    match boot(p).expect("boot") {}
 }

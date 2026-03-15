@@ -16,7 +16,6 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
@@ -95,11 +94,12 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_sem_test: round_robin");
 
-    let mut k = Kernel::<TestConfig>::create_sentinels(sched).expect("plib_sem_test: kernel");
-    k.semaphores_mut()
-        .add(Semaphore::new(0, 1))
-        .expect("plib_sem_test: add semaphore");
-    store_kernel(k);
+    init_kernel(sched, &[(p0_main, 0), (p1_main, 0)]).expect("plib_sem_test: kernel");
+    with_kernel_mut(|k| {
+        k.semaphores_mut()
+            .add(Semaphore::new(0, 1))
+            .expect("plib_sem_test: add semaphore");
+    });
 
-    match boot(&[(p0_main, 0), (p1_main, 0)], p).expect("plib_sem_test: boot") {}
+    match boot(p).expect("plib_sem_test: boot") {}
 }

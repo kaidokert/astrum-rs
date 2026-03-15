@@ -51,6 +51,9 @@ kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, 
 
 static SVC_RESULT: AtomicU32 = AtomicU32::new(0);
 static SVC_DONE: AtomicU32 = AtomicU32::new(0);
+/// Packed argument for P0: port_id in bits [31:16], p1_base upper 16 in [15:0].
+/// Set by main() before boot, read by p0_main_body.
+static P0_ARG: AtomicU32 = AtomicU32::new(0);
 
 kernel::define_unified_harness!(TestConfig, |tick, _k| {
     if SVC_DONE.load(Ordering::Acquire) == 1 {
@@ -75,8 +78,8 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 });
 
 /// Partition 0 entry: invoke SYS_SAMPLING_WRITE with pointer into P1's region.
-extern "C" fn p0_main_body(r0: u32) -> ! {
-    let packed = r0;
+extern "C" fn p0_main_body(_r0: u32) -> ! {
+    let packed = P0_ARG.load(Ordering::Acquire);
     let port_id = packed >> 16;
     let p1_base = (packed & 0xFFFF) << 16;
     let target_in_p1 = p1_base + STACK_SIZE / 2;
@@ -117,8 +120,12 @@ fn main() -> ! {
     let mut stack0 = AlignedStack1K::ZERO;
     let mut stack1 = AlignedStack1K::ZERO;
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
-    let mem0 = ExternalPartitionMemory::new(&mut stack0.0, 0, sentinel_mpu, 0).expect("ext mem 0");
-    let mem1 = ExternalPartitionMemory::new(&mut stack1.0, 0, sentinel_mpu, 1).expect("ext mem 1");
+    let mem0 =
+        ExternalPartitionMemory::new(&mut stack0.0, p0_main as *const () as u32, sentinel_mpu, 0)
+            .expect("ext mem 0");
+    let mem1 =
+        ExternalPartitionMemory::new(&mut stack1.0, p1_main as *const () as u32, sentinel_mpu, 1)
+            .expect("ext mem 1");
     let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0, mem1];
 
     let mut k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");
@@ -149,16 +156,13 @@ fn main() -> ! {
     hprintln!("  target (in P1): {:#010x}", p1_base + STACK_SIZE / 2);
     hprintln!("  expected error: {:#010x}", EXPECTED_ERROR);
 
-    // Pass port_id and P1 base to partition 0 via r0.
+    // Pass port_id and P1 base to partition 0 via static.
     // Pack: port_id in bits [31:16], p1_base upper 16 bits in [15:0].
     // (Stack bases are 64KB aligned, so lower 16 bits are always 0.)
-    let p0_arg = ((port_id as u32) << 16) | ((p1_base >> 16) & 0xFFFF);
+    P0_ARG.store(
+        ((port_id as u32) << 16) | ((p1_base >> 16) & 0xFFFF),
+        Ordering::Release,
+    );
 
-    // Build partition array for boot().
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [
-        (p0_main, p0_arg),
-        (p1_main, 0), // P1 never runs, arg unused
-    ];
-
-    match boot(&parts, p).expect("syscall_other_ptr: boot failed") {}
+    match boot(p).expect("syscall_other_ptr: boot failed") {}
 }

@@ -14,7 +14,6 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsSmall, SyncMinimal};
 
 kernel::compose_kernel_config!(
@@ -112,11 +111,12 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_bb_test: round_robin");
 
-    let mut k = Kernel::<TestConfig>::create_sentinels(sched).expect("plib_bb_test: kernel");
-    k.blackboards_mut()
-        .create()
-        .expect("plib_bb_test: create blackboard");
-    store_kernel(k);
+    init_kernel(sched, &[(p0_main, 0), (p1_main, 0)]).expect("plib_bb_test: kernel");
+    with_kernel_mut(|k| {
+        k.blackboards_mut()
+            .create()
+            .expect("plib_bb_test: create blackboard");
+    });
 
-    match boot(&[(p0_main, 0), (p1_main, 0)], p).expect("plib_bb_test: boot") {}
+    match boot(p).expect("plib_bb_test: boot") {}
 }

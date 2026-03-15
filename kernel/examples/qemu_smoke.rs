@@ -21,7 +21,6 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(SmokeConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -113,16 +112,13 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ SmokeConfig::SCHED }>::round_robin(2, 3)
         .expect("qemu_smoke: round_robin");
 
-    let mut k = Kernel::<SmokeConfig>::create_sentinels(sched).expect("qemu_smoke: Kernel::create");
-
-    // Semaphore 0: initial count=0, max=1.
-    // P0 signals (0→1), then P1 waits and acquires (1→0).
-    k.semaphores_mut()
-        .add(Semaphore::new(0, 1))
-        .expect("qemu_smoke: add semaphore");
-
-    store_kernel(k);
-
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("qemu_smoke: boot") {}
+    init_kernel(sched, &parts).expect("qemu_smoke: Kernel::create");
+    with_kernel_mut(|k| {
+        k.semaphores_mut()
+            .add(Semaphore::new(0, 1))
+            .expect("qemu_smoke: add semaphore");
+    });
+
+    match boot(p).expect("qemu_smoke: boot") {}
 }

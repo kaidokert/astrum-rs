@@ -14,7 +14,6 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 
@@ -67,12 +66,10 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(0, 2)).expect("sched entry 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched entry 1");
 
-    let k = Kernel::<DemoConfig>::create_sentinels(sched).expect("kernel creation");
-
-    store_kernel(k);
-    hprintln!("context_switch: triggering first PendSV");
-
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
         [(partition_0_entry, 0), (partition_1_entry, 0)];
-    match boot(&parts, p).expect("context_switch: boot failed") {}
+    init_kernel(sched, &parts).expect("kernel creation");
+    hprintln!("context_switch: triggering first PendSV");
+
+    match boot(p).expect("context_switch: boot failed") {}
 }

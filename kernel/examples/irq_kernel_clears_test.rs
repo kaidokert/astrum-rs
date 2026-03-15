@@ -28,7 +28,6 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::irq_dispatch::{ClearStrategy, IrqClearModel};
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -101,15 +100,11 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ KClearsConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_kernel_clears_test: round_robin");
 
-    let k = Kernel::<KClearsConfig>::create_sentinels(sched)
-        .expect("irq_kernel_clears_test: Kernel::create");
-
-    // store_kernel, enable_bound_irqs, and boot are macro-generated.
-    store_kernel(k);
+    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0)];
+    init_kernel(sched, &parts).expect("irq_kernel_clears_test: Kernel::create");
 
     // Unmask IRQ 60 so the software-triggered pend fires.
     enable_bound_irqs(&mut p.NVIC, KClearsConfig::IRQ_DEFAULT_PRIORITY).unwrap();
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0)];
-    match boot(&parts, p).expect("irq_kernel_clears_test: boot") {}
+    match boot(p).expect("irq_kernel_clears_test: boot") {}
 }

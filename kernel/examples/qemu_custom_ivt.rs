@@ -17,7 +17,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(IvtConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -57,14 +56,11 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ IvtConfig::SCHED }>::round_robin(1, 3)
         .expect("qemu_custom_ivt: round_robin");
 
-    let k =
-        Kernel::<IvtConfig>::create_sentinels(sched).expect("qemu_custom_ivt: create_sentinels");
-
-    store_kernel(k);
+    let parts: [(extern "C" fn() -> !, u32); IvtConfig::N] = [(p0_main, 0)];
+    init_kernel(sched, &parts).expect("qemu_custom_ivt: create_sentinels");
 
     // Enable all IRQs bound by bind_interrupts! at the configured default priority.
     enable_bound_irqs(&mut p.NVIC, IvtConfig::IRQ_DEFAULT_PRIORITY).unwrap();
 
-    let parts: [(extern "C" fn() -> !, u32); IvtConfig::N] = [(p0_main, 0)];
-    match boot(&parts, p).expect("qemu_custom_ivt: boot") {}
+    match boot(p).expect("qemu_custom_ivt: boot") {}
 }

@@ -10,7 +10,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(AckMultiConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -96,10 +95,8 @@ fn main() -> ! {
 
     let sched = ScheduleTable::<{ AckMultiConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_ack_multi_test: round_robin");
-    let k = Kernel::<AckMultiConfig>::create_sentinels(sched)
-        .expect("irq_ack_multi_test: Kernel::create");
-    store_kernel(k);
-    enable_bound_irqs(&mut p.NVIC, AckMultiConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("irq_ack_multi_test: boot") {}
+    init_kernel(sched, &parts).expect("irq_ack_multi_test: Kernel::create");
+    enable_bound_irqs(&mut p.NVIC, AckMultiConfig::IRQ_DEFAULT_PRIORITY).unwrap();
+    match boot(p).expect("irq_ack_multi_test: boot") {}
 }

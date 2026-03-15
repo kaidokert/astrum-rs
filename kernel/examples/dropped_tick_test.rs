@@ -21,7 +21,6 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
 
 // Ultra-fast SysTick: 12 MHz * 1 µs / 1e6 = 12 cycles per tick.
@@ -80,12 +79,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3)
         .expect("dropped_tick_test: round_robin");
 
-    let k =
-        Kernel::<TestConfig>::create_sentinels(sched).expect("dropped_tick_test: create_sentinels");
-
-    // store_kernel and boot are provided by the define_unified_harness! macro.
-    store_kernel(k);
-
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
-    match boot(&parts, p).expect("dropped_tick_test: boot") {}
+    init_kernel(sched, &parts).expect("dropped_tick_test: create_sentinels");
+
+    match boot(p).expect("dropped_tick_test: boot") {}
 }

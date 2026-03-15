@@ -205,10 +205,10 @@ fn main() -> ! {
     // stack_base/stack_size point at the actual partition stacks (STACKS
     // array), not the data regions. mpu_region carries the data-region
     // descriptor that DynamicStrategy programs into MPU R4.
-    #[allow(clippy::deref_addrof)]
     let k = {
         // SAFETY: before interrupts; single-core exclusive.
-        let stacks: &mut [AlignedStack; NP] = unsafe { &mut *(&raw mut STACKS) };
+        let ptr = &raw mut STACKS;
+        let stacks: &mut [AlignedStack; NP] = unsafe { &mut *ptr };
         let [ref mut s0, ref mut s1] = *stacks;
         let memories = [
             ExternalPartitionMemory::new(
@@ -239,7 +239,6 @@ fn main() -> ! {
     });
 
     // Initialize partition stacks
-    #[allow(clippy::deref_addrof)]
     // SAFETY: before interrupts; single-core exclusive.
     unsafe {
         for i in 0..NP {

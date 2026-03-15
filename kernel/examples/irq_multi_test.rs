@@ -19,7 +19,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::{Kernel, SvcError};
+use kernel::svc::SvcError;
 use kernel::syscall::SYS_EVT_WAIT;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 
@@ -94,13 +94,11 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ MultiIrqConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_multi_test: round_robin");
 
-    let k =
-        Kernel::<MultiIrqConfig>::create_sentinels(sched).expect("irq_multi_test: Kernel::create");
-    store_kernel(k);
+    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    init_kernel(sched, &parts).expect("irq_multi_test: Kernel::create");
 
     // Unmask bound IRQs so software-triggered pends fire.
     enable_bound_irqs(&mut p.NVIC, MultiIrqConfig::IRQ_DEFAULT_PRIORITY).unwrap();
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("irq_multi_test: boot") {}
+    match boot(p).expect("irq_multi_test: boot") {}
 }

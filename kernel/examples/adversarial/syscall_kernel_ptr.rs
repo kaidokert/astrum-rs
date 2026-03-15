@@ -139,8 +139,6 @@ fn main() -> ! {
     hprintln!("  expected error: {:#010x}", EXPECTED_ERROR);
 
     // Build partition array for boot().
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
-        [(test_partition_main, port_id as u32)];
 
-    match boot(&parts, p).expect("syscall_kernel_ptr: boot failed") {}
+    match boot(p).expect("syscall_kernel_ptr: boot failed") {}
 }

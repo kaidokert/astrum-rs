@@ -27,7 +27,6 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal,
 };
 
@@ -85,11 +84,9 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched entry");
 
-    let k = Kernel::<TestConfig>::create_sentinels(sched).expect("kernel creation");
-
-    store_kernel(k);
+    let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
+    init_kernel(sched, &parts).expect("kernel creation");
 
     // Boot with partition entry and hint (0 for no packed data).
-    let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
-    match boot(&parts, p).expect("get_time_test: boot failed") {}
+    match boot(p).expect("get_time_test: boot failed") {}
 }

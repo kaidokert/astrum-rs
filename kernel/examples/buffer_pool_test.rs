@@ -304,10 +304,9 @@ fn main() -> ! {
 
     // Build partition descriptors from existing stack arrays.
     // SAFETY: before interrupts; single-core exclusive access.
-    // SAFETY: cast through raw pointer avoids `deref_addrof` lint while
-    // remaining equivalent to `&mut STACKS`.
-    let stacks: &mut [AlignedStack; NP] =
-        unsafe { &mut *(&raw mut STACKS).cast::<[AlignedStack; NP]>() };
+    // SAFETY: before interrupts; single-core exclusive access.
+    let ptr = &raw mut STACKS;
+    let stacks: &mut [AlignedStack; NP] = unsafe { &mut *ptr };
     let [s0, s1] = stacks;
     let memories = [
         ExternalPartitionMemory::new(

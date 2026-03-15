@@ -147,9 +147,9 @@ fn main() -> ! {
 
     // Initialize stacks AFTER storing kernel (so set_partition_sp can access it)
     // SAFETY: single-core, interrupts disabled — exclusive access to statics.
-    #[allow(clippy::deref_addrof)]
     unsafe {
-        let stacks = &mut *(&raw mut STACKS);
+        let ptr = &raw mut STACKS;
+        let stacks = &mut *ptr;
 
         let ep = partition_main as *const () as u32;
         hprintln!("debug_boot: entry point = {:#010x}", ep);

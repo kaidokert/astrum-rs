@@ -20,7 +20,6 @@ use kernel::kpanic as _;
 use kernel::{
     partition::MpuRegion,
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 
@@ -80,15 +79,15 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ PassthroughConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched");
 
-    let mut k = Kernel::<PassthroughConfig>::create_sentinels(sched).expect("kernel");
-    k.partitions_mut()
-        .get_mut(0)
-        .expect("partition 0")
-        .set_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)]);
-
-    store_kernel(k);
+    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
+    init_kernel(sched, &parts).expect("kernel");
+    with_kernel_mut(|k| {
+        k.partitions_mut()
+            .get_mut(0)
+            .expect("partition 0")
+            .set_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)]);
+    });
     hprintln!("peripheral_passthrough: booting");
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
-    match boot(&parts, p).expect("boot failed") {}
+    match boot(p).expect("boot failed") {}
 }

@@ -20,7 +20,6 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::message::MessageQueue;
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::Kernel;
 // TODO: subtask requests MsgStandard, but MsgSmall (MAX_MSG_SIZE=4, QUEUES=2)
 // is sufficient for this 4-byte payload test and is the minimal config.
 use kernel::{DebugEnabled, MsgSmall, Partitions2, PortsTiny, SyncMinimal};
@@ -124,12 +123,13 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_msg_test: round_robin");
 
-    let mut k = Kernel::<TestConfig>::create_sentinels(sched).expect("plib_msg_test: kernel");
-    k.messages_mut()
-        .add(MessageQueue::new())
-        .expect("plib_msg_test: add msg queue");
-    store_kernel(k);
-
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("plib_msg_test: boot") {}
+    init_kernel(sched, &parts).expect("plib_msg_test: kernel");
+    with_kernel_mut(|k| {
+        k.messages_mut()
+            .add(MessageQueue::new())
+            .expect("plib_msg_test: add msg queue");
+    });
+
+    match boot(p).expect("plib_msg_test: boot") {}
 }

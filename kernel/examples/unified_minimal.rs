@@ -9,7 +9,6 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
 };
 
@@ -38,12 +37,10 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched");
 
-    let k = Kernel::<TestConfig>::create_sentinels(sched).expect("kernel");
-
-    store_kernel(k);
+    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
+    init_kernel(sched, &parts).expect("kernel");
     hprintln!("unified_minimal: kernel stored");
 
     hprintln!("unified_minimal: calling boot");
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
-    match boot(&parts, p).expect("unified_minimal: boot failed") {}
+    match boot(p).expect("unified_minimal: boot failed") {}
 }

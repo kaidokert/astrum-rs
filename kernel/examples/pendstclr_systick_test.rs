@@ -24,7 +24,6 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 
 // Fast SysTick: 12 MHz * 83 µs / 1e6 ≈ 996 cycles per tick.
@@ -135,8 +134,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 2)
         .expect("pendstclr_systick: sched");
 
-    let k = Kernel::<Config>::create_sentinels(sched).expect("pendstclr_systick: Kernel::create");
-    store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, p).expect("pendstclr_systick: boot") {}
+    init_kernel(sched, &parts).expect("pendstclr_systick: Kernel::create");
+    match boot(p).expect("pendstclr_systick: boot") {}
 }
