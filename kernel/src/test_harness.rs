@@ -431,35 +431,36 @@ impl KernelTestHarness {
         );
     }
 
-    /// Assert that every partition has a valid, unique core stack base address.
+    /// Assert that every partition has a valid, unique stack base address.
     ///
     /// For each partition index `0..partition_count`:
-    /// - `core_stack_base(i)` returns `Some` (stack storage exists)
-    /// - The address is non-zero
+    /// - `partitions().get(i)` returns `Some` (partition exists)
+    /// - `pcb.stack_base()` is non-zero
     /// - The address is word-aligned (multiple of 4)
-    /// - No two partitions share the same core stack base address
+    /// - No two partitions share the same stack base address
     pub fn assert_stack_bases_valid(&self) {
         let n = self.kernel.partitions().len();
         let mut seen: std::vec::Vec<u32> = std::vec::Vec::with_capacity(n);
         const WORD_SIZE: usize = core::mem::size_of::<u32>();
         for i in 0..n {
-            let base = self.kernel.core_stack_base(i).unwrap_or_else(|| {
+            let pcb = self.kernel.partitions().get(i).unwrap_or_else(|| {
                 panic!(
-                    "invariant violation: core_stack_base({i}) returned None \
+                    "invariant violation: partitions().get({i}) returned None \
                      but partition exists"
                 )
             });
-            assert_ne!(base, 0, "invariant violation: core_stack_base({i}) is zero");
+            let base = pcb.stack_base();
+            assert_ne!(base, 0, "invariant violation: P{i} stack_base is zero");
             assert_eq!(
                 base as usize % WORD_SIZE,
                 0,
-                "invariant violation: core_stack_base({i}) = {base:#x} is not word-aligned"
+                "invariant violation: P{i} stack_base = {base:#x} is not word-aligned"
             );
             for (j, &prev) in seen.iter().enumerate() {
                 assert_ne!(
                     base, prev,
                     "invariant violation: partitions {j} and {i} share \
-                     core stack base {base:#x}"
+                     stack base {base:#x}"
                 );
             }
             seen.push(base);
@@ -1326,26 +1327,29 @@ mod tests {
         h.assert_no_switch_to_waiting();
     }
 
-    // ----- core_stack_base accessor tests -----
+    // ----- PCB stack_base accessor tests -----
 
     #[test]
-    fn core_stack_base_returns_valid_addresses() {
+    fn pcb_stack_base_returns_valid_addresses() {
         let h = KernelTestHarness::with_partitions(3).expect("harness setup");
         for i in 0..3 {
-            let base = h.kernel().core_stack_base(i);
-            assert!(base.is_some(), "partition {i} should have a stack base");
-            let addr = base.unwrap();
+            let pcb = h.kernel().partitions().get(i);
+            assert!(pcb.is_some(), "partition {i} should exist");
+            let addr = pcb.unwrap().stack_base();
             assert_ne!(addr, 0, "partition {i} stack base must be non-zero");
             assert_eq!(addr % 4, 0, "partition {i} stack base must be word-aligned");
         }
     }
 
     #[test]
-    fn core_stack_base_returns_none_for_out_of_bounds() {
+    fn partitions_get_returns_none_for_out_of_bounds() {
         let h = KernelTestHarness::with_partitions(2).expect("harness setup");
-        // Indices >= N are truly out of bounds (N is the backing storage size).
-        assert!(h.kernel().core_stack_base(HarnessConfig::N).is_none());
-        assert!(h.kernel().core_stack_base(HarnessConfig::N + 100).is_none());
+        assert!(h.kernel().partitions().get(HarnessConfig::N).is_none());
+        assert!(h
+            .kernel()
+            .partitions()
+            .get(HarnessConfig::N + 100)
+            .is_none());
     }
 
     // ----- stack_bases_valid invariant tests -----
@@ -1357,23 +1361,19 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // PCB mpu_region matches core stack base (regression for commit 2675853)
+    // PCB mpu_region matches stack base (regression for commit 2675853)
     // ------------------------------------------------------------------
 
     #[test]
-    fn pcb_mpu_region_base_matches_core_stack_base() {
+    fn pcb_mpu_region_base_matches_stack_base() {
         for &n in &[1, 2, 4] {
             let h = KernelTestHarness::with_partitions(n).expect("harness setup");
             for i in 0..n {
                 let pcb = h.kernel().partitions().get(i).expect("partition exists");
-                let core_base = h
-                    .kernel()
-                    .core_stack_base(i)
-                    .expect("core_stack_base must be Some");
                 assert_eq!(
                     pcb.mpu_region().base(),
-                    core_base,
-                    "n={n} partition {i}: mpu_region().base() must equal core_stack_base()"
+                    pcb.stack_base(),
+                    "n={n} partition {i}: mpu_region().base() must equal pcb.stack_base()"
                 );
                 assert_eq!(
                     pcb.mpu_region().size(),
@@ -1461,24 +1461,19 @@ mod tests {
     #[test]
     fn harness_build_applies_fix_mpu_data_region() {
         // Verifies that build_kernel() calls fix_mpu_data_region for every
-        // partition, reconciling stale MPU bases with actual core_stack_base
-        // addresses after the kernel is boxed on the heap.
+        // partition, reconciling MPU bases with pcb.stack_base() after build.
         //
-        // On 64-bit test hosts the heap-allocated core_stack_base differs
+        // On 64-bit test hosts the heap-allocated stack base differs
         // from the PartitionConfig value (RAM_BASE + i*PARTITION_OFFSET),
-        // so a successful match proves the fixup actually ran.
+        // so a successful mismatch proves the fixup actually ran.
         for &n in &[1, 2, 4] {
             let h = KernelTestHarness::with_partitions(n).expect("harness setup");
             for i in 0..n {
                 let pcb = h.kernel().partitions().get(i).expect("partition exists");
-                let core_base = h
-                    .kernel()
-                    .core_stack_base(i)
-                    .expect("core_stack_base must be Some");
                 assert_eq!(
                     pcb.mpu_region().base(),
-                    core_base,
-                    "n={n} partition {i}: mpu_region().base() must equal core_stack_base() \
+                    pcb.stack_base(),
+                    "n={n} partition {i}: mpu_region().base() must equal pcb.stack_base() \
                      after build (fix_mpu_data_region integration)"
                 );
                 let config_base = RAM_BASE + (i as u32) * PARTITION_OFFSET;
@@ -1493,21 +1488,18 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // PCB stack_base/stack_size match core_stack_base/STACK_SIZE_BYTES
+    // PCB stack_base/stack_size valid after construction
     // ------------------------------------------------------------------
 
     #[test]
-    fn pcb_stack_fields_match_core_after_construction() {
+    fn pcb_stack_fields_valid_after_construction() {
         for &n in &[1, 2, 4] {
             let h = KernelTestHarness::with_partitions(n).expect("harness setup");
             for i in 0..n {
                 let pcb = h.kernel().partitions().get(i).expect("partition exists");
-                let core_base = h.kernel().core_stack_base(i).expect("core_stack_base");
-                assert_eq!(
-                    pcb.stack_base(),
-                    core_base,
-                    "n={n} P{i} stack_base mismatch"
-                );
+                let base = pcb.stack_base();
+                assert_ne!(base, 0, "n={n} P{i} stack_base must be non-zero");
+                assert_eq!(base % 4, 0, "n={n} P{i} stack_base must be word-aligned");
                 assert_eq!(
                     pcb.stack_size(),
                     STACK_SIZE_BYTES,
@@ -2538,14 +2530,15 @@ mod tests {
         let mut initial_size = [0u32; 2];
         let mut initial_perms = [0u32; 2];
         for i in 0..n {
-            let expected_base = h.kernel().core_stack_base(i).expect("core_stack_base");
-            let region = h.kernel().partitions().get(i).unwrap().mpu_region();
+            let pcb = h.kernel().partitions().get(i).unwrap();
+            let region = pcb.mpu_region();
             initial_base[i] = region.base();
             initial_size[i] = region.size();
             initial_perms[i] = region.permissions();
             assert_eq!(
-                initial_base[i], expected_base,
-                "partition {i}: initial mpu_region.base() != core_stack_base()"
+                initial_base[i],
+                pcb.stack_base(),
+                "partition {i}: initial mpu_region.base() != pcb.stack_base()"
             );
         }
 
@@ -2558,12 +2551,12 @@ mod tests {
 
             // After every tick, verify all partitions' MPU regions are intact.
             for i in 0..n {
-                let region = h.kernel().partitions().get(i).unwrap().mpu_region();
-                let expected_base = h.kernel().core_stack_base(i).expect("core_stack_base");
+                let pcb = h.kernel().partitions().get(i).unwrap();
+                let region = pcb.mpu_region();
                 assert_eq!(
                     region.base(),
-                    expected_base,
-                    "tick {tick}: partition {i} mpu_region.base() diverged from core_stack_base()"
+                    pcb.stack_base(),
+                    "tick {tick}: partition {i} mpu_region.base() diverged from pcb.stack_base()"
                 );
                 assert_eq!(
                     region.base(),
@@ -2594,7 +2587,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     /// Regression: after Kernel::new + Box move + post-move fixup, every
-    /// partition's mpu_region.base must point to the real core_stack_base
+    /// partition's mpu_region.base must point to the real pcb.stack_base()
     /// (the post-move heap address), NOT the PartitionConfig address that
     /// was computed before the move (RAM_BASE + offset).  This is the
     /// same root cause as bug01 (stale MPU base after kernel relocation).
@@ -2605,26 +2598,24 @@ mod tests {
 
             for i in 0..n {
                 let config_base = RAM_BASE + (i as u32) * PARTITION_OFFSET;
-                let core_base = h
-                    .kernel()
-                    .core_stack_base(i)
-                    .expect("core_stack_base must be Some");
                 let pcb = h.kernel().partitions().get(i).expect("partition exists");
                 let actual_base = pcb.mpu_region().base();
 
-                // The post-move core_stack_base must differ from the
+                // The post-move pcb.stack_base() must differ from the
                 // config-time address (they live in different allocations).
                 assert_ne!(
-                    core_base, config_base,
-                    "n={n} partition {i}: core_stack_base must differ from \
+                    pcb.stack_base(),
+                    config_base,
+                    "n={n} partition {i}: pcb.stack_base() must differ from \
                      config-time RAM_BASE+offset (kernel was moved)"
                 );
 
                 // The PCB must hold the post-move address, not the stale one.
                 assert_eq!(
-                    actual_base, core_base,
+                    actual_base,
+                    pcb.stack_base(),
                     "n={n} partition {i}: mpu_region.base() must equal \
-                     core_stack_base (post-move address)"
+                     pcb.stack_base() (post-move address)"
                 );
                 assert_ne!(
                     actual_base, config_base,
@@ -2652,11 +2643,10 @@ mod tests {
         // P0: sentinel — Kernel::new derived base from internal stack,
         // then the sentinel-guarded fixup updated it to the pinned address.
         let p0 = k.partitions().get(0).expect("P0");
-        let core_base_0 = k.core_stack_base(0).expect("core_stack_base(0)");
         assert_eq!(
             p0.mpu_region().base(),
-            core_base_0,
-            "P0 sentinel: mpu_region.base() must equal core_stack_base"
+            p0.stack_base(),
+            "P0 sentinel: mpu_region.base() must equal pcb.stack_base()"
         );
 
         // P1: user-configured — Kernel::new preserved the original base,
@@ -2741,8 +2731,10 @@ mod tests {
                 .expect("create_from_memory"),
         );
 
-        // Grab core_stack_base for P0 (the fixup target).
-        let core_stack_base = kernel
+        // Grab the actual stack address for P0 (the fixup target).
+        // core_stack_base() is needed here as test setup: it provides the
+        // real post-move address to pass into fix_mpu_data_region.
+        let fixup_base = kernel
             .core_stack_base(0)
             .expect("core_stack_base(0) must exist");
 
@@ -2754,18 +2746,18 @@ mod tests {
                 .is_some_and(|p| p.mpu_region().size() == 0);
             if is_sentinel {
                 assert!(
-                    kernel.fix_mpu_data_region(i, core_stack_base),
+                    kernel.fix_mpu_data_region(i, fixup_base),
                     "fix_mpu_data_region must succeed for sentinel P{i}"
                 );
             }
         }
 
-        // Assert P0 (sentinel): base updated to core_stack_base.
+        // Assert P0 (sentinel): base updated to the fixup address.
         let p0 = kernel.partitions().get(0).expect("P0");
         assert_eq!(
             p0.mpu_region().base(),
-            core_stack_base,
-            "P0 sentinel: base must be updated to core_stack_base"
+            fixup_base,
+            "P0 sentinel: base must be updated to fixup_base"
         );
         assert_eq!(
             p0.mpu_region().size(),
