@@ -119,7 +119,7 @@ pub trait PartitionCoreOps {
 /// direct memory access from PendSV assembly. The `current_partition`,
 /// `next_partition`, and `partition_sp` fields are accessed at known offsets.
 #[repr(C)]
-pub struct PartitionCore<const N: usize, const SCHED: usize, S: StackStorage>
+pub struct PartitionCore<const N: usize, const SCHED: usize>
 where
     [(); N]:,
     [(); SCHED]:,
@@ -141,36 +141,14 @@ where
     /// harness so it can force-advance the schedule and call
     /// `set_next_partition()` before PendSV fires.
     yield_requested: bool,
-    /// Per-partition stack storage, aligned for MPU region base requirements.
-    /// Placed last so that `offset_of!(PartitionCore, stacks)` equals the
-    /// size of the metadata region that PendSV assembly may address.
-    pub stacks: [S; N],
 }
 
-impl<const N: usize, const SCHED: usize, S: StackStorage> PartitionCore<N, SCHED, S>
+impl<const N: usize, const SCHED: usize> PartitionCore<N, SCHED>
 where
     [(); N]:,
     [(); SCHED]:,
 {
-    const _ASSERT_ALIGNMENT_EQ_SIZE: () = assert!(
-        S::ALIGNMENT == S::SIZE_BYTES,
-        "StackStorage: ALIGNMENT must equal SIZE_BYTES"
-    );
-
-    /// Static enforcement that `stacks` is the last field in `PartitionCore`.
-    /// Required by `define_pendsv!(@assert_offsets)` which uses
-    /// `offset_of!(C, stacks)` as the metadata region size.
-    pub const STACKS_IS_LAST_FIELD: bool = {
-        let stacks = core::mem::offset_of!(Self, stacks);
-        stacks > core::mem::offset_of!(Self, partition_stack_limits)
-            && stacks > core::mem::offset_of!(Self, active_partition)
-            && stacks > core::mem::offset_of!(Self, tick)
-            && stacks > core::mem::offset_of!(Self, yield_requested)
-    };
-
     pub fn new() -> Self {
-        #[allow(clippy::let_unit_value)]
-        let _ = Self::_ASSERT_ALIGNMENT_EQ_SIZE;
         Self {
             partitions: PartitionTable::new(),
             schedule: ScheduleTable::new(),
@@ -181,7 +159,6 @@ where
             active_partition: None,
             tick: TickCounter::new(),
             yield_requested: false,
-            stacks: [S::ZERO; N],
         }
     }
 
@@ -299,7 +276,7 @@ where
     }
 }
 
-impl<const N: usize, const SCHED: usize, S: StackStorage> Default for PartitionCore<N, SCHED, S>
+impl<const N: usize, const SCHED: usize> Default for PartitionCore<N, SCHED>
 where
     [(); N]:,
     [(); SCHED]:,
@@ -309,8 +286,7 @@ where
     }
 }
 
-impl<const N: usize, const SCHED: usize, S: StackStorage> crate::config::CoreOps
-    for PartitionCore<N, SCHED, S>
+impl<const N: usize, const SCHED: usize> crate::config::CoreOps for PartitionCore<N, SCHED>
 where
     [(); N]:,
     [(); SCHED]:,
@@ -389,8 +365,7 @@ where
     }
 }
 
-impl<const N: usize, const SCHED: usize, S: StackStorage> PartitionCoreOps
-    for PartitionCore<N, SCHED, S>
+impl<const N: usize, const SCHED: usize> PartitionCoreOps for PartitionCore<N, SCHED>
 where
     [(); N]:,
     [(); SCHED]:,
@@ -475,8 +450,7 @@ mod tests {
     use crate::partition::MpuRegion;
     use crate::scheduler::ScheduleEntry;
 
-    type TestCore<const N: usize, const SCHED: usize> =
-        super::PartitionCore<N, SCHED, AlignedStack1K>;
+    type TestCore<const N: usize, const SCHED: usize> = super::PartitionCore<N, SCHED>;
 
     fn test_pcb(id: u8) -> PartitionControlBlock {
         let o = (id as u32) * 0x1000;

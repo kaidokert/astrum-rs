@@ -804,11 +804,11 @@ macro_rules! kernel_config_types {
             $stack
         );
     };
-    (@cfg $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty) => {
-        $crate::kernel_config_types!(@cfg $parts, $sync, $msg, $ports, $debug; $crate::partition_core::AlignedStack1K);
-    };
     (@cfg $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty; $stack:ty) => {
-        type Core = $crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }, $stack>;
+        $crate::kernel_config_types!(@cfg $parts, $sync, $msg, $ports, $debug);
+    };
+    (@cfg $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty) => {
+        type Core = $crate::partition_core::PartitionCore<{ Self::N }, { Self::SCHED }>;
         type Sync =
             $crate::sync_pools::SyncPools<{ Self::S }, { Self::SW }, { Self::MS }, { Self::MW }>;
         type Msg =
@@ -2850,9 +2850,11 @@ mod tests {
         // Core type with AlignedStack4K must be larger than with AlignedStack1K.
         type Core4K = <Composed4KStack as KernelConfig>::Core;
         type Core1K = <ComposedConfig as KernelConfig>::Core;
-        // Both have N=2. AlignedStack4K is 4096 bytes vs 1024 for 1K,
-        // so the 4K Core must be strictly larger.
-        assert!(core::mem::size_of::<Core4K>() > core::mem::size_of::<Core1K>());
+        // Stack type is now ignored; both resolve to the same Core type.
+        assert_eq!(
+            core::mem::size_of::<Core4K>(),
+            core::mem::size_of::<Core1K>()
+        );
     }
 
     #[test]
@@ -2860,11 +2862,8 @@ mod tests {
         // ComposedConfig (no bracket) uses AlignedStack1K by default.
         // Verify Core type matches explicit AlignedStack1K.
         type CoreDefault = <ComposedConfig as KernelConfig>::Core;
-        type CoreExplicit = crate::partition_core::PartitionCore<
-            { ComposedConfig::N },
-            { ComposedConfig::SCHED },
-            crate::partition_core::AlignedStack1K,
-        >;
+        type CoreExplicit =
+            crate::partition_core::PartitionCore<{ ComposedConfig::N }, { ComposedConfig::SCHED }>;
         assert_eq!(
             core::mem::size_of::<CoreDefault>(),
             core::mem::size_of::<CoreExplicit>()
