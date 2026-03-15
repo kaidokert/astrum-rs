@@ -1078,6 +1078,16 @@ where
         BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     >,
 {
+    /// Create a `Kernel` from caller-provided [`PartitionMemory`](crate::partition::PartitionMemory) descriptors.
+    ///
+    /// This is the canonical constructor. It delegates to [`new_external()`](Self::new_external).
+    pub fn new(
+        schedule: ScheduleTable<{ C::SCHED }>,
+        memories: &[crate::partition::ExternalPartitionMemory<'_>],
+    ) -> Result<Self, ConfigError> {
+        Self::new_external(schedule, memories)
+    }
+
     /// Create a `Kernel` from caller-provided [`ExternalPartitionMemory`] descriptors.
     ///
     /// Partition IDs are derived from array indices (0, 1, 2, …).
@@ -3025,6 +3035,31 @@ mod tests {
         mems: &[ExternalPartitionMemory<'_>],
     ) -> Kernel<TestConfig> {
         Kernel::<TestConfig>::new_external(schedule, mems).unwrap()
+    }
+
+    // ---- Kernel::new() delegates to new_external() ----
+
+    #[test]
+    fn kernel_new_delegates_to_new_external() {
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 5)).unwrap();
+        schedule.add(ScheduleEntry::new(1, 5)).unwrap();
+        schedule.start();
+
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
+        let mpu0 = MpuRegion::new(0x2000_0000, 4096, 0);
+        let mpu1 = MpuRegion::new(0x2000_1000, 4096, 0);
+        let m0 =
+            crate::partition::PartitionMemory::from_aligned_stack(&mut stk0, 0x0800_0000, mpu0, 0)
+                .unwrap();
+        let m1 =
+            crate::partition::PartitionMemory::from_aligned_stack(&mut stk1, 0x0800_1000, mpu1, 1)
+                .unwrap();
+        let k = Kernel::<TestConfig>::new(schedule, &[m0, m1]).unwrap();
+        assert_eq!(k.partitions().len(), 2);
+        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
+        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1000);
     }
 
     // ---- unpack_packed_r2 unit tests ----

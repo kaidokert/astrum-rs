@@ -61,6 +61,7 @@ pub mod mpu_strategy;
 pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
+pub use partition::{ExternalPartitionMemory, PartitionMemory};
 pub mod partition_core;
 pub use partition_core::{
     AlignedStack1K, AlignedStack256B, AlignedStack2K, AlignedStack4K, AlignedStack512B,
@@ -195,6 +196,16 @@ mod reexport_tests {
         assert_eq!(DefaultConfig::S, 1); // SyncMinimal
         assert_eq!(DefaultConfig::QS, 1); // MsgMinimal
         assert_eq!(DefaultConfig::SP, 1); // PortsTiny
+    }
+
+    #[test]
+    fn partition_memory_alias_via_root() {
+        // PartitionMemory is re-exported at crate root as an alias for ExternalPartitionMemory
+        fn _assert_same_type(_: PartitionMemory<'_>) {}
+        fn _accept_external(e: ExternalPartitionMemory<'_>) {
+            _assert_same_type(e);
+        }
+        let _ = _accept_external;
     }
 
     #[test]

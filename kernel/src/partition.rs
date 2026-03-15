@@ -797,6 +797,9 @@ impl<const N: usize> PartitionTable<N> {
     }
 }
 
+/// Canonical public alias for [`ExternalPartitionMemory`].
+pub type PartitionMemory<'mem> = ExternalPartitionMemory<'mem>;
+
 /// Partition memory descriptor that borrows caller-provided stack memory.
 #[derive(Debug)]
 pub struct ExternalPartitionMemory<'mem> {
@@ -2797,6 +2800,42 @@ mod tests {
             ExternalPartitionMemory::from_aligned_stack(&mut storage, 0x0800_0000, mpu, 0).unwrap();
         assert_eq!(epm.stack_size_bytes(), 256);
         assert_eq!(epm.entry_point(), 0x0800_0000);
+    }
+
+    // ------------------------------------------------------------------
+    // PartitionMemory alias
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn partition_memory_alias_creates_valid_descriptor() {
+        let mut buf = Align256([0u32; 64]);
+        let expected_base = buf.0.as_ptr() as u32;
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let pm = PartitionMemory::new(&mut buf.0, 0x0800_2000, mpu, 0).unwrap();
+        assert_eq!(pm.entry_point(), 0x0800_2000);
+        assert_eq!(pm.stack_size_bytes(), 256);
+        assert_eq!(pm.stack_base(), expected_base);
+        assert_eq!(*pm.mpu_region(), mpu);
+    }
+
+    #[test]
+    fn partition_memory_validates_alignment() {
+        // Use a large buffer so we can point to a misaligned sub-slice
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        // A 32-byte (8-word) sub-slice starting at offset 1 word is misaligned
+        let sub = &mut buf.0[1..9];
+        let result = PartitionMemory::new(sub, 0x0800_0000, mpu, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn partition_memory_validates_size() {
+        let valid_mpu = MpuRegion::new(0, 32, 0);
+        // 3 words = 12 bytes, not a power of two
+        let mut tiny = [0u32; 3];
+        let result = PartitionMemory::new(&mut tiny, 0x0800_0000, valid_mpu, 0);
+        assert!(result.is_err());
     }
 
     #[test]
