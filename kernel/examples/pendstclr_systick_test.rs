@@ -128,7 +128,7 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("pendstclr_systick: Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("pendstclr_systick: Peripherals::take");
     hprintln!("pendstclr_systick_test: start");
 
     // 2 ticks per slot absorbs the forced PENDSTSET re-entry tick.
@@ -138,5 +138,5 @@ fn main() -> ! {
     let k = Kernel::<Config>::create_sentinels(sched).expect("pendstclr_systick: Kernel::create");
     store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("pendstclr_systick: boot") {}
+    match boot(&parts, p).expect("pendstclr_systick: boot") {}
 }

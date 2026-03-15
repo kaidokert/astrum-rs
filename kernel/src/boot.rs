@@ -308,8 +308,7 @@ where
             .push(mem)
             .map_err(|_| BootError::StackInitFailed { partition_index: i })?;
     }
-    crate::svc::Kernel::<C>::new_external(sched, &memories)
-        .map_err(|_| BootError::KernelNotInitialized)
+    crate::svc::Kernel::<C>::new(sched, &memories).map_err(|_| BootError::KernelNotInitialized)
 }
 
 /// Boot the kernel using caller-provided `stacks` for partition storage.
@@ -461,6 +460,189 @@ where
     loop {
         cortex_m::asm::wfi();
     }
+}
+
+/// Boot the kernel from pre-configured PCBs already stored in kernel state.
+///
+/// Unlike [`boot_external()`], which builds PCBs from caller-provided stacks,
+/// this function assumes the kernel was initialized (e.g. via
+/// [`Kernel::with_config()`]) with PCBs that already have valid entry points,
+/// stack addresses, and MPU regions. It performs the full boot sequence:
+///
+/// 1. Validate PCBs (entry point, stack bounds, MPU constraints)
+/// 2. Initialize stack frames (`init_stack_frame`) for each partition
+/// 3. Precompute MPU cache entries
+/// 4. Configure AIRCR priority grouping and handler priorities
+/// 5. Start the schedule and select the first partition
+/// 6. Initialize MPU hardware via `__boot_mpu_init`
+/// 7. Configure and enable SysTick
+/// 8. Trigger PendSV for the first context switch
+///
+/// # Safety
+///
+/// The stack memory regions referenced by each PCB must be valid, writable,
+/// and not aliased. The kernel must be initialized before calling this function.
+#[cfg(not(test))]
+pub unsafe fn boot_preconfigured<C: KernelConfig>(
+    mut peripherals: cortex_m::Peripherals,
+) -> Result<Never, BootError>
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+    C::Core:
+        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
+    C::Sync: SyncOps<
+        SemPool = SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: MsgOps<
+        MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: PortsOps<
+        SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    use core::ptr::addr_of;
+    use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
+
+    #[cfg(klog_backend = "rtt")]
+    rtt_target::rtt_init_print!();
+
+    let storage_addr = addr_of!(crate::state::UNIFIED_KERNEL_STORAGE) as u32;
+    check_storage_alignment(storage_addr, crate::state::KERNEL_ALIGNMENT as u32)?;
+
+    crate::state::with_kernel_mut::<C, _, _>(|k| {
+        let n = k.partitions().len();
+        // Step 1: Validate all PCBs.
+        validate_preconfigured_pcbs(k.partitions().as_slice(), C::MPU_ENFORCE)?;
+
+        // Step 2: Initialize stack frames for each partition.
+        for i in 0..n {
+            let pcb = k
+                .partitions()
+                .get(i)
+                .ok_or(BootError::StackInitFailed { partition_index: i })?;
+            let entry = pcb.entry_point();
+            let base = pcb.stack_base();
+            let size = pcb.stack_size();
+            let word_count = (size / 4) as usize;
+
+            // SAFETY: PCBs were validated above; stack memory is caller-guaranteed
+            // valid and non-aliased per the function's safety contract.
+            let stack_slice =
+                unsafe { core::slice::from_raw_parts_mut(base as *mut u32, word_count) };
+            let ix = crate::context::init_stack_frame(stack_slice, entry, None)
+                .ok_or(BootError::StackInitFailed { partition_index: i })?;
+            let sp = u32::try_from(ix)
+                .ok()
+                .and_then(|v| v.checked_mul(4))
+                .and_then(|offset| base.checked_add(offset))
+                .ok_or(BootError::StackSizeOverflow { partition_index: i })?;
+            k.set_sp(i, sp);
+            k.sync_stack_limit(i);
+        }
+
+        // Step 3: Precompute MPU cache entries.
+        for i in 0..n {
+            if let Some(pcb) = k.partitions_mut().get_mut(i) {
+                crate::mpu::precompute_mpu_cache(pcb)
+                    .map_err(|_| BootError::MpuCachePopulationFailed { partition_index: i })?;
+            }
+        }
+
+        Ok::<(), BootError>(())
+    })
+    .map_err(|_| BootError::KernelNotInitialized)??;
+
+    // Step 4: Configure AIRCR priority grouping and handler priorities.
+    const { crate::config::assert_priority_order::<C>() }
+    const { crate::config::assert_systick_reload::<C>() }
+
+    // SAFETY: Called once before scheduler starts; exclusive SCB access.
+    unsafe {
+        peripherals
+            .SCB
+            .aircr
+            .write(AIRCR_VECTKEY | AIRCR_PRIGROUP_0);
+        peripherals
+            .SCB
+            .set_priority(SystemHandler::SVCall, C::SVCALL_PRIORITY);
+        peripherals
+            .SCB
+            .set_priority(SystemHandler::PendSV, C::PENDSV_PRIORITY);
+        peripherals
+            .SCB
+            .set_priority(SystemHandler::SysTick, C::SYSTICK_PRIORITY);
+    }
+
+    // Step 5: Start the schedule and select the first partition.
+    crate::state::with_kernel_mut::<C, _, _>(|k| {
+        crate::svc::scheduler::start_schedule(k).inspect(|&pid| k.set_next_partition(pid))
+    })
+    .map_err(|_| BootError::KernelNotInitialized)?
+    .ok_or(BootError::NoReadyPartition)?;
+
+    // Step 6: Initialize MPU hardware.
+    {
+        extern "Rust" {
+            fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) -> Result<(), &'static str>;
+        }
+        // SAFETY: __boot_mpu_init is generated by define_unified_harness!
+        // and called exactly once before the first context switch.
+        unsafe { __boot_mpu_init(&peripherals.MPU) }
+            .map_err(|reason| BootError::BootMpuInitFailed { reason })?;
+    }
+
+    // Step 7: Configure and enable SysTick.
+    peripherals
+        .SYST
+        .set_clock_source(if C::USE_PROCESSOR_CLOCK {
+            SystClkSource::Core
+        } else {
+            SystClkSource::External
+        });
+    peripherals.SYST.set_reload(C::SYSTICK_CYCLES - 1);
+    peripherals.SYST.clear_current();
+    peripherals.SYST.enable_counter();
+    peripherals.SYST.enable_interrupt();
+
+    // Step 8: Trigger PendSV for the first context switch and enter idle loop.
+    // TODO: SCB::set_pendsv() is a static method in cortex-m 0.7; cannot call on instance.
+    SCB::set_pendsv();
+    loop {
+        cortex_m::asm::wfi();
+    }
+}
+
+/// Validate PCBs have real stack addresses and entry points for preconfigured boot.
+pub fn validate_preconfigured_pcbs(
+    partitions: &[crate::partition::PartitionControlBlock],
+    mpu_enforce: bool,
+) -> Result<(), BootError> {
+    if partitions.is_empty() {
+        return Err(BootError::NoReadyPartition);
+    }
+    for (i, pcb) in partitions.iter().enumerate() {
+        if pcb.entry_point() == 0 {
+            return Err(BootError::StackInitFailed { partition_index: i });
+        }
+        let (base, size) = (pcb.stack_base(), pcb.stack_size());
+        if base == 0 || size == 0 {
+            return Err(BootError::StackInitFailed { partition_index: i });
+        }
+        check_stack_mpu_size(i, size)?;
+        check_stack_mpu_alignment(i, base, size)?;
+    }
+    check_sentinel_mpu_enforce(partitions, mpu_enforce)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1049,5 +1231,92 @@ mod tests {
         // Verify VECTKEY field (bits [31:16]) from the combined value.
         let vectkey = (aircr_value >> 16) & 0xFFFF;
         assert_eq!(vectkey, 0x05FA, "VECTKEY must be 0x05FA");
+    }
+
+    #[test]
+    fn validate_preconfigured_pcbs_rejects_empty() {
+        assert_eq!(
+            validate_preconfigured_pcbs(&[], false),
+            Err(BootError::NoReadyPartition)
+        );
+    }
+
+    #[test]
+    fn validate_preconfigured_pcbs_rejects_zero_stack() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+        let zero =
+            PartitionControlBlock::new(0, 0x0800_0000, 0, 0, MpuRegion::new(0x2000_0000, 1024, 3));
+        assert_eq!(
+            validate_preconfigured_pcbs(&[zero], false),
+            Err(BootError::StackInitFailed { partition_index: 0 })
+        );
+    }
+
+    #[test]
+    fn validate_preconfigured_pcbs_rejects_zero_entry_point() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+        let pcb = PartitionControlBlock::new(
+            0,
+            0, // zero entry_point
+            0x2000_0000,
+            0x2000_0400,
+            MpuRegion::new(0x2000_0000, 1024, 3),
+        );
+        assert_eq!(
+            validate_preconfigured_pcbs(&[pcb], false),
+            Err(BootError::StackInitFailed { partition_index: 0 })
+        );
+    }
+
+    #[test]
+    fn validate_preconfigured_pcbs_accepts_valid() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0400,
+            MpuRegion::new(0x2000_0000, 1024, 3),
+        );
+        assert!(validate_preconfigured_pcbs(&[pcb], false).is_ok());
+    }
+
+    #[test]
+    fn validate_preconfigured_pcbs_rejects_bad_size() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0000 + 100,
+            MpuRegion::new(0x2000_0000, 1024, 3),
+        );
+        assert_eq!(
+            validate_preconfigured_pcbs(&[pcb], false),
+            Err(BootError::StackSizeError {
+                partition_index: 0,
+                size: 100
+            })
+        );
+    }
+
+    #[test]
+    fn validate_preconfigured_pcbs_rejects_misaligned() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0100,
+            0x2000_0100 + 1024,
+            MpuRegion::new(0x2000_0100, 1024, 3),
+        );
+        assert_eq!(
+            validate_preconfigured_pcbs(&[pcb], false),
+            Err(BootError::StackAlignmentError {
+                partition_index: 0,
+                base: 0x2000_0100,
+                size: 1024,
+            })
+        );
     }
 }

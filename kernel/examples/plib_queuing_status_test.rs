@@ -51,10 +51,19 @@ extern "C" fn p0_main() -> ! {
 }
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals");
+    let p = cortex_m::Peripherals::take().expect("peripherals");
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("sched");
-    let cfgs = PartitionConfig::sentinel_array::<{ TestConfig::N }>(TestConfig::STACK_WORDS);
-    let mut k = Kernel::<TestConfig>::create(sched, &cfgs).expect("kernel");
+    let cfgs = PartitionConfig::sentinel_array::<{ TestConfig::N }>();
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let mut k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
+    #[cfg(feature = "dynamic-mpu")]
+    let mut k = Kernel::<TestConfig>::with_config(
+        sched,
+        &cfgs,
+        kernel::virtual_device::DeviceRegistry::new(),
+        &[],
+    )
+    .expect("kernel");
     let src = k
         .queuing_mut()
         .create_port(PortDirection::Source)
@@ -65,5 +74,5 @@ fn main() -> ! {
         .expect("dst port");
     k.queuing_mut().connect_ports(src, dst).expect("connect");
     store_kernel(k);
-    match boot(&[(p0_main, 0)], &mut p).expect("boot") {}
+    match boot(&[(p0_main, 0)], p).expect("boot") {}
 }

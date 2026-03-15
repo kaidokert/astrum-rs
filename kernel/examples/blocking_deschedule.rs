@@ -90,7 +90,7 @@ fn SysTick() {
     // TODO: with_kernel_mut refactoring is a DRY cleanup, technically out of
     // scope for the schedule audit. Consider splitting into a separate commit.
     with_kernel_mut(|k| {
-        let event = kernel::svc_scheduler::advance_schedule_tick(k);
+        let event = kernel::svc::scheduler::advance_schedule_tick(k);
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             // Transition incoming partition to Running so syscalls can block it
             let _ = try_transition(k.partitions_mut(), pid, PartitionState::Running);
@@ -152,23 +152,21 @@ fn main() -> ! {
     let cfgs: [PartitionConfig; Cfg::N] = unsafe {
         [{
             let b = STACKS[0].0.as_ptr() as u32;
-            PartitionConfig {
-                id: 0,
-                entry_point: 0,
-                stack_base: b,
-                stack_size: (Cfg::STACK_WORDS * 4) as u32,
-                mpu_region: MpuRegion::new(b, (Cfg::STACK_WORDS * 4) as u32, 0),
-                peripheral_regions: heapless::Vec::new(),
-            }
+            PartitionConfig::new(0, 0, MpuRegion::new(b, (Cfg::STACK_WORDS * 4) as u32, 0))
         }]
     };
 
     // Create unified kernel with schedule and partitions
     #[cfg(feature = "dynamic-mpu")]
-    let mut k = Kernel::<Cfg>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-        .expect("kernel creation");
+    let mut k = Kernel::<Cfg>::with_config(
+        sched,
+        &cfgs,
+        kernel::virtual_device::DeviceRegistry::new(),
+        &[],
+    )
+    .expect("kernel creation");
     #[cfg(not(feature = "dynamic-mpu"))]
-    let mut k = Kernel::<Cfg>::new(sched, &cfgs).expect("kernel creation");
+    let mut k = Kernel::<Cfg>::with_config(sched, &cfgs, &[]).expect("kernel creation");
 
     // Create queuing port for the test
     let dst = k
@@ -181,7 +179,7 @@ fn main() -> ! {
     let _ = try_transition(k.partitions_mut(), 0, PartitionState::Running);
 
     // Start schedule and set next partition before storing kernel
-    let first_pid = kernel::svc_scheduler::start_schedule(&mut k).expect("schedule start failed");
+    let first_pid = kernel::svc::scheduler::start_schedule(&mut k).expect("schedule start failed");
     k.set_next_partition(first_pid);
     hprintln!("blocking_deschedule: first_pid={}", first_pid);
 

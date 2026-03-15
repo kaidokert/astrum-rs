@@ -326,8 +326,8 @@ fn main() -> ! {
         .expect("partition memory 1"),
     ];
 
-    // Create the unified kernel with new_external()
-    let k = Kernel::<TestConfig>::new_external(sched, &memories).expect("kernel creation");
+    // Create the unified kernel with new()
+    let k = Kernel::<TestConfig>::new(sched, &memories).expect("kernel creation");
     store_kernel(k);
 
     // Seal the MPU cache so cached_dynamic_region() returns valid data.

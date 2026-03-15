@@ -74,7 +74,7 @@ extern "C" fn partition_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("dropped_tick_test: Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("dropped_tick_test: Peripherals::take");
     hprintln!("dropped_tick_test: start");
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3)
@@ -87,5 +87,5 @@ fn main() -> ! {
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
-    match boot(&parts, &mut p).expect("dropped_tick_test: boot") {}
+    match boot(&parts, p).expect("dropped_tick_test: boot") {}
 }

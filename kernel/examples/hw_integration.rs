@@ -63,7 +63,7 @@ kernel::partition_trampoline!(p1_main => p1_main_body);
 #[cortex_m_rt::entry]
 #[allow(clippy::never_loop)] // kexit! diverges via inner loop on catch-all backend
 fn main() -> ! {
-    let mut p = match cortex_m::Peripherals::take() {
+    let p = match cortex_m::Peripherals::take() {
         Some(p) => p,
         None => loop { kexit!(failure); },
     };
@@ -94,7 +94,7 @@ fn main() -> ! {
         unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
     let parts: [(extern "C" fn() -> !, u32); Cfg::N] =
         [(p0_main, (src as u32) << 16), (p1_main, dst as u32)];
-    match boot::boot_external::<Cfg, SW>(&parts, &mut p, stacks) {
+    match boot::boot_external::<Cfg, SW>(&parts, p, stacks) {
         Ok(never) => match never {},
         Err(_) => loop { kexit!(failure); },
     }

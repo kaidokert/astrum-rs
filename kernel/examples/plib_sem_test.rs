@@ -87,12 +87,9 @@ extern "C" fn p1_main() -> ! {
     }
 }
 
-// TODO: reviewer false positive – store_kernel and boot are provided by compose_kernel_config! macro
-// TODO: .expect() calls below follow the established test/example pattern; convert to
-//       panic-free error propagation if the project enforces the policy in examples.
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
     hprintln!("plib_sem_test: start");
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
@@ -104,5 +101,5 @@ fn main() -> ! {
         .expect("plib_sem_test: add semaphore");
     store_kernel(k);
 
-    match boot(&[(p0_main, 0), (p1_main, 0)], &mut p).expect("plib_sem_test: boot") {}
+    match boot(&[(p0_main, 0), (p1_main, 0)], p).expect("plib_sem_test: boot") {}
 }

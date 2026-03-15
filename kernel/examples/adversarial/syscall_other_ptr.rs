@@ -19,7 +19,7 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::{
     kpanic as _,
-    partition::PartitionMemory,
+    partition::{ExternalPartitionMemory, MpuRegion},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
@@ -105,7 +105,7 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
     hprintln!("{}: start", TEST_NAME);
 
     // Build schedule: only partition 0 runs (partition 1 just owns a region).
@@ -116,12 +116,13 @@ fn main() -> ! {
 
     let mut stack0 = AlignedStack1K::ZERO;
     let mut stack1 = AlignedStack1K::ZERO;
-    let mems: [PartitionMemory; NUM_PARTITIONS] = [
-        PartitionMemory::sentinel(&mut stack0.0),
-        PartitionMemory::sentinel(&mut stack1.0),
-    ];
+    let sentinel_mpu = MpuRegion::new(0, 0, 0);
+    let mem0 = ExternalPartitionMemory::new(&mut stack0.0, 0, sentinel_mpu, 0).expect("ext mem 0");
+    let mem1 = ExternalPartitionMemory::new(&mut stack1.0, 0, sentinel_mpu, 1).expect("ext mem 1");
+    let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0, mem1];
 
-    let mut k = Kernel::<TestConfig>::create_from_memory(sched, &mems).expect("kernel creation");
+    #[allow(deprecated)]
+    let mut k = Kernel::<TestConfig>::new_external(sched, &mems).expect("kernel creation");
 
     // Create a source port (partition will "write" to it).
     let port_id = k
@@ -160,5 +161,5 @@ fn main() -> ! {
         (p1_main, 0), // P1 never runs, arg unused
     ];
 
-    match boot(&parts, &mut p).expect("syscall_other_ptr: boot failed") {}
+    match boot(&parts, p).expect("syscall_other_ptr: boot failed") {}
 }

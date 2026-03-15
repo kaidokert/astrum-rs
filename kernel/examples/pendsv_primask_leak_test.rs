@@ -36,7 +36,6 @@ const MIN_COUNT: u32 = 4;
 static PARTITION_COUNTS: [AtomicU32; NUM_PARTITIONS] = [AtomicU32::new(0), AtomicU32::new(0)];
 
 kernel::define_unified_harness!(Config, |tick, _k| {
-    // TODO: reviewer false positive — SCB::set_pendsv() is a static method in cortex-m 0.7
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();
 

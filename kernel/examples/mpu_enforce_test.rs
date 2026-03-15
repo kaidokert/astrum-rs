@@ -28,8 +28,6 @@ use plib;
 const SW: usize = TestConfig::STACK_WORDS;
 const REGION_SZ: u32 = 1024;
 
-// TODO: reviewer false positive on align(4096) — matches the harness macro's alignment
-// (kernel/src/harness.rs) which also uses align(4096) for MPU region sizing constraints.
 #[repr(C, align(4096))]
 struct PartitionStacks([[u32; SW]; TestConfig::N]);
 static mut PARTITION_STACKS: PartitionStacks = PartitionStacks([[0u32; SW]; TestConfig::N]);
@@ -66,7 +64,7 @@ kernel::define_unified_harness!(no_boot, TestConfig, |tick, _k| {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals");
+    let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("mpu_enforce_test: start");
 
     // Derive code region base from partition function pointers.
@@ -82,29 +80,20 @@ fn main() -> ! {
     // in Kernel::new. entry_point is set to the computed code base
     // so partition_mpu_regions builds a valid code RX region.
     let cfgs: [PartitionConfig; TestConfig::N] = [
-        PartitionConfig {
-            id: 0,
-            entry_point: code_base,
-            stack_base: 0x2000_0000,
-            stack_size: (SW * 4) as u32,
-            mpu_region: MpuRegion::new(0, 0, 0),
-            peripheral_regions: heapless::Vec::new(),
-        },
-        PartitionConfig {
-            id: 1,
-            entry_point: code_base,
-            stack_base: 0x2000_8000,
-            stack_size: (SW * 4) as u32,
-            mpu_region: MpuRegion::new(0, 0, 0),
-            peripheral_regions: heapless::Vec::new(),
-        },
+        PartitionConfig::new(0, code_base, MpuRegion::new(0, 0, 0)),
+        PartitionConfig::new(1, code_base, MpuRegion::new(0, 0, 0)),
     ];
 
-    #[cfg(feature = "dynamic-mpu")]
-    let k = Kernel::<TestConfig>::new(sched, &cfgs, kernel::virtual_device::DeviceRegistry::new())
-        .expect("kernel creation");
     #[cfg(not(feature = "dynamic-mpu"))]
-    let k = Kernel::<TestConfig>::new(sched, &cfgs).expect("kernel creation");
+    let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel creation");
+    #[cfg(feature = "dynamic-mpu")]
+    let k = Kernel::<TestConfig>::with_config(
+        sched,
+        &cfgs,
+        kernel::virtual_device::DeviceRegistry::new(),
+        &[],
+    )
+    .expect("kernel creation");
 
     store_kernel(k);
 
@@ -125,5 +114,5 @@ fn main() -> ! {
     .expect("with_kernel_mut");
 
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(p0_entry, 0), (p1_entry, 0)];
-    match boot::boot_external::<TestConfig, SW>(&parts, &mut p, stacks).expect("boot failed") {}
+    match boot::boot_external::<TestConfig, SW>(&parts, p, stacks).expect("boot failed") {}
 }

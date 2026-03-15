@@ -137,7 +137,7 @@ extern "C" fn p1_idle() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals");
+    let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("plib_buf_test: start");
 
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
@@ -149,9 +149,18 @@ fn main() -> ! {
         .add(ScheduleEntry::new(1, 3))
         .expect("plib_buf_test: add P1");
     sched.add_system_window(1).expect("plib_buf_test: sys1");
-    let cfgs = PartitionConfig::sentinel_array::<2>(TestConfig::STACK_WORDS);
-    let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("plib_buf_test: kernel");
+    let cfgs = PartitionConfig::sentinel_array::<2>();
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("plib_buf_test: kernel");
+    #[cfg(feature = "dynamic-mpu")]
+    let k = Kernel::<TestConfig>::with_config(
+        sched,
+        &cfgs,
+        kernel::virtual_device::DeviceRegistry::new(),
+        &[],
+    )
+    .expect("plib_buf_test: kernel");
     store_kernel(k);
 
-    match boot(&[(p0_main, 0), (p1_idle, 0)], &mut p).expect("plib_buf_test: boot") {}
+    match boot(&[(p0_main, 0), (p1_idle, 0)], p).expect("plib_buf_test: boot") {}
 }

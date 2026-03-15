@@ -122,7 +122,7 @@ fn main() -> ! {
             ExternalPartitionMemory::new(s0, 0, MpuRegion::new(0, 0, 0), 0).expect("mem 0"),
             ExternalPartitionMemory::new(s1, 0, MpuRegion::new(0, 0, 0), 1).expect("mem 1"),
         ];
-        Kernel::<TestConfig>::new_external(sched, &memories).expect("kernel")
+        Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
     store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_main, 0), (p1_main, 0)];

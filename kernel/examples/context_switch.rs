@@ -20,7 +20,6 @@ use kernel::{
 
 kernel::compose_kernel_config!(DemoConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-// TODO: reviewer false positive — NUM_PARTITIONS is used in the `parts` array type below.
 const NUM_PARTITIONS: usize = DemoConfig::N;
 const TARGET_SWITCHES: u32 = 6;
 

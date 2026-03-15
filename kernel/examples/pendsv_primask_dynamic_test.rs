@@ -90,8 +90,7 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p =
-        cortex_m::Peripherals::take().expect("pendsv_primask_dynamic_test: Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("pendsv_primask_dynamic_test: Peripherals::take");
     hprintln!("pendsv_primask_dynamic_test: start");
 
     // Dynamic-mpu requires system windows in the schedule table.
@@ -109,5 +108,5 @@ fn main() -> ! {
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("pendsv_primask_dynamic_test: boot") {}
+    match boot(&parts, p).expect("pendsv_primask_dynamic_test: boot") {}
 }

@@ -78,7 +78,7 @@ extern "C" fn partition_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
     hprintln!("get_time_test: start");
 
     // Build schedule: single partition runs for 2 ticks per slot.
@@ -91,5 +91,5 @@ fn main() -> ! {
 
     // Boot with partition entry and hint (0 for no packed data).
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
-    match boot(&parts, &mut p).expect("get_time_test: boot failed") {}
+    match boot(&parts, p).expect("get_time_test: boot failed") {}
 }

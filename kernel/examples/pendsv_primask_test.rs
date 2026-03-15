@@ -48,8 +48,6 @@ static LAST_SEEN: AtomicU32 = AtomicU32::new(NO_PARTITION);
 static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 
 kernel::define_unified_harness!(Config, |tick, k| {
-    // TODO: reviewer false positive — SCB::set_pendsv() is a static method in cortex-m 0.7+;
-    // the same call is used in harness.rs, boot.rs, tick.rs, svc.rs, and all other examples.
     // Pend PendSV on every tick to maximise preemption pressure.
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();
@@ -117,7 +115,7 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals already taken");
+    let p = cortex_m::Peripherals::take().expect("cortex-m peripherals already taken");
     hprintln!("pendsv_primask_test: start");
 
     // 2 partitions, 1 tick per slot → major frame = 2 ticks (~1992 cycles).
@@ -128,5 +126,5 @@ fn main() -> ! {
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("boot must succeed after kernel create") {}
+    match boot(&parts, p).expect("boot must succeed after kernel create") {}
 }

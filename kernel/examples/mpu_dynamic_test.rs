@@ -226,7 +226,7 @@ fn main() -> ! {
             )
             .expect("ext mem"),
         ];
-        Kernel::<TestConfig>::new_external(sched, &memories).expect("kernel creation")
+        Kernel::<TestConfig>::new(sched, &memories).expect("kernel creation")
     };
     store_kernel(k);
 

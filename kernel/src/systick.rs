@@ -317,7 +317,7 @@ mod tests {
     }
 
     // Lifetime note: `stk0`/`stk1` are local but this is sound because
-    // `Kernel<C>` has no lifetime parameter — `new_external` copies
+    // `Kernel<C>` has no lifetime parameter — `new()` copies
     // descriptor data into PCBs (with sentinel stack fields) and does
     // not retain borrows from `ExternalPartitionMemory`.
     fn make_test_kernel() -> Kernel<TestConfig> {
@@ -346,7 +346,7 @@ mod tests {
             )
             .unwrap(),
         ];
-        Kernel::<TestConfig>::new_external(schedule, &mems).expect("kernel creation failed")
+        Kernel::<TestConfig>::new(schedule, &mems).expect("kernel creation failed")
     }
 
     /// Mutex to serialize tests that manipulate the global `SYSTICK_HANDLER`.

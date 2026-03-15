@@ -1079,23 +1079,13 @@ where
         BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     >,
 {
-    /// Create a `Kernel` from caller-provided [`PartitionMemory`](crate::partition::PartitionMemory) descriptors.
-    ///
-    /// This is the canonical constructor. It delegates to [`new_external()`](Self::new_external).
-    pub fn new(
-        schedule: ScheduleTable<{ C::SCHED }>,
-        memories: &[crate::partition::ExternalPartitionMemory<'_>],
-    ) -> Result<Self, ConfigError> {
-        Self::new_external(schedule, memories)
-    }
-
-    /// Create a `Kernel` from caller-provided [`ExternalPartitionMemory`] descriptors.
+    /// Primary constructor: create a `Kernel` from [`ExternalPartitionMemory`] descriptors.
     ///
     /// Partition IDs are derived from array indices (0, 1, 2, …).
     /// PCBs are created with sentinel stack values (0, 0) that
     /// [`boot_external()`](crate::boot::boot_external) patches later.
     /// Entry points and MPU regions are preserved from each descriptor.
-    pub fn new_external(
+    pub fn new(
         schedule: ScheduleTable<{ C::SCHED }>,
         memories: &[crate::partition::ExternalPartitionMemory<'_>],
     ) -> Result<Self, ConfigError> {
@@ -1121,6 +1111,15 @@ where
             crate::virtual_device::DeviceRegistry::new(),
             &[],
         )
+    }
+
+    /// Deprecated alias for [`new()`](Self::new).
+    #[deprecated(note = "use Kernel::new() instead")]
+    pub fn new_external(
+        schedule: ScheduleTable<{ C::SCHED }>,
+        memories: &[crate::partition::ExternalPartitionMemory<'_>],
+    ) -> Result<Self, ConfigError> {
+        Self::new(schedule, memories)
     }
 
     /// Create a `Kernel` with `C::N` sentinel partitions.
@@ -2853,7 +2852,7 @@ fn handle_yield() -> u32 {
 }
 
 #[cfg(test)]
-#[allow(clippy::undocumented_unsafe_blocks)]
+#[allow(clippy::undocumented_unsafe_blocks, deprecated)]
 mod tests {
     // Facade methods for `active_partition`, `current_partition`, `yield_requested`,
     // `buffers`, `dev_wait_queue`, and `hw_uart` are now available on Kernel.
@@ -2921,8 +2920,9 @@ mod tests {
     use crate::syscall::SYS_GET_PARTITION_ID;
     use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_IRQ_ACK, SYS_YIELD};
 
-    /// Build a `Kernel` from `ExternalPartitionMemory` slices via `new_external`.
+    /// Build a `Kernel` from `ExternalPartitionMemory` slices via `new`.
     /// No system-window is added — callers must include one for `dynamic-mpu` builds.
+    #[allow(deprecated)]
     fn kernel_from_ext(
         schedule: ScheduleTable<4>,
         mems: &[ExternalPartitionMemory<'_>],
@@ -2930,10 +2930,10 @@ mod tests {
         Kernel::<TestConfig>::new_external(schedule, mems).unwrap()
     }
 
-    // ---- Kernel::new() delegates to new_external() ----
+    // ---- Kernel::new() is the canonical constructor ----
 
     #[test]
-    fn kernel_new_delegates_to_new_external() {
+    fn kernel_new_is_canonical_constructor() {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
         schedule.add(ScheduleEntry::new(1, 5)).unwrap();
@@ -3577,7 +3577,6 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         // Build 5 ExternalPartitionMemory descriptors — exceeds TestConfig::N (4).
-        // TODO: reviewer false positive — AlignedStack256B derives Copy, so array init compiles fine
         let mut stacks: [AlignedStack256B; 5] = [AlignedStack256B::default(); 5];
         let mut mems: heapless::Vec<ExternalPartitionMemory<'_>, 5> = heapless::Vec::new();
         for (i, s) in stacks.iter_mut().enumerate() {
@@ -8249,8 +8248,6 @@ mod tests {
     /// Helper to create a Kernel with a started schedule and partitions.
     // NOTE: local stacks are safe here — Kernel has no lifetime parameter and
     // new_external() copies all data out of ExternalPartitionMemory.
-    // TODO: reviewer false positive — returning borrows of locals is not an
-    // issue because Kernel does not retain references to the stacks.
     fn kernel_with_schedule() -> Kernel<TestConfig> {
         // Create 2-slot schedule: P0 for 5 ticks, P1 for 3 ticks
         let mut schedule = ScheduleTable::<4>::new();

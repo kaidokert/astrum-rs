@@ -90,14 +90,10 @@ impl KernelTestHarness {
                 i as u8,
             )
             .map_err(HarnessError::KernelInit)?
-            // TODO: reviewer false positive — with_peripheral_regions() copies MpuRegion values
-            // into an owned Vec<MpuRegion, 2>; the temporary from peripheral_fn(i) only needs
-            // to live for the duration of this statement, which it does.
             .with_peripheral_regions(&peripheral_fn(i));
             mems.push(mem).map_err(|_| HarnessError::ConfigsFull)?;
         }
-        let mut kernel =
-            Box::new(Kernel::new_external(schedule, &mems).map_err(HarnessError::KernelInit)?);
+        let mut kernel = Box::new(Kernel::new(schedule, &mems).map_err(HarnessError::KernelInit)?);
         // Only partition 0 starts Running; others remain Ready (at-most-one-Running invariant).
         kernel
             .partitions_mut()
@@ -239,8 +235,7 @@ impl KernelTestHarness {
         )
         .map_err(HarnessError::KernelInit)?;
         let mems = [mem0, mem1];
-        let mut kernel =
-            Box::new(Kernel::new_external(schedule, &mems).map_err(HarnessError::KernelInit)?);
+        let mut kernel = Box::new(Kernel::new(schedule, &mems).map_err(HarnessError::KernelInit)?);
         // Verify Kernel::new preserved P1's user-configured base before fixup.
         assert_eq!(
             kernel.partitions().get(1).map(|p| p.mpu_region().base()),
@@ -2736,7 +2731,7 @@ mod tests {
 
         // Create kernel and box it to simulate boot placement.
         let mut kernel =
-            Box::new(Kernel::<HarnessConfig>::new_external(schedule, &mems).expect("new_external"));
+            Box::new(Kernel::<HarnessConfig>::new(schedule, &mems).expect("kernel creation"));
         drop(mems);
 
         // Use the external (boxed) stack address for P0 (the fixup target).

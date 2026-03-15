@@ -446,8 +446,6 @@ macro_rules! define_unified_harness {
             });
         }
     };
-    // TODO: reviewer false positive — `@impl` is a standard Rust macro internal arm,
-    // not a file path.  The `@` prefix is idiomatic for private macro dispatch arms.
     // Internal: full implementation (handlers + boot function)
     (@impl $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
@@ -468,7 +466,7 @@ macro_rules! define_unified_harness {
              <$Config as $crate::config::KernelConfig>::N],
         );
 
-        /// Create a sentinel kernel via `new_external()` from
+        /// Create a sentinel kernel via `new()` from
         /// `__PARTITION_STACKS` and store it.
         #[allow(dead_code)]
         fn init_kernel(

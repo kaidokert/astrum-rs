@@ -21,7 +21,6 @@ kernel::compose_kernel_config!(
 );
 
 const NUM_PARTITIONS: usize = Config::N;
-const STACK_WORDS: usize = Config::STACK_WORDS;
 
 /// P1 is the partition that will starve (index 1).
 const STARVING_PID: usize = 1;
@@ -101,8 +100,6 @@ extern "C" fn p0_main() -> ! {
 
 extern "C" fn p1_main() -> ! {
     // Block on an empty semaphore — transitions to Waiting immediately.
-    // TODO: reviewer false positive — plib is a dev-dependency (Cargo.toml [dev-dependencies]),
-    //       available to examples without `use plib;` in Rust 2021 edition.
     if let Err(e) = plib::sys_sem_wait(plib::SemaphoreId::new(0)) {
         P1_SEM_ERR.store(e.to_u32(), Ordering::Release);
     }
@@ -113,24 +110,31 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("Peripherals::take");
     hprintln!("starvation_detect_test: start");
 
     let sched =
         ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1).expect("round_robin");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let mut k = Kernel::<Config>::create(sched, &cfgs).expect("Kernel::create");
+    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let mut k = Kernel::<Config>::with_config(sched, &cfgs, &[]).expect("Kernel::create");
+    #[cfg(feature = "dynamic-mpu")]
+    let mut k = Kernel::<Config>::with_config(
+        sched,
+        &cfgs,
+        kernel::virtual_device::DeviceRegistry::new(),
+        &[],
+    )
+    .expect("Kernel::create");
 
     // Semaphore 0 with count=0, max=1 — P1 will block immediately on wait.
     k.semaphores_mut()
         .add(Semaphore::new(0, 1))
         .expect("add semaphore");
 
-    // TODO: reviewer false positive — store_kernel and boot are emitted by
-    //       define_unified_harness!, not separate imports.
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("boot") {}
+    match boot(&parts, p).expect("boot") {}
 }

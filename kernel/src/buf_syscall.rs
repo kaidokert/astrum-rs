@@ -5,10 +5,6 @@ use crate::syscall::{
     SYS_BUF_WRITE,
 };
 // ABI helpers re-exported from rtos-traits.
-// TODO: reviewer false positive – this module is already behind
-// #[cfg(feature = "dynamic-mpu")] in kernel/src/lib.rs, and kernel's
-// dynamic-mpu feature enables rtos-traits/dynamic-mpu, so the re-export
-// is correctly gated.
 pub use rtos_traits::buf_syscall::{pack_lend_r2, parse_result, LendResult};
 #[cfg(test)]
 use rtos_traits::syscall::lend_flags;

@@ -29,11 +29,11 @@ extern "C" fn p1_healthy() -> ! {
 }
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals");
+    let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("pendsv_stack_overflow_test: start");
     let sched =
         kernel::scheduler::ScheduleTable::<{ Config::SCHED }>::round_robin(2, 1).expect("sched");
     let k = kernel::svc::Kernel::<Config>::create_sentinels(sched).expect("kernel");
     store_kernel(k);
-    match boot(&[(p0_overflow, 0), (p1_healthy, 0)], &mut p).expect("boot") {}
+    match boot(&[(p0_overflow, 0), (p1_healthy, 0)], p).expect("boot") {}
 }

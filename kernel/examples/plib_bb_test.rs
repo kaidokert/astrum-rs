@@ -106,7 +106,7 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
     hprintln!("plib_bb_test: start");
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
@@ -118,5 +118,5 @@ fn main() -> ! {
         .expect("plib_bb_test: create blackboard");
     store_kernel(k);
 
-    match boot(&[(p0_main, 0), (p1_main, 0)], &mut p).expect("plib_bb_test: boot") {}
+    match boot(&[(p0_main, 0), (p1_main, 0)], p).expect("plib_bb_test: boot") {}
 }

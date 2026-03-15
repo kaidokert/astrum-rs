@@ -12,7 +12,7 @@ pub unsafe fn handle_sampling_write<const S: usize, const M: usize>(
     len: usize,
     tick: u64,
 ) -> u32 {
-    // SAFETY: Caller (validated_ptr!) guarantees [ptr, ptr+len) is valid.
+    // SAFETY: Caller (check_user_ptr) guarantees [ptr, ptr+len) is valid.
     let data = unsafe { core::slice::from_raw_parts(ptr, len) };
     pool.write_sampling_message(port_id, data, tick)
         .map_or_else(sampling_error_to_svc, |()| 0)
@@ -29,7 +29,7 @@ pub unsafe fn handle_sampling_read<const S: usize, const M: usize>(
     buf_len: usize,
     tick: u64,
 ) -> Result<(u32, Validity), u32> {
-    // SAFETY: Caller (validated_ptr!) guarantees [ptr, ptr+buf_len) is valid.
+    // SAFETY: Caller (check_user_ptr) guarantees [ptr, ptr+buf_len) is valid.
     let buf = unsafe { core::slice::from_raw_parts_mut(ptr, buf_len) };
     pool.read_sampling_message(port_id, buf, tick)
         .map(|(sz, v)| (sz as u32, v))

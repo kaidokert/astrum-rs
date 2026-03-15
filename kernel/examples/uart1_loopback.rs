@@ -396,7 +396,7 @@ fn main() -> ! {
             ExternalPartitionMemory::new(&mut s1.0, 0, MpuRegion::new(base1, STACK_BYTES, 0), 1)
                 .expect("ext mem"),
         ];
-        Kernel::<DemoConfig>::new_external(sched, &memories).expect("kernel creation")
+        Kernel::<DemoConfig>::new(sched, &memories).expect("kernel creation")
     };
 
     // Set up HW UART backend with software loopback

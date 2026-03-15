@@ -175,7 +175,7 @@ fn main() -> ! {
     };
 
     // Create the unified kernel with schedule and partitions.
-    let mut k = Kernel::<DemoConfig>::new_external(sched, &mems).expect("kernel creation");
+    let mut k = Kernel::<DemoConfig>::new(sched, &mems).expect("kernel creation");
 
     // Register the uart_pair backends in the device registry so that
     // dev_dispatch can route SYS_DEV_* syscalls to UART-A and UART-B.

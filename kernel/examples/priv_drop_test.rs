@@ -75,7 +75,7 @@ extern "C" fn partition_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals already taken");
+    let p = cortex_m::Peripherals::take().expect("cortex-m peripherals already taken");
     hprintln!("priv_drop_test: start");
 
     // Build schedule: single partition runs for 2 ticks.
@@ -89,5 +89,5 @@ fn main() -> ! {
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
-    match boot(&parts, &mut p).expect("priv_drop_test: boot failed") {}
+    match boot(&parts, p).expect("priv_drop_test: boot failed") {}
 }

@@ -319,8 +319,6 @@ impl PartitionControlBlock {
         }
         self.stack_base = base;
         self.stack_size = size;
-        // TODO: reviewer false positive — stack_limit == stack_base is the established
-        // convention (see fix_stack_region, PartitionControlBlock::new, and stack_limit tests).
         self.stack_limit = base;
         Ok(())
     }
@@ -619,8 +617,6 @@ pub enum ConfigError {
     },
     /// A partition's MPU region failed validation.
     MpuRegionInvalid { partition_id: u8, detail: MpuError },
-    // TODO: reviewer false positive — these variants are still used by
-    // ExternalPartitionMemory::new() for stack validation on external memory.
     /// A partition's stack size is not a power of two or is less than 32.
     StackSizeInvalid { partition_id: u8 },
     /// A partition's stack base is not aligned to its stack size.

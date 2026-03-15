@@ -76,10 +76,6 @@ const _: () = {
 /// Emit the PendSV context-switch handler. See module docs for modes.
 #[macro_export]
 macro_rules! define_pendsv {
-    // TODO: reviewer false positive — the internal dispatch tag is `@impl`,
-    // a standard Rust macro pattern; no build-artifact path is present.
-    // Public entry points delegate to the internal @impl arm.
-
     // Static mode without $Config — no struct-level assertions possible.
     // Prefer the ($Config:ty) arm when $Config is available.
     () => { $crate::define_pendsv!(@impl ""); };

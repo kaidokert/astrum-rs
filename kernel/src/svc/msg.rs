@@ -25,7 +25,7 @@ impl MsgOutcome {
 /// # Safety
 ///
 /// `ptr` must point to a readable region of at least `len` bytes owned by the
-/// calling partition (validated by `validated_ptr!` in the caller).
+/// calling partition (validated by `check_user_ptr` in the caller).
 pub unsafe fn handle_msg_send<
     const N: usize,
     const S: usize,
@@ -41,7 +41,7 @@ pub unsafe fn handle_msg_send<
     len: usize,
 ) -> MsgOutcome {
     // SAFETY: Caller guarantees [ptr, ptr+len) is valid, partition-owned memory
-    // verified by validated_ptr! against MPU bounds.
+    // verified by check_user_ptr against MPU bounds.
     let data = unsafe { core::slice::from_raw_parts(ptr, len) };
     match pool.send(queue_id, caller, data) {
         Ok(SendOutcome::Delivered {
@@ -70,7 +70,7 @@ pub unsafe fn handle_msg_send<
 /// # Safety
 ///
 /// `ptr` must point to a writable region of at least `len` bytes owned by the
-/// calling partition (validated by `validated_ptr!` in the caller).
+/// calling partition (validated by `check_user_ptr` in the caller).
 pub unsafe fn handle_msg_recv<
     const N: usize,
     const S: usize,
@@ -86,7 +86,7 @@ pub unsafe fn handle_msg_recv<
     len: usize,
 ) -> MsgOutcome {
     // SAFETY: Caller guarantees [ptr, ptr+len) is valid, partition-owned memory
-    // verified by validated_ptr! against MPU bounds.
+    // verified by check_user_ptr against MPU bounds.
     let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
     match pool.recv(queue_id, caller, buf) {
         Ok(RecvOutcome::Received {

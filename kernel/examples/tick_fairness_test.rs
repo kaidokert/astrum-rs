@@ -28,7 +28,6 @@ kernel::compose_kernel_config!(
 );
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = Config::STACK_WORDS;
 
 /// Minimum tick count before checking fairness (≥ 30 ticks = 15 major frames).
 const CHECK_TICK: u32 = 30;
@@ -51,8 +50,6 @@ fn load_counts() -> (u32, u32, u32, u32) {
 
 kernel::define_unified_harness!(Config, |tick, _k| {
     // Pend PendSV on every tick to maximise preemption pressure.
-    // TODO: reviewer false positive — SCB::set_pendsv() is a static method in cortex-m 0.7+;
-    // the same call is used in harness.rs, pendsv_primask_test.rs, etc.
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();
 
@@ -104,19 +101,29 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("tick_fairness: Peripherals::take");
+    let p = cortex_m::Peripherals::take().expect("tick_fairness: Peripherals::take");
     hprintln!("tick_fairness_test: start");
 
     // 2 partitions, 1 tick per slot → major frame = 2 ticks.
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("tick_fairness: sched");
 
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
+    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
 
-    let k = Kernel::<Config>::create(sched, &cfgs).expect("tick_fairness: Kernel::create");
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let k =
+        Kernel::<Config>::with_config(sched, &cfgs, &[]).expect("tick_fairness: Kernel::create");
+    #[cfg(feature = "dynamic-mpu")]
+    let k = Kernel::<Config>::with_config(
+        sched,
+        &cfgs,
+        kernel::virtual_device::DeviceRegistry::new(),
+        &[],
+    )
+    .expect("tick_fairness: Kernel::create");
 
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("tick_fairness: boot") {}
+    match boot(&parts, p).expect("tick_fairness: boot") {}
 }

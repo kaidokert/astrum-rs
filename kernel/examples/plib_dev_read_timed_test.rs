@@ -97,14 +97,23 @@ extern "C" fn partition_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals");
+    let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("plib_dev_read_timed_test: start");
 
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 3)).expect("add P0");
     sched.add_system_window(1).expect("sys0");
-    let cfgs = PartitionConfig::sentinel_array::<1>(TestConfig::STACK_WORDS);
-    let k = Kernel::<TestConfig>::create(sched, &cfgs).expect("kernel");
+    let cfgs = PartitionConfig::sentinel_array::<1>();
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
+    #[cfg(feature = "dynamic-mpu")]
+    let k = Kernel::<TestConfig>::with_config(
+        sched,
+        &cfgs,
+        kernel::virtual_device::DeviceRegistry::new(),
+        &[],
+    )
+    .expect("kernel");
     store_kernel(k);
 
     with_kernel_mut(|k| {
@@ -119,5 +128,5 @@ fn main() -> ! {
         }
     });
 
-    match boot(&[(partition_main, 0)], &mut p).expect("boot") {}
+    match boot(&[(partition_main, 0)], p).expect("boot") {}
 }

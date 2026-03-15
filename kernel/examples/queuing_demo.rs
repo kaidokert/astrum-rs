@@ -123,8 +123,6 @@ kernel::define_unified_harness!(DemoConfig, |tick, _k| {
             debug::exit(debug::EXIT_FAILURE);
         }
 
-        // TODO: reviewer false positive — this hook already verifies IPC data integrity:
-        // RSP_MISMATCH checks response content, not just counts.
         // Test passes when:
         // 1. Queue full was detected (qf_seen == 1)
         // 2. All expected responses received (rsp_recv >= delivered)

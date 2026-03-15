@@ -27,8 +27,6 @@ use kernel::{
 // Actual partition count (3) differs from DemoConfig::N (4, from Partitions4 capacity).
 const NUM_PARTITIONS: usize = 3;
 const STACK_WORDS: usize = DemoConfig::STACK_WORDS;
-// TODO: reviewer false positive on align(4096) — matches the harness macro's alignment
-// (kernel/src/harness.rs) which also uses align(4096) for MPU region sizing constraints.
 #[repr(C, align(4096))]
 struct PartitionStacks([[u32; STACK_WORDS]; DemoConfig::N]);
 static mut PARTITION_STACKS: PartitionStacks =

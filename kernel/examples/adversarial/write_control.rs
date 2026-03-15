@@ -23,7 +23,7 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::{
     kpanic as _,
-    partition::PartitionMemory,
+    partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     AlignedStack1K, DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, StackStorage as _,
@@ -101,7 +101,7 @@ extern "C" fn partition_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals already taken");
+    let p = cortex_m::Peripherals::take().expect("cortex-m peripherals already taken");
     hprintln!("{}: start", TEST_NAME);
 
     // Build schedule: partition runs for 2 ticks per slot.
@@ -111,12 +111,20 @@ fn main() -> ! {
         .expect("static schedule entry must fit");
 
     let mut stack0 = AlignedStack1K::ZERO;
-    let mems: [PartitionMemory; NUM_PARTITIONS] = [PartitionMemory::sentinel(&mut stack0.0)];
+    let sentinel_mpu = MpuRegion::new(0, 0, 0);
+    let mem0 = ExternalPartitionMemory::new(
+        &mut stack0.0,
+        partition_main as *const () as u32,
+        sentinel_mpu,
+        0,
+    )
+    .expect("ext mem");
+    let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0];
 
-    let k = Kernel::<TestConfig>::create_from_memory(sched, &mems).expect("kernel creation");
+    let k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");
 
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
-    match boot(&parts, &mut p).expect("write_control: boot failed") {}
+    match boot(&parts, p).expect("write_control: boot failed") {}
 }

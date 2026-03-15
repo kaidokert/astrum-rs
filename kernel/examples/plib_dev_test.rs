@@ -99,7 +99,7 @@ extern "C" fn partition_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("peripherals");
+    let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("plib_dev_test: start");
 
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
@@ -125,5 +125,5 @@ fn main() -> ! {
         }
     });
 
-    match boot(&[(partition_main, 0)], &mut p).expect("plib_dev_test: boot") {}
+    match boot(&[(partition_main, 0)], p).expect("plib_dev_test: boot") {}
 }

@@ -123,7 +123,7 @@ fn main() -> ! {
     let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0];
 
     // Create kernel (no ports needed - we're testing invalid IDs).
-    let k = Kernel::<TestConfig>::new_external(sched, &mems).expect("kernel creation");
+    let k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");
 
     store_kernel(k);
 

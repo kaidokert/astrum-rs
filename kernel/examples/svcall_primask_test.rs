@@ -30,7 +30,6 @@ kernel::compose_kernel_config!(
 );
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = Config::STACK_WORDS;
 const CHECK_TICK: u32 = 20;
 const TIMEOUT_TICK: u32 = 200;
 const MIN_COUNT: u32 = 4;
@@ -129,13 +128,22 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("svcall_primask: peripherals");
+    let p = cortex_m::Peripherals::take().expect("svcall_primask: peripherals");
     hprintln!("svcall_primask_test: start");
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("svcall_primask: sched");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let k = Kernel::<Config>::create(sched, &cfgs).expect("svcall_primask: kernel");
+    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let k = Kernel::<Config>::with_config(sched, &cfgs, &[]).expect("svcall_primask: kernel");
+    #[cfg(feature = "dynamic-mpu")]
+    let k = Kernel::<Config>::with_config(
+        sched,
+        &cfgs,
+        kernel::virtual_device::DeviceRegistry::new(),
+        &[],
+    )
+    .expect("svcall_primask: kernel");
     store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("svcall_primask: boot") {}
+    match boot(&parts, p).expect("svcall_primask: boot") {}
 }

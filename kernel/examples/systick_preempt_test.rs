@@ -33,9 +33,6 @@ static WAIT_COUNT: AtomicU32 = AtomicU32::new(0);
 kernel::define_unified_harness!(Config, |tick, _k| {
     if tick == 2 {
         // Software-trigger IRQ 0 while inside SysTick handler.
-        // TODO: reviewer false positive — NVIC::pend / is_pending are associated
-        // (static) functions in cortex-m 0.7, not instance methods; dsb/isb are
-        // safe functions; IrqNr implements InterruptNumber on ARM. No unsafe needed.
         #[cfg(target_arch = "arm")]
         {
             cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));

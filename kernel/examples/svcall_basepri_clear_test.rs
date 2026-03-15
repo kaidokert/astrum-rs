@@ -10,10 +10,13 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
+use kernel::partition::{ExternalPartitionMemory, MpuRegion};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, StackStorage as _,
+    SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     Config < Partitions2,
@@ -26,7 +29,6 @@ kernel::compose_kernel_config!(
 );
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = Config::STACK_WORDS;
 const CHECK_TICK: u32 = 20;
 const TIMEOUT_TICK: u32 = 200;
 const MIN_COUNT: u32 = 4;
@@ -134,16 +136,20 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("basepri: peripherals");
+    let p = cortex_m::Peripherals::take().expect("basepri: peripherals");
     hprintln!("svcall_basepri_clear_test: start");
     let sched =
         ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1).expect("basepri: sched");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let k = Kernel::<Config>::create(sched, &cfgs).expect("basepri: kernel");
+    let mut stk0 = AlignedStack1K::ZERO;
+    let mut stk1 = AlignedStack1K::ZERO;
+    let sentinel_mpu = MpuRegion::new(0, 0, 0);
+    let mem0 = ExternalPartitionMemory::new(&mut stk0.0, 0, sentinel_mpu, 0).expect("ext mem");
+    let mem1 = ExternalPartitionMemory::new(&mut stk1.0, 0, sentinel_mpu, 1).expect("ext mem");
+    let k = Kernel::<Config>::new(sched, &[mem0, mem1]).expect("basepri: kernel");
     store_kernel(k);
     // Override dispatch with our verifying wrapper that reads BASEPRI
     // from Handler mode before delegating.
     kernel::svc::set_dispatch_hook(verifying_dispatch_hook);
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("basepri: boot") {}
+    match boot(&parts, p).expect("basepri: boot") {}
 }

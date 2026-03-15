@@ -112,7 +112,7 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
     hprintln!("plib_mutex_test: start");
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
@@ -121,5 +121,5 @@ fn main() -> ! {
     let k = Kernel::<TestConfig>::create_sentinels(sched).expect("plib_mutex_test: kernel");
     store_kernel(k);
 
-    match boot(&[(p0_main, 0), (p1_main, 0)], &mut p).expect("plib_mutex_test: boot") {}
+    match boot(&[(p0_main, 0), (p1_main, 0)], p).expect("plib_mutex_test: boot") {}
 }

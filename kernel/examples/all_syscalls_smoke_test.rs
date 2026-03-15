@@ -48,7 +48,6 @@ fn chk(bit: u32, ok: bool) {
 }
 
 extern "C" fn partition_main() -> ! {
-    // TODO: reviewer false positive – sys_yield() returns Result<u32, SvcError>, Ok(0) is correct.
     chk(0, plib::sys_yield() == Ok(0));
     chk(
         1,

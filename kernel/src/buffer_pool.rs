@@ -470,10 +470,6 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
     /// `unshare_from_partition` (revoke), `release`, and
     /// `transfer_ownership` each perform their own independent owner
     /// checks and are unreachable through this path.
-    // TODO: reviewer false positive — reviewer claimed this bypass lets
-    // lendees call revoke/lend and ignores writable.  In fact, only
-    // read_from_slot is affected (read-only); revoke/lend/write have
-    // independent owner checks in their respective methods and SVC handlers.
     pub fn read_from_slot(
         &self,
         slot: usize,

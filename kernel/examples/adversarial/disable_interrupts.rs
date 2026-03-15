@@ -28,8 +28,6 @@ use cortex_m::peripheral::syst::SystClkSource;
 // to have a single atomic privilege-drop-and-loop sequence.
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-// TODO: reviewer false positive — #[allow(unused_imports)] is required; `as _`
-// side-effect imports still trigger the unused-import lint under -D warnings.
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::mpu;

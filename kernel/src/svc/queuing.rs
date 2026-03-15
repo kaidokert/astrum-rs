@@ -75,7 +75,7 @@ pub unsafe fn handle_queuing_status<
     match pool.get_queuing_port_status(port_id) {
         Ok(status) => {
             // SAFETY: The caller guarantees `out` is valid, aligned, and writable.
-            // In the syscall path, validated_ptr confirms the pointer lies within
+            // In the syscall path, check_user_ptr confirms the pointer lies within
             // the partition's MPU data region with sufficient size.
             unsafe { core::ptr::write(out, status) };
             0

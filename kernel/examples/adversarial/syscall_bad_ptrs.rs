@@ -119,7 +119,7 @@ fn main() -> ! {
     .expect("ext mem");
     let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0];
 
-    let mut k = Kernel::<TestConfig>::new_external(sched, &mems).expect("kernel creation");
+    let mut k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");
 
     let port_id = k
         .sampling_mut()

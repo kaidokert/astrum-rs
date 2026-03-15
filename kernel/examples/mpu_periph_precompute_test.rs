@@ -132,13 +132,11 @@ fn main() -> ! {
             .expect("mem 1")
             .with_peripheral_regions(&[MpuRegion::new(0x4000_5000, 4096, 0)]),
         ];
-        Kernel::<TestConfig>::new_external(sched, &memories).expect("kernel")
+        Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
     store_kernel(k);
     // SAFETY: the mutable borrow above has been released (block scope ended and
-    // new_external copies config data, not stack references); called before interrupts.
-    // TODO: reviewer false positive on aliasing — first &mut is confined to the block
-    // above; new_external does not retain stack references (it copies into PartitionConfig).
+    // new copies config data, not stack references); called before interrupts.
     let stacks: &mut [[u32; SW]; TestConfig::N] =
         unsafe { &mut *(&raw mut PARTITION_STACKS).cast() };
     kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {

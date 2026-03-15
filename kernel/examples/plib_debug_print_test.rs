@@ -71,7 +71,7 @@ extern "C" fn partition_main() -> ! {
 fn main() -> ! {
     // TODO: #[entry] requires `-> !` so main cannot return Result; .expect()
     // matches established test patterns until a panic-free boot helper exists.
-    let mut p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
     hprintln!("plib_debug_print_test: start");
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("round_robin");
@@ -79,5 +79,5 @@ fn main() -> ! {
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
-    match boot(&parts, &mut p).expect("boot") {}
+    match boot(&parts, p).expect("boot") {}
 }

@@ -21,7 +21,6 @@ kernel::compose_kernel_config!(
 );
 
 const NUM_PARTITIONS: usize = TestConfig::N;
-const STACK_WORDS: usize = TestConfig::STACK_WORDS;
 const TIMEOUT_TICKS: u32 = 50;
 
 const PAYLOAD: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
@@ -99,13 +98,23 @@ extern "C" fn p1_main() -> ! {
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
     hprintln!("plib_queuing_test: start");
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_queuing_test: round_robin");
-    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>(STACK_WORDS);
-    let mut k = Kernel::<TestConfig>::create(sched, &cfgs).expect("plib_queuing_test: kernel");
+    let cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
+    #[cfg(not(feature = "dynamic-mpu"))]
+    let mut k =
+        Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("plib_queuing_test: kernel");
+    #[cfg(feature = "dynamic-mpu")]
+    let mut k = Kernel::<TestConfig>::with_config(
+        sched,
+        &cfgs,
+        kernel::virtual_device::DeviceRegistry::new(),
+        &[],
+    )
+    .expect("plib_queuing_test: kernel");
 
     // Create source port (id=0) on P0 and destination port (id=1) on P1, then connect.
     let src = k
@@ -120,5 +129,5 @@ fn main() -> ! {
     store_kernel(k);
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    match boot(&parts, &mut p).expect("plib_queuing_test: boot") {}
+    match boot(&parts, p).expect("plib_queuing_test: boot") {}
 }

@@ -24,8 +24,6 @@ use kernel::{
 const NP: usize = 2;
 const P1: u8 = 1;
 const MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
-// TODO: reviewer false positive — 0x4000_C000 is UART0 on LM3S6965, consistent
-// with uart_irq_demo.rs and peripheral_passthrough.rs.
 const UART0_BASE: u32 = 0x4000_C000;
 const UART0_SIZE: u32 = 4096;
 
@@ -132,7 +130,7 @@ fn main() -> ! {
                 .with_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)]),
             ExternalPartitionMemory::new(s1, 0, MpuRegion::new(0, 0, 0), 1).expect("mem 1"),
         ];
-        Kernel::<TestConfig>::new_external(sched, &memories).expect("kernel")
+        Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
     store_kernel(k);
     let parts: [(extern "C" fn() -> !, u32); NP] = [(p0_main, 0), (p1_main, 0)];
