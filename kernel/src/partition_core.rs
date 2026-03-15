@@ -260,21 +260,6 @@ where
         }
         false
     }
-
-    /// Returns the base address of a partition's stack as an integer.
-    ///
-    /// Returns `None` if the index is out of bounds.
-    pub fn stack_base(&self, index: usize) -> Option<u32> {
-        self.stacks
-            .get(index)
-            .map(|s| s.as_u32_slice().as_ptr() as u32)
-    }
-
-    /// Returns the stack size in bytes for each partition.
-    pub fn stack_size(&self) -> usize {
-        S::SIZE_BYTES
-    }
-
     /// Returns the currently active partition index, if any.
     pub fn active_partition(&self) -> Option<u8> {
         self.active_partition

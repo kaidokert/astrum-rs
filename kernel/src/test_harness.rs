@@ -5,7 +5,7 @@ use crate::message::MessageQueue;
 use crate::partition::{
     ConfigError, ExternalPartitionMemory, MpuRegion, PartitionState, TransitionError,
 };
-use crate::partition_core::{AlignedStack1K, StackStorage};
+use crate::partition_core::{AlignedStack1K, StackStorage}; // StackStorage: trait for as_u32_slice()
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
 use crate::semaphore::Semaphore;
 use crate::svc::{Kernel, YieldResult};
