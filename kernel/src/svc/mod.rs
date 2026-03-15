@@ -2927,7 +2927,28 @@ mod tests {
         schedule: ScheduleTable<4>,
         mems: &[ExternalPartitionMemory<'_>],
     ) -> Kernel<TestConfig> {
-        Kernel::<TestConfig>::new_external(schedule, mems).unwrap()
+        Kernel::<TestConfig>::new(schedule, mems).unwrap()
+    }
+
+    // ---- Kernel::new() is the canonical constructor ----
+
+    #[test]
+    fn kernel_new_is_canonical_constructor() {
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 5)).unwrap();
+        schedule.add(ScheduleEntry::new(1, 5)).unwrap();
+        schedule.start();
+
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
+        let mpu0 = MpuRegion::new(0x2000_0000, 4096, 0);
+        let mpu1 = MpuRegion::new(0x2000_1000, 4096, 0);
+        let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0000, mpu0, 0).unwrap();
+        let m1 = ExternalPartitionMemory::new(&mut stk1.0, 0x0800_1000, mpu1, 1).unwrap();
+        let k = Kernel::<TestConfig>::new(schedule, &[m0, m1]).unwrap();
+        assert_eq!(k.partitions().len(), 2);
+        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
+        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1000);
     }
 
     // ---- Kernel::new() is the canonical constructor ----
