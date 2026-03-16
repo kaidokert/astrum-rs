@@ -569,6 +569,14 @@ pub enum MpuError {
     SlotExhausted,
     /// The target region has already been initialised (non-sentinel).
     AlreadyInitialized,
+    /// Code region parameters failed MPU validation.
+    CodeRegionInvalid { base: u32, size: u32 },
+    /// Data region parameters failed MPU validation.
+    DataRegionInvalid { base: u32, size: u32 },
+    /// Stack guard base address is invalid.
+    StackGuardInvalid { base: u32 },
+    /// Region size could not be encoded as an MPU SIZE field.
+    EncodeSizeFailed { size: u32 },
 }
 
 impl core::fmt::Display for MpuError {
@@ -581,6 +589,18 @@ impl core::fmt::Display for MpuError {
             Self::AddressOverflow => write!(f, "base + size overflows u32"),
             Self::SlotExhausted => write!(f, "no free MPU region slots"),
             Self::AlreadyInitialized => write!(f, "region already initialized"),
+            Self::CodeRegionInvalid { base, size } => {
+                write!(f, "code region invalid: base={base:#010X}, size={size:#X}")
+            }
+            Self::DataRegionInvalid { base, size } => {
+                write!(f, "data region invalid: base={base:#010X}, size={size:#X}")
+            }
+            Self::StackGuardInvalid { base } => {
+                write!(f, "stack guard invalid: base={base:#010X}")
+            }
+            Self::EncodeSizeFailed { size } => {
+                write!(f, "encode size failed: size={size:#X}")
+            }
         }
     }
 }
@@ -1007,12 +1027,107 @@ mod tests {
             format!("{}", MpuError::AlreadyInitialized),
             "region already initialized"
         );
+        assert_eq!(
+            format!(
+                "{}",
+                MpuError::CodeRegionInvalid {
+                    base: 0,
+                    size: 0x20
+                }
+            ),
+            "code region invalid: base=0x00000000, size=0x20"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                MpuError::DataRegionInvalid {
+                    base: 0,
+                    size: 0x20
+                }
+            ),
+            "data region invalid: base=0x00000000, size=0x20"
+        );
+        assert_eq!(
+            format!("{}", MpuError::StackGuardInvalid { base: 0 }),
+            "stack guard invalid: base=0x00000000"
+        );
+        assert_eq!(
+            format!("{}", MpuError::EncodeSizeFailed { size: 0 }),
+            "encode size failed: size=0x0"
+        );
     }
 
     #[test]
     fn mpu_error_debug_contains_variant_name() {
         assert!(format!("{:?}", MpuError::SizeTooSmall).contains("SizeTooSmall"));
         assert!(format!("{:?}", MpuError::SlotExhausted).contains("SlotExhausted"));
+    }
+
+    #[test]
+    fn mpu_error_display_code_region_invalid() {
+        let e = MpuError::CodeRegionInvalid {
+            base: 0x0800_1000,
+            size: 0x1000,
+        };
+        assert_eq!(
+            format!("{e}"),
+            "code region invalid: base=0x08001000, size=0x1000"
+        );
+    }
+
+    #[test]
+    fn mpu_error_display_data_region_invalid() {
+        let e = MpuError::DataRegionInvalid {
+            base: 0x2000_0000,
+            size: 0x400,
+        };
+        assert_eq!(
+            format!("{e}"),
+            "data region invalid: base=0x20000000, size=0x400"
+        );
+    }
+
+    #[test]
+    fn mpu_error_display_stack_guard_invalid() {
+        let e = MpuError::StackGuardInvalid { base: 0x2000_F000 };
+        assert_eq!(format!("{e}"), "stack guard invalid: base=0x2000F000");
+    }
+
+    #[test]
+    fn mpu_error_display_encode_size_failed() {
+        let e = MpuError::EncodeSizeFailed { size: 48 };
+        assert_eq!(format!("{e}"), "encode size failed: size=0x30");
+    }
+
+    #[test]
+    fn mpu_error_debug_new_variants() {
+        let code = MpuError::CodeRegionInvalid {
+            base: 0x100,
+            size: 0x20,
+        };
+        let dbg = format!("{code:?}");
+        assert!(dbg.contains("CodeRegionInvalid"));
+        assert!(dbg.contains("256"));
+        assert!(dbg.contains("32"));
+
+        let data = MpuError::DataRegionInvalid {
+            base: 0x200,
+            size: 0x40,
+        };
+        let dbg = format!("{data:?}");
+        assert!(dbg.contains("DataRegionInvalid"));
+        assert!(dbg.contains("512"));
+        assert!(dbg.contains("64"));
+
+        let stack = MpuError::StackGuardInvalid { base: 0x300 };
+        let dbg = format!("{stack:?}");
+        assert!(dbg.contains("StackGuardInvalid"));
+        assert!(dbg.contains("768"));
+
+        let enc = MpuError::EncodeSizeFailed { size: 48 };
+        let dbg = format!("{enc:?}");
+        assert!(dbg.contains("EncodeSizeFailed"));
+        assert!(dbg.contains("48"));
     }
 
     // ------------------------------------------------------------------
