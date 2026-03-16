@@ -1142,7 +1142,7 @@ mod tests {
         };
         compose_kernel_config!(BootTestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-        fn create_test_kernel() -> crate::svc::Kernel<BootTestConfig> {
+        fn create_test_kernel() -> crate::svc::Kernel<'static, BootTestConfig> {
             #[cfg(not(feature = "dynamic-mpu"))]
             {
                 crate::svc::Kernel::new_empty()

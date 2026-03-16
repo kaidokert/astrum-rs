@@ -268,7 +268,7 @@ const _: () = {
 /// yield flag, and all IPC pools (events, semaphores, mutexes, messages,
 /// queuing ports, sampling ports, blackboards). The `Kernel<C>` struct
 /// already contains all these via sub-struct composition.
-pub type UnifiedKernel<C> = Kernel<C>;
+pub type UnifiedKernel<'mem, C> = Kernel<'mem, C>;
 
 /// Helper struct for compile-time kernel storage invariants.
 ///
@@ -303,11 +303,11 @@ where
     /// and its alignment does not exceed the buffer alignment.
     const OK: () = {
         assert!(
-            size_of::<Kernel<C>>() <= MAX_KERNEL_SIZE,
+            size_of::<Kernel<'_, C>>() <= MAX_KERNEL_SIZE,
             "Kernel<C> exceeds MAX_KERNEL_SIZE"
         );
         assert!(
-            align_of::<Kernel<C>>() <= KERNEL_ALIGNMENT,
+            align_of::<Kernel<'_, C>>() <= KERNEL_ALIGNMENT,
             "Kernel<C> alignment exceeds KERNEL_ALIGNMENT"
         );
     };
@@ -316,9 +316,9 @@ where
 /// Initialize kernel at `ptr`. Panics if misaligned.
 /// # Safety
 /// `ptr` must be valid, writable, and sized for `Kernel<C>`.
-pub unsafe fn init_kernel_state_at<C: KernelConfig>(
-    ptr: *mut Kernel<C>,
-    kernel: Kernel<C>,
+pub unsafe fn init_kernel_state_at<'mem, C: KernelConfig>(
+    ptr: *mut Kernel<'mem, C>,
+    kernel: Kernel<'mem, C>,
 ) -> Result<(), &'static str>
 where
     [(); C::N]:,
@@ -340,7 +340,7 @@ where
         ptr.is_aligned(),
         "ptr not aligned for Kernel<C>: buffer alignment {} but type requires {} byte alignment",
         KERNEL_ALIGNMENT,
-        align_of::<Kernel<C>>()
+        align_of::<Kernel<'_, C>>()
     );
     // SAFETY: The caller guarantees that ptr is valid, writable, and has sufficient
     // size for Kernel<C>. The alignment check above ensures ptr is KERNEL_ALIGNMENT-aligned.
@@ -359,14 +359,14 @@ where
 ///
 /// # Panics
 ///
-/// - Compile-time assertion fails if `size_of::<Kernel<C>>()` exceeds
-///   [`MAX_KERNEL_SIZE`], or if `align_of::<Kernel<C>>()` exceeds
+/// - Compile-time assertion fails if `size_of::<Kernel<'_, C>>()` exceeds
+///   [`MAX_KERNEL_SIZE`], or if `align_of::<Kernel<'_, C>>()` exceeds
 ///   [`KERNEL_ALIGNMENT`].
 /// - Runtime panic if `UNIFIED_KERNEL_STORAGE` address is not aligned to
 ///   [`KERNEL_ALIGNMENT`] (4096 bytes). The panic message includes the actual
 ///   alignment offset.
 #[allow(dead_code)]
-pub unsafe fn init_kernel_state<C: KernelConfig>(kernel: Kernel<C>) -> Result<(), &'static str>
+pub unsafe fn init_kernel_state<C: KernelConfig>(kernel: Kernel<'_, C>) -> Result<(), &'static str>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -392,12 +392,12 @@ where
     // fields that require KERNEL_ALIGNMENT-byte alignment. The compile-time
     // assertion above guarantees that Kernel<C> fits within this buffer. The
     // pointer cast from *mut MaybeUninit<KernelStorageBuffer> to
-    // *mut MaybeUninit<Kernel<C>> is valid because:
+    // *mut MaybeUninit<Kernel<'_, C>> is valid because:
     // 1. Both pointers point to the same memory location
     // 2. The buffer has sufficient size (verified at compile time)
     // 3. The buffer has sufficient alignment (KERNEL_ALIGNMENT >= Kernel<C> alignment)
     // 4. MaybeUninit::write() initializes the memory with a valid Kernel<C> value
-    let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut MaybeUninit<Kernel<C>>;
+    let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut MaybeUninit<Kernel<'_, C>>;
 
     // Alignment check: verify the storage address is KERNEL_ALIGNMENT-aligned.
     if check_kernel_alignment(mu_ptr as *const u8).is_err() {
@@ -407,7 +407,7 @@ where
         mu_ptr.cast::<Kernel<C>>().is_aligned(),
         "ptr not aligned for Kernel<C>: buffer alignment {} but type requires {} byte alignment",
         KERNEL_ALIGNMENT,
-        align_of::<Kernel<C>>()
+        align_of::<Kernel<'_, C>>()
     );
 
     // SAFETY: mu_ptr points to UNIFIED_KERNEL_STORAGE which has sufficient size
@@ -427,7 +427,7 @@ where
 /// The returned pointer is only valid after [`init_kernel_state`] has been called.
 /// The caller must ensure proper synchronization when accessing the kernel state.
 #[allow(dead_code)]
-pub unsafe fn get_kernel_ptr<C: KernelConfig>() -> *mut Kernel<C>
+pub unsafe fn get_kernel_ptr<C: KernelConfig>() -> *mut Kernel<'static, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -446,7 +446,7 @@ where
     // via repr(C, align(4096))). The caller must ensure init_kernel_state() was
     // called before dereferencing the returned pointer, and must provide proper
     // synchronization for access.
-    let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut MaybeUninit<Kernel<C>>;
+    let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut MaybeUninit<Kernel<'_, C>>;
     // SAFETY: as_mut_ptr() returns pointer to inner value without assuming init.
     // TODO: raw pointer deref needed because storage is type-erased; see init_kernel_state.
     unsafe { (*mu_ptr).as_mut_ptr() }
@@ -488,7 +488,7 @@ where
 pub fn with_kernel<C, F, R>(f: F) -> Result<R, &'static str>
 where
     C: KernelConfig,
-    F: FnOnce(&Kernel<C>) -> R,
+    F: FnOnce(&Kernel<'static, C>) -> R,
     [(); C::N]:,
     [(); C::SCHED]:,
     #[cfg(feature = "dynamic-mpu")]
@@ -504,7 +504,7 @@ where
     Ok(cortex_m::interrupt::free(|_cs| {
         // SAFETY: KERNEL_INITIALIZED (Acquire) guarantees init_kernel_state()
         // completed (Release). Critical section prevents concurrent access.
-        let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *const MaybeUninit<Kernel<C>>;
+        let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *const MaybeUninit<Kernel<'_, C>>;
         // SAFETY: KERNEL_INITIALIZED guarantees the MaybeUninit was written.
         let kernel = unsafe { (*mu_ptr).assume_init_ref() };
         f(kernel)
@@ -547,7 +547,7 @@ where
 pub fn with_kernel_mut<C, F, R>(f: F) -> Result<R, &'static str>
 where
     C: KernelConfig,
-    F: FnOnce(&mut Kernel<C>) -> R,
+    F: FnOnce(&mut Kernel<'static, C>) -> R,
     [(); C::N]:,
     [(); C::SCHED]:,
     #[cfg(feature = "dynamic-mpu")]
@@ -563,7 +563,7 @@ where
     Ok(cortex_m::interrupt::free(|_cs| {
         // SAFETY: KERNEL_INITIALIZED (Acquire) guarantees init_kernel_state()
         // completed (Release). Critical section prevents concurrent access.
-        let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut MaybeUninit<Kernel<C>>;
+        let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut MaybeUninit<Kernel<'_, C>>;
         // SAFETY: KERNEL_INITIALIZED guarantees the MaybeUninit was written.
         let kernel = unsafe { (*mu_ptr).assume_init_mut() };
         f(kernel)
@@ -582,7 +582,7 @@ mod tests {
     /// Helper to create a test kernel instance.
     ///
     /// Abstracts cfg-gated construction logic for DRY compliance.
-    fn create_test_kernel() -> Kernel<TestConfig> {
+    fn create_test_kernel() -> Kernel<'static, TestConfig> {
         #[cfg(not(feature = "dynamic-mpu"))]
         {
             Kernel::new_empty()
@@ -597,8 +597,8 @@ mod tests {
     #[test]
     fn unified_kernel_is_kernel_alias() {
         fn assert_same_type<T>(_: T, _: T) {}
-        let k1: Kernel<TestConfig> = create_test_kernel();
-        let k2: UnifiedKernel<TestConfig> = create_test_kernel();
+        let k1: Kernel<'_, TestConfig> = create_test_kernel();
+        let k2: UnifiedKernel<'_, TestConfig> = create_test_kernel();
         assert_same_type(k1, k2);
     }
 
@@ -628,8 +628,8 @@ mod tests {
 
     #[test]
     fn kernel_fits_in_storage() {
-        // Verify that Kernel<TestConfig> fits in the storage buffer
-        assert!(size_of::<Kernel<TestConfig>>() <= MAX_KERNEL_SIZE);
+        // Verify that Kernel<'_, TestConfig> fits in the storage buffer
+        assert!(size_of::<Kernel<'_, TestConfig>>() <= MAX_KERNEL_SIZE);
     }
 
     #[test]
@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn kernel_alignment_within_buffer_alignment() {
-        assert!(align_of::<Kernel<TestConfig>>() <= KERNEL_ALIGNMENT);
+        assert!(align_of::<Kernel<'_, TestConfig>>() <= KERNEL_ALIGNMENT);
     }
 
     // NOTE: These alignment tests are unit tests rather than integration tests.
@@ -694,7 +694,7 @@ mod tests {
         let mut storage = AlignedStorage {
             data: MaybeUninit::uninit(),
         };
-        let ptr = storage.data.as_mut_ptr() as *mut Kernel<TestConfig>;
+        let ptr = storage.data.as_mut_ptr() as *mut Kernel<'_, TestConfig>;
         let kernel = create_test_kernel();
         // SAFETY: ptr points to aligned, sufficiently-sized storage.
         let result = unsafe { init_kernel_state_at(ptr, kernel) };
@@ -712,7 +712,7 @@ mod tests {
         };
         let aligned_ptr = storage.data.as_mut_ptr() as *mut u8;
         // SAFETY: aligned_ptr has MAX_KERNEL_SIZE + 4096 bytes; offset 512 is in bounds.
-        let misaligned_ptr = unsafe { aligned_ptr.add(512) } as *mut Kernel<TestConfig>;
+        let misaligned_ptr = unsafe { aligned_ptr.add(512) } as *mut Kernel<'_, TestConfig>;
         let kernel = create_test_kernel();
         // SAFETY: Testing error on misaligned pointer; memory is valid but misaligned.
         let result = unsafe { init_kernel_state_at(misaligned_ptr, kernel) };
@@ -756,21 +756,21 @@ mod tests {
         }
     }
 
-    /// Verifies that Kernel<TestConfig> type alignment and size fit within
+    /// Verifies that Kernel<'_, TestConfig> type alignment and size fit within
     /// the storage constants.
     #[test]
     fn kernel_type_fits_storage_constants() {
         assert!(
-            KERNEL_ALIGNMENT >= align_of::<Kernel<TestConfig>>(),
-            "KERNEL_ALIGNMENT ({}) < Kernel<TestConfig> alignment ({})",
+            KERNEL_ALIGNMENT >= align_of::<Kernel<'_, TestConfig>>(),
+            "KERNEL_ALIGNMENT ({}) < Kernel<'_, TestConfig> alignment ({})",
             KERNEL_ALIGNMENT,
-            align_of::<Kernel<TestConfig>>(),
+            align_of::<Kernel<'_, TestConfig>>(),
         );
         assert!(
-            MAX_KERNEL_SIZE >= size_of::<Kernel<TestConfig>>(),
-            "MAX_KERNEL_SIZE ({}) < Kernel<TestConfig> size ({})",
+            MAX_KERNEL_SIZE >= size_of::<Kernel<'_, TestConfig>>(),
+            "MAX_KERNEL_SIZE ({}) < Kernel<'_, TestConfig> size ({})",
             MAX_KERNEL_SIZE,
-            size_of::<Kernel<TestConfig>>(),
+            size_of::<Kernel<'_, TestConfig>>(),
         );
     }
 
@@ -819,15 +819,15 @@ mod tests {
         struct Aligned(MaybeUninit<[u8; MAX_KERNEL_SIZE]>);
         let mut storage = Aligned(MaybeUninit::uninit());
 
-        let ptr = storage.0.as_mut_ptr() as *mut Kernel<TestConfig>;
+        let ptr = storage.0.as_mut_ptr() as *mut Kernel<'_, TestConfig>;
         let kernel = create_test_kernel();
-        // SAFETY: ptr is aligned and storage is large enough for Kernel<TestConfig>.
+        // SAFETY: ptr is aligned and storage is large enough for Kernel<'_, TestConfig>.
         let result = unsafe { init_kernel_state_at(ptr, kernel) };
         assert!(result.is_ok(), "init_kernel_state_at must succeed");
 
         // Read back via MaybeUninit::assume_init_ref, same path as with_kernel.
-        let mu_ptr = storage.0.as_ptr() as *const MaybeUninit<Kernel<TestConfig>>;
-        // SAFETY: init_kernel_state_at wrote a valid Kernel<TestConfig> above.
+        let mu_ptr = storage.0.as_ptr() as *const MaybeUninit<Kernel<'_, TestConfig>>;
+        // SAFETY: init_kernel_state_at wrote a valid Kernel<'_, TestConfig> above.
         let recovered = unsafe { (*mu_ptr).assume_init_ref() };
         assert_eq!(
             recovered.current_partition, 255,

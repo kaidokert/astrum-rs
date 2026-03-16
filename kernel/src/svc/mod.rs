@@ -19,6 +19,7 @@ pub mod sleep;
 pub mod sync;
 
 use core::cell::RefCell;
+use core::marker::PhantomData;
 
 use cortex_m::interrupt::Mutex;
 
@@ -648,21 +649,21 @@ macro_rules! define_unified_kernel {
         #[cfg_attr(not(test), link_section = ".rodata")]
         #[used]
         static KERNEL_CURRENT_PARTITION_OFFSET: usize =
-            ::core::mem::offset_of!($crate::svc::Kernel<$Config>, current_partition);
+            ::core::mem::offset_of!($crate::svc::Kernel<'static, $Config>, current_partition);
 
         /// Offset of `ticks_dropped` field in `Kernel<C>`.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
         #[used]
         static KERNEL_TICKS_DROPPED_OFFSET: usize =
-            ::core::mem::offset_of!($crate::svc::Kernel<$Config>, ticks_dropped);
+            ::core::mem::offset_of!($crate::svc::Kernel<'static, $Config>, ticks_dropped);
 
         /// Offset of `core` field in `Kernel<C>`.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
         #[used]
         static KERNEL_CORE_OFFSET: usize =
-            ::core::mem::offset_of!($crate::svc::Kernel<$Config>, core);
+            ::core::mem::offset_of!($crate::svc::Kernel<'static, $Config>, core);
 
         /// Offset of `next_partition` field within `PartitionCore`.
         /// To get the absolute offset from kernel base, add KERNEL_CORE_OFFSET.
@@ -692,7 +693,7 @@ macro_rules! define_unified_kernel {
         // SVC-specific: verify exported ABI statics match offset_of! and
         // check type constraints for ldrb/strb instructions.
         const _: () = {
-            type K = $crate::svc::Kernel<$Config>;
+            type K = $crate::svc::Kernel<'static, $Config>;
             type C = <$Config as $crate::config::KernelConfig>::Core;
 
             // Verify the exported ABI constants match the actual struct layout.
@@ -756,7 +757,7 @@ macro_rules! define_unified_kernel {
         ///
         /// Must be called exactly once during initialization, before enabling
         /// interrupts or starting the scheduler.
-        fn store_kernel(k: $crate::svc::Kernel<$Config>) {
+        fn store_kernel(k: $crate::svc::Kernel<'static, $Config>) {
             // SAFETY: Called once during init before interrupts enabled.
             if let Err(e) = unsafe { $crate::state::init_kernel_state(k) } {
                 panic!("{}", e);
@@ -774,13 +775,13 @@ macro_rules! define_unified_kernel {
         // TODO: Reviewer feedback suggests a cleaner abstraction layer for all
         // C-ABI shims that return raw pointers to kernel state (issue #3).
         #[inline]
-        fn with_kernel<T, F: FnOnce(&$crate::svc::Kernel<$Config>) -> T>(f: F) -> Option<T> {
+        fn with_kernel<T, F: FnOnce(&$crate::svc::Kernel<'static, $Config>) -> T>(f: F) -> Option<T> {
             $crate::state::with_kernel::<$Config, _, _>(f).ok()
         }
 
         /// Mutable variant of [`with_kernel`] for accessors that need `&mut`.
         #[inline]
-        fn with_kernel_mut<T, F: FnOnce(&mut $crate::svc::Kernel<$Config>) -> T>(f: F) -> Option<T> {
+        fn with_kernel_mut<T, F: FnOnce(&mut $crate::svc::Kernel<'static, $Config>) -> T>(f: F) -> Option<T> {
             $crate::state::with_kernel_mut::<$Config, _, _>(f).ok()
         }
 
@@ -939,7 +940,7 @@ pub fn dispatch_syscall<const N: usize>(
 /// `current_partition`, `core.next_partition`, and `core.partition_sp[]`
 /// without calling Rust shim functions.
 #[repr(C)]
-pub struct Kernel<C: KernelConfig>
+pub struct Kernel<'mem, C: KernelConfig>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -1019,10 +1020,11 @@ where
     /// partitions. Entries are inserted by `SYS_SLEEP` and drained each
     /// tick in [`expire_timed_waits`](Self::expire_timed_waits).
     pub sleep_queue: crate::waitqueue::SleepQueue<{ C::N }>,
+    _memory: PhantomData<&'mem ()>,
 }
 
 #[cfg(test)]
-impl<C: KernelConfig> Default for Kernel<C>
+impl<C: KernelConfig> Default for Kernel<'_, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -1055,7 +1057,7 @@ where
     }
 }
 
-impl<C: KernelConfig> Kernel<C>
+impl<'mem, C: KernelConfig> Kernel<'mem, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -1335,6 +1337,7 @@ where
             ports: C::Ports::default(),
             irq_bindings,
             sleep_queue: crate::waitqueue::SleepQueue::new(),
+            _memory: PhantomData,
         }
     }
 
@@ -1381,6 +1384,7 @@ where
             ports: C::Ports::default(),
             irq_bindings: &[],
             sleep_queue: crate::waitqueue::SleepQueue::new(),
+            _memory: PhantomData,
         }
     }
 
@@ -2813,7 +2817,7 @@ fn apply_send_outcome<const N: usize>(
 
 #[cfg(test)]
 fn apply_recv_outcome<C: KernelConfig>(
-    kernel: &mut Kernel<C>,
+    kernel: &mut Kernel<'_, C>,
     outcome: RecvOutcome,
 ) -> Result<Option<u32>, SvcError>
 where
@@ -2946,7 +2950,7 @@ mod tests {
     fn kernel_from_ext(
         schedule: ScheduleTable<4>,
         mems: &[ExternalPartitionMemory<'_>],
-    ) -> Kernel<TestConfig> {
+    ) -> Kernel<'static, TestConfig> {
         Kernel::<TestConfig>::new(schedule, mems).unwrap()
     }
 
@@ -3082,7 +3086,7 @@ mod tests {
         mtx_count: usize,
         msg_queue_count: usize,
         registry: crate::virtual_device::DeviceRegistry<'static, 4>,
-    ) -> Kernel<TestConfig> {
+    ) -> Kernel<'static, TestConfig> {
         kernel_impl(sem_count, mtx_count, msg_queue_count, registry)
     }
 
@@ -3092,7 +3096,11 @@ mod tests {
     /// When `dynamic-mpu` is enabled the kernel is constructed with a
     /// [`DeviceRegistry`] pre-populated with virtual UART backends for
     /// device IDs 0 and 1.
-    fn kernel(sem_count: usize, mtx_count: usize, msg_queue_count: usize) -> Kernel<TestConfig> {
+    fn kernel(
+        sem_count: usize,
+        mtx_count: usize,
+        msg_queue_count: usize,
+    ) -> Kernel<'static, TestConfig> {
         #[cfg(feature = "dynamic-mpu")]
         {
             kernel_impl(sem_count, mtx_count, msg_queue_count, default_registry().0)
@@ -3110,14 +3118,14 @@ mod tests {
         mtx_count: usize,
         msg_queue_count: usize,
         #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<'static, 4>,
-    ) -> Kernel<TestConfig> {
+    ) -> Kernel<'static, TestConfig> {
         // Build the core with pre-populated partitions.
         let mut core = <TestConfig as KernelConfig>::Core::default();
         let pt = tbl();
         for pcb in pt.iter() {
             core.partitions_mut().add(pcb.clone()).unwrap();
         }
-        let mut k: Kernel<TestConfig> = Kernel {
+        let mut k: Kernel<'static, TestConfig> = Kernel {
             active_partition: None,
             tick: TickCounter::new(),
             current_partition: 0,
@@ -3149,6 +3157,7 @@ mod tests {
             ports: <TestConfig as KernelConfig>::Ports::default(),
             irq_bindings: &[],
             sleep_queue: crate::waitqueue::SleepQueue::new(),
+            _memory: PhantomData,
         };
         // Add semaphores via facade method
         for _ in 0..sem_count {
@@ -3169,7 +3178,7 @@ mod tests {
     /// Consolidates the repeated `unsafe { k.dispatch(ef) }` pattern behind
     /// a safe interface. The safety justification is documented once here
     /// rather than at each call site.
-    fn dispatch_checked(k: &mut Kernel<TestConfig>, ef: &mut ExceptionFrame) {
+    fn dispatch_checked(k: &mut Kernel<'static, TestConfig>, ef: &mut ExceptionFrame) {
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(ef) }
     }
@@ -3178,14 +3187,14 @@ mod tests {
     ///
     /// Builds an [`ExceptionFrame`] from the given register values, dispatches
     /// it through `dispatch_checked`, and returns the resulting `r0`.
-    fn dispatch_r0(k: &mut Kernel<TestConfig>, r0: u32, r1: u32, r2: u32) -> u32 {
+    fn dispatch_r0(k: &mut Kernel<'static, TestConfig>, r0: u32, r1: u32, r2: u32) -> u32 {
         let mut ef = frame(r0, r1, r2);
         dispatch_checked(k, &mut ef);
         ef.r0
     }
 
     /// Dispatch a 3-register SVC and return `(r0, r1)`.
-    fn dispatch_r01(k: &mut Kernel<TestConfig>, r0: u32, r1: u32, r2: u32) -> (u32, u32) {
+    fn dispatch_r01(k: &mut Kernel<'static, TestConfig>, r0: u32, r1: u32, r2: u32) -> (u32, u32) {
         let mut ef = frame(r0, r1, r2);
         dispatch_checked(k, &mut ef);
         (ef.r0, ef.r1)
@@ -3194,7 +3203,13 @@ mod tests {
     /// Dispatch a 4-register SVC and return `r0`.
     ///
     /// Like [`dispatch_r0`] but passes all four argument registers.
-    fn dispatch_r04(k: &mut Kernel<TestConfig>, r0: u32, r1: u32, r2: u32, r3: u32) -> u32 {
+    fn dispatch_r04(
+        k: &mut Kernel<'static, TestConfig>,
+        r0: u32,
+        r1: u32,
+        r2: u32,
+        r3: u32,
+    ) -> u32 {
         let mut ef = frame4(r0, r1, r2, r3);
         dispatch_checked(k, &mut ef);
         ef.r0
@@ -3204,7 +3219,7 @@ mod tests {
     ///
     /// Useful for tests that need additional partitions beyond the default P0/P1
     /// created by [`kernel()`].
-    fn add_running_partition(k: &mut Kernel<TestConfig>, id: u8) {
+    fn add_running_partition(k: &mut Kernel<'static, TestConfig>, id: u8) {
         k.partitions_mut().add(pcb(id)).unwrap();
         k.partitions_mut()
             .get_mut(id as usize)
@@ -3272,7 +3287,7 @@ mod tests {
         let k = kernel(0, 0, 0);
         // Verify the actual address is aligned (same check the method performs).
         let addr = &k as *const _ as usize;
-        let required = align_of::<Kernel<TestConfig>>();
+        let required = align_of::<Kernel<'static, TestConfig>>();
         assert!(
             addr.is_multiple_of(required),
             "Kernel at 0x{:x} not aligned to {} bytes",
@@ -3401,7 +3416,9 @@ mod tests {
     }
 
     /// Build a single-partition Kernel whose only variable is `mpu_region`.
-    fn kernel_with_mpu_region(region: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
+    fn kernel_with_mpu_region(
+        region: MpuRegion,
+    ) -> Result<Kernel<'static, TestConfig>, ConfigError> {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
@@ -3473,7 +3490,7 @@ mod tests {
     }
 
     /// Helper: build a single-partition kernel via `new`.
-    fn mem_kernel(entry: u32, mpu: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
+    fn mem_kernel(entry: u32, mpu: MpuRegion) -> Result<Kernel<'static, TestConfig>, ConfigError> {
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
         #[cfg(feature = "dynamic-mpu")]
@@ -3524,7 +3541,7 @@ mod tests {
     // ---- Kernel::new() with ExternalPartitionMemory unit tests ----
 
     /// Helper: build a single-partition kernel via `new`.
-    fn ext_kernel(entry: u32, mpu: MpuRegion) -> Result<Kernel<TestConfig>, ConfigError> {
+    fn ext_kernel(entry: u32, mpu: MpuRegion) -> Result<Kernel<'static, TestConfig>, ConfigError> {
         use crate::partition_core::AlignedStack256B;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
@@ -6733,7 +6750,7 @@ mod tests {
     // ---- QueuingSendTimed dispatch tests ----
 
     /// Helper: create a connected Source→Destination pair, return (src_id, dst_id).
-    fn connected_send_pair(k: &mut Kernel<TestConfig>) -> (usize, usize) {
+    fn connected_send_pair(k: &mut Kernel<'static, TestConfig>) -> (usize, usize) {
         use crate::sampling::PortDirection;
         let s = k.queuing_mut().create_port(PortDirection::Source).unwrap();
         let d = k
@@ -6751,7 +6768,7 @@ mod tests {
 
     /// Dequeue one message from destination port `d` and assert its length and
     /// content match `expected_data`.
-    fn assert_queued_message(k: &mut Kernel<TestConfig>, d: usize, expected_data: &[u8]) {
+    fn assert_queued_message(k: &mut Kernel<'static, TestConfig>, d: usize, expected_data: &[u8]) {
         assert_eq!(
             k.queuing().get(d).unwrap().nb_messages(),
             1,
@@ -7788,7 +7805,7 @@ mod tests {
     fn try_kernel_new_mem(
         schedule: ScheduleTable<4>,
         memories: &[ExternalPartitionMemory<'_>],
-    ) -> Result<Kernel<TestConfig>, ConfigError> {
+    ) -> Result<Kernel<'static, TestConfig>, ConfigError> {
         #[cfg(not(feature = "dynamic-mpu"))]
         {
             Kernel::<TestConfig>::new(schedule, memories)
@@ -8260,7 +8277,7 @@ mod tests {
     /// Helper to create a Kernel with a started schedule and partitions.
     // NOTE: local stacks are safe here — Kernel has no lifetime parameter and
     // new() copies all data out of ExternalPartitionMemory.
-    fn kernel_with_schedule() -> Kernel<TestConfig> {
+    fn kernel_with_schedule() -> Kernel<'static, TestConfig> {
         // Create 2-slot schedule: P0 for 5 ticks, P1 for 3 ticks
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
@@ -8595,7 +8612,7 @@ mod tests {
 
     /// Helper: 3-partition schedule for starvation tests.
     /// P0: 5 ticks, P1: 3 ticks, P2: 4 ticks.
-    fn kernel_with_3_partition_schedule() -> Kernel<TestConfig> {
+    fn kernel_with_3_partition_schedule() -> Kernel<'static, TestConfig> {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
         schedule.add(ScheduleEntry::new(1, 3)).unwrap();
@@ -11672,7 +11689,7 @@ mod tests {
 
     /// Helper to create a Kernel with an UNSTARTED schedule for testing
     /// the start_schedule() method.
-    fn kernel_unstarted_schedule() -> Kernel<TestConfig> {
+    fn kernel_unstarted_schedule() -> Kernel<'static, TestConfig> {
         // Create 2-slot schedule: P0 for 5 ticks, P1 for 3 ticks
         // NOTE: do NOT call schedule.start() here
         let mut schedule = ScheduleTable::<4>::new();
@@ -12600,7 +12617,7 @@ mod tests {
     // runtime test.  These assertions fire during `cargo test` compilation,
     // catching layout regressions without needing to run the binary.
     const _: () = {
-        type K = Kernel<TestConfig>;
+        type K = Kernel<'static, TestConfig>;
         type C = <TestConfig as KernelConfig>::Core;
 
         // Field ordering: current_partition before core.
@@ -12646,7 +12663,7 @@ mod tests {
             kernel_config_types!();
         }
 
-        type K = Kernel<SmallConfig>;
+        type K = Kernel<'static, SmallConfig>;
         type C = <SmallConfig as KernelConfig>::Core;
 
         let co = core::mem::offset_of!(K, core);

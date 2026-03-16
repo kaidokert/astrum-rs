@@ -27,7 +27,7 @@ static KERNEL_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 /// subsequent calls to [`load_kernel_ptr`]. Because the pointer escapes
 /// to a global static, a non-`'static` reference can dangle if the
 /// kernel is dropped or moved before [`clear_kernel_ptr`] is called.
-pub unsafe fn store_kernel_ptr<C: KernelConfig>(k: &mut Kernel<C>)
+pub unsafe fn store_kernel_ptr<C: KernelConfig>(k: &mut Kernel<'_, C>)
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -38,7 +38,7 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    KERNEL_PTR.store(k as *mut Kernel<C> as *mut (), Ordering::Release);
+    KERNEL_PTR.store(k as *mut Kernel<'_, C> as *mut (), Ordering::Release);
 }
 
 /// Load the kernel pointer (Acquire ordering). Returns null if no
@@ -53,7 +53,7 @@ where
 ///   exists at the same time (e.g., between `main` and an ISR, or in
 ///   nested ISRs). Dereferencing the returned pointer while another
 ///   mutable reference is live is undefined behaviour.
-pub unsafe fn load_kernel_ptr<C: KernelConfig>() -> *mut Kernel<C>
+pub unsafe fn load_kernel_ptr<C: KernelConfig>() -> *mut Kernel<'static, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -65,7 +65,7 @@ where
     [(); C::DR]:,
 {
     let ptr = KERNEL_PTR.load(Ordering::Acquire);
-    ptr as *mut Kernel<C>
+    ptr as *mut Kernel<'static, C>
 }
 
 /// Clear the stored kernel pointer (Release ordering).
@@ -85,7 +85,7 @@ mod tests {
     /// Mutex to serialize tests that share the global `KERNEL_PTR`.
     static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn create_test_kernel() -> Kernel<TestConfig> {
+    fn create_test_kernel() -> Kernel<'static, TestConfig> {
         #[cfg(not(feature = "dynamic-mpu"))]
         {
             Kernel::new_empty()

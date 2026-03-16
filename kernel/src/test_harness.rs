@@ -54,7 +54,7 @@ pub enum HarnessError {
 }
 
 pub struct KernelTestHarness {
-    kernel: Box<Kernel<HarnessConfig>>,
+    kernel: Box<Kernel<'static, HarnessConfig>>,
     _stacks: Box<[AlignedStack1K; HarnessConfig::N]>,
 }
 
@@ -337,15 +337,15 @@ impl KernelTestHarness {
         crate::invariants::assert_kernel_invariants(parts, active, &sem_pairs[..sem_len], next, sp);
         crate::invariants::assert_storage_alignment(
             &*self.kernel as *const _ as usize,
-            core::mem::align_of::<Kernel<HarnessConfig>>(),
+            core::mem::align_of::<Kernel<'static, HarnessConfig>>(),
         );
     }
 
-    pub fn kernel(&self) -> &Kernel<HarnessConfig> {
+    pub fn kernel(&self) -> &Kernel<'static, HarnessConfig> {
         &self.kernel
     }
 
-    pub fn kernel_mut(&mut self) -> &mut Kernel<HarnessConfig> {
+    pub fn kernel_mut(&mut self) -> &mut Kernel<'static, HarnessConfig> {
         &mut self.kernel
     }
 
@@ -1230,14 +1230,14 @@ mod tests {
     /// macro's check sequence: call `assert_storage_alignment` before
     /// `advance_schedule_tick()` on every tick.
     ///
-    /// Uses `align_of::<Kernel<HarnessConfig>>()` instead of `KERNEL_ALIGNMENT`
+    /// Uses `align_of::<Kernel<'static, HarnessConfig>>()` instead of `KERNEL_ALIGNMENT`
     /// because the test harness Box-allocates the kernel, which only
     /// guarantees the type's natural alignment (not linker-placed 4096).
     /// The production macro uses `KERNEL_ALIGNMENT` with linker-placed storage.
     #[test]
     fn tick_path_alignment_check_no_panic() {
         let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
-        let align = core::mem::align_of::<Kernel<HarnessConfig>>();
+        let align = core::mem::align_of::<Kernel<'static, HarnessConfig>>();
         crate::svc::scheduler::start_schedule(h.kernel_mut());
         for tick in 0..20 {
             // Mirror _unified_handle_tick! macro body: check alignment

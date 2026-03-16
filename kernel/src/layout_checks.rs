@@ -3,7 +3,7 @@
 #[doc(hidden)]
 macro_rules! assert_kernel_layout {
     ($Config:ty) => { const _: () = {
-        type K = $crate::svc::Kernel<$Config>;
+        type K = $crate::svc::Kernel<'static, $Config>;
         type C = <$Config as $crate::config::KernelConfig>::Core;
         const LIM: usize = $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT;
         // All ABI-visible offsets must be < LITERAL_POOL_OFFSET_LIMIT.

@@ -9,7 +9,7 @@ use crate::sampling::SamplingPortPool;
 use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
 
-impl<C: KernelConfig> Kernel<C>
+impl<C: KernelConfig> Kernel<'_, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,

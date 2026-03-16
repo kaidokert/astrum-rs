@@ -128,7 +128,7 @@ macro_rules! define_pendsv {
         $crate::assert_kernel_layout!($Config);
         // PendSV-specific: Core metadata region guard.
         const _: () = {
-            type K = $crate::svc::Kernel<$Config>;
+            type K = $crate::svc::Kernel<'static, $Config>;
             type C = <$Config as $crate::config::KernelConfig>::Core;
             // TODO: size_of::<C> is conservative — alignment padding may
             // cause this to fire before the actual last-accessed field

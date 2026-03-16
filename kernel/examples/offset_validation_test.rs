@@ -17,7 +17,7 @@ kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, 
 
 kernel::define_unified_harness!(TestConfig);
 
-type K = Kernel<TestConfig>;
+type K = Kernel<'static, TestConfig>;
 type C = <TestConfig as KernelConfig>::Core;
 
 // TODO: The offset symbols used below (KERNEL_CURRENT_PARTITION_OFFSET, etc.)

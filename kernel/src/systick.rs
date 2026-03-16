@@ -19,20 +19,20 @@
 //!
 //! ## Custom Callback Registration
 //!
-//! For more control, register a callback that receives `&mut Kernel<C>` and the
+//! For more control, register a callback that receives `&mut Kernel<'_, C>` and the
 //! tick count. The callback runs after internal SysTick processing completes.
 //!
 //! # Type Erasure
 //!
-//! Because `Kernel<C>` is generic over `KernelConfig`, but static storage must be
+//! Because `Kernel<'_, C>` is generic over `KernelConfig`, but static storage must be
 //! non-generic, this module uses type erasure:
-//! - The user's `fn(&mut Kernel<C>, u64)` is stored as a raw pointer
+//! - The user's `fn(&mut Kernel<'_, C>, u64)` is stored as a raw pointer
 //! - A raw `*mut ()` pointer to the kernel is stored alongside
 //! - A monomorphized trampoline function handles the typed invocation
 //!
 //! # Safety
 //!
-//! The `invoke_handler` function must only be called with a valid `&mut Kernel<C>`
+//! The `invoke_handler` function must only be called with a valid `&mut Kernel<'_, C>`
 //! reference that matches the type used during `register_handler`. This is enforced
 //! by requiring the same `C` type parameter at both registration and invocation.
 //!
@@ -137,8 +137,8 @@ where
 /// Type-erased handler that stores all pointers needed for invocation.
 ///
 /// The `trampoline` field is a monomorphized function that:
-/// 1. Casts `kernel_ptr` back to `*mut Kernel<C>`
-/// 2. Casts `handler_ptr` back to `fn(&mut Kernel<C>, u64)`
+/// 1. Casts `kernel_ptr` back to `*mut Kernel<'_, C>`
+/// 2. Casts `handler_ptr` back to `fn(&mut Kernel<'_, C>, u64)`
 /// 3. Dereferences the kernel and calls the handler
 struct ErasedHandler {
     /// Monomorphized trampoline: `fn(*mut (), *const (), u64)` that internally
@@ -147,7 +147,7 @@ struct ErasedHandler {
     /// Raw pointer to the Kernel instance, stored as `*mut ()` for type erasure.
     kernel_ptr: *mut (),
     /// Raw pointer to the user's handler function, stored as `*const ()` for type erasure.
-    /// This is actually a `fn(&mut Kernel<C>, u64)` cast to a raw pointer.
+    /// This is actually a `fn(&mut Kernel<'_, C>, u64)` cast to a raw pointer.
     handler_ptr: *const (),
 }
 
@@ -167,8 +167,8 @@ static SYSTICK_HANDLER: Mutex<RefCell<Option<ErasedHandler>>> = Mutex::new(RefCe
 ///
 /// # Safety
 ///
-/// - `kernel_ptr` must be a valid pointer to a `Kernel<C>` that was cast to `*mut ()`
-/// - `handler_ptr` must be a valid `fn(&mut Kernel<C>, u64)` cast to `*const ()`
+/// - `kernel_ptr` must be a valid pointer to a `Kernel<'_, C>` that was cast to `*mut ()`
+/// - `handler_ptr` must be a valid `fn(&mut Kernel<'_, C>, u64)` cast to `*const ()`
 /// - The caller must ensure no other mutable references to the kernel exist
 fn trampoline<C: KernelConfig>(kernel_ptr: *mut (), handler_ptr: *const (), tick: u64)
 where
@@ -181,18 +181,18 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    // SAFETY: The kernel_ptr was created from a valid &mut Kernel<C> in register_handler.
+    // SAFETY: The kernel_ptr was created from a valid &mut Kernel<'_, C> in register_handler.
     // The caller of invoke_handler guarantees the pointer is still valid and the type matches.
     // We're in a critical section (interrupt-disabled) when this runs.
-    let kernel = unsafe { &mut *(kernel_ptr as *mut Kernel<C>) };
-    // SAFETY: The handler_ptr was created from a valid fn(&mut Kernel<C>, u64) in register_handler.
+    let kernel = unsafe { &mut *(kernel_ptr as *mut Kernel<'_, C>) };
+    // SAFETY: The handler_ptr was created from a valid fn(&mut Kernel<'_, C>, u64) in register_handler.
     // Function pointers have the same size/alignment as *const (), and the type is preserved.
-    let handler: fn(&mut Kernel<C>, u64) =
-        unsafe { core::mem::transmute::<*const (), fn(&mut Kernel<C>, u64)>(handler_ptr) };
+    let handler: fn(&mut Kernel<'_, C>, u64) =
+        unsafe { core::mem::transmute::<*const (), fn(&mut Kernel<'_, C>, u64)>(handler_ptr) };
     handler(kernel, tick);
 }
 
-/// Register a SysTick handler that receives `&mut Kernel<C>` and the tick count.
+/// Register a SysTick handler that receives `&mut Kernel<'_, C>` and the tick count.
 ///
 /// The handler is called after the kernel's internal SysTick processing completes.
 /// Replaces any previously registered handler. Call before `boot()`.
@@ -200,7 +200,7 @@ where
 /// # Type Safety
 ///
 /// The handler is stored with type erasure. The caller must ensure that
-/// `invoke_handler` is called with the same `Kernel<C>` instance that was
+/// `invoke_handler` is called with the same `Kernel<'_, C>` instance that was
 /// passed to this function.
 ///
 /// # Safety
@@ -209,10 +209,12 @@ where
 /// unsafe pointer casts. The safety invariants are:
 /// 1. The kernel reference must remain valid for the duration of handler invocations
 /// 2. `invoke_handler` must be called with matching type parameter `C`
-/// 3. Handler invocation must occur in a context where `&mut Kernel<C>` is valid
+/// 3. Handler invocation must occur in a context where `&mut Kernel<'_, C>` is valid
 ///    (typically within a critical section in the SysTick exception)
-pub fn register_handler<C: KernelConfig>(kernel: &mut Kernel<C>, handler: fn(&mut Kernel<C>, u64))
-where
+pub fn register_handler<C: KernelConfig>(
+    kernel: &mut Kernel<'_, C>,
+    handler: fn(&mut Kernel<'_, C>, u64),
+) where
     [(); C::N]:,
     [(); C::SCHED]:,
     #[cfg(feature = "dynamic-mpu")]
@@ -222,7 +224,7 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    let kernel_ptr = kernel as *mut Kernel<C> as *mut ();
+    let kernel_ptr = kernel as *mut Kernel<'_, C> as *mut ();
     // Cast the fn pointer to a raw pointer for type-erased storage
     let handler_ptr = handler as *const ();
 
@@ -317,10 +319,10 @@ mod tests {
     }
 
     // Lifetime note: `stk0`/`stk1` are local but this is sound because
-    // `Kernel<C>` has no lifetime parameter — `new()` copies
+    // `Kernel<'_, C>` has no lifetime parameter — `new()` copies
     // descriptor data into PCBs (with sentinel stack fields) and does
     // not retain borrows from `ExternalPartitionMemory`.
-    fn make_test_kernel() -> Kernel<TestConfig> {
+    fn make_test_kernel() -> Kernel<'static, TestConfig> {
         let mut schedule = ScheduleTable::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         schedule.add(ScheduleEntry::new(1, 10)).unwrap();
@@ -361,7 +363,7 @@ mod tests {
         clear_handler();
     }
 
-    fn handler(_kernel: &mut Kernel<TestConfig>, t: u64) {
+    fn handler(_kernel: &mut Kernel<'_, TestConfig>, t: u64) {
         COUNTER.fetch_add(1, Ordering::SeqCst);
         TICK.store(t, Ordering::SeqCst);
     }
@@ -402,7 +404,7 @@ mod tests {
         reset();
 
         static N: AtomicU64 = AtomicU64::new(0);
-        fn h2(_kernel: &mut Kernel<TestConfig>, _: u64) {
+        fn h2(_kernel: &mut Kernel<'_, TestConfig>, _: u64) {
             N.fetch_add(1, Ordering::SeqCst);
         }
         N.store(0, Ordering::SeqCst);
@@ -424,7 +426,7 @@ mod tests {
 
         static TICK_FROM_KERNEL: AtomicU64 = AtomicU64::new(0);
 
-        fn kernel_reader(kernel: &mut Kernel<TestConfig>, _tick: u64) {
+        fn kernel_reader(kernel: &mut Kernel<'_, TestConfig>, _tick: u64) {
             // Read the tick count from the kernel to verify we have real access
             let tick = kernel.tick().get();
             TICK_FROM_KERNEL.store(tick, Ordering::SeqCst);
@@ -447,7 +449,7 @@ mod tests {
         let _guard = TEST_MUTEX.lock().unwrap();
         reset();
 
-        fn kernel_modifier(kernel: &mut Kernel<TestConfig>, tick: u64) {
+        fn kernel_modifier(kernel: &mut Kernel<'_, TestConfig>, tick: u64) {
             // Modify the kernel's tick counter
             kernel.tick.sync(tick * 2);
         }
