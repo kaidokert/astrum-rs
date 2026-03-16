@@ -135,6 +135,9 @@ pub struct PartitionControlBlock {
     pub(crate) stack_limit: u32,
     /// Initial r0 value passed to the partition entry point at boot.
     r0_hint: u32,
+    /// Optional code (text) MPU region for partitions whose code lives in a
+    /// separate flash/RAM region that must be explicitly mapped.
+    code_mpu_region: Option<MpuRegion>,
 }
 
 impl PartitionControlBlock {
@@ -166,6 +169,7 @@ impl PartitionControlBlock {
             starvation_count: 0,
             stack_limit: stack_base,
             r0_hint: 0,
+            code_mpu_region: None,
         }
     }
 
@@ -178,6 +182,17 @@ impl PartitionControlBlock {
             }
         }
         self
+    }
+
+    /// Set the code MPU region (builder pattern).
+    pub fn with_code_mpu_region(mut self, region: MpuRegion) -> Self {
+        self.code_mpu_region = Some(region);
+        self
+    }
+
+    /// Returns the optional code MPU region.
+    pub fn code_mpu_region(&self) -> Option<&MpuRegion> {
+        self.code_mpu_region.as_ref()
     }
 
     /// Replace peripheral regions via `&mut self` (post-creation setter).
@@ -1001,6 +1016,22 @@ mod tests {
         assert_eq!(pcb.sleep_until(), 500);
         pcb.set_sleep_until(0);
         assert_eq!(pcb.sleep_until(), 0);
+    }
+
+    #[test]
+    fn code_mpu_region_defaults_to_none() {
+        let pcb = make_pcb();
+        assert!(pcb.code_mpu_region().is_none());
+    }
+
+    #[test]
+    fn with_code_mpu_region_sets_field() {
+        let region = MpuRegion::new(0x0800_0000, 0x1_0000, 0x0206_0000);
+        let pcb = make_pcb().with_code_mpu_region(region);
+        let got = pcb.code_mpu_region().expect("should be Some");
+        assert_eq!(got.base(), 0x0800_0000);
+        assert_eq!(got.size(), 0x1_0000);
+        assert_eq!(got.permissions(), 0x0206_0000);
     }
 
     #[test]
