@@ -1,3 +1,17 @@
+//! Kernel build script — conditional linker fragment output.
+//!
+//! Emitted files (all written to `OUT_DIR`):
+//!
+//! | File             | When                        | Purpose                                 |
+//! |------------------|-----------------------------|-----------------------------------------|
+//! | `kernel_state.x` | Always (thumb targets)      | `.kernel_state` SECTIONS / INSERT AFTER  |
+//! | `device.x`       | Always (thumb targets)      | Minimal device.x for cortex-m-rt        |
+//! | `memory.x`       | `qemu` feature only         | MEMORY{} block for QEMU LM3S6965EVB     |
+//! | `link.x`         | `qemu` feature only         | cortex-m-rt full link (needs MEMORY{})   |
+//!
+//! When the `qemu` feature is **not** active, `memory.x` and `link.x` are
+//! omitted so a BSP crate can supply its own memory map without conflict.
+
 use std::env;
 use std::fs::File;
 use std::io::Write;
