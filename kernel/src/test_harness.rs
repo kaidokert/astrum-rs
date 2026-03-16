@@ -55,7 +55,7 @@ pub enum HarnessError {
 
 pub struct KernelTestHarness {
     kernel: Box<Kernel<'static, HarnessConfig>>,
-    _stacks: Box<[AlignedStack1K; HarnessConfig::N]>,
+    _stacks: Box<[AlignedStack1K]>,
 }
 
 impl KernelTestHarness {
@@ -80,7 +80,7 @@ impl KernelTestHarness {
         schedule
             .add_system_window(10)
             .map_err(|_| HarnessError::ScheduleFull)?;
-        let mut stacks = [AlignedStack1K::default(); HarnessConfig::N];
+        let mut stacks = vec![AlignedStack1K::default(); HarnessConfig::N].into_boxed_slice();
         let mut mems: Vec<ExternalPartitionMemory<'_>, { HarnessConfig::N }> = Vec::new();
         for (i, stack) in stacks.iter_mut().enumerate().take(n) {
             let o = (i as u32) * PARTITION_OFFSET;
@@ -104,20 +104,11 @@ impl KernelTestHarness {
             .map_err(HarnessError::Transition)?;
         kernel.current_partition = 0;
         kernel.active_partition = Some(0);
-        // Reconcile mpu_region bases with actual core stack addresses.
-        // On 64-bit test hosts, addresses captured during Kernel::new become
-        // stale when the struct moves. Boxing pins the kernel on the heap so
-        // the stack addresses are stable for writing into the PCBs.
         drop(mems);
-        let stacks = Box::new(stacks);
         for i in 0..n {
             let base = stacks[i].as_u32_slice().as_ptr() as u32;
             let sp = base.wrapping_add(STACK_SIZE_BYTES);
             kernel.set_sp(i, sp);
-            assert!(
-                kernel.fix_stack_region(i, base, STACK_SIZE_BYTES),
-                "fix_stack_region failed for partition {i}"
-            );
             assert!(
                 kernel.fix_mpu_data_region(i, base),
                 "fix_mpu_data_region failed for partition {i}"
@@ -220,7 +211,7 @@ impl KernelTestHarness {
         schedule
             .add_system_window(10)
             .map_err(|_| HarnessError::ScheduleFull)?;
-        let mut stacks = Box::new([AlignedStack1K::default(); HarnessConfig::N]);
+        let mut stacks = vec![AlignedStack1K::default(); HarnessConfig::N].into_boxed_slice();
         let (head, tail) = stacks.split_at_mut(1);
         let mem0 = ExternalPartitionMemory::new(
             head[0].as_u32_slice_mut(),
@@ -260,10 +251,6 @@ impl KernelTestHarness {
             let base = stacks[i].as_u32_slice().as_ptr() as u32;
             let sp = base.wrapping_add(STACK_SIZE_BYTES);
             kernel.set_sp(i, sp);
-            assert!(
-                kernel.fix_stack_region(i, base, STACK_SIZE_BYTES),
-                "fix_stack_region failed for partition {i}"
-            );
             let is_sentinel = kernel
                 .partitions()
                 .get(i)
@@ -1387,24 +1374,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    // ------------------------------------------------------------------
-    // fix_stack_region out-of-bounds edge case
-    // ------------------------------------------------------------------
-
-    #[test]
-    #[allow(deprecated)]
-    fn fix_stack_region_returns_false_for_out_of_bounds() {
-        let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
-        assert!(
-            !h.kernel_mut().fix_stack_region(2, 0x2000_0000, 1024),
-            "index == partition_count must return false"
-        );
-        assert!(
-            !h.kernel_mut().fix_stack_region(100, 0x2000_0000, 1024),
-            "large out-of-bounds index must return false"
-        );
     }
 
     // ------------------------------------------------------------------

@@ -43,13 +43,13 @@ pub use rtos_traits::syscall::SvcError;
 //
 // Affected fields (as of this writing):
 //   - `PartitionControlBlock.mpu_region.base`  — patched by `fix_mpu_data_region()`
-//   - `PartitionControlBlock.stack_base`        — patched by `fix_stack_region()`
+//   - `PartitionControlBlock.stack_base`        — set via `PartitionConfig` at construction
 //
 // Correct pattern:
 //   1. Construct with sentinel / placeholder values (`PartitionConfig::sentinel()`).
 //   2. Place into `UNIFIED_KERNEL_STORAGE` with `ptr::write()`.
-//   3. Call `fix_mpu_data_region()` and `fix_stack_region()` **after** placement
-//      so they compute addresses from the struct's final location.
+//   3. Call `fix_mpu_data_region()` **after** placement so it computes
+//      addresses from the struct's final location.
 //   4. Verify with `invariants::assert_pcb_addresses_in_storage()`.
 //
 // See `boot.rs` for the post-placement fixup sequence and `invariants.rs` for
@@ -924,7 +924,7 @@ pub fn dispatch_syscall<const N: usize>(
 //
 // Currently affected fields and their fixup methods:
 //   - `PartitionControlBlock.mpu_region.base`  → `fix_mpu_data_region()`
-//   - `PartitionControlBlock.stack_base`        → `fix_stack_region()`
+//   - `PartitionControlBlock.stack_base`        → set via `PartitionConfig` at construction
 //
 // See `boot.rs` for the post-placement fixup sequence that calls these
 // methods after the kernel has been moved into its final storage.
@@ -1111,30 +1111,20 @@ where
                 peripheral_regions: m.peripheral_regions().clone(),
                 r0_hint: m.r0_hint(),
                 code_mpu_region: None,
+                stack_base: m.stack_base(),
+                stack_size: m.stack_size_bytes(),
             };
             configs
                 .push(cfg)
                 .map_err(|_| ConfigError::PartitionTableFull)?;
         }
-        let mut kernel = Self::with_config(
+        Self::with_config(
             schedule,
             &configs,
             #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
             &[],
-        )?;
-        // Patch stack_base and stack_size from ExternalPartitionMemory
-        // into each PCB so that boot_preconfigured() can read them directly.
-        // (r0_hint is already propagated through PartitionConfig/with_config.)
-        for (i, m) in memories.iter().enumerate() {
-            if let Some(pcb) = kernel.partitions_mut().get_mut(i) {
-                pcb.set_stack_fields(m.stack_base(), m.stack_size_bytes())
-                    .map_err(|_| ConfigError::StackSizeInvalid {
-                        partition_id: i as u8,
-                    })?;
-            }
-        }
-        Ok(kernel)
+        )
     }
 
     /// Create a `Kernel` with `C::N` sentinel partitions.
@@ -1267,15 +1257,17 @@ where
                     },
                 )?;
             }
-            // Use sentinel stack values (0, 0).  boot_preconfigured() will
-            // patch in the real addresses once the kernel is in its final
-            // storage location, eliminating the stale-address window.
+            // Stack values default to 0 (sentinel) when not provided.
+            // boot_preconfigured() patches sentinels with real addresses
+            // once the kernel is in its final storage location.
             let mpu_region = c.mpu_region;
+            let stack_base = c.stack_base;
+            let stack_pointer = stack_base.wrapping_add(c.stack_size);
             let mut pcb = PartitionControlBlock::new(
                 c.id,
                 c.entry_point,
-                0, // sentinel stack_base — patched by boot_preconfigured()
-                0, // sentinel sp — patched by boot_preconfigured()
+                stack_base,
+                stack_pointer,
                 mpu_region,
             )
             .with_peripheral_regions(&c.peripheral_regions);
@@ -1283,8 +1275,7 @@ where
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
             }
-            // Sentinel sp=0; boot_preconfigured() sets the real value.
-            core.set_sp(i, 0);
+            core.set_sp(i, stack_pointer);
         }
         #[cfg(debug_assertions)]
         crate::invariants::assert_no_overlapping_mpu_regions(core.partitions().as_slice());
@@ -2432,20 +2423,6 @@ where
     /// `false` if the partition index is out of bounds or the MPU validation
     /// fails.
     ///
-    #[deprecated(
-        since = "0.1.0",
-        note = "stack fields are set at construction via PartitionMemory"
-    )]
-    #[inline(always)]
-    pub fn fix_stack_region(&mut self, index: usize, base: u32, size: u32) -> bool {
-        #[allow(deprecated)]
-        if let Some(pcb) = self.core.partitions_mut().get_mut(index) {
-            pcb.fix_stack_region(base, size).is_ok()
-        } else {
-            false
-        }
-    }
-
     /// Syncs the PCB stack_limit into the mirrored `partition_stack_limits`
     /// array for PendSV overflow pre-check.
     #[inline(always)]

@@ -1217,6 +1217,8 @@ mod tests {
                 peripheral_regions: heapless::Vec::new(),
                 r0_hint: 0xDEAD_BEEF,
                 code_mpu_region: None,
+                stack_base: 0,
+                stack_size: 0,
             },
             PartitionConfig {
                 id: 1,
@@ -1225,6 +1227,8 @@ mod tests {
                 peripheral_regions: heapless::Vec::new(),
                 r0_hint: 0xCAFE_BABE,
                 code_mpu_region: None,
+                stack_base: 0,
+                stack_size: 0,
             },
         ];
 

@@ -297,40 +297,6 @@ impl PartitionControlBlock {
     /// - `BaseNotAligned`: base is not aligned to size
     /// - `AddressOverflow`: base + size overflows u32
     ///
-    #[deprecated(
-        since = "0.1.0",
-        note = "stack fields are set at construction via PartitionMemory"
-    )]
-    pub fn fix_stack_region(&mut self, base: u32, size: u32) -> Result<(), MpuError> {
-        assert!(
-            !self.cache_sealed,
-            "fix_stack_region called after MPU cache sealed"
-        );
-        // Validate MPU constraints before modifying any state
-        validate_mpu_region(base, size)?;
-
-        // Only update stack fields; preserve mpu_region (data region) unchanged
-        self.stack_base = base;
-        self.stack_size = size;
-        self.stack_limit = base;
-
-        Ok(())
-    }
-
-    /// Sets stack fields directly for external-stack boot paths.
-    ///
-    /// Unlike `fix_stack_region`, this does NOT perform MPU validation.
-    /// The caller must validate size/alignment separately before calling.
-    pub(crate) fn set_stack_fields(&mut self, base: u32, size: u32) -> Result<(), &'static str> {
-        if self.cache_sealed {
-            return Err("set_stack_fields called after MPU cache sealed");
-        }
-        self.stack_base = base;
-        self.stack_size = size;
-        self.stack_limit = base;
-        Ok(())
-    }
-
     pub fn r0_hint(&self) -> u32 {
         self.r0_hint
     }
@@ -553,6 +519,10 @@ pub struct PartitionConfig {
     pub r0_hint: u32,
     /// Optional MPU region for the partition's code (text + rodata).
     pub code_mpu_region: Option<MpuRegion>,
+    /// Stack base address. Zero means sentinel (patched later by boot).
+    pub stack_base: u32,
+    /// Stack size in bytes. Zero means sentinel (patched later by boot).
+    pub stack_size: u32,
 }
 
 impl PartitionConfig {
@@ -569,6 +539,8 @@ impl PartitionConfig {
             peripheral_regions: Vec::new(),
             r0_hint: 0,
             code_mpu_region: None,
+            stack_base: 0,
+            stack_size: 0,
         }
     }
 
@@ -584,6 +556,8 @@ impl PartitionConfig {
             peripheral_regions: Vec::new(),
             r0_hint: 0,
             code_mpu_region: None,
+            stack_base: 0,
+            stack_size: 0,
         }
     }
 
@@ -1020,182 +994,6 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // fix_stack_region
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn fix_stack_region_updates_stack_base() {
-        let mut pcb = make_pcb();
-        let original_base = pcb.stack_base();
-        assert_eq!(original_base, 0x2000_0000);
-
-        // 0x2001_0000 is aligned to 2048
-        pcb.fix_stack_region(0x2001_0000, 2048).unwrap();
-        assert_eq!(pcb.stack_base(), 0x2001_0000);
-    }
-
-    #[test]
-    fn fix_stack_region_updates_stack_size() {
-        let mut pcb = make_pcb();
-        let original_size = pcb.stack_size();
-        assert_eq!(original_size, 1024);
-
-        // 0x2001_0000 is aligned to 2048
-        pcb.fix_stack_region(0x2001_0000, 2048).unwrap();
-        assert_eq!(pcb.stack_size(), 2048);
-    }
-
-    #[test]
-    fn fix_stack_region_preserves_mpu_region() {
-        let mut pcb = make_pcb();
-        let original_mpu_base = pcb.mpu_region().base();
-        let original_mpu_size = pcb.mpu_region().size();
-        let original_mpu_permissions = pcb.mpu_region().permissions();
-
-        // 0x2002_0000 is aligned to 8192
-        pcb.fix_stack_region(0x2002_0000, 8192).unwrap();
-
-        // Verify mpu_region (data region) is unchanged
-        assert_eq!(pcb.mpu_region().base(), original_mpu_base);
-        assert_eq!(pcb.mpu_region().size(), original_mpu_size);
-        assert_eq!(pcb.mpu_region().permissions(), original_mpu_permissions);
-
-        // Verify stack fields are updated
-        assert_eq!(pcb.stack_base(), 0x2002_0000);
-        assert_eq!(pcb.stack_size(), 8192);
-    }
-
-    #[test]
-    fn fix_stack_region_stack_region_accessor_reflects_changes() {
-        let mut pcb = make_pcb();
-        // 0x2003_0000 is aligned to 4096
-        pcb.fix_stack_region(0x2003_0000, 4096).unwrap();
-
-        let (base, size) = pcb.stack_region();
-        assert_eq!(base, 0x2003_0000);
-        assert_eq!(size, 4096);
-    }
-
-    #[test]
-    fn fix_stack_region_rejects_size_too_small() {
-        let mut pcb = make_pcb();
-        let original_base = pcb.stack_base();
-        let original_size = pcb.stack_size();
-
-        // Size < 32 is invalid
-        let result = pcb.fix_stack_region(0x2000_0000, 16);
-        assert_eq!(result, Err(MpuError::SizeTooSmall));
-
-        // Verify state is unchanged on error
-        assert_eq!(pcb.stack_base(), original_base);
-        assert_eq!(pcb.stack_size(), original_size);
-    }
-
-    #[test]
-    fn fix_stack_region_rejects_size_not_power_of_two() {
-        let mut pcb = make_pcb();
-        let original_base = pcb.stack_base();
-        let original_size = pcb.stack_size();
-
-        // Size 100 is not a power of two
-        let result = pcb.fix_stack_region(0x2000_0000, 100);
-        assert_eq!(result, Err(MpuError::SizeNotPowerOfTwo));
-
-        // Verify state is unchanged on error
-        assert_eq!(pcb.stack_base(), original_base);
-        assert_eq!(pcb.stack_size(), original_size);
-    }
-
-    #[test]
-    fn fix_stack_region_rejects_misaligned_base() {
-        let mut pcb = make_pcb();
-        let original_base = pcb.stack_base();
-        let original_size = pcb.stack_size();
-
-        // Base 0x2000_0100 is not aligned to size 1024
-        let result = pcb.fix_stack_region(0x2000_0100, 1024);
-        assert_eq!(result, Err(MpuError::BaseNotAligned));
-
-        // Verify state is unchanged on error
-        assert_eq!(pcb.stack_base(), original_base);
-        assert_eq!(pcb.stack_size(), original_size);
-    }
-
-    #[test]
-    fn fix_stack_region_rejects_address_overflow() {
-        let mut pcb = make_pcb();
-        let original_base = pcb.stack_base();
-        let original_size = pcb.stack_size();
-
-        // base + size would overflow u32
-        let result = pcb.fix_stack_region(0x8000_0000, 0x8000_0000);
-        assert_eq!(result, Err(MpuError::AddressOverflow));
-
-        // Verify state is unchanged on error
-        assert_eq!(pcb.stack_base(), original_base);
-        assert_eq!(pcb.stack_size(), original_size);
-    }
-
-    #[test]
-    fn fix_stack_region_accepts_minimum_valid_size() {
-        let mut pcb = make_pcb();
-
-        // 32 is the minimum valid size, base must be 32-byte aligned
-        pcb.fix_stack_region(0x2000_0020, 32).unwrap();
-
-        assert_eq!(pcb.stack_base(), 0x2000_0020);
-        assert_eq!(pcb.stack_size(), 32);
-    }
-
-    #[test]
-    fn fix_stack_region_updates_stack_fields_independently() {
-        let mut pcb = make_pcb();
-        let original_mpu_base = pcb.mpu_region().base();
-        let original_mpu_size = pcb.mpu_region().size();
-
-        // Use valid aligned values that differ from mpu_region
-        pcb.fix_stack_region(0x2004_0000, 4096).unwrap();
-
-        // Verify stack fields are updated to new values
-        assert_eq!(pcb.stack_base(), 0x2004_0000);
-        assert_eq!(pcb.stack_size(), 4096);
-
-        // Verify mpu_region is unchanged (stack and data are independent)
-        assert_eq!(pcb.mpu_region().base(), original_mpu_base);
-        assert_eq!(pcb.mpu_region().size(), original_mpu_size);
-    }
-
-    // ------------------------------------------------------------------
-    // set_stack_fields
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn set_stack_fields_updates_base_size_limit() {
-        let mut pcb = make_pcb();
-        let original_mpu_base = pcb.mpu_region().base();
-        let original_mpu_size = pcb.mpu_region().size();
-
-        pcb.set_stack_fields(0x2004_0000, 2048).unwrap();
-
-        assert_eq!(pcb.stack_base(), 0x2004_0000);
-        assert_eq!(pcb.stack_size(), 2048);
-        assert_eq!(pcb.stack_limit, 0x2004_0000);
-        // mpu_region must be unchanged
-        assert_eq!(pcb.mpu_region().base(), original_mpu_base);
-        assert_eq!(pcb.mpu_region().size(), original_mpu_size);
-    }
-
-    #[test]
-    fn set_stack_fields_err_after_seal() {
-        let mut pcb = make_pcb();
-        crate::mpu::precompute_mpu_cache(&mut pcb).unwrap();
-        assert_eq!(
-            pcb.set_stack_fields(0x2004_0000, 2048),
-            Err("set_stack_fields called after MPU cache sealed")
-        );
-    }
-
-    // ------------------------------------------------------------------
     // fix_mpu_data_region
     // ------------------------------------------------------------------
 
@@ -1242,11 +1040,16 @@ mod tests {
 
     #[test]
     fn fix_mpu_data_region_post_condition_base_matches_stack_base() {
-        let mut pcb = make_pcb();
+        // Construct PCB with stack_base at the target relocation address.
         let new_base = 0x2005_0000;
+        let mut pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            new_base,
+            new_base + 1024,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+        );
 
-        // Simulate boot-time relocation: fix stack, then fix MPU data region.
-        pcb.fix_stack_region(new_base, pcb.stack_size()).unwrap();
         pcb.fix_mpu_data_region(new_base);
 
         assert_eq!(pcb.mpu_region().base(), pcb.stack_base());
@@ -1556,50 +1359,38 @@ mod tests {
     }
 
     #[test]
-    fn accessible_static_regions_reflects_fix_stack_region() {
+    fn accessible_static_regions_reflects_stack_construction() {
         // Create PCB with distinct data region (0x2000_0000, 8192) and stack region
-        // Note: make_pcb creates a PCB where mpu_region.base == stack_base, so
-        // we create a custom PCB with separate regions to properly test.
-        let mut pcb = PartitionControlBlock::new(
+        let pcb = PartitionControlBlock::new(
             0,
             0x0800_0000,
-            0x2000_2000,                                    // stack_base
-            0x2000_2400, // stack_pointer (stack_size = 0x400 = 1024)
+            0x2001_0000,                                    // stack_base
+            0x2001_0800, // stack_pointer (stack_size = 0x800 = 2048)
             MpuRegion::new(0x2000_0000, 8192, 0x0306_0000), // data region at different location
         );
 
-        // Verify initial regions: data region and stack region are distinct
-        let regions_before = pcb.accessible_static_regions();
-        assert_eq!(regions_before.len(), 2);
-        assert_eq!(regions_before[0], (0x2000_0000, 8192)); // data region
-        assert_eq!(regions_before[1], (0x2000_2000, 1024)); // initial stack region
-
-        // Call fix_stack_region with new values
-        // New stack: base=0x2001_0000, size=2048
-        pcb.fix_stack_region(0x2001_0000, 2048).unwrap();
-
-        // Verify accessible_static_regions returns updated stack region
-        // while preserving the original data region
-        let regions_after = pcb.accessible_static_regions();
-        assert_eq!(regions_after.len(), 2);
-        assert_eq!(regions_after[0], (0x2000_0000, 8192)); // data region preserved
-        assert_eq!(regions_after[1], (0x2001_0000, 2048)); // stack region updated
+        let regions = pcb.accessible_static_regions();
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0], (0x2000_0000, 8192)); // data region
+        assert_eq!(regions[1], (0x2001_0000, 2048)); // stack region
     }
 
     #[test]
-    fn accessible_static_regions_stack_matches_stack_region_after_fix() {
-        let mut pcb = make_pcb();
+    fn accessible_static_regions_stack_matches_stack_region() {
+        // Construct PCB with specific stack values
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2004_0000,
+            0x2004_1000, // stack_size = 4096
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+        );
 
-        // Call fix_stack_region with new values
-        pcb.fix_stack_region(0x2004_0000, 4096).unwrap();
-
-        // Verify accessible_static_regions stack entry matches stack_region()
         let (stack_base, stack_size) = pcb.stack_region();
         assert_eq!(stack_base, 0x2004_0000);
         assert_eq!(stack_size, 4096);
 
         let regions = pcb.accessible_static_regions();
-        // Stack region is at index 1 (after data region)
         assert_eq!(regions[1], (stack_base, stack_size));
     }
 
@@ -1793,15 +1584,17 @@ mod tests {
     }
 
     #[test]
-    fn exclusive_static_regions_reflects_fix_stack_region() {
-        let mut pcb = make_pcb();
-        let before = pcb.exclusive_static_regions();
-        assert_eq!(before[0], (0x2000_0000, 1024));
-
-        pcb.fix_stack_region(0x2001_0000, 2048).unwrap();
-        let after = pcb.exclusive_static_regions();
-        assert_eq!(after.len(), 1);
-        assert_eq!(after[0], (0x2001_0000, 2048));
+    fn exclusive_static_regions_reflects_stack_construction() {
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2001_0000,
+            0x2001_0800, // stack_size = 2048
+            MpuRegion::new(0x2001_0000, 2048, 0x0306_0000),
+        );
+        let regions = pcb.exclusive_static_regions();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0], (0x2001_0000, 2048));
     }
 
     #[test]
@@ -2098,6 +1891,8 @@ mod tests {
             peripheral_regions: Vec::new(),
             r0_hint: 0,
             code_mpu_region: None,
+            stack_base: 0,
+            stack_size: 0,
         }
     }
 
@@ -2335,9 +2130,14 @@ mod tests {
     }
 
     #[test]
-    fn fix_stack_region_updates_stack_limit() {
-        let mut pcb = make_pcb();
-        pcb.fix_stack_region(0x2001_0000, 2048).unwrap();
+    fn stack_limit_equals_stack_base_at_construction() {
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2001_0000,
+            0x2001_0800,
+            MpuRegion::new(0x2001_0000, 2048, 0x0306_0000),
+        );
         assert_eq!(pcb.stack_limit(), 0x2001_0000);
         assert_eq!(pcb.stack_limit(), pcb.stack_base());
     }
@@ -2586,7 +2386,6 @@ mod tests {
     fn mutators_succeed_before_seal() {
         let mut pcb = make_pcb();
         // All mutators should succeed before the cache is sealed.
-        assert!(pcb.fix_stack_region(0x2000_0000, 2048).is_ok());
         pcb.fix_mpu_data_region(0x2000_0000);
         pcb.set_cached_base_regions([(1, 2); 4]).unwrap();
         pcb.set_cached_periph_regions([(3, 4); 3]).unwrap();
@@ -2595,14 +2394,6 @@ mod tests {
         assert!(sentinel
             .promote_sentinel_mpu(0x2000_0000, 1024, SENTINEL_DATA_PERMISSIONS)
             .is_ok());
-    }
-
-    #[test]
-    #[should_panic(expected = "fix_stack_region called after MPU cache sealed")]
-    fn fix_stack_region_panics_after_seal() {
-        let mut pcb = make_pcb();
-        pcb.seal_cache();
-        let _ = pcb.fix_stack_region(0x2000_0000, 2048);
     }
 
     #[test]
