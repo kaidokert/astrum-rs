@@ -6,7 +6,7 @@
 TARGET   ?= thumbv7m-none-eabi
 FEATURES ?= qemu,log-semihosting
 
-.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test check-rtt
+.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test check-rtt check-rtt-combos
 
 # Minimal single-partition smoke test (SYS_YIELD)
 smoke-test:
@@ -32,6 +32,13 @@ irq-dispatch-test:
 # Build all examples with log-rtt to catch duplicate _SEGGER_RTT symbols at link time
 check-rtt:
 	cargo build -p kernel --examples --features log-rtt --target $(TARGET)
+
+# Build with conflicting log-backend pairs to verify build.rs priority selection
+check-rtt-combos:
+	cargo build -p kernel --lib --features log-rtt,log-swo --target $(TARGET)
+	cargo build -p kernel --lib --features log-rtt,log-defmt --target $(TARGET)
+	cargo build -p kernel --lib --features log-semihosting,log-rtt --target $(TARGET)
+	cargo build -p kernel --lib --features log-semihosting,log-defmt --target $(TARGET)
 
 # Run all QEMU integration examples
 test-qemu:
