@@ -285,11 +285,18 @@ pub fn deny_all_regions() -> [(u32, u32); 4] {
 /// the deny-all fallback ensures the partition gets zero memory access
 /// rather than causing a panic — critical for handler-mode safety where
 /// panics are unrecoverable.
+///
+/// Production code now inlines this logic in [`precompute_mpu_cache`];
+/// this helper is retained only for test assertions.
+// NOTE: kept as a module-level fn (not inside `mod tests`) so that
+// sibling test modules (boot, harness, pendsv) can import it via
+// `crate::mpu::partition_mpu_regions_or_deny_all`.
+#[cfg(test)]
 pub(crate) fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> [(u32, u32); 4] {
     match partition_mpu_regions(pcb) {
         Ok(regions) => regions,
-        Err(_e) => {
-            klog!("MPU DENY-ALL partition {}: {:?}", pcb.id(), _e);
+        Err(e) => {
+            klog!("MPU DENY-ALL partition {}: {:?}", pcb.id(), e);
             deny_all_regions()
         }
     }
@@ -440,10 +447,24 @@ pub(crate) fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) ->
 /// Pre-compute and cache both base (R0–R3) and peripheral (R4–R6) MPU
 /// register pairs into the PCB.
 ///
-/// Calls [`partition_mpu_regions_or_deny_all`] for base regions and
-/// [`peripheral_mpu_regions_or_disabled`] for peripheral regions.
+/// Calls [`partition_mpu_regions`] for base regions (falling back to
+/// [`deny_all_regions`] on error) and [`peripheral_mpu_regions_or_disabled`]
+/// for peripheral regions.
+// TODO: return Result<(), MpuError> instead of &'static str — requires changing
+// set_cached_base_regions / set_cached_periph_regions to return MpuError first.
 pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) -> Result<(), &'static str> {
-    pcb.set_cached_base_regions(partition_mpu_regions_or_deny_all(pcb))?;
+    let base = match partition_mpu_regions(pcb) {
+        Ok(regions) => regions,
+        Err(e) => {
+            klog!(
+                "precompute_mpu_cache: partition {} MPU error: {:?}",
+                pcb.id(),
+                e
+            );
+            deny_all_regions()
+        }
+    };
+    pcb.set_cached_base_regions(base)?;
     pcb.set_cached_periph_regions(peripheral_mpu_regions_or_disabled(pcb))?;
     pcb.seal_cache();
     Ok(())
@@ -2235,14 +2256,21 @@ mod tests {
 
     /// `precompute_mpu_cache` on a PCB whose data region size is not a
     /// power-of-two must still succeed: `partition_mpu_regions` returns
-    /// `None`, and the fallback fills `cached_base_regions[0]` with the
-    /// background deny-all region (non-zero RBAR/RASR) instead of
-    /// leaving uninitialized zeros.
+    /// `Err(MpuError)`, the error is logged via `klog!`, and the
+    /// fallback fills `cached_base_regions` with `deny_all_regions()`
+    /// instead of leaving uninitialized zeros.
     #[test]
     fn precompute_mpu_cache_deny_all_fallback() {
-        // 100 is not a power-of-two → partition_mpu_regions returns None.
+        // 100 is not a power-of-two → partition_mpu_regions returns Err.
         let mut pcb = make_pcb(0x0000_0000, 0x2000_0000, 100);
 
+        // Confirm partition_mpu_regions itself fails for this PCB.
+        assert!(
+            partition_mpu_regions(&pcb).is_err(),
+            "partition_mpu_regions must fail for non-power-of-two data size"
+        );
+
+        // precompute_mpu_cache must still succeed (deny-all fallback).
         assert!(precompute_mpu_cache(&mut pcb).is_ok());
 
         let (rbar, rasr) = pcb.cached_base_regions()[0];
