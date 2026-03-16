@@ -671,6 +671,14 @@ pub enum ConfigError {
         entry_point: u32,
         required_alignment: u32,
     },
+    /// A partition's entry point (Thumb bit stripped) falls outside its code
+    /// MPU region.
+    EntryPointOutsideCodeRegion {
+        partition_id: u8,
+        entry_point: u32,
+        region_base: u32,
+        region_size: u32,
+    },
     /// The schedule contains no system window entries.
     ///
     /// When `dynamic-mpu` is enabled, system windows are required for
@@ -765,6 +773,17 @@ impl core::fmt::Display for ConfigError {
                 f,
                 "partition {partition_id}: entry point {entry_point:#010x} \
                  not aligned to {required_alignment} bytes"
+            ),
+            Self::EntryPointOutsideCodeRegion {
+                partition_id,
+                entry_point,
+                region_base,
+                region_size,
+            } => write!(
+                f,
+                "partition {partition_id}: entry point {entry_point:#010x} \
+                 not within code region [{region_base:#010x}..{:#010x})",
+                region_base.wrapping_add(*region_size)
             ),
             #[cfg(feature = "dynamic-mpu")]
             Self::NoSystemWindow => write!(
@@ -1906,6 +1925,44 @@ mod tests {
     }
 
     #[test]
+    fn config_error_display_entry_point_outside_code_region() {
+        let msg = format!(
+            "{}",
+            ConfigError::EntryPointOutsideCodeRegion {
+                partition_id: 2,
+                entry_point: 0x0900_0100,
+                region_base: 0x0800_0000,
+                region_size: 0x0001_0000,
+            }
+        );
+        assert_eq!(
+            msg,
+            "partition 2: entry point 0x09000100 \
+             not within code region [0x08000000..0x08010000)"
+        );
+    }
+
+    #[test]
+    fn config_error_entry_point_outside_code_region_distinct() {
+        let outside = ConfigError::EntryPointOutsideCodeRegion {
+            partition_id: 1,
+            entry_point: 0x0900_0000,
+            region_base: 0x0800_0000,
+            region_size: 0x0001_0000,
+        };
+        assert_ne!(outside, ConfigError::ScheduleEmpty);
+        assert_ne!(outside, ConfigError::PartitionTableFull);
+        assert_ne!(
+            outside,
+            ConfigError::EntryPointMisaligned {
+                partition_id: 1,
+                entry_point: 0x0900_0000,
+                required_alignment: 4,
+            }
+        );
+    }
+
+    #[test]
     fn config_error_display_code_region_invalid() {
         let msg = format!(
             "{}",
@@ -1967,6 +2024,16 @@ mod tests {
             }
         )
         .contains("PartitionIdMismatch"));
+        assert!(format!(
+            "{:?}",
+            ConfigError::EntryPointOutsideCodeRegion {
+                partition_id: 0,
+                entry_point: 0x0900_0000,
+                region_base: 0x0800_0000,
+                region_size: 0x0001_0000,
+            }
+        )
+        .contains("EntryPointOutsideCodeRegion"));
     }
 
     #[test]
