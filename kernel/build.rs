@@ -59,46 +59,56 @@ MEMORY
 }
 ";
 
+/// Backend names in priority order (highest first).
+const BACKEND_PRIORITY: &[&str] = &["semihosting", "rtt", "swo", "defmt"];
+
+/// Select the highest-priority backend from enabled backend names.
+///
+/// Priority: semihosting > rtt > swo > defmt > none.
+/// Iterates the priority list and returns the first backend present in `enabled`.
+fn select_backend(enabled: &[&str]) -> &'static str {
+    BACKEND_PRIORITY
+        .iter()
+        .copied()
+        .find(|b| enabled.contains(b))
+        .unwrap_or("none")
+}
+
+/// Map a log backend to its panic backend (semihosting/rtt pass through, others → halt).
+fn select_panic_backend(log_backend: &str) -> &'static str {
+    match log_backend {
+        "semihosting" => "semihosting",
+        "rtt" => "rtt",
+        _ => "halt",
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Emit klog backend cfg based on enabled features.
     // Priority: semihosting > rtt > swo > defmt > none
     // If multiple are enabled, we pick the first in priority order and emit a warning.
-    let backends = [
-        ("CARGO_FEATURE_LOG_SEMIHOSTING", "semihosting"),
-        ("CARGO_FEATURE_LOG_RTT", "rtt"),
-        ("CARGO_FEATURE_LOG_SWO", "swo"),
-        ("CARGO_FEATURE_LOG_DEFMT", "defmt"),
-    ];
-
-    let enabled: Vec<&str> = backends
+    let enabled: Vec<&str> = BACKEND_PRIORITY
         .iter()
-        .filter(|(env_var, _)| env::var(env_var).is_ok())
-        .map(|(_, name)| *name)
+        .copied()
+        .filter(|name| {
+            let env_var = format!("CARGO_FEATURE_LOG_{}", name.to_uppercase());
+            env::var(env_var).is_ok()
+        })
         .collect();
 
-    let backend = match enabled.len() {
-        0 => "none",
-        1 => enabled[0],
-        _ => {
-            println!(
-                "cargo:warning=Multiple klog backends enabled ({:?}), using '{}'",
-                enabled, enabled[0]
-            );
-            enabled[0]
-        }
-    };
+    let backend = select_backend(&enabled);
+    if enabled.len() > 1 {
+        println!(
+            "cargo:warning=Multiple klog backends enabled ({:?}), using '{}'",
+            enabled, backend
+        );
+    }
 
     println!("cargo:rustc-cfg=klog_backend=\"{}\"", backend);
     // Declare valid klog_backend values for check-cfg lint.
     println!("cargo::rustc-check-cfg=cfg(klog_backend, values(\"semihosting\", \"rtt\", \"swo\", \"defmt\", \"none\"))");
 
-    // Emit panic_backend cfg matching the log backend.
-    // Priority: semihosting > rtt > halt (fallback)
-    let panic_backend = match backend {
-        "semihosting" => "semihosting",
-        "rtt" => "rtt",
-        _ => "halt",
-    };
+    let panic_backend = select_panic_backend(backend);
     println!("cargo:rustc-cfg=panic_backend=\"{}\"", panic_backend);
     println!(
         "cargo::rustc-check-cfg=cfg(panic_backend, values(\"semihosting\", \"rtt\", \"halt\"))"
@@ -138,4 +148,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_no_features() {
+        assert_eq!(select_backend(&[]), "none");
+    }
+
+    #[test]
+    fn backend_single_feature() {
+        assert_eq!(select_backend(&["semihosting"]), "semihosting");
+        assert_eq!(select_backend(&["rtt"]), "rtt");
+        assert_eq!(select_backend(&["swo"]), "swo");
+        assert_eq!(select_backend(&["defmt"]), "defmt");
+    }
+
+    #[test]
+    fn backend_multi_highest_priority_wins() {
+        // In priority order — sanity check.
+        assert_eq!(select_backend(&["semihosting", "rtt"]), "semihosting");
+        assert_eq!(select_backend(&["rtt", "swo"]), "rtt");
+        assert_eq!(select_backend(&["swo", "defmt"]), "swo");
+
+        // Out of priority order — verifies the function enforces priority,
+        // not just picking the first element.
+        assert_eq!(select_backend(&["rtt", "semihosting"]), "semihosting");
+        assert_eq!(select_backend(&["defmt", "swo"]), "swo");
+        assert_eq!(select_backend(&["defmt", "rtt", "swo"]), "rtt");
+        assert_eq!(
+            select_backend(&["defmt", "swo", "rtt", "semihosting"]),
+            "semihosting"
+        );
+    }
+
+    #[test]
+    fn panic_backend_mappings() {
+        assert_eq!(select_panic_backend("semihosting"), "semihosting");
+        assert_eq!(select_panic_backend("rtt"), "rtt");
+        assert_eq!(select_panic_backend("swo"), "halt");
+        assert_eq!(select_panic_backend("defmt"), "halt");
+        assert_eq!(select_panic_backend("none"), "halt");
+    }
 }
