@@ -383,18 +383,23 @@ const DISABLED_R6: (u32, u32) = (
 /// of what the caller specified in `permissions`.
 ///
 /// Returns `None` if the region's base or size is invalid for the MPU.
-fn peripheral_region_pair(region: &MpuRegion, slot: u32) -> Option<(u32, u32)> {
-    let size_field = encode_size(region.size())?;
-    let rbar = build_rbar(region.base(), slot)?;
+fn peripheral_region_pair(region: &MpuRegion, slot: u32) -> Result<(u32, u32), MpuError> {
+    let make_err = || MpuError::PeripheralRegionInvalid {
+        base: region.base(),
+        size: region.size(),
+    };
+    let size_field = encode_size(region.size()).ok_or_else(make_err)?;
+    let rbar = build_rbar(region.base(), slot).ok_or_else(make_err)?;
     let rasr = build_rasr(size_field, AP_FULL_ACCESS, true, (true, false, true));
-    Some((rbar, rasr))
+    Ok((rbar, rasr))
 }
 
 /// Build (RBAR, RASR) pairs for peripheral regions R4-R6.
 ///
 /// Returns up to 3 pairs from the PCB's peripheral regions.  Unused
-/// slots are disabled (RASR enable bit = 0).  Returns `None` if a
-/// configured peripheral region has invalid MPU parameters.
+/// slots are disabled (RASR enable bit = 0).  Returns
+/// `Err(MpuError::PeripheralRegionInvalid)` if a configured peripheral
+/// region has invalid MPU parameters.
 ///
 /// # Mode usage
 ///
@@ -402,7 +407,9 @@ fn peripheral_region_pair(region: &MpuRegion, slot: u32) -> Option<(u32, u32)> {
 /// "dynamic-mpu"))]`).  In dynamic mode the PendSV handler calls
 /// [`DynamicStrategy::cached_peripheral_regions`] instead, which
 /// restores pre-computed (RBAR, RASR) pairs from the boot-time cache.
-pub(crate) fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 3]> {
+pub(crate) fn peripheral_mpu_regions(
+    pcb: &PartitionControlBlock,
+) -> Result<[(u32, u32); 3], MpuError> {
     let periph = pcb.peripheral_regions();
     let r4 = match periph.first() {
         Some(r) => peripheral_region_pair(r, 4)?,
@@ -416,7 +423,7 @@ pub(crate) fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u3
         Some(r) => peripheral_region_pair(r, 6)?,
         None => DISABLED_R6,
     };
-    Some([r4, r5, r6])
+    Ok([r4, r5, r6])
 }
 
 /// Return peripheral (RBAR, RASR) pairs for R4-R6, falling back to
@@ -424,7 +431,7 @@ pub(crate) fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u3
 /// invalid.
 ///
 /// This is the infallible counterpart of [`peripheral_mpu_regions`].
-/// When `peripheral_mpu_regions` returns `None` (e.g. non-power-of-2
+/// When `peripheral_mpu_regions` returns `Err` (e.g. non-power-of-2
 /// peripheral size), the disabled fallback ensures R4-R6 are explicitly
 /// cleared rather than retaining stale grants from a previous partition.
 ///
@@ -437,7 +444,9 @@ pub(crate) fn peripheral_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u3
 /// between the two paths is verified by
 /// `cache_vs_pcb_peripheral_rbar_rasr_equivalence`.
 pub(crate) fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) -> [(u32, u32); 3] {
-    peripheral_mpu_regions(pcb).unwrap_or([DISABLED_R4, DISABLED_R5, DISABLED_R6])
+    peripheral_mpu_regions(pcb)
+        .ok()
+        .unwrap_or([DISABLED_R4, DISABLED_R5, DISABLED_R6])
 }
 
 /// Pre-compute and cache both base (R0–R3) and peripheral (R4–R6) MPU
@@ -640,6 +649,8 @@ pub enum MpuError {
     StackRegionInvalid { base: u32, size: u32 },
     /// Disabled region build_rbar failed.
     DisabledRegionInvalid { base: u32, size: u32 },
+    /// Peripheral region parameters failed MPU validation.
+    PeripheralRegionInvalid { base: u32, size: u32 },
     /// MPU cache has already been sealed; mutation rejected.
     CacheAlreadySealed,
 }
@@ -679,6 +690,12 @@ impl core::fmt::Display for MpuError {
                 write!(
                     f,
                     "disabled region invalid: base={base:#010X}, size={size:#X}"
+                )
+            }
+            Self::PeripheralRegionInvalid { base, size } => {
+                write!(
+                    f,
+                    "peripheral region invalid: base={base:#010X}, size={size:#X}"
                 )
             }
             Self::CacheAlreadySealed => write!(f, "MPU cache already sealed"),
@@ -1780,8 +1797,8 @@ mod tests {
         let pcb_invalid = make_pcb(0x0000_0000, 0x2000_0000, 4096)
             .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 100, 0)]);
         assert!(
-            peripheral_mpu_regions(&pcb_invalid).is_none(),
-            "Non-power-of-2 size must make peripheral_mpu_regions return None"
+            peripheral_mpu_regions(&pcb_invalid).is_err(),
+            "Non-power-of-2 size must make peripheral_mpu_regions return Err"
         );
         let fallback = peripheral_mpu_regions_or_disabled(&pcb_invalid);
         assert_eq!(
@@ -1796,6 +1813,26 @@ mod tests {
         );
         assert_eq!(fallback[0].1, 0, "Fallback R4 RASR must be 0 (disabled)");
         assert_eq!(fallback[1].1, 0, "Fallback R5 RASR must be 0 (disabled)");
+    }
+
+    /// Verify that `peripheral_mpu_regions` returns the correct
+    /// `MpuError::PeripheralRegionInvalid` variant for an invalid
+    /// peripheral region (non-power-of-2 size).
+    #[test]
+    fn peripheral_mpu_regions_err_variant_for_invalid_region() {
+        let bad_base: u32 = 0x4000_0000;
+        let bad_size: u32 = 100; // not a power of two
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[MpuRegion::new(bad_base, bad_size, 0)]);
+        let err = peripheral_mpu_regions(&pcb).unwrap_err();
+        assert_eq!(
+            err,
+            MpuError::PeripheralRegionInvalid {
+                base: bad_base,
+                size: bad_size,
+            },
+            "Must return PeripheralRegionInvalid with correct base/size"
+        );
     }
 
     // ------------------------------------------------------------------
