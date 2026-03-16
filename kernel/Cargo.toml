@@ -10,10 +10,13 @@ cortex-m-semihosting = { version = "0.5", optional = true }
 defmt = { version = "0.3", optional = true }
 heapless = "0.8"
 panic-halt = { version = "1.0", optional = true }
+# TODO: reviewer false positive – panic-rtt-target 0.2 depends on rtt-target ^0.6,
+# so both crates resolve to a single rtt-target 0.6.x (no duplicate _SEGGER_RTT).
+# rtt_init_print!() and rprintln!() APIs are unchanged in 0.6.
 panic-rtt-target = { version = "0.2", optional = true }
 panic-semihosting = { version = "0.6", features = ["exit"], optional = true }
 rtos-traits = { path = "../rtos-traits" }
-rtt-target = { version = "0.5", optional = true }
+rtt-target = { version = "0.6", optional = true }
 
 [[example]]
 name = "hello"
