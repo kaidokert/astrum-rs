@@ -554,6 +554,8 @@ pub struct PartitionConfig {
     pub peripheral_regions: Vec<MpuRegion, 2>,
     /// Initial r0 value passed to the partition entry point.
     pub r0_hint: u32,
+    /// Optional MPU region for the partition's code (text + rodata).
+    pub code_mpu_region: Option<MpuRegion>,
 }
 
 impl PartitionConfig {
@@ -569,6 +571,7 @@ impl PartitionConfig {
             mpu_region,
             peripheral_regions: Vec::new(),
             r0_hint: 0,
+            code_mpu_region: None,
         }
     }
 
@@ -583,6 +586,7 @@ impl PartitionConfig {
             mpu_region: MpuRegion::new(0, 0, 0),
             peripheral_regions: Vec::new(),
             r0_hint: 0,
+            code_mpu_region: None,
         }
     }
 
@@ -2096,6 +2100,7 @@ mod tests {
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
             peripheral_regions: Vec::new(),
             r0_hint: 0,
+            code_mpu_region: None,
         }
     }
 
@@ -2217,6 +2222,19 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
         let cfg = PartitionConfig::new(0, 0x0800_0000, mpu);
         assert!(cfg.peripheral_regions.is_empty());
+    }
+
+    #[test]
+    fn config_new_code_mpu_region_is_none() {
+        let mpu = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
+        let cfg = PartitionConfig::new(0, 0x0800_0000, mpu);
+        assert_eq!(cfg.code_mpu_region, None);
+    }
+
+    #[test]
+    fn sentinel_code_mpu_region_is_none() {
+        let cfg = PartitionConfig::sentinel(0);
+        assert_eq!(cfg.code_mpu_region, None);
     }
 
     #[test]

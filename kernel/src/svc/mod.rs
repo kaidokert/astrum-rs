@@ -1107,6 +1107,7 @@ where
                 mpu_region: *m.mpu_region(),
                 peripheral_regions: m.peripheral_regions().clone(),
                 r0_hint: m.r0_hint(),
+                code_mpu_region: None,
             };
             configs
                 .push(cfg)
