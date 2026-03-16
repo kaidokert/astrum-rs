@@ -247,13 +247,13 @@ macro_rules! partition_stacks {
 #[macro_export]
 macro_rules! define_unified_harness {
     // ── Public arms ──────────────────────────────────────────────
-    // Basic form: no SysTick hook
+    // Basic form: no SysTick hook (legacy: caller must call init_kernel + boot separately)
     ($Config:ty) => {
-        $crate::define_unified_harness!(@impl $Config, |_tick, _k| {});
+        $crate::define_unified_harness!(@impl_compat $Config, |_tick, _k| {});
     };
-    // Extended form: with SysTick hook
+    // Extended form: with SysTick hook (legacy: caller must call init_kernel + boot separately)
     ($Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_unified_harness!(@impl $Config, |$tick, $k| $hook);
+        $crate::define_unified_harness!(@impl_compat $Config, |$tick, $k| $hook);
     };
     // no_boot form: handlers only, caller uses kernel::boot directly
     (no_boot, $Config:ty) => {
@@ -262,6 +262,15 @@ macro_rules! define_unified_harness {
     // no_boot form with SysTick hook
     (no_boot, $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
+    };
+    // Full form: boot() calls init_kernel() internally with the provided schedule and entries.
+    // $sched and $entries are expressions evaluated inside boot()'s body.
+    ($Config:ty, $sched:expr, $entries:expr) => {
+        $crate::define_unified_harness!(@impl $Config, $sched, $entries, |_tick, _k| {});
+    };
+    // Full form with SysTick hook
+    ($Config:ty, $sched:expr, $entries:expr, |$tick:ident, $k:ident| $hook:block) => {
+        $crate::define_unified_harness!(@impl $Config, $sched, $entries, |$tick, $k| $hook);
     };
     // Internal: handlers only (SysTick, PendSV, SVC linkage, kernel state)
     (@handlers $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
@@ -479,8 +488,72 @@ macro_rules! define_unified_harness {
             });
         }
     };
-    // Internal: full implementation (handlers + boot function)
-    (@impl $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
+    // Internal: full implementation with boot() calling init_kernel() internally.
+    // $sched and $entries are macro-level expressions pasted into boot()'s body.
+    // TODO: reviewer false positive – reported a corrupted `@cortex-m-rtos/target/...` tag
+    // but no such identifier exists in this file; the diff was truncated.
+    (@impl $Config:ty, $sched:expr, $entries:expr, |$tick:ident, $k:ident| $hook:block) => {
+        $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
+
+        /// Partition stacks with 4 KiB alignment; used by `init_kernel()` to build PCBs.
+        ///
+        /// # Singleton
+        /// This macro arm must be invoked at most once per binary.  Multiple
+        /// invocations would produce duplicate `__PartitionStackStorage` /
+        /// `__PARTITION_STACKS` symbols, causing a compile-time link error.
+        #[repr(C, align(4096))]
+        struct __PartitionStackStorage(
+            [[u32; <$Config as $crate::config::KernelConfig>::STACK_WORDS];
+             <$Config as $crate::config::KernelConfig>::N],
+        );
+        static mut __PARTITION_STACKS: __PartitionStackStorage = __PartitionStackStorage(
+            [[0u32; <$Config as $crate::config::KernelConfig>::STACK_WORDS];
+             <$Config as $crate::config::KernelConfig>::N],
+        );
+
+        // TODO: `init_kernel` is generated in the caller's local scope; acceptable
+        // for a harness macro but could shadow other symbols if used carelessly.
+        /// Create a kernel via `new()` from
+        /// `__PARTITION_STACKS` with the given entry points and store it.
+        fn init_kernel(
+            sched: $crate::scheduler::ScheduleTable<
+                { <$Config as $crate::config::KernelConfig>::SCHED }>,
+            entries: &[(extern "C" fn() -> !, u32)],
+        ) -> Result<(), $crate::harness::BootError> {
+            // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
+            // by this macro arm, which is invoked at most once per binary (enforced
+            // by the linker via duplicate symbol errors).  `init_kernel()` is called
+            // exactly once from `boot()` before interrupts are enabled, so there are
+            // no concurrent accesses.
+            let stacks = unsafe { &mut __PARTITION_STACKS.0 };
+            let k = $crate::boot::create_kernel_from_stacks::<$Config,
+                { <$Config as $crate::config::KernelConfig>::STACK_WORDS }>(
+                sched, stacks, entries,
+            )?;
+            store_kernel(k);
+            Ok(())
+        }
+
+        /// Boot the kernel: creates the kernel via [`init_kernel`] using the
+        /// schedule and entry points provided as macro arguments, then
+        /// configures exceptions and enters the idle loop via
+        /// [`boot::boot_preconfigured`].
+        fn boot(
+            peripherals: cortex_m::Peripherals,
+        ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
+            init_kernel($sched, $entries)?;
+            // SAFETY: `init_kernel` above stored a fully-initialised kernel
+            // into the global state.  `boot_preconfigured` requires exactly
+            // this: a stored kernel, valid peripherals, and a single call
+            // site before interrupts are enabled — all satisfied here.
+            unsafe {
+                $crate::boot::boot_preconfigured::<$Config>(peripherals)
+            }
+        }
+    };
+    // TODO: consider renaming @impl_compat to @impl_legacy once legacy callers are migrated.
+    // Internal: legacy implementation (handlers + boot function, caller calls init_kernel separately)
+    (@impl_compat $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
 
         /// Partition stacks with 4 KiB alignment; used by `init_kernel()` to build PCBs.

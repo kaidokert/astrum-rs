@@ -14,10 +14,6 @@ use kernel::{
 
 kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-const NUM_PARTITIONS: usize = 1;
-
-kernel::define_unified_harness!(TestConfig);
-
 // Atomic flag for partition to signal it ran (semihosting requires privileged mode)
 static PARTITION_RAN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -29,17 +25,18 @@ extern "C" fn partition_main() -> ! {
     }
 }
 
+fn make_schedule() -> ScheduleTable<{ TestConfig::SCHED }> {
+    let mut sched = ScheduleTable::new();
+    sched.add(ScheduleEntry::new(0, 2)).expect("sched");
+    sched
+}
+
+kernel::define_unified_harness!(TestConfig, make_schedule(), &[(partition_main, 0)]);
+
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("unified_minimal: start");
-
-    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
-    sched.add(ScheduleEntry::new(0, 2)).expect("sched");
-
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
-    init_kernel(sched, &parts).expect("kernel");
-    hprintln!("unified_minimal: kernel stored");
 
     hprintln!("unified_minimal: calling boot");
     match boot(p).expect("unified_minimal: boot failed") {}
