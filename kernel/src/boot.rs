@@ -1353,9 +1353,39 @@ mod tests {
     }
 
     #[test]
-    fn init_rtt_is_callable_under_host_cfg() {
-        // Under host builds (klog_backend=none), init_rtt() should be a no-op.
-        // This verifies the cfg gates compile correctly for all backends.
+    #[cfg(klog_backend = "none")]
+    fn init_rtt_none_backend_is_noop() {
+        // Under host/none builds, init_rtt() is a no-op stub.
+        init_rtt();
+    }
+
+    #[test]
+    #[cfg(klog_backend = "rtt")]
+    fn init_rtt_rtt_backend_calls_rtt_init_print() {
+        // When log-rtt is enabled, init_rtt() must compile with the
+        // rtt_init_print!() expansion.  This catches duplicate
+        // _SEGGER_RTT symbol regressions.
+        init_rtt();
+    }
+
+    #[test]
+    #[cfg(klog_backend = "semihosting")]
+    fn init_rtt_semihosting_backend_is_noop() {
+        // Semihosting backend does not require RTT init.
+        init_rtt();
+    }
+
+    #[test]
+    #[cfg(klog_backend = "swo")]
+    fn init_rtt_swo_backend_is_noop() {
+        // SWO backend does not require RTT init.
+        init_rtt();
+    }
+
+    #[test]
+    #[cfg(klog_backend = "defmt")]
+    fn init_rtt_defmt_backend_is_noop() {
+        // defmt backend does not require RTT init.
         init_rtt();
     }
 }
