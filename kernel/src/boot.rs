@@ -13,6 +13,16 @@ use crate::{
     semaphore::SemaphorePool,
 };
 
+/// Initialize the RTT logging channel (RTT backend).
+#[cfg(klog_backend = "rtt")]
+fn init_rtt() {
+    rtt_target::rtt_init_print!();
+}
+
+/// No-op RTT init for non-RTT backends.
+#[cfg(not(klog_backend = "rtt"))]
+fn init_rtt() {}
+
 /// Minimum MPU region size (32 bytes for ARMv7-M and ARMv8-M).
 pub const MPU_MIN_REGION_SIZE: u32 = 32;
 
@@ -316,8 +326,7 @@ where
     use core::ptr::addr_of;
     use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
 
-    #[cfg(klog_backend = "rtt")]
-    rtt_target::rtt_init_print!();
+    init_rtt();
 
     let storage_addr = addr_of!(crate::state::UNIFIED_KERNEL_STORAGE) as u32;
     check_storage_alignment(storage_addr, crate::state::KERNEL_ALIGNMENT as u32)?;
@@ -1341,5 +1350,12 @@ mod tests {
             0xCAFE_BABE,
             "r0_hint for partition 1 must survive init_kernel_state round-trip"
         );
+    }
+
+    #[test]
+    fn init_rtt_is_callable_under_host_cfg() {
+        // Under host builds (klog_backend=none), init_rtt() should be a no-op.
+        // This verifies the cfg gates compile correctly for all backends.
+        init_rtt();
     }
 }
