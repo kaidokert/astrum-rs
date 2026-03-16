@@ -1108,7 +1108,7 @@ where
                 mpu_region: *m.mpu_region(),
                 peripheral_regions: m.peripheral_regions().clone(),
                 r0_hint: m.r0_hint(),
-                code_mpu_region: None,
+                code_mpu_region: m.code_mpu_region().copied(),
                 stack_base: m.stack_base(),
                 stack_size: m.stack_size_bytes(),
             };
@@ -1219,6 +1219,9 @@ where
                 mpu_region,
             )
             .with_peripheral_regions(&c.peripheral_regions);
+            if let Some(code_region) = c.code_mpu_region {
+                pcb = pcb.with_code_mpu_region(code_region);
+            }
             pcb.set_r0_hint(c.r0_hint);
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
@@ -2905,6 +2908,27 @@ mod tests {
         assert_eq!(k.partitions().len(), 2);
         assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
         assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1000);
+    }
+
+    #[test]
+    fn kernel_new_forwards_code_mpu_region() {
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 5)).unwrap();
+        schedule.start();
+
+        let mut stk0 = AlignedStack1K::default();
+        let data_region = MpuRegion::new(0x2000_0000, 4096, 0);
+        let code_region = MpuRegion::new(0x0800_0000, 8192, 0);
+        let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0000, data_region, 0)
+            .unwrap()
+            .with_code_mpu_region(code_region);
+        let k = Kernel::<TestConfig>::new(schedule, &[m0]).unwrap();
+        let pcb = k.partitions().get(0).unwrap();
+        let got = pcb
+            .code_mpu_region()
+            .expect("code_mpu_region should be Some");
+        assert_eq!(got.base(), 0x0800_0000);
+        assert_eq!(got.size(), 8192);
     }
 
     // ---- unpack_packed_r2 unit tests ----
