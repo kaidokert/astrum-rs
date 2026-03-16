@@ -490,8 +490,6 @@ macro_rules! define_unified_harness {
     };
     // Internal: full implementation with boot() calling init_kernel() internally.
     // $sched and $entries are macro-level expressions pasted into boot()'s body.
-    // TODO: reviewer false positive – reported a corrupted `@cortex-m-rtos/target/...` tag
-    // but no such identifier exists in this file; the diff was truncated.
     (@impl $Config:ty, $sched:expr, $entries:expr, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
 
