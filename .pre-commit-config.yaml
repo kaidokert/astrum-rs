@@ -20,6 +20,12 @@ repos:
         language: system
         files: \.rs$
         pass_filenames: false
+      - id: check-rtt-lint
+        name: "check rtt_init_print! confined to boot.rs"
+        entry: make check-rtt-lint
+        language: system
+        files: \.rs$
+        pass_filenames: false
       - id: codespell
         name: codespell
         entry: codespell --skip="*.lock,./target"
