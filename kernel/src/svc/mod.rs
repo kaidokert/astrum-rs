@@ -1021,6 +1021,7 @@ where
     pub sleep_queue: crate::waitqueue::SleepQueue<{ C::N }>,
 }
 
+#[cfg(test)]
 impl<C: KernelConfig> Default for Kernel<C>
 where
     [(); C::N]:,
@@ -1047,7 +1048,6 @@ where
     >,
 {
     fn default() -> Self {
-        #[allow(deprecated)]
         Self::new_empty(
             #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
@@ -1340,13 +1340,10 @@ where
 
     /// Create a `Kernel` with empty partition table and schedule.
     ///
-    /// This is for backward compatibility with examples that manage
-    /// partitions via `KernelState` separately.
-    ///
-    /// # Deprecated
-    /// Use [`Kernel::new()`] instead.
-    #[deprecated(since = "0.1.0", note = "use Kernel::new() instead")]
-    pub fn new_empty(
+    /// Only available in test builds for backward-compatible test helpers.
+    /// Production code should use [`Kernel::new()`] instead.
+    #[cfg(test)]
+    pub(crate) fn new_empty(
         #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
             'static,
             { C::DR },

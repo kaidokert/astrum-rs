@@ -391,16 +391,33 @@ where
     // matches the requirement of Kernel<C> which contains stack storage
     // fields that require KERNEL_ALIGNMENT-byte alignment. The compile-time
     // assertion above guarantees that Kernel<C> fits within this buffer. The
-    // pointer cast from *mut KernelStorageBuffer to *mut Kernel<C> is valid
-    // because:
+    // pointer cast from *mut MaybeUninit<KernelStorageBuffer> to
+    // *mut MaybeUninit<Kernel<C>> is valid because:
     // 1. Both pointers point to the same memory location
     // 2. The buffer has sufficient size (verified at compile time)
     // 3. The buffer has sufficient alignment (KERNEL_ALIGNMENT >= Kernel<C> alignment)
-    // 4. The write initializes the memory with a valid Kernel<C> value
-    let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>;
+    // 4. MaybeUninit::write() initializes the memory with a valid Kernel<C> value
+    let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut MaybeUninit<Kernel<C>>;
 
-    // SAFETY: ptr points to UNIFIED_KERNEL_STORAGE with sufficient size and alignment.
-    init_kernel_state_at(ptr, kernel)
+    // Alignment check: verify the storage address is KERNEL_ALIGNMENT-aligned.
+    if check_kernel_alignment(mu_ptr as *const u8).is_err() {
+        return Err("UNIFIED_KERNEL_STORAGE misaligned");
+    }
+    debug_assert!(
+        mu_ptr.cast::<Kernel<C>>().is_aligned(),
+        "ptr not aligned for Kernel<C>: buffer alignment {} but type requires {} byte alignment",
+        KERNEL_ALIGNMENT,
+        align_of::<Kernel<C>>()
+    );
+
+    // SAFETY: mu_ptr points to UNIFIED_KERNEL_STORAGE which has sufficient size
+    // and alignment (verified above). We dereference the raw pointer to call
+    // MaybeUninit::write(), which initializes the memory without reading it.
+    // TODO: raw pointer deref needed because storage is type-erased (KernelStorageBuffer);
+    // could be eliminated if UNIFIED_KERNEL_STORAGE were generic over Kernel<C>.
+    unsafe { (*mu_ptr).write(kernel) };
+    KERNEL_INITIALIZED.store(true, Ordering::Release);
+    Ok(())
 }
 
 /// Get a raw pointer to the kernel state storage.
@@ -429,7 +446,10 @@ where
     // via repr(C, align(4096))). The caller must ensure init_kernel_state() was
     // called before dereferencing the returned pointer, and must provide proper
     // synchronization for access.
-    addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>
+    let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut MaybeUninit<Kernel<C>>;
+    // SAFETY: as_mut_ptr() returns pointer to inner value without assuming init.
+    // TODO: raw pointer deref needed because storage is type-erased; see init_kernel_state.
+    unsafe { (*mu_ptr).as_mut_ptr() }
 }
 
 /// Access the unified kernel state immutably within a critical section.
@@ -484,9 +504,9 @@ where
     Ok(cortex_m::interrupt::free(|_cs| {
         // SAFETY: KERNEL_INITIALIZED (Acquire) guarantees init_kernel_state()
         // completed (Release). Critical section prevents concurrent access.
-        let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *const Kernel<C>;
-        // SAFETY: ptr valid per KERNEL_INITIALIZED; critical section is exclusive.
-        let kernel = unsafe { &*ptr };
+        let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *const MaybeUninit<Kernel<C>>;
+        // SAFETY: KERNEL_INITIALIZED guarantees the MaybeUninit was written.
+        let kernel = unsafe { (*mu_ptr).assume_init_ref() };
         f(kernel)
     }))
 }
@@ -543,9 +563,9 @@ where
     Ok(cortex_m::interrupt::free(|_cs| {
         // SAFETY: KERNEL_INITIALIZED (Acquire) guarantees init_kernel_state()
         // completed (Release). Critical section prevents concurrent access.
-        let ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut Kernel<C>;
-        // SAFETY: ptr valid per KERNEL_INITIALIZED; critical section is exclusive.
-        let kernel = unsafe { &mut *ptr };
+        let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut MaybeUninit<Kernel<C>>;
+        // SAFETY: KERNEL_INITIALIZED guarantees the MaybeUninit was written.
+        let kernel = unsafe { (*mu_ptr).assume_init_mut() };
         f(kernel)
     }))
 }
@@ -562,7 +582,6 @@ mod tests {
     /// Helper to create a test kernel instance.
     ///
     /// Abstracts cfg-gated construction logic for DRY compliance.
-    #[allow(deprecated)]
     fn create_test_kernel() -> Kernel<TestConfig> {
         #[cfg(not(feature = "dynamic-mpu"))]
         {
@@ -789,6 +808,38 @@ mod tests {
         assert_eq!(
             result.unwrap_err(),
             "nested bottom-half invocation detected"
+        );
+    }
+
+    /// Verifies the init_kernel_state_at + assume_init_ref round-trip on
+    /// aligned storage, mirroring the actual production write/read path.
+    #[test]
+    fn init_kernel_state_at_then_assume_init_ref_round_trip() {
+        #[repr(C, align(4096))]
+        struct Aligned(MaybeUninit<[u8; MAX_KERNEL_SIZE]>);
+        let mut storage = Aligned(MaybeUninit::uninit());
+
+        let ptr = storage.0.as_mut_ptr() as *mut Kernel<TestConfig>;
+        let kernel = create_test_kernel();
+        // SAFETY: ptr is aligned and storage is large enough for Kernel<TestConfig>.
+        let result = unsafe { init_kernel_state_at(ptr, kernel) };
+        assert!(result.is_ok(), "init_kernel_state_at must succeed");
+
+        // Read back via MaybeUninit::assume_init_ref, same path as with_kernel.
+        let mu_ptr = storage.0.as_ptr() as *const MaybeUninit<Kernel<TestConfig>>;
+        // SAFETY: init_kernel_state_at wrote a valid Kernel<TestConfig> above.
+        let recovered = unsafe { (*mu_ptr).assume_init_ref() };
+        assert_eq!(
+            recovered.current_partition, 255,
+            "current_partition sentinel must survive round-trip"
+        );
+        assert!(
+            recovered.active_partition.is_none(),
+            "active_partition must be None after init"
+        );
+        assert_eq!(
+            recovered.ticks_dropped, 0,
+            "ticks_dropped must be zero after init"
         );
     }
 }

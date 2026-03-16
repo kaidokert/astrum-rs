@@ -132,8 +132,9 @@ macro_rules! svc {
 /// // kernel::define_kernel_runtime!(KERNEL: Kernel<MyConfig>, dynamic: STRATEGY, systick);
 ///
 /// fn main() {
-///     let k = Kernel::<MyConfig>::new_empty();
-///     store_kernel(k);
+///     // Build schedule and partition memory descriptors, then:
+///     // let k = Kernel::<MyConfig>::new(schedule, &memories);
+///     // store_kernel(k); // k is valid if new() returned Ok
 /// }
 /// ```
 #[macro_export]
