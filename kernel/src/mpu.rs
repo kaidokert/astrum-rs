@@ -251,10 +251,6 @@ pub(crate) fn partition_mpu_regions(
     ])
 }
 
-pub(crate) fn partition_mpu_regions_opt(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
-    partition_mpu_regions(pcb).ok()
-}
-
 /// Build a deny-all MPU region set: region 0 is background no-access
 /// covering the full 4 GiB address space (XN), regions 1-3 are disabled.
 /// Used as a safe fallback when `partition_mpu_regions` returns `None`,
@@ -487,13 +483,14 @@ const DYNAMIC_REGION_COUNT: usize = 1;
 /// only the data region at index 2, destined for hardware region R4).
 pub fn partition_dynamic_regions(
     pcb: &PartitionControlBlock,
-) -> Option<[(u32, u32); DYNAMIC_REGION_COUNT]> {
-    let regions = partition_mpu_regions_opt(pcb)?;
+) -> Result<[(u32, u32); DYNAMIC_REGION_COUNT], MpuError> {
+    let regions = partition_mpu_regions(pcb)?;
     let mut out = [(0u32, 0u32); DYNAMIC_REGION_COUNT];
+    // TODO(panic-free): use .get(..) and return MpuError instead of panicking indexing
     out.copy_from_slice(
         &regions[DYNAMIC_REGION_START..DYNAMIC_REGION_START + DYNAMIC_REGION_COUNT],
     );
-    Some(out)
+    Ok(out)
 }
 
 /// Disable the MPU and issue DSB+ISB memory barriers.
@@ -874,8 +871,9 @@ mod tests {
     #[test]
     fn partition_dynamic_regions_returns_data_region() {
         let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096);
-        let full = partition_mpu_regions(&pcb).unwrap();
-        let dynamic = partition_dynamic_regions(&pcb).unwrap();
+        let full = partition_mpu_regions(&pcb).expect("valid PCB must produce Ok regions");
+        let dynamic =
+            partition_dynamic_regions(&pcb).expect("valid PCB must produce Ok dynamic regions");
         // Should return exactly the data region (index 2).
         assert_eq!(dynamic.len(), 1);
         assert_eq!(dynamic[0], full[2]);
@@ -887,7 +885,7 @@ mod tests {
     #[test]
     fn partition_dynamic_regions_invalid_pcb() {
         let pcb = make_pcb(0x0000_0000, 0x2000_0000, 100); // not power of 2
-        assert!(partition_dynamic_regions(&pcb).is_none());
+        assert!(partition_dynamic_regions(&pcb).is_err());
     }
 
     #[test]
@@ -2305,7 +2303,8 @@ mod tests {
         precompute_mpu_cache(&mut pcb).unwrap();
 
         let cached = pcb.cached_dynamic_region();
-        let dynamic = partition_dynamic_regions(&pcb).unwrap();
+        let dynamic =
+            partition_dynamic_regions(&pcb).expect("valid PCB must produce Ok dynamic regions");
         assert_eq!(
             cached, dynamic[0],
             "cached_dynamic_region must match partition_dynamic_regions"
