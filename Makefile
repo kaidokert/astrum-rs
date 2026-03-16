@@ -6,7 +6,7 @@
 TARGET   ?= thumbv7m-none-eabi
 FEATURES ?= qemu,log-semihosting
 
-.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test check-rtt check-rtt-combos
+.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test check-rtt check-rtt-combos check-rtt-lint
 
 # Minimal single-partition smoke test (SYS_YIELD)
 smoke-test:
@@ -39,6 +39,18 @@ check-rtt-combos:
 	cargo build -p kernel --lib --features log-rtt,log-defmt --target $(TARGET)
 	cargo build -p kernel --lib --features log-semihosting,log-rtt --target $(TARGET)
 	cargo build -p kernel --lib --features log-semihosting,log-defmt --target $(TARGET)
+
+# Lint: rtt_init_print! must only appear in boot.rs
+check-rtt-lint:
+	@offenders=$$(grep -rn 'rtt_init_print!' kernel/src/ kernel/examples/ --include='*.rs' | grep -v 'boot\.rs:' || true); \
+	if [ -n "$$offenders" ]; then \
+		echo "FAIL: rtt_init_print! must only be used in kernel/src/boot.rs."; \
+		echo "      Use kernel::init_rtt() instead."; \
+		echo "$$offenders"; \
+		exit 1; \
+	fi
+	# TODO: reviewer false positive — @echo below is Make's standard shell echo (@ suppresses command echo), not a .rs file
+	@echo "  ok — rtt_init_print! confined to boot.rs"
 
 # Run all QEMU integration examples
 test-qemu:
