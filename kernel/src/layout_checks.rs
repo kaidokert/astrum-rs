@@ -1,4 +1,4 @@
-/// Shared compile-time layout assertions for `Kernel<Config>` / `Core`.
+/// Shared compile-time layout assertions for `Kernel<'mem, Config>` / `Core`.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! assert_kernel_layout {

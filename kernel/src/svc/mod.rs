@@ -644,21 +644,21 @@ macro_rules! define_unified_kernel {
         // directly, avoiding function call overhead during context switch.
         // ============================================================
 
-        /// Offset of `current_partition` field in `Kernel<C>`.
+        /// Offset of `current_partition` field in `Kernel<'mem, C>`.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
         #[used]
         static KERNEL_CURRENT_PARTITION_OFFSET: usize =
             ::core::mem::offset_of!($crate::svc::Kernel<'static, $Config>, current_partition);
 
-        /// Offset of `ticks_dropped` field in `Kernel<C>`.
+        /// Offset of `ticks_dropped` field in `Kernel<'mem, C>`.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
         #[used]
         static KERNEL_TICKS_DROPPED_OFFSET: usize =
             ::core::mem::offset_of!($crate::svc::Kernel<'static, $Config>, ticks_dropped);
 
-        /// Offset of `core` field in `Kernel<C>`.
+        /// Offset of `core` field in `Kernel<'mem, C>`.
         #[cfg_attr(not(test), no_mangle)]
         #[cfg_attr(not(test), link_section = ".rodata")]
         #[used]
@@ -1405,7 +1405,7 @@ where
     pub fn debug_assert_self_aligned(&self) {
         debug_assert!(
             (self as *const Self as usize).is_multiple_of(core::mem::align_of::<Self>()),
-            "Kernel<C> instance at {:p} is not aligned to {} bytes",
+            "Kernel<'mem, C> instance at {:p} is not aligned to {} bytes",
             self as *const Self,
             core::mem::align_of::<Self>()
         );

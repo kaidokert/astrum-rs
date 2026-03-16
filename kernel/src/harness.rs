@@ -233,7 +233,7 @@ macro_rules! partition_stacks {
 /// ```ignore
 /// kernel::define_unified_harness!(DemoConfig, |tick, k| {
 ///     // tick: current tick count (u32)
-///     // k: &mut Kernel<Config>
+///     // k: &mut Kernel<'mem, Config>
 ///     if tick == 10 { /* verify something */ }
 /// });
 /// ```

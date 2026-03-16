@@ -44,7 +44,7 @@
 //! `harness.rs`) enforces the initialization-before-use invariant:
 //!
 //! 1. **Single initialization**: `init_kernel_state()` is called exactly once
-//!    from `main()` before `boot()` is invoked. This writes a valid `Kernel<C>`
+//!    from `main()` before `boot()` is invoked. This writes a valid `Kernel<'mem, C>`
 //!    instance into `UNIFIED_KERNEL_STORAGE`.
 //!
 //! 2. **Interrupts disabled during init**: The initialization occurs before
@@ -108,7 +108,7 @@ use crate::svc::Kernel;
 
 /// Maximum size in bytes for kernel state storage.
 ///
-/// This must be large enough to hold `Kernel<C>` for any configuration used.
+/// This must be large enough to hold `Kernel<'mem, C>` for any configuration used.
 /// The `init_kernel_state` function includes a compile-time assertion to verify
 /// that the actual kernel size does not exceed this limit.
 ///
@@ -122,7 +122,7 @@ use crate::svc::Kernel;
 ///
 /// `MAX_KERNEL_SIZE` (32 KiB) and [`LITERAL_POOL_OFFSET_LIMIT`](crate::pendsv::LITERAL_POOL_OFFSET_LIMIT)
 /// (64 KiB) are **independent constraints**. `MAX_KERNEL_SIZE` governs
-/// how much RAM is reserved for the entire `Kernel<C>` struct, while the
+/// how much RAM is reserved for the entire `Kernel<'mem, C>` struct, while the
 /// literal-pool offset limit is a conservative sanity-check for struct
 /// field offsets accessed by PendSV assembly (which uses literal-pool
 /// indirection, not Thumb2 imm12 encoding).
