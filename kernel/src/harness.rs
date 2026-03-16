@@ -511,23 +511,41 @@ macro_rules! define_unified_harness {
 
         // TODO: `init_kernel` is generated in the caller's local scope; acceptable
         // for a harness macro but could shadow other symbols if used carelessly.
-        /// Create a kernel via `new()` from
-        /// `__PARTITION_STACKS` with the given entry points and store it.
+        /// Build a kernel from `__PARTITION_STACKS` with the given entry points
+        /// and store it into global kernel state.
+        ///
+        /// Each entry in `entries` is `(entry_point_fn, r0_hint)`.  The function
+        /// pointer is converted to a `u32` address and written into the
+        /// corresponding partition memory descriptor.  `r0_hint` is forwarded
+        /// via `with_r0_hint` so that `boot_preconfigured` can pass it to
+        /// `init_stack_frame` as `r0`.  MPU regions use sentinel values
+        /// `(base=0, size=0, attrs=0)` because the harness does not configure
+        /// per-partition MPU regions.
         fn init_kernel(
             sched: $crate::scheduler::ScheduleTable<
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
             entries: &[(extern "C" fn() -> !, u32)],
         ) -> Result<(), $crate::harness::BootError> {
+            use $crate::partition::{ExternalPartitionMemory, MpuRegion};
             // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
             // by this macro arm, which is invoked at most once per binary (enforced
             // by the linker via duplicate symbol errors).  `init_kernel()` is called
             // exactly once from `boot()` before interrupts are enabled, so there are
             // no concurrent accesses.
             let stacks = unsafe { &mut __PARTITION_STACKS.0 };
-            let k = $crate::boot::create_kernel_from_stacks::<$Config,
-                { <$Config as $crate::config::KernelConfig>::STACK_WORDS }>(
-                sched, stacks, entries,
-            )?;
+            let sentinel_mpu = MpuRegion::new(0, 0, 0);
+            let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
+                { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
+            for (i, (stk, &(ep, hint))) in stacks.iter_mut().zip(entries.iter()).enumerate() {
+                let entry = ep as *const () as u32;
+                let mem = ExternalPartitionMemory::new(&mut stk[..], entry, sentinel_mpu, i as u8)
+                    .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?
+                    .with_r0_hint(hint);
+                memories.push(mem)
+                    .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?;
+            }
+            let k = $crate::svc::Kernel::<$Config>::new(sched, &memories)
+                .map_err(|_| $crate::harness::BootError::KernelNotInitialized)?;
             store_kernel(k);
             Ok(())
         }
@@ -570,24 +588,36 @@ macro_rules! define_unified_harness {
              <$Config as $crate::config::KernelConfig>::N],
         );
 
-        /// Create a kernel via `new()` from
-        /// `__PARTITION_STACKS` with the given entry points and store it.
+        /// Build a kernel from `__PARTITION_STACKS` with the given entry points
+        /// and store it into global kernel state.
+        ///
+        /// See the `@impl` arm's `init_kernel` for full documentation.
         #[allow(dead_code)]
         fn init_kernel(
             sched: $crate::scheduler::ScheduleTable<
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
             entries: &[(extern "C" fn() -> !, u32)],
         ) -> Result<(), $crate::harness::BootError> {
+            use $crate::partition::{ExternalPartitionMemory, MpuRegion};
             // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
             // by this macro arm, which is invoked at most once per binary (enforced
             // by the linker via duplicate symbol errors).  `init_kernel()` is called
             // exactly once from `main()` before interrupts are enabled, so there are
             // no concurrent accesses.
             let stacks = unsafe { &mut __PARTITION_STACKS.0 };
-            let k = $crate::boot::create_kernel_from_stacks::<$Config,
-                { <$Config as $crate::config::KernelConfig>::STACK_WORDS }>(
-                sched, stacks, entries,
-            )?;
+            let sentinel_mpu = MpuRegion::new(0, 0, 0);
+            let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
+                { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
+            for (i, (stk, &(ep, hint))) in stacks.iter_mut().zip(entries.iter()).enumerate() {
+                let entry = ep as *const () as u32;
+                let mem = ExternalPartitionMemory::new(&mut stk[..], entry, sentinel_mpu, i as u8)
+                    .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?
+                    .with_r0_hint(hint);
+                memories.push(mem)
+                    .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?;
+            }
+            let k = $crate::svc::Kernel::<$Config>::new(sched, &memories)
+                .map_err(|_| $crate::harness::BootError::KernelNotInitialized)?;
             store_kernel(k);
             Ok(())
         }
