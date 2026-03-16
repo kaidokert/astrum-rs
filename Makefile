@@ -6,7 +6,7 @@
 TARGET   ?= thumbv7m-none-eabi
 FEATURES ?= qemu,log-semihosting
 
-.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test
+.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test check-rtt
 
 # Minimal single-partition smoke test (SYS_YIELD)
 smoke-test:
@@ -28,6 +28,10 @@ custom-ivt-test:
 # Run IRQ dispatch test (irq_dispatch_test)
 irq-dispatch-test:
 	cargo run -p kernel --target $(TARGET) --features $(FEATURES),custom-ivt --example irq_dispatch_test
+
+# Build all examples with log-rtt to catch duplicate _SEGGER_RTT symbols at link time
+check-rtt:
+	cargo build -p kernel --examples --features log-rtt --target $(TARGET)
 
 # Run all QEMU integration examples
 test-qemu:

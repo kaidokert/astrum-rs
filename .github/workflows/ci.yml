@@ -28,6 +28,9 @@ jobs:
 
       - name: Run CI
         run: ./scripts/ci.sh
+        # NOTE: ci.sh includes 'cargo build --examples --features log-rtt'
+        # to catch duplicate-symbol regressions at link time.
+        # TODO: consider extracting log-rtt link check into its own workflow step for visibility
 
   hardware:
     needs: qemu
