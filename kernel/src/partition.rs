@@ -297,9 +297,6 @@ impl PartitionControlBlock {
     /// - `BaseNotAligned`: base is not aligned to size
     /// - `AddressOverflow`: base + size overflows u32
     ///
-    /// # Deprecated
-    /// Stack fields are now set at construction via
-    /// [`PartitionMemory`](crate::boot::PartitionMemory).
     #[deprecated(
         since = "0.1.0",
         note = "stack fields are set at construction via PartitionMemory"

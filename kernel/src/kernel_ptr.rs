@@ -88,11 +88,13 @@ mod tests {
     fn create_test_kernel() -> Kernel<'static, TestConfig> {
         #[cfg(not(feature = "dynamic-mpu"))]
         {
+            #[allow(deprecated)]
             Kernel::new_empty()
         }
         #[cfg(feature = "dynamic-mpu")]
         {
             let reg = crate::virtual_device::DeviceRegistry::default();
+            #[allow(deprecated)]
             Kernel::new_empty(reg)
         }
     }

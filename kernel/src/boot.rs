@@ -1,4 +1,7 @@
 //! Kernel boot initialization.
+//!
+// TODO: boot_external() was requested for deprecation but does not exist in this
+// codebase. Deferred — no action needed unless the API is added in the future.
 
 #[allow(unused_imports)]
 use crate::{
@@ -1145,11 +1148,13 @@ mod tests {
         fn create_test_kernel() -> crate::svc::Kernel<'static, BootTestConfig> {
             #[cfg(not(feature = "dynamic-mpu"))]
             {
+                #[allow(deprecated)]
                 crate::svc::Kernel::new_empty()
             }
             #[cfg(feature = "dynamic-mpu")]
             {
                 let reg = crate::virtual_device::DeviceRegistry::default();
+                #[allow(deprecated)]
                 crate::svc::Kernel::new_empty(reg)
             }
         }

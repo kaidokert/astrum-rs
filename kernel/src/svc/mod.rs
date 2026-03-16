@@ -1023,6 +1023,8 @@ where
     _memory: PhantomData<&'mem ()>,
 }
 
+// TODO: reviewer false positive — this Default impl is #[cfg(test)], so the
+// call to the #[cfg(test)] new_empty() cannot cause a production build breakage.
 #[cfg(test)]
 impl<C: KernelConfig> Default for Kernel<'_, C>
 where
@@ -1050,6 +1052,7 @@ where
     >,
 {
     fn default() -> Self {
+        #[allow(deprecated)]
         Self::new_empty(
             #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
@@ -1141,8 +1144,6 @@ where
     /// [`DeviceRegistry::new()`] is used.  Addresses are patched later
     /// by [`boot_preconfigured()`](crate::boot::boot_preconfigured).
     ///
-    /// # Deprecated
-    /// Use [`Kernel::new()`] with [`PartitionMemory`](crate::boot::PartitionMemory) instead.
     #[deprecated(
         since = "0.1.0",
         note = "use Kernel::new() with PartitionMemory instead"
@@ -1348,6 +1349,7 @@ where
     ///
     /// Only available in test builds for backward-compatible test helpers.
     /// Production code should use [`Kernel::new()`] instead.
+    #[deprecated(since = "0.1.0", note = "use Kernel::new() instead")]
     #[cfg(test)]
     pub(crate) fn new_empty(
         #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
@@ -2430,9 +2432,6 @@ where
     /// `false` if the partition index is out of bounds or the MPU validation
     /// fails.
     ///
-    /// # Deprecated
-    /// Stack fields are now set at construction via
-    /// [`PartitionMemory`](crate::boot::PartitionMemory).
     #[deprecated(
         since = "0.1.0",
         note = "stack fields are set at construction via PartitionMemory"
@@ -7879,6 +7878,7 @@ mod tests {
         ($Config:ty, $schedule:expr) => {{
             #[cfg(not(feature = "dynamic-mpu"))]
             {
+                #[allow(deprecated)]
                 Kernel::<$Config>::create_sentinels($schedule)
             }
             #[cfg(feature = "dynamic-mpu")]
@@ -7887,6 +7887,7 @@ mod tests {
                 schedule
                     .add_system_window(1)
                     .expect("schedule must have room for system window");
+                #[allow(deprecated)]
                 Kernel::<$Config>::create_sentinels(schedule)
             }
         }};
@@ -8001,6 +8002,7 @@ mod tests {
     #[test]
     fn create_sentinels_empty_schedule_fails() {
         let s = ScheduleTable::new();
+        #[allow(deprecated)]
         let result = Kernel::<TestConfig>::create_sentinels(s);
         assert!(matches!(result, Err(ConfigError::ScheduleEmpty)));
     }
@@ -9363,6 +9365,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "dynamic-mpu")]
+    #[allow(deprecated)]
     fn bottom_half_stale_flag_set_when_threshold_exceeded() {
         // Create a kernel with a schedule that has NO system window.
         // This allows ticks_since_bottom_half to exceed the threshold.
@@ -9406,6 +9409,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "dynamic-mpu")]
+    #[allow(deprecated)]
     fn clear_bottom_half_stale_resets_flag() {
         // Set up a kernel where the stale flag can be triggered
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
@@ -9444,6 +9448,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "dynamic-mpu")]
+    #[allow(deprecated)]
     fn fallback_revoke_noop_when_not_stale() {
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
         k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
@@ -9469,6 +9474,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "dynamic-mpu")]
+    #[allow(deprecated)]
     fn fallback_revoke_expired_buffers_when_stale() {
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
         k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
@@ -9497,6 +9503,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "dynamic-mpu")]
+    #[allow(deprecated)]
     fn fallback_revoke_skips_non_expired_buffers() {
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
         k.schedule_mut().add(ScheduleEntry::new(0, 50)).unwrap();
@@ -9528,6 +9535,7 @@ mod tests {
     /// buffers with expired deadlines even without a SystemWindow event.
     #[test]
     #[cfg(feature = "dynamic-mpu")]
+    #[allow(deprecated)]
     fn systick_handler_fallback_revokes_expired_buffers() {
         use crate::buffer_pool::BorrowState;
 
@@ -9590,6 +9598,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "dynamic-mpu")]
+    #[allow(deprecated)]
     fn query_bottom_half_returns_stale_flag_in_r1() {
         // Use new_empty so we can exceed the threshold without system window reset
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
@@ -11735,6 +11744,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn start_schedule_empty_returns_none() {
         // Create empty kernel via new_empty
         #[cfg(not(feature = "dynamic-mpu"))]
