@@ -651,6 +651,12 @@ pub enum ConfigError {
         region_index: usize,
         detail: MpuError,
     },
+    /// A partition's entry point is not aligned to the required boundary.
+    EntryPointMisaligned {
+        partition_id: u8,
+        entry_point: u32,
+        required_alignment: u32,
+    },
     /// The schedule contains no system window entries.
     ///
     /// When `dynamic-mpu` is enabled, system windows are required for
@@ -729,6 +735,15 @@ impl core::fmt::Display for ConfigError {
             } => write!(
                 f,
                 "partition {partition_id}: peripheral region {region_index} invalid: {detail}"
+            ),
+            Self::EntryPointMisaligned {
+                partition_id,
+                entry_point,
+                required_alignment,
+            } => write!(
+                f,
+                "partition {partition_id}: entry point {entry_point:#010x} \
+                 not aligned to {required_alignment} bytes"
             ),
             #[cfg(feature = "dynamic-mpu")]
             Self::NoSystemWindow => write!(
@@ -1844,6 +1859,21 @@ mod tests {
         assert!(msg.contains("id 7"), "should contain actual_id");
         assert!(msg.contains("expected 2"), "should contain expected_id");
         assert!(msg.contains("ids must match array index"));
+    }
+
+    #[test]
+    fn config_error_display_entry_point_misaligned() {
+        let msg = format!(
+            "{}",
+            ConfigError::EntryPointMisaligned {
+                partition_id: 3,
+                entry_point: 0x0800_0002,
+                required_alignment: 4,
+            }
+        );
+        assert!(msg.contains("3"), "should contain partition_id");
+        assert!(msg.contains("0x08000002"), "should contain entry_point");
+        assert!(msg.contains("4"), "should contain required_alignment");
     }
 
     #[test]
