@@ -1023,8 +1023,6 @@ where
     _memory: PhantomData<&'mem ()>,
 }
 
-// TODO: reviewer false positive — this Default impl is #[cfg(test)], so the
-// call to the #[cfg(test)] new_empty() cannot cause a production build breakage.
 #[cfg(test)]
 impl<C: KernelConfig> Default for Kernel<'_, C>
 where
@@ -1134,6 +1132,11 @@ where
     /// [`DeviceRegistry::new()`] is used.  Addresses are patched later
     /// by [`boot_preconfigured()`](crate::boot::boot_preconfigured).
     ///
+    /// # Deprecation
+    ///
+    /// Use [`Kernel::new()`] with [`PartitionMemory`](crate::partition_memory::PartitionMemory)
+    /// instead.  `Kernel::new()` validates stack regions at construction time,
+    /// eliminating the need for sentinel PCBs that must be patched post-hoc.
     #[deprecated(
         since = "0.1.0",
         note = "use Kernel::new() with PartitionMemory instead"
@@ -1339,7 +1342,12 @@ where
     /// Create a `Kernel` with empty partition table and schedule.
     ///
     /// Only available in test builds for backward-compatible test helpers.
-    /// Production code should use [`Kernel::new()`] instead.
+    ///
+    /// # Deprecation
+    ///
+    /// Use [`Kernel::new()`] instead.  `new_empty()` exists only for legacy
+    /// test helpers; new tests should construct a fully-configured kernel
+    /// via `Kernel::new()` with appropriate test fixtures.
     #[deprecated(since = "0.1.0", note = "use Kernel::new() instead")]
     #[cfg(test)]
     pub(crate) fn new_empty(

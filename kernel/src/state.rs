@@ -428,7 +428,6 @@ where
 ///
 /// The returned pointer is only valid after [`init_kernel_state`] has been called.
 /// The caller must ensure proper synchronization when accessing the kernel state.
-// TODO: reviewer false positive — get_kernel_ptr return type updated to 'static in commit d8d6a32
 #[allow(dead_code)]
 pub unsafe fn get_kernel_ptr<C: KernelConfig>() -> *mut Kernel<'static, C>
 where
@@ -487,7 +486,6 @@ where
 ///
 /// Calling this function before `init_kernel_state()` has been called results
 /// in **Undefined Behavior** (dereferencing an uninitialized pointer).
-// TODO: reviewer false positive — with_kernel closure lifetime updated to 'static in commit d8d6a32
 #[cfg(not(test))]
 pub fn with_kernel<C, F, R>(f: F) -> Result<R, &'static str>
 where
@@ -547,7 +545,6 @@ where
 ///
 /// Calling this function before `init_kernel_state()` has been called results
 /// in **Undefined Behavior** (dereferencing an uninitialized pointer).
-// TODO: reviewer false positive — with_kernel_mut closure lifetime updated to 'static in commit d8d6a32
 #[cfg(not(test))]
 pub fn with_kernel_mut<C, F, R>(f: F) -> Result<R, &'static str>
 where
