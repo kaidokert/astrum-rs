@@ -590,6 +590,7 @@ impl PartitionConfig {
     /// Checks performed (in order):
     /// 1. The MPU region `(base, size)` must pass [`validate_mpu_region`].
     /// 2. Each peripheral region `(base, size)` must pass [`validate_mpu_region`].
+    /// 3. If present, the code MPU region `(base, size)` must pass [`validate_mpu_region`].
     pub fn validate(&self) -> Result<(), ConfigError> {
         // MPU region validation
         validate_mpu_region(self.mpu_region.base(), self.mpu_region.size()).map_err(|detail| {
@@ -605,6 +606,17 @@ impl PartitionConfig {
                 ConfigError::PeripheralRegionInvalid {
                     partition_id: self.id,
                     region_index: i,
+                    detail,
+                }
+            })?;
+        }
+
+        // TODO: consider a helper to reduce repetition if more region kinds are added
+        // Code MPU region validation
+        if let Some(region) = &self.code_mpu_region {
+            validate_mpu_region(region.base(), region.size()).map_err(|detail| {
+                ConfigError::CodeRegionInvalid {
+                    partition_id: self.id,
                     detail,
                 }
             })?;
@@ -2095,6 +2107,50 @@ mod tests {
         };
         let msg = format!("{e}");
         assert!(msg.contains("partition 2") && msg.contains("peripheral region 1"));
+    }
+
+    // ------------------------------------------------------------------
+    // PartitionConfig code_mpu_region validation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn validate_rejects_code_region_non_power_of_two_size() {
+        let mut cfg = valid_config();
+        cfg.code_mpu_region = Some(MpuRegion::new(0x0800_0000, 100, 0));
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::CodeRegionInvalid {
+                partition_id: 0,
+                detail: MpuError::SizeNotPowerOfTwo,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_code_region_misaligned_base() {
+        let mut cfg = valid_config();
+        cfg.code_mpu_region = Some(MpuRegion::new(0x0800_0100, 4096, 0));
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::CodeRegionInvalid {
+                partition_id: 0,
+                detail: MpuError::BaseNotAligned,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_accepts_valid_code_region() {
+        let mut cfg = valid_config();
+        cfg.code_mpu_region = Some(MpuRegion::new(0x0800_0000, 4096, 0));
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_passes_when_code_mpu_region_is_none() {
+        let cfg = valid_config();
+        assert_eq!(cfg.code_mpu_region, None);
+        assert_eq!(cfg.validate(), Ok(()));
     }
 
     // ------------------------------------------------------------------
