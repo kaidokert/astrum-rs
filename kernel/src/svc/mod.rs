@@ -1196,6 +1196,16 @@ where
                     },
                 )?;
             }
+            if let Some(ref code) = c.code_mpu_region {
+                if code.size() > 0 {
+                    crate::mpu::validate_mpu_region(code.base(), code.size()).map_err(
+                        |detail| ConfigError::CodeRegionInvalid {
+                            partition_id: c.id,
+                            detail,
+                        },
+                    )?;
+                }
+            }
             for (j, region) in c.peripheral_regions.iter().enumerate() {
                 crate::mpu::validate_mpu_region(region.base(), region.size()).map_err(
                     |detail| ConfigError::PeripheralRegionInvalid {
@@ -3576,6 +3586,82 @@ mod tests {
         sched.add_system_window(1).unwrap();
         let err = Kernel::<TestConfig>::new(sched, &mems);
         assert!(matches!(err, Err(ConfigError::PartitionTableFull)));
+    }
+
+    // ---- Kernel::new() code_mpu_region validation tests ----
+
+    /// Kernel::new() rejects a partition with an invalid code_mpu_region
+    /// (non-power-of-two size).
+    #[test]
+    fn kernel_new_rejects_invalid_code_mpu_region() {
+        use crate::partition_core::AlignedStack256B;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
+        let bad_code = MpuRegion::new(0x0800_0000, 100, 0); // 100 is not power-of-two
+        let mut stack = AlignedStack256B::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0000, data_mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(bad_code);
+        let err = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
+            .err()
+            .expect("should reject invalid code_mpu_region");
+        assert!(
+            matches!(
+                err,
+                ConfigError::CodeRegionInvalid {
+                    partition_id: 0,
+                    detail: MpuError::SizeNotPowerOfTwo,
+                }
+            ),
+            "Expected CodeRegionInvalid, got: {:?}",
+            err,
+        );
+    }
+
+    /// Kernel::new() accepts a partition with a valid code_mpu_region.
+    #[test]
+    fn kernel_new_accepts_valid_code_mpu_region() {
+        use crate::partition_core::AlignedStack256B;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
+        let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
+        let mut stack = AlignedStack256B::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0000, data_mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(code_mpu);
+        let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
+            .expect("valid code_mpu_region should be accepted");
+        let pcb = k.partitions().get(0).expect("partition 0 must exist");
+        let got = pcb.code_mpu_region().expect("code region should be set");
+        assert_eq!(got.base(), 0x0800_0000);
+        assert_eq!(got.size(), 8192);
+    }
+
+    /// Kernel::new() succeeds when no code_mpu_region is configured.
+    #[test]
+    fn kernel_new_accepts_no_code_mpu_region() {
+        use crate::partition_core::AlignedStack256B;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
+        let mut stack = AlignedStack256B::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0000, data_mpu, 0)
+            .unwrap();
+        let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
+            .expect("no code_mpu_region should be accepted");
+        let pcb = k.partitions().get(0).expect("partition 0 must exist");
+        assert!(
+            pcb.code_mpu_region().is_none(),
+            "code region should be None when not configured"
+        );
     }
 
     #[test]
