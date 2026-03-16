@@ -2039,11 +2039,22 @@ mod tests {
     // code_mpu_region: explicit code region in partition_mpu_regions
     // ------------------------------------------------------------------
 
+    /// Helper: build a PCB with an explicit code MPU region.
+    fn make_pcb_with_code_region(
+        entry: u32,
+        data_base: u32,
+        data_size: u32,
+        code_base: u32,
+        code_size: u32,
+    ) -> PartitionControlBlock {
+        make_pcb(entry, data_base, data_size)
+            .with_code_mpu_region(MpuRegion::new(code_base, code_size, 0))
+    }
+
     #[test]
     fn code_mpu_region_some_uses_explicit_base_and_size() {
         // Code at 0x0800_0000 (256 bytes), data at 0x2000_0000 (4 KiB).
-        let code_region = MpuRegion::new(0x0800_0000, 256, 0);
-        let pcb = make_pcb(0x0800_0000, 0x2000_0000, 4096).with_code_mpu_region(code_region);
+        let pcb = make_pcb_with_code_region(0x0800_0000, 0x2000_0000, 4096, 0x0800_0000, 256);
         let regions = partition_mpu_regions(&pcb).unwrap();
 
         // R1 (code): base = 0x0800_0000, size_field = encode_size(256) = 7
@@ -2057,6 +2068,21 @@ mod tests {
         let (data_rbar, data_rasr) = regions[2];
         assert_eq!(data_rbar, build_rbar(0x2000_0000, 2).unwrap());
         assert_eq!((data_rasr >> 1) & 0x1F, 11); // SIZE = 11 (4096 bytes)
+    }
+
+    #[test]
+    fn code_mpu_region_independent_sizes() {
+        // Code 512 bytes, data 8 KiB — R1 and R2 sizes must differ.
+        let pcb = make_pcb_with_code_region(0x0800_0000, 0x2000_0000, 8192, 0x0800_0000, 512);
+        let regions = partition_mpu_regions(&pcb).unwrap();
+
+        let (r1_rbar, r1_rasr) = regions[1];
+        assert_eq!(r1_rbar, build_rbar(0x0800_0000, 1).unwrap());
+        assert_eq!((r1_rasr >> 1) & 0x1F, 8); // SIZE = 8 (512 bytes)
+
+        let (r2_rbar, r2_rasr) = regions[2];
+        assert_eq!(r2_rbar, build_rbar(0x2000_0000, 2).unwrap());
+        assert_eq!((r2_rasr >> 1) & 0x1F, 12); // SIZE = 12 (8192 bytes)
     }
 
     #[test]
@@ -2077,19 +2103,41 @@ mod tests {
     }
 
     #[test]
+    fn code_mpu_region_entry_misaligned_to_data_size_succeeds() {
+        // Bug scenario: entry_point 0x0800_0100 is NOT aligned to data size
+        // (4096 = 0x1000), since 0x0800_0100 & 0xFFF = 0x100 != 0.  Without
+        // code_mpu_region legacy path would fail because it uses entry as
+        // code base with data_region_size.  With an explicit code_mpu_region
+        // whose base IS aligned to its own size, it must succeed.
+        let pcb_legacy = make_pcb(0x0800_0100, 0x2000_0000, 4096);
+        assert_eq!(partition_mpu_regions(&pcb_legacy), None); // legacy fails
+
+        let pcb_fixed =
+            make_pcb_with_code_region(0x0800_0100, 0x2000_0000, 4096, 0x0800_0000, 4096);
+        let regions = partition_mpu_regions(&pcb_fixed).unwrap(); // must succeed
+        let (code_rbar, code_rasr) = regions[1];
+        assert_eq!(code_rbar, build_rbar(0x0800_0000, 1).unwrap());
+        assert_eq!((code_rasr >> 1) & 0x1F, 11); // SIZE = 11 (4096)
+    }
+
+    #[test]
     fn code_mpu_region_invalid_code_returns_none() {
         // Code region with non-power-of-two size → validation fails → None.
-        let bad_code = MpuRegion::new(0x0800_0000, 100, 0);
-        let pcb = make_pcb(0x0800_0000, 0x2000_0000, 4096).with_code_mpu_region(bad_code);
+        let pcb = make_pcb_with_code_region(0x0800_0000, 0x2000_0000, 4096, 0x0800_0000, 100);
+        assert_eq!(partition_mpu_regions(&pcb), None);
+    }
+
+    #[test]
+    fn code_mpu_region_misaligned_base_returns_none() {
+        // Code base 0x0800_0100 not aligned to size 1024 → None.
+        let pcb = make_pcb_with_code_region(0x0800_0100, 0x2000_0000, 4096, 0x0800_0100, 1024);
         assert_eq!(partition_mpu_regions(&pcb), None);
     }
 
     #[test]
     fn code_mpu_region_invalid_data_returns_none() {
         // Valid code region but invalid data region → None.
-        let code_region = MpuRegion::new(0x0800_0000, 256, 0);
-        let pcb = make_pcb(0x0800_0000, 0x2000_0000, 100) // bad data size
-            .with_code_mpu_region(code_region);
+        let pcb = make_pcb_with_code_region(0x0800_0000, 0x2000_0000, 100, 0x0800_0000, 256);
         assert_eq!(partition_mpu_regions(&pcb), None);
     }
 }
