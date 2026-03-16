@@ -269,6 +269,13 @@ pub fn is_stack_aapcs_aligned(sp: u32) -> bool {
 /// Build a [`Kernel`] from caller-provided `stacks` via
 /// [`Kernel::new()`](crate::svc::Kernel::new)
 /// with the given entry points and sentinel MPU regions.
+///
+/// Each entry in `entries` is `(entry_point_fn, stack_hint)`.  The function
+/// pointer is converted to a `u32` address and written into the corresponding
+/// [`ExternalPartitionMemory`] descriptor.  `stack_hint` is currently unused
+/// (reserved for future stack-size validation).  MPU regions are set to
+/// sentinel values `(base=0, size=0, attrs=0)` because the harness does not
+/// configure per-partition MPU regions.
 pub fn create_kernel_from_stacks<C: KernelConfig, const SW: usize>(
     sched: ScheduleTable<{ C::SCHED }>,
     stacks: &mut [[u32; SW]],
@@ -1318,6 +1325,71 @@ mod tests {
                 base: 0x2000_0100,
                 size: 1024,
             })
+        );
+    }
+
+    // ============ create_kernel_from_stacks tests ============
+
+    use crate::{
+        compose_kernel_config, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    };
+
+    compose_kernel_config!(CkfsTestCfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+
+    #[allow(clippy::empty_loop)]
+    extern "C" fn dummy_entry_0() -> ! {
+        loop {}
+    }
+
+    #[allow(clippy::empty_loop)]
+    extern "C" fn dummy_entry_1() -> ! {
+        loop {}
+    }
+
+    #[test]
+    fn create_kernel_from_stacks_uses_real_entry_points() {
+        #[repr(C, align(1024))]
+        struct Aligned([[u32; 256]; 2]);
+        static mut STACKS: Aligned = Aligned([[0u32; 256]; 2]);
+        // SAFETY: test is single-threaded; no concurrent access.
+        let stacks = unsafe { &mut *core::ptr::addr_of_mut!(STACKS.0) };
+
+        let sched = ScheduleTable::<4>::round_robin(2, 5).unwrap();
+        let entries: &[(extern "C" fn() -> !, u32)] =
+            &[(dummy_entry_0, 1024), (dummy_entry_1, 1024)];
+
+        let k = create_kernel_from_stacks::<CkfsTestCfg, 256>(sched, stacks, entries)
+            .expect("kernel creation should succeed");
+
+        let expected_0 = dummy_entry_0 as *const () as u32;
+        let expected_1 = dummy_entry_1 as *const () as u32;
+        let pcb0 = k.pcb(0).expect("partition 0 must exist");
+        let pcb1 = k.pcb(1).expect("partition 1 must exist");
+        assert_eq!(pcb0.entry_point(), expected_0, "partition 0 entry point");
+        assert_eq!(pcb1.entry_point(), expected_1, "partition 1 entry point");
+        assert_ne!(pcb0.entry_point(), 0, "entry point 0 must not be sentinel");
+        assert_ne!(pcb1.entry_point(), 0, "entry point 1 must not be sentinel");
+    }
+
+    #[test]
+    fn create_kernel_from_stacks_single_entry_with_extra_stacks() {
+        #[repr(C, align(1024))]
+        struct Aligned([[u32; 256]; 2]);
+        static mut STACKS2: Aligned = Aligned([[0u32; 256]; 2]);
+        // SAFETY: test is single-threaded; no concurrent access.
+        let stacks = unsafe { &mut *core::ptr::addr_of_mut!(STACKS2.0) };
+
+        let sched = ScheduleTable::<4>::round_robin(1, 10).unwrap();
+        let entries: &[(extern "C" fn() -> !, u32)] = &[(dummy_entry_0, 1024)];
+
+        let k = create_kernel_from_stacks::<CkfsTestCfg, 256>(sched, stacks, entries)
+            .expect("kernel creation should succeed with 1 entry");
+
+        let pcb0 = k.pcb(0).expect("partition 0 must exist");
+        assert_eq!(
+            pcb0.entry_point(),
+            dummy_entry_0 as *const () as u32,
+            "partition 0 entry point"
         );
     }
 }
