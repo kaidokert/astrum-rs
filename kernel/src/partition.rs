@@ -881,6 +881,14 @@ impl<'mem> ExternalPartitionMemory<'mem> {
                 }
             })?;
         }
+        // Strip Thumb bit (bit[0]) and check 4-byte alignment (bit[1] must be 0).
+        if (entry_point & 0b10) != 0 {
+            return Err(ConfigError::EntryPointMisaligned {
+                partition_id,
+                entry_point,
+                required_alignment: 4,
+            });
+        }
         Ok(Self {
             stack,
             entry_point,
@@ -2931,10 +2939,10 @@ mod tests {
         let expected_base = buf.0.as_ptr() as u32;
         let mpu = MpuRegion::new(0x2000_0000, 256, 0x0306_0000);
         let periph = MpuRegion::new(0x4000_0000, 256, 0x03);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_ABCD, mpu, 5)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_ABC9, mpu, 5)
             .unwrap()
             .with_peripheral_regions(&[periph]);
-        assert_eq!(epm.entry_point(), 0x0800_ABCD);
+        assert_eq!(epm.entry_point(), 0x0800_ABC9);
         assert_eq!(epm.stack_base(), expected_base);
         assert_eq!(epm.stack_size_bytes(), 256);
         assert_eq!(epm.mpu_region().base(), 0x2000_0000);
@@ -2942,5 +2950,53 @@ mod tests {
         assert_eq!(epm.mpu_region().permissions(), 0x0306_0000);
         assert_eq!(epm.peripheral_regions().len(), 1);
         assert_eq!(epm.peripheral_regions()[0].base(), 0x4000_0000);
+    }
+
+    // ------------------------------------------------------------------
+    // Entry-point alignment validation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn ext_pmem_rejects_misaligned_entry_point_bit1_set() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0, 0, 0);
+        assert_eq!(
+            ExternalPartitionMemory::new(&mut buf.0, 0x0800_0002, mpu, 3).unwrap_err(),
+            ConfigError::EntryPointMisaligned {
+                partition_id: 3,
+                entry_point: 0x0800_0002,
+                required_alignment: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn ext_pmem_accepts_aligned_entry_point_with_thumb_bit() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0, 0, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 1).unwrap();
+        assert_eq!(epm.entry_point(), 0x0800_0001);
+    }
+
+    #[test]
+    fn ext_pmem_accepts_naturally_aligned_entry_point() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0, 0, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0).unwrap();
+        assert_eq!(epm.entry_point(), 0x0800_0000);
+    }
+
+    #[test]
+    fn ext_pmem_rejects_misaligned_entry_point_both_low_bits_set() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0, 0, 0);
+        assert_eq!(
+            ExternalPartitionMemory::new(&mut buf.0, 0x0800_0003, mpu, 7).unwrap_err(),
+            ConfigError::EntryPointMisaligned {
+                partition_id: 7,
+                entry_point: 0x0800_0003,
+                required_alignment: 4,
+            }
+        );
     }
 }
