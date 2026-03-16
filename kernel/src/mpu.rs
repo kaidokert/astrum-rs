@@ -458,11 +458,11 @@ pub(crate) fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) ->
 pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) -> Result<(), MpuError> {
     let base = match partition_mpu_regions(pcb) {
         Ok(regions) => regions,
-        Err(e) => {
+        Err(_e) => {
             klog!(
                 "precompute_mpu_cache: partition {} MPU error: {:?}",
                 pcb.id(),
-                e
+                _e
             );
             deny_all_regions()
         }
