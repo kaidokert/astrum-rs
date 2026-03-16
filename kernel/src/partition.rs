@@ -133,6 +133,8 @@ pub struct PartitionControlBlock {
     /// Lowest valid PSP address for this partition (== stack_base).
     /// Used by PendSV for stack overflow pre-check.
     pub(crate) stack_limit: u32,
+    /// Initial r0 value passed to the partition entry point at boot.
+    r0_hint: u32,
 }
 
 impl PartitionControlBlock {
@@ -163,6 +165,7 @@ impl PartitionControlBlock {
             sleep_until: 0,
             starvation_count: 0,
             stack_limit: stack_base,
+            r0_hint: 0,
         }
     }
 
@@ -322,6 +325,14 @@ impl PartitionControlBlock {
         self.stack_size = size;
         self.stack_limit = base;
         Ok(())
+    }
+
+    pub fn r0_hint(&self) -> u32 {
+        self.r0_hint
+    }
+
+    pub(crate) fn set_r0_hint(&mut self, hint: u32) {
+        self.r0_hint = hint;
     }
 
     /// Updates the MPU data region base address.
@@ -825,6 +836,7 @@ pub struct ExternalPartitionMemory<'mem> {
     entry_point: u32,
     mpu_region: MpuRegion,
     peripheral_regions: Vec<MpuRegion, 2>,
+    r0_hint: u32,
 }
 
 impl<'mem> ExternalPartitionMemory<'mem> {
@@ -860,6 +872,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
             entry_point,
             mpu_region,
             peripheral_regions: Vec::new(),
+            r0_hint: 0,
         })
     }
 
@@ -886,8 +899,17 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         self
     }
 
+    /// Builder: set the initial r0 value passed to the partition entry point.
+    pub fn with_r0_hint(mut self, hint: u32) -> Self {
+        self.r0_hint = hint;
+        self
+    }
+
     pub fn entry_point(&self) -> u32 {
         self.entry_point
+    }
+    pub fn r0_hint(&self) -> u32 {
+        self.r0_hint
     }
     pub fn mpu_region(&self) -> &MpuRegion {
         &self.mpu_region

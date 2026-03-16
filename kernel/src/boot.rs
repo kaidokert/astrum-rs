@@ -308,10 +308,11 @@ where
     use crate::partition::{ExternalPartitionMemory, MpuRegion};
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
     let mut memories: heapless::Vec<ExternalPartitionMemory<'_>, { C::N }> = heapless::Vec::new();
-    for (i, (stk, &(ep, _hint))) in stacks.iter_mut().zip(entries.iter()).enumerate() {
+    for (i, (stk, &(ep, hint))) in stacks.iter_mut().zip(entries.iter()).enumerate() {
         let entry = ep as *const () as u32;
         let mem = ExternalPartitionMemory::new(&mut stk[..], entry, sentinel_mpu, i as u8)
-            .map_err(|_| BootError::StackInitFailed { partition_index: i })?;
+            .map_err(|_| BootError::StackInitFailed { partition_index: i })?
+            .with_r0_hint(hint);
         memories
             .push(mem)
             .map_err(|_| BootError::StackInitFailed { partition_index: i })?;
@@ -548,7 +549,7 @@ where
             // valid and non-aliased per the function's safety contract.
             let stack_slice =
                 unsafe { core::slice::from_raw_parts_mut(base as *mut u32, word_count) };
-            let ix = crate::context::init_stack_frame(stack_slice, entry, None)
+            let ix = crate::context::init_stack_frame(stack_slice, entry, Some(pcb.r0_hint()))
                 .ok_or(BootError::StackInitFailed { partition_index: i })?;
             let sp = u32::try_from(ix)
                 .ok()
@@ -1392,5 +1393,47 @@ mod tests {
             dummy_entry_0 as *const () as u32,
             "partition 0 entry point"
         );
+    }
+
+    #[test]
+    fn create_kernel_from_stacks_preserves_r0_hint() {
+        use crate::context::{CONTEXT_FRAME_WORDS, SAVED_CONTEXT_WORDS};
+
+        #[repr(C, align(1024))]
+        struct Aligned([[u32; 256]; 2]);
+        static mut STACKS3: Aligned = Aligned([[0u32; 256]; 2]);
+        // SAFETY: test is single-threaded; no concurrent access.
+        let stacks = unsafe { &mut *core::ptr::addr_of_mut!(STACKS3.0) };
+
+        let sched = ScheduleTable::<4>::round_robin(2, 5).unwrap();
+        let entries: &[(extern "C" fn() -> !, u32)] =
+            &[(dummy_entry_0, 0xCAFE), (dummy_entry_1, 0xBEEF)];
+
+        let k = create_kernel_from_stacks::<CkfsTestCfg, 256>(sched, stacks, entries)
+            .expect("kernel creation should succeed");
+
+        // Verify PCB metadata preserves the hint.
+        let pcb0 = k.pcb(0).expect("partition 0 must exist");
+        let pcb1 = k.pcb(1).expect("partition 1 must exist");
+        assert_eq!(pcb0.r0_hint(), 0xCAFE, "partition 0 r0 hint preserved");
+        assert_eq!(pcb1.r0_hint(), 0xBEEF, "partition 1 r0 hint preserved");
+
+        // Verify the r0 hint is written into the stack frame by init_stack_frame.
+        // create_kernel_from_stacks does not initialize stack frames (boot_preconfigured
+        // does that), so we verify the plumbing end-to-end by calling init_stack_frame
+        // directly with the PCB's stored hint.
+        // SAFETY: test is single-threaded; no concurrent access.
+        let stacks = unsafe { &mut *core::ptr::addr_of_mut!(STACKS3.0) };
+        for (idx, expected) in [(0usize, 0xCAFE_u32), (1, 0xBEEF)] {
+            let pcb = k.pcb(idx).expect("partition must exist");
+            let entry = pcb.entry_point();
+            crate::context::init_stack_frame(&mut stacks[idx][..], entry, Some(pcb.r0_hint()))
+                .expect("init_stack_frame should succeed");
+            let r0_offset = 256 - CONTEXT_FRAME_WORDS + SAVED_CONTEXT_WORDS;
+            assert_eq!(
+                stacks[idx][r0_offset], expected,
+                "partition {idx} stack frame r0"
+            );
+        }
     }
 }

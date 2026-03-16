@@ -1116,14 +1116,15 @@ where
             crate::virtual_device::DeviceRegistry::new(),
             &[],
         )?;
-        // Patch stack_base and stack_size from ExternalPartitionMemory into
-        // each PCB so that boot_preconfigured() can read them directly.
+        // Patch stack_base, stack_size, and r0_hint from ExternalPartitionMemory
+        // into each PCB so that boot_preconfigured() can read them directly.
         for (i, m) in memories.iter().enumerate() {
             if let Some(pcb) = kernel.partitions_mut().get_mut(i) {
                 pcb.set_stack_fields(m.stack_base(), m.stack_size_bytes())
                     .map_err(|_| ConfigError::StackSizeInvalid {
                         partition_id: i as u8,
                     })?;
+                pcb.set_r0_hint(m.r0_hint());
             }
         }
         Ok(kernel)
