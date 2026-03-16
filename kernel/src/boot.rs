@@ -1,7 +1,4 @@
 //! Kernel boot initialization.
-//!
-// TODO: boot_external() was requested for deprecation but does not exist in this
-// codebase. Deferred — no action needed unless the API is added in the future.
 
 #[allow(unused_imports)]
 use crate::{
