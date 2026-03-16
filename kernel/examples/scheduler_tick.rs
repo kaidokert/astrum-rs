@@ -6,111 +6,82 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
-use cortex_m_semihosting::{debug, hprintln};
+use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::PartitionState;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
-use kernel::svc::Kernel;
-use kernel::tick::configure_systick;
-use kernel::{DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncStandard};
+use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncStandard};
 
-kernel::compose_kernel_config!(TestConfig<Partitions4, SyncStandard, MsgMinimal, PortsTiny, DebugEnabled>);
-
-kernel::define_unified_kernel!(TestConfig);
+kernel::compose_kernel_config!(
+    TestConfig < Partitions2,
+    SyncStandard,
+    MsgMinimal,
+    PortsTiny,
+    DebugEnabled > {
+        tick_period_us = 100; // 10 kHz — matches original RELOAD for reproducibility
+    }
+);
 
 static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
-static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Tracks the active partition across ticks. `u32::MAX` means no partition yet.
 static ACTIVE_PID: AtomicU32 = AtomicU32::new(u32::MAX);
-const RELOAD: u32 = kernel::config::compute_systick_reload(12_000_000, 10_000);
 const MAX_SWITCHES: u32 = 6;
 
-#[exception]
-fn SysTick() {
-    if let Err(e) = kernel::state::with_kernel_mut::<TestConfig, _, _>(|k| {
-        // Read previous active partition's state before advancing the tick.
-        // On the first switch prev_pid is u32::MAX (no previous partition).
-        let prev_pid = ACTIVE_PID.load(Ordering::Acquire);
-        if prev_pid != u32::MAX {
-            let state = k.partitions().get(prev_pid as usize).map(|p| p.state());
-            if state != Some(PartitionState::Running) {
+kernel::define_unified_harness!(TestConfig, |_tick, k| {
+    use kernel::partition::PartitionState;
+    // Verify post-switch state: harness already called advance_schedule_tick + set_next_partition.
+    let pid = k.next_partition();
+    let prev = ACTIVE_PID.swap(pid as u32, Ordering::AcqRel);
+    if prev != pid as u32 {
+        // (1) Verify outgoing partition transitioned to Ready (not still Running).
+        if prev != u32::MAX {
+            let out_state = k.partitions().get(prev as usize).map(|p| p.state());
+            if out_state != Some(PartitionState::Ready) {
                 hprintln!(
-                    "FAIL: pre-tick partition {} expected Running, got {:?}",
-                    prev_pid,
-                    state
+                    "FAIL: outgoing partition {} expected Ready, got {:?}",
+                    prev,
+                    out_state
                 );
-                FAIL_COUNT.fetch_add(1, Ordering::Release);
+                kernel::kexit!(failure);
             }
         }
-
-        let event = kernel::svc::scheduler::advance_schedule_tick(k);
-        if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
-            // (1) Verify outgoing partition is now Ready (not Running).
-            if prev_pid != u32::MAX {
-                let out_state = k.partitions().get(prev_pid as usize).map(|p| p.state());
-                if out_state != Some(PartitionState::Ready) {
-                    hprintln!(
-                        "FAIL: outgoing partition {} expected Ready, got {:?}",
-                        prev_pid,
-                        out_state
-                    );
-                    FAIL_COUNT.fetch_add(1, Ordering::Release);
-                }
-            }
-
-            // (2) Use set_next_partition to transition the incoming partition
-            //     to Running, matching the pattern in tick.rs / blocking_deschedule.rs.
-            k.set_next_partition(pid);
-            let in_state = k.partitions().get(pid as usize).map(|p| p.state());
-            if in_state != Some(PartitionState::Running) {
-                hprintln!(
-                    "FAIL: incoming partition {} expected Running, got {:?}",
-                    pid,
-                    in_state
-                );
-                FAIL_COUNT.fetch_add(1, Ordering::Release);
-            }
-
-            // (3) Track the active partition for the next tick's verification.
-            ACTIVE_PID.store(pid as u32, Ordering::Release);
-            hprintln!("switch -> partition {}", pid);
-            SWITCH_COUNT.fetch_add(1, Ordering::Release);
+        // (2) Verify incoming partition is Running.
+        let in_state = k.partitions().get(pid as usize).map(|p| p.state());
+        if in_state != Some(PartitionState::Running) {
+            hprintln!(
+                "FAIL: partition {} expected Running, got {:?}",
+                pid,
+                in_state
+            );
+            kernel::kexit!(failure);
         }
-    }) {
-        hprintln!("FAIL: SysTick with_kernel_mut failed: {}", e);
-        FAIL_COUNT.fetch_add(1, Ordering::Release);
+        hprintln!("switch -> partition {}", pid);
+        SWITCH_COUNT.fetch_add(1, Ordering::Release);
+    }
+    if SWITCH_COUNT.load(Ordering::Acquire) >= MAX_SWITCHES {
+        hprintln!("done: {} switches, 0 failures", MAX_SWITCHES);
+        kernel::kexit!(success);
+    }
+});
+
+extern "C" fn partition_idle() -> ! {
+    loop {
+        cortex_m::asm::nop();
     }
 }
 
 #[entry]
 fn main() -> ! {
-    let mut sched: ScheduleTable<8> = ScheduleTable::new();
+    let p = cortex_m::Peripherals::take().expect("scheduler_tick: Peripherals::take");
+    hprintln!("scheduler_tick: started");
+
+    let mut sched: ScheduleTable<{ TestConfig::SCHED }> = ScheduleTable::new();
     sched.add(ScheduleEntry::new(0, 3)).unwrap();
     sched.add(ScheduleEntry::new(1, 2)).unwrap();
 
-    // TODO: The old code had specific flash/RAM addresses (0x0800_0000, 0x2000_2000, etc.)
-    // but this example uses define_unified_kernel! and never boots partitions — it only
-    // tests the scheduler state machine via SysTick, so sentinel values are correct here.
-    let k = Kernel::<TestConfig>::create_sentinels(sched).expect("kernel creation");
+    let entries: [(extern "C" fn() -> !, u32); TestConfig::N] =
+        [(partition_idle, 0), (partition_idle, 0)];
+    init_kernel(sched, &entries).expect("kernel creation");
 
-    // TODO: store_kernel is generated by define_unified_kernel! macro (not in kernel::state),
-    // wraps init_kernel_state + dispatch hook setup. No qualified path available.
-    store_kernel(k);
-
-    let p = cortex_m::Peripherals::take().unwrap();
-    configure_systick(&mut { p.SYST }, RELOAD);
-    hprintln!("scheduler_tick: started, reload={}", RELOAD);
-
-    loop {
-        let fails = FAIL_COUNT.load(Ordering::Acquire);
-        if fails > 0 {
-            hprintln!("FAILED: {} assertion failures", fails);
-            debug::exit(debug::EXIT_FAILURE);
-        }
-        if SWITCH_COUNT.load(Ordering::Acquire) >= MAX_SWITCHES {
-            hprintln!("done: {} switches, 0 failures", MAX_SWITCHES);
-            debug::exit(debug::EXIT_SUCCESS);
-        }
-    }
+    match boot(p).expect("scheduler_tick: boot") {}
 }

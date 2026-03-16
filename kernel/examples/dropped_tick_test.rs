@@ -80,7 +80,7 @@ fn main() -> ! {
         .expect("dropped_tick_test: round_robin");
 
     let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
-    init_kernel(sched, &parts).expect("dropped_tick_test: create_sentinels");
+    init_kernel(sched, &parts).expect("dropped_tick_test: init_kernel");
 
     match boot(p).expect("dropped_tick_test: boot") {}
 }

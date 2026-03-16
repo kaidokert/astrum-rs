@@ -96,7 +96,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(1, 3).expect("round_robin");
 
     let parts: [(extern "C" fn() -> !, u32); Config::N] = [(p0_main, 0)];
-    init_kernel(sched, &parts).expect("systick_preempt_test: create_sentinels");
+    init_kernel(sched, &parts).expect("systick_preempt_test: init_kernel");
 
     // Enable IRQ 0 at MIN_APP_IRQ_PRIORITY — the tightest allowed app
     // priority, numerically just above SYSTICK_PRIORITY.

@@ -76,7 +76,7 @@ fn main() -> ! {
         .expect("smoke_test: round_robin");
 
     let parts: [(extern "C" fn() -> !, u32); SmokeConfig::N] = [(partition_main, 0)];
-    init_kernel(sched, &parts).expect("smoke_test: create_sentinels");
+    init_kernel(sched, &parts).expect("smoke_test: init_kernel");
 
     match boot(p).expect("smoke_test: boot") {}
 }
