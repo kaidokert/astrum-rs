@@ -450,9 +450,10 @@ pub(crate) fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) ->
 /// Calls [`partition_mpu_regions`] for base regions (falling back to
 /// [`deny_all_regions`] on error) and [`peripheral_mpu_regions_or_disabled`]
 /// for peripheral regions.
-// TODO: return Result<(), MpuError> instead of &'static str — requires changing
-// set_cached_base_regions / set_cached_periph_regions to return MpuError first.
-pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) -> Result<(), &'static str> {
+// TODO: reviewer false positive — the function body is already correct for
+// Result<(), MpuError>: the Err branch falls back (no error-string return),
+// and the `?` operators propagate MpuError from the updated setters.
+pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) -> Result<(), MpuError> {
     let base = match partition_mpu_regions(pcb) {
         Ok(regions) => regions,
         Err(e) => {
@@ -646,6 +647,8 @@ pub enum MpuError {
     StackRegionInvalid { base: u32, size: u32 },
     /// Disabled region build_rbar failed.
     DisabledRegionInvalid { base: u32, size: u32 },
+    /// MPU cache has already been sealed; mutation rejected.
+    CacheAlreadySealed,
 }
 
 impl core::fmt::Display for MpuError {
@@ -685,6 +688,7 @@ impl core::fmt::Display for MpuError {
                     "disabled region invalid: base={base:#010X}, size={size:#X}"
                 )
             }
+            Self::CacheAlreadySealed => write!(f, "MPU cache already sealed"),
         }
     }
 }

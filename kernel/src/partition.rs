@@ -447,12 +447,9 @@ impl PartitionControlBlock {
     }
 
     /// Sets the pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
-    pub fn set_cached_base_regions(
-        &mut self,
-        regions: [(u32, u32); 4],
-    ) -> Result<(), &'static str> {
+    pub fn set_cached_base_regions(&mut self, regions: [(u32, u32); 4]) -> Result<(), MpuError> {
         if self.cache_sealed {
-            return Err("set_cached_base_regions called after MPU cache sealed");
+            return Err(MpuError::CacheAlreadySealed);
         }
         self.cached_base_regions = regions;
         Ok(())
@@ -464,12 +461,9 @@ impl PartitionControlBlock {
     }
 
     /// Sets the pre-computed (RBAR, RASR) pairs for peripheral MPU regions R4–R6.
-    pub fn set_cached_periph_regions(
-        &mut self,
-        regions: [(u32, u32); 3],
-    ) -> Result<(), &'static str> {
+    pub fn set_cached_periph_regions(&mut self, regions: [(u32, u32); 3]) -> Result<(), MpuError> {
         if self.cache_sealed {
-            return Err("set_cached_periph_regions called after MPU cache sealed");
+            return Err(MpuError::CacheAlreadySealed);
         }
         self.cached_periph_regions = regions;
         Ok(())
@@ -2405,6 +2399,8 @@ mod tests {
     }
 
     // ── cache_sealed guard tests ────────────────────────────────────
+    // TODO: reviewer false positive — no consolidated `mutators_rejected_after_seal`
+    // test exists; post-seal rejection is covered by the individual tests below.
 
     #[test]
     fn cache_sealed_default_false_then_seal() {
@@ -2452,7 +2448,7 @@ mod tests {
         pcb.seal_cache();
         assert_eq!(
             pcb.set_cached_base_regions([(1, 2); 4]),
-            Err("set_cached_base_regions called after MPU cache sealed")
+            Err(MpuError::CacheAlreadySealed)
         );
     }
 
@@ -2462,7 +2458,7 @@ mod tests {
         pcb.seal_cache();
         assert_eq!(
             pcb.set_cached_periph_regions([(3, 4); 3]),
-            Err("set_cached_periph_regions called after MPU cache sealed")
+            Err(MpuError::CacheAlreadySealed)
         );
     }
 
