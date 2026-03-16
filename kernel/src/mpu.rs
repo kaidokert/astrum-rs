@@ -297,25 +297,34 @@ pub(crate) fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> 
 /// Region 2 = stack buffer AP_FULL_ACCESS + XN=true (writable SRAM),
 /// Region 3 = disabled.
 ///
-/// Returns `None` if stack size is < 32 or not a power of two.
-pub fn partition_mpu_regions_permissive(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
+/// Returns `Err` if stack size is < 32 or not a power of two.
+pub fn partition_mpu_regions_permissive(
+    pcb: &PartitionControlBlock,
+) -> Result<[(u32, u32); 4], MpuError> {
     let stack_size = pcb.stack_size();
     let stack_base = pcb.stack_base();
 
-    let stack_size_field = encode_size(stack_size)?;
-    validate_mpu_region(stack_base, stack_size).ok()?;
+    let stack_size_field =
+        encode_size(stack_size).ok_or(MpuError::EncodeSizeFailed { size: stack_size })?;
+    validate_mpu_region(stack_base, stack_size)?;
 
     let bg_size_field = 31u32; // 4 GiB = 2^32 → SIZE field = 31
-    let r0_rbar = build_rbar(0x0000_0000, 0)?;
+    let r0_rbar = build_rbar(0x0000_0000, 0).ok_or(MpuError::BackgroundRegionInvalid {
+        base: 0x0000_0000,
+        size: u32::MAX, // 4 GiB; 2^32 doesn't fit in u32
+    })?;
     let r0_rasr = build_rasr(bg_size_field, AP_RO_RO, false, (false, false, false));
 
-    let r2_rbar = build_rbar(stack_base, 2)?;
+    let r2_rbar = build_rbar(stack_base, 2).ok_or(MpuError::StackRegionInvalid {
+        base: stack_base,
+        size: stack_size,
+    })?;
     let r2_rasr = build_rasr(stack_size_field, AP_FULL_ACCESS, true, (true, true, false));
 
-    let r1_rbar = build_rbar(0, 1)?;
-    let r3_rbar = build_rbar(0, 3)?;
+    let r1_rbar = build_rbar(0, 1).ok_or(MpuError::DisabledRegionInvalid { base: 0, size: 0 })?;
+    let r3_rbar = build_rbar(0, 3).ok_or(MpuError::DisabledRegionInvalid { base: 0, size: 0 })?;
 
-    Some([
+    Ok([
         (r0_rbar, r0_rasr),
         (r1_rbar, 0), // R1 disabled
         (r2_rbar, r2_rasr),
@@ -603,6 +612,12 @@ pub enum MpuError {
     StackGuardInvalid { base: u32, size: u32 },
     /// Region size could not be encoded as an MPU SIZE field.
     EncodeSizeFailed { size: u32 },
+    /// Background region (R0) build_rbar failed.
+    BackgroundRegionInvalid { base: u32, size: u32 },
+    /// Stack buffer region (R2) build_rbar failed.
+    StackRegionInvalid { base: u32, size: u32 },
+    /// Disabled region build_rbar failed.
+    DisabledRegionInvalid { base: u32, size: u32 },
 }
 
 impl core::fmt::Display for MpuError {
@@ -626,6 +641,21 @@ impl core::fmt::Display for MpuError {
             }
             Self::EncodeSizeFailed { size } => {
                 write!(f, "encode size failed: size={size:#X}")
+            }
+            Self::BackgroundRegionInvalid { base, size } => {
+                write!(
+                    f,
+                    "background region invalid: base={base:#010X}, size={size:#X}"
+                )
+            }
+            Self::StackRegionInvalid { base, size } => {
+                write!(f, "stack region invalid: base={base:#010X}, size={size:#X}")
+            }
+            Self::DisabledRegionInvalid { base, size } => {
+                write!(
+                    f,
+                    "disabled region invalid: base={base:#010X}, size={size:#X}"
+                )
             }
         }
     }
@@ -1798,13 +1828,36 @@ mod tests {
     }
 
     #[test]
-    fn permissive_invalid_stack_size_returns_none() {
+    fn permissive_invalid_stack_size_returns_err() {
         // Size < 32
-        assert!(partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0000, 16)).is_none());
+        assert!(partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0000, 16)).is_err());
         // Not power of two
-        assert!(partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0000, 100)).is_none());
+        assert!(partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0000, 100)).is_err());
         // Zero
-        assert!(partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0000, 0)).is_none());
+        assert!(partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0000, 0)).is_err());
+    }
+
+    #[test]
+    fn permissive_invalid_size_returns_encode_size_failed() {
+        let err =
+            partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0000, 16)).unwrap_err();
+        assert!(
+            matches!(err, MpuError::EncodeSizeFailed { size: 16 }),
+            "expected EncodeSizeFailed {{ size: 16 }}, got {:?}",
+            err,
+        );
+    }
+
+    #[test]
+    fn permissive_misaligned_base_returns_err() {
+        // base 0x2000_0001 is not aligned to size 256
+        let err =
+            partition_mpu_regions_permissive(&make_sentinel_pcb(0x2000_0001, 256)).unwrap_err();
+        assert!(
+            matches!(err, MpuError::BaseNotAligned),
+            "expected BaseNotAligned, got {:?}",
+            err,
+        );
     }
 
     #[test]
