@@ -1106,6 +1106,7 @@ where
                 entry_point: m.entry_point(),
                 mpu_region: *m.mpu_region(),
                 peripheral_regions: m.peripheral_regions().clone(),
+                r0_hint: m.r0_hint(),
             };
             configs
                 .push(cfg)
@@ -1118,15 +1119,15 @@ where
             crate::virtual_device::DeviceRegistry::new(),
             &[],
         )?;
-        // Patch stack_base, stack_size, and r0_hint from ExternalPartitionMemory
+        // Patch stack_base and stack_size from ExternalPartitionMemory
         // into each PCB so that boot_preconfigured() can read them directly.
+        // (r0_hint is already propagated through PartitionConfig/with_config.)
         for (i, m) in memories.iter().enumerate() {
             if let Some(pcb) = kernel.partitions_mut().get_mut(i) {
                 pcb.set_stack_fields(m.stack_base(), m.stack_size_bytes())
                     .map_err(|_| ConfigError::StackSizeInvalid {
                         partition_id: i as u8,
                     })?;
-                pcb.set_r0_hint(m.r0_hint());
             }
         }
         Ok(kernel)
@@ -1268,7 +1269,7 @@ where
             // patch in the real addresses once the kernel is in its final
             // storage location, eliminating the stale-address window.
             let mpu_region = c.mpu_region;
-            let pcb = PartitionControlBlock::new(
+            let mut pcb = PartitionControlBlock::new(
                 c.id,
                 c.entry_point,
                 0, // sentinel stack_base — patched by boot_preconfigured()
@@ -1276,6 +1277,7 @@ where
                 mpu_region,
             )
             .with_peripheral_regions(&c.peripheral_regions);
+            pcb.set_r0_hint(c.r0_hint);
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
             }

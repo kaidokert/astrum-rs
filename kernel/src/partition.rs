@@ -552,6 +552,8 @@ pub struct PartitionConfig {
     /// Optional peripheral register block regions for user-space drivers.
     /// Supports up to 2 peripheral regions (Approach D).
     pub peripheral_regions: Vec<MpuRegion, 2>,
+    /// Initial r0 value passed to the partition entry point.
+    pub r0_hint: u32,
 }
 
 impl PartitionConfig {
@@ -566,6 +568,7 @@ impl PartitionConfig {
             entry_point,
             mpu_region,
             peripheral_regions: Vec::new(),
+            r0_hint: 0,
         }
     }
 
@@ -579,6 +582,7 @@ impl PartitionConfig {
             entry_point: 0,
             mpu_region: MpuRegion::new(0, 0, 0),
             peripheral_regions: Vec::new(),
+            r0_hint: 0,
         }
     }
 
@@ -2091,6 +2095,7 @@ mod tests {
             entry_point: 0x0800_0000,
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
             peripheral_regions: Vec::new(),
+            r0_hint: 0,
         }
     }
 

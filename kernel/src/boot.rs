@@ -1186,4 +1186,152 @@ mod tests {
 
         kernel_ptr::clear_kernel_ptr();
     }
+
+    /// Verify that r0_hint set via PartitionConfig.r0_hint propagates through
+    /// with_config() into the PCB, exercising the with_config round-trip that
+    /// was previously missing r0_hint propagation.
+    #[test]
+    fn r0_hint_propagates_through_with_config() {
+        use crate::{
+            compose_kernel_config,
+            partition::{MpuRegion, PartitionConfig},
+            scheduler::{ScheduleEntry, ScheduleTable},
+            DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+        };
+
+        compose_kernel_config!(R0Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 50)).unwrap();
+        s.add(ScheduleEntry::new(1, 50)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        s.add_system_window(1).unwrap();
+
+        let cfgs = [
+            PartitionConfig {
+                id: 0,
+                entry_point: 0x0800_0001,
+                mpu_region: MpuRegion::new(0, 0, 0),
+                peripheral_regions: heapless::Vec::new(),
+                r0_hint: 0xDEAD_BEEF,
+            },
+            PartitionConfig {
+                id: 1,
+                entry_point: 0x0800_0001,
+                mpu_region: MpuRegion::new(0, 0, 0),
+                peripheral_regions: heapless::Vec::new(),
+                r0_hint: 0xCAFE_BABE,
+            },
+        ];
+
+        let k = crate::svc::Kernel::<R0Config>::with_config(
+            s,
+            &cfgs,
+            #[cfg(feature = "dynamic-mpu")]
+            crate::virtual_device::DeviceRegistry::new(),
+            &[],
+        )
+        .expect("with_config must succeed");
+
+        assert_eq!(
+            k.partitions().get(0).unwrap().r0_hint(),
+            0xDEAD_BEEF,
+            "r0_hint must propagate through with_config for partition 0"
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().r0_hint(),
+            0xCAFE_BABE,
+            "r0_hint must propagate through with_config for partition 1"
+        );
+    }
+
+    /// Verify that r0_hint values set via ExternalPartitionMemory.with_r0_hint()
+    /// survive the Kernel::new() → init_kernel_state_at → assume_init_ref
+    /// round-trip and that init_stack_frame places the hint into the stack
+    /// frame's r0 slot, matching the boot_preconfigured() read path.
+    #[test]
+    fn r0_hint_survives_init_kernel_state_round_trip() {
+        use crate::{
+            compose_kernel_config,
+            context::{init_stack_frame, SAVED_CONTEXT_WORDS},
+            partition::{ExternalPartitionMemory, MpuRegion},
+            partition_core::AlignedStack1K,
+            scheduler::{ScheduleEntry, ScheduleTable},
+            state::{init_kernel_state_at, MAX_KERNEL_SIZE},
+            DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+        };
+        use core::mem::MaybeUninit;
+
+        compose_kernel_config!(R0Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 50)).unwrap();
+        s.add(ScheduleEntry::new(1, 50)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        s.add_system_window(1).unwrap();
+
+        let sentinel_mpu = MpuRegion::new(0, 0, 0);
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
+        let mem0 =
+            ExternalPartitionMemory::from_aligned_stack(&mut stk0, 0x0800_0001, sentinel_mpu, 0)
+                .unwrap()
+                .with_r0_hint(0xDEAD_BEEF);
+        let mem1 =
+            ExternalPartitionMemory::from_aligned_stack(&mut stk1, 0x0800_0001, sentinel_mpu, 1)
+                .unwrap()
+                .with_r0_hint(0xCAFE_BABE);
+
+        let k = crate::svc::Kernel::<R0Config>::new(s, &[mem0, mem1])
+            .expect("Kernel::new must succeed");
+
+        // Verify r0_hint is set after Kernel::new().
+        assert_eq!(
+            k.partitions().get(0).unwrap().r0_hint(),
+            0xDEAD_BEEF,
+            "r0_hint must be set on partition 0 after Kernel::new()"
+        );
+        assert_eq!(
+            k.partitions().get(1).unwrap().r0_hint(),
+            0xCAFE_BABE,
+            "r0_hint must be set on partition 1 after Kernel::new()"
+        );
+
+        // Verify init_stack_frame places r0_hint into the stack frame r0 slot,
+        // mirroring what boot_preconfigured() does at line 345.
+        let mut test_stack = [0u32; 32];
+        let base_ix = init_stack_frame(&mut test_stack, 0x0800_0001, Some(0xDEAD_BEEF))
+            .expect("init_stack_frame must succeed");
+        let r0_slot = base_ix + SAVED_CONTEXT_WORDS; // r0 is first word of ExceptionFrame
+        assert_eq!(
+            test_stack[r0_slot], 0xDEAD_BEEF,
+            "init_stack_frame must write r0_hint into the stack frame r0 slot"
+        );
+
+        // Simulate store_kernel: write to aligned storage.
+        #[repr(C, align(4096))]
+        struct Aligned(MaybeUninit<[u8; MAX_KERNEL_SIZE]>);
+        let mut storage = Aligned(MaybeUninit::uninit());
+        let ptr = storage.0.as_mut_ptr() as *mut crate::svc::Kernel<'_, R0Config>;
+        // SAFETY: ptr is 4096-aligned and storage is MAX_KERNEL_SIZE bytes.
+        let result = unsafe { init_kernel_state_at(ptr, k) };
+        assert!(result.is_ok(), "init_kernel_state_at must succeed");
+
+        // Simulate with_kernel: read back via assume_init_ref.
+        let mu_ptr = storage.0.as_ptr() as *const MaybeUninit<crate::svc::Kernel<'_, R0Config>>;
+        // SAFETY: init_kernel_state_at wrote a valid Kernel above.
+        let recovered = unsafe { (*mu_ptr).assume_init_ref() };
+
+        // Assert r0_hint survives the round-trip.
+        assert_eq!(
+            recovered.partitions().get(0).unwrap().r0_hint(),
+            0xDEAD_BEEF,
+            "r0_hint for partition 0 must survive init_kernel_state round-trip"
+        );
+        assert_eq!(
+            recovered.partitions().get(1).unwrap().r0_hint(),
+            0xCAFE_BABE,
+            "r0_hint for partition 1 must survive init_kernel_state round-trip"
+        );
+    }
 }
