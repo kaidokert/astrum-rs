@@ -1293,8 +1293,8 @@ where
     /// Construct a `Kernel` from a fully-populated `Core` and IRQ bindings.
     ///
     /// This is the single place where the `Kernel` struct literal is built.
-    /// Both `with_config()` and `create_sentinels()` delegate here after
-    /// populating the core's partition table and schedule.
+    /// `with_config()` delegates here after populating the core's
+    /// partition table and schedule.
     fn init_kernel_struct(
         core: C::Core,
         irq_bindings: &'static [crate::irq_dispatch::IrqBinding],
@@ -7857,109 +7857,6 @@ mod tests {
         ));
     }
 
-    /// Helper: call `create_sentinels` with dynamic-mpu system-window handling.
-    /// Generic over `KernelConfig` to avoid duplicating system-window boilerplate.
-    macro_rules! try_create_sentinels {
-        ($Config:ty, $schedule:expr) => {{
-            #[cfg(not(feature = "dynamic-mpu"))]
-            {
-                #[allow(deprecated)]
-                Kernel::<$Config>::create_sentinels($schedule)
-            }
-            #[cfg(feature = "dynamic-mpu")]
-            {
-                let mut schedule = $schedule;
-                schedule
-                    .add_system_window(1)
-                    .expect("schedule must have room for system window");
-                #[allow(deprecated)]
-                Kernel::<$Config>::create_sentinels(schedule)
-            }
-        }};
-    }
-
-    #[test]
-    fn create_sentinels_basic_succeeds() {
-        let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 100)).unwrap();
-        let k = try_create_sentinels!(TestConfig, s).unwrap();
-        // TestConfig::N == 4, so 4 sentinel partitions created.
-        assert_eq!(k.partitions().len(), 4);
-        for i in 0..4usize {
-            let pcb = k.partitions().get(i).unwrap();
-            assert_eq!(pcb.id(), i as u8);
-            assert_eq!(pcb.entry_point(), 0);
-            assert_eq!(pcb.mpu_region().size(), 0);
-        }
-    }
-
-    #[test]
-    fn create_sentinels_one_partition() {
-        struct OneConfig;
-        impl KernelConfig for OneConfig {
-            const N: usize = 1;
-            const STACK_WORDS: usize = 256;
-            const S: usize = 1;
-            const SW: usize = 1;
-            const MS: usize = 1;
-            const MW: usize = 1;
-            const QS: usize = 1;
-            const QD: usize = 1;
-            const QM: usize = 1;
-            const QW: usize = 1;
-            const SP: usize = 1;
-            const BS: usize = 1;
-            const BW: usize = 1;
-            #[cfg(feature = "dynamic-mpu")]
-            const BP: usize = 1;
-            kernel_config_types!();
-        }
-        let mut s = ScheduleTable::<{ <OneConfig as KernelConfig>::SCHED }>::new();
-        s.add(ScheduleEntry::new(0, 50)).unwrap();
-        let k = try_create_sentinels!(OneConfig, s).unwrap();
-        assert_eq!(k.partitions().len(), 1);
-        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
-    }
-
-    #[test]
-    fn create_sentinels_two_partitions() {
-        struct TwoConfig;
-        impl KernelConfig for TwoConfig {
-            const N: usize = 2;
-            const STACK_WORDS: usize = 256;
-            const S: usize = 2;
-            const SW: usize = 2;
-            const MS: usize = 2;
-            const MW: usize = 2;
-            const QS: usize = 2;
-            const QD: usize = 2;
-            const QM: usize = 2;
-            const QW: usize = 2;
-            const SP: usize = 2;
-            const BS: usize = 2;
-            const BW: usize = 2;
-            #[cfg(feature = "dynamic-mpu")]
-            const BP: usize = 2;
-            kernel_config_types!();
-        }
-        let mut s = ScheduleTable::<{ <TwoConfig as KernelConfig>::SCHED }>::new();
-        s.add(ScheduleEntry::new(0, 50)).unwrap();
-        s.add(ScheduleEntry::new(1, 50)).unwrap();
-        let k = try_create_sentinels!(TwoConfig, s).unwrap();
-        assert_eq!(k.partitions().len(), 2);
-        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
-        assert_eq!(k.partitions().get(1).unwrap().id(), 1);
-    }
-
-    #[test]
-    fn create_sentinels_schedule_out_of_range_fails() {
-        // Schedule references partition 4, but TestConfig::N == 4 (indices 0..3).
-        let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(4, 100)).unwrap();
-        let result = try_create_sentinels!(TestConfig, s);
-        assert!(matches!(result, Err(ConfigError::PartitionTableFull)));
-    }
-
     #[test]
     fn init_kernel_struct_returns_valid_kernel() {
         let mut core = <TestConfig as KernelConfig>::Core::default();
@@ -7982,14 +7879,6 @@ mod tests {
         assert_eq!(k.schedule().entries().len(), 1);
         assert_eq!(k.schedule().entries()[0].partition_index, 0);
         assert_eq!(k.schedule().entries()[0].duration_ticks, 100);
-    }
-
-    #[test]
-    fn create_sentinels_empty_schedule_fails() {
-        let s = ScheduleTable::new();
-        #[allow(deprecated)]
-        let result = Kernel::<TestConfig>::create_sentinels(s);
-        assert!(matches!(result, Err(ConfigError::ScheduleEmpty)));
     }
 
     #[test]
