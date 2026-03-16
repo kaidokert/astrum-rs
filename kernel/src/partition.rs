@@ -840,6 +840,7 @@ pub struct ExternalPartitionMemory<'mem> {
     entry_point: u32,
     mpu_region: MpuRegion,
     peripheral_regions: Vec<MpuRegion, 2>,
+    code_mpu_region: Option<MpuRegion>,
     r0_hint: u32,
 }
 
@@ -876,6 +877,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
             entry_point,
             mpu_region,
             peripheral_regions: Vec::new(),
+            code_mpu_region: None,
             r0_hint: 0,
         })
     }
@@ -903,6 +905,12 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         self
     }
 
+    /// Builder: attach a code MPU region (separate from the data region).
+    pub fn with_code_mpu_region(mut self, region: MpuRegion) -> Self {
+        self.code_mpu_region = Some(region);
+        self
+    }
+
     /// Builder: set the initial r0 value passed to the partition entry point.
     pub fn with_r0_hint(mut self, hint: u32) -> Self {
         self.r0_hint = hint;
@@ -920,6 +928,9 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     }
     pub fn peripheral_regions(&self) -> &Vec<MpuRegion, 2> {
         &self.peripheral_regions
+    }
+    pub fn code_mpu_region(&self) -> Option<&MpuRegion> {
+        self.code_mpu_region.as_ref()
     }
     pub fn stack_base(&self) -> u32 {
         self.stack.as_ptr() as u32
@@ -2734,6 +2745,40 @@ mod tests {
             .with_peripheral_regions(&[periph]);
         assert_eq!(epm.peripheral_regions().len(), 1);
         assert_eq!(epm.peripheral_regions()[0], periph);
+    }
+
+    #[test]
+    fn ext_pmem_code_mpu_region_default_none() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0).unwrap();
+        assert!(epm.code_mpu_region().is_none());
+    }
+
+    #[test]
+    fn ext_pmem_with_code_mpu_region_sets_some() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let code = MpuRegion::new(0x0800_0000, 1024, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(code);
+        let got = epm.code_mpu_region().expect("should be Some");
+        assert_eq!(got.base(), 0x0800_0000);
+        assert_eq!(got.size(), 1024);
+    }
+
+    #[test]
+    fn ext_pmem_code_mpu_region_copied_round_trip() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let code = MpuRegion::new(0x0800_0000, 512, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(code);
+        let copied: MpuRegion = epm.code_mpu_region().copied().unwrap();
+        assert_eq!(copied.base(), code.base());
+        assert_eq!(copied.size(), code.size());
     }
 
     // ------------------------------------------------------------------
