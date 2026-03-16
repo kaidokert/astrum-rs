@@ -43,10 +43,10 @@ pub use rtos_traits::syscall::SvcError;
 //
 // Affected fields (as of this writing):
 //   - `PartitionControlBlock.mpu_region.base`  — patched by `fix_mpu_data_region()`
-//   - `PartitionControlBlock.stack_base`        — set via `PartitionConfig` at construction
+//   - `PartitionControlBlock.stack_base`        — set via `ExternalPartitionMemory` at construction
 //
 // Correct pattern:
-//   1. Construct with sentinel / placeholder values (`PartitionConfig::sentinel()`).
+//   1. Construct with real stack/config values via `ExternalPartitionMemory`.
 //   2. Place into `UNIFIED_KERNEL_STORAGE` with `ptr::write()`.
 //   3. Call `fix_mpu_data_region()` **after** placement so it computes
 //      addresses from the struct's final location.
@@ -916,7 +916,7 @@ pub fn dispatch_syscall<const N: usize>(
 // Fields that store self-referential addresses must therefore be **patched
 // after placement**, not during construction.  The correct pattern is:
 //
-//   1. Construct with stale / sentinel values (e.g. base = 0, size = 0).
+//   1. Construct with real stack/config values via `ExternalPartitionMemory`.
 //   2. After placement in `boot_preconfigured()`, call the appropriate `fix_*()` method
 //      which recomputes the address from the live storage location.
 //   3. Verify the patched address falls within the `UNIFIED_KERNEL_STORAGE`
@@ -924,7 +924,7 @@ pub fn dispatch_syscall<const N: usize>(
 //
 // Currently affected fields and their fixup methods:
 //   - `PartitionControlBlock.mpu_region.base`  → `fix_mpu_data_region()`
-//   - `PartitionControlBlock.stack_base`        → set via `PartitionConfig` at construction
+//   - `PartitionControlBlock.stack_base`        → set via `ExternalPartitionMemory` at construction
 //
 // See `boot.rs` for the post-placement fixup sequence that calls these
 // methods after the kernel has been moved into its final storage.
@@ -1127,61 +1127,6 @@ where
 
     /// Create a `Kernel` with `C::N` sentinel partitions.
     ///
-    /// Each partition gets `id = index`, `entry_point = 0`, `stack = 0`,
-    /// and a zero MPU region.  On `dynamic-mpu` builds a default
-    /// [`DeviceRegistry::new()`] is used.  Addresses are patched later
-    /// by [`boot_preconfigured()`](crate::boot::boot_preconfigured).
-    ///
-    /// # Deprecation
-    ///
-    /// Use [`Kernel::new()`] with [`PartitionMemory`](crate::partition_memory::PartitionMemory)
-    /// instead.  `Kernel::new()` validates stack regions at construction time,
-    /// eliminating the need for sentinel PCBs that must be patched post-hoc.
-    #[deprecated(
-        since = "0.1.0",
-        note = "use Kernel::new() with PartitionMemory instead"
-    )]
-    pub fn create_sentinels(schedule: ScheduleTable<{ C::SCHED }>) -> Result<Self, ConfigError> {
-        use crate::partition::{MpuRegion, PartitionControlBlock};
-
-        if schedule.is_empty() {
-            return Err(ConfigError::ScheduleEmpty);
-        }
-        for entry in schedule.entries().iter() {
-            #[cfg(feature = "dynamic-mpu")]
-            if entry.is_system_window {
-                continue;
-            }
-            if entry.partition_index as usize >= C::N {
-                return Err(ConfigError::PartitionTableFull);
-            }
-        }
-
-        let mut core = C::Core::default();
-        *core.schedule_mut() = schedule;
-        for i in 0..C::N {
-            let id = u8::try_from(i).map_err(|_| ConfigError::PartitionTableFull)?;
-            let pcb = PartitionControlBlock::new(
-                id,
-                0, // sentinel entry_point
-                0, // sentinel stack_base
-                0, // sentinel sp
-                MpuRegion::new(0, 0, 0),
-            );
-            if core.partitions_mut().add(pcb).is_err() {
-                return Err(ConfigError::PartitionTableFull);
-            }
-            core.set_sp(i, 0);
-        }
-
-        Ok(Self::init_kernel_struct(
-            core,
-            &[],
-            #[cfg(feature = "dynamic-mpu")]
-            crate::virtual_device::DeviceRegistry::new(),
-        ))
-    }
-
     /// Primary constructor for custom kernel configurations.
     ///
     /// Validates that: schedule is non-empty, all schedule entries reference
@@ -11825,7 +11770,6 @@ mod tests {
         struct NoDrainConfig;
         impl KernelConfig for NoDrainConfig {
             const N: usize = 4;
-            const STACK_WORDS: usize = 1024;
             const S: usize = 4;
             const SW: usize = 4;
             const MS: usize = 4;
@@ -12532,7 +12476,6 @@ mod tests {
         struct SmallConfig;
         impl KernelConfig for SmallConfig {
             const N: usize = 2;
-            const STACK_WORDS: usize = 256;
             const S: usize = 2;
             const SW: usize = 2;
             const MS: usize = 2;

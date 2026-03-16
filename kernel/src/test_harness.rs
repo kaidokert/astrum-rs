@@ -40,8 +40,8 @@ const FLASH_BASE: u32 = 0x0800_0000;
 const RAM_BASE: u32 = 0x2000_0000;
 /// Address offset between consecutive partition regions.
 const PARTITION_OFFSET: u32 = 0x1000;
-/// Stack size in bytes for each test partition, derived from STACK_WORDS.
-const STACK_SIZE_BYTES: u32 = HarnessConfig::STACK_WORDS as u32 * 4;
+/// Stack size in bytes for each test partition (AlignedStack1K = 256 words = 1024 bytes).
+const STACK_SIZE_BYTES: u32 = (AlignedStack1K::WORDS as u32) * 4;
 
 #[derive(Debug)]
 pub enum HarnessError {

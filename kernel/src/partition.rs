@@ -249,28 +249,6 @@ impl PartitionControlBlock {
         (self.stack_base, self.stack_size)
     }
 
-    // NOTE: fix_stack_region was removed in f4002a2 and is re-added here as a
-    // deprecated compatibility shim so downstream callers get a deprecation
-    // warning instead of a hard compile error.
-    /// Patch the stack base, size, and stack limit after construction.
-    ///
-    /// # Deprecation
-    ///
-    /// Legacy callers used sentinel PCBs (via `create_sentinels()`) and patched
-    /// stack fields post-hoc.  New code should set stack fields at construction
-    /// time via [`PartitionMemory`](crate::partition_memory::PartitionMemory),
-    /// which ensures stack regions are valid from the start.
-    #[deprecated(
-        since = "0.1.0",
-        note = "set stack fields at construction time via PartitionMemory instead"
-    )]
-    pub fn fix_stack_region(&mut self, stack_base: u32, stack_size: u32) {
-        self.stack_base = stack_base;
-        self.stack_size = stack_size;
-        self.stack_pointer = stack_base.wrapping_add(stack_size);
-        self.stack_limit = stack_base;
-    }
-
     /// Returns (base, size) pairs: data region, stack, then peripheral regions.
     /// Only non-zero-size regions are included. Capacity is 5 (1 data + 1 stack + 3 peripherals).
     pub fn accessible_static_regions(&self) -> Vec<(u32, u32), 5> {
