@@ -320,6 +320,7 @@ where
 }
 
 /// Boot the kernel using caller-provided `stacks` for partition storage.
+#[deprecated(since = "0.1.0", note = "use boot_preconfigured() instead")]
 #[cfg(not(test))]
 pub fn boot_external<C: KernelConfig, const SW: usize>(
     partitions: &[(extern "C" fn() -> !, u32)],

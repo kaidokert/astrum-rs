@@ -293,6 +293,7 @@ impl PartitionControlBlock {
     /// - `SizeNotPowerOfTwo`: size is not a power of two
     /// - `BaseNotAligned`: base is not aligned to size
     /// - `AddressOverflow`: base + size overflows u32
+    #[deprecated(note = "stack fields are set at construction via PartitionMemory")]
     pub fn fix_stack_region(&mut self, base: u32, size: u32) -> Result<(), MpuError> {
         assert!(
             !self.cache_sealed,
@@ -907,6 +908,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

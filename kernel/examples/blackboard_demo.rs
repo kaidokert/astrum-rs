@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! 3-partition shared-config demo: blackboard + semaphore + events.
 //!
 //! Demonstrates: blackboard display/read with wake-all semantics,

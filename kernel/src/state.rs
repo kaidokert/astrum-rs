@@ -562,6 +562,7 @@ mod tests {
     /// Helper to create a test kernel instance.
     ///
     /// Abstracts cfg-gated construction logic for DRY compliance.
+    #[allow(deprecated)]
     fn create_test_kernel() -> Kernel<TestConfig> {
         #[cfg(not(feature = "dynamic-mpu"))]
         {

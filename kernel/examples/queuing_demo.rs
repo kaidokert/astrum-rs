@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! 2-partition command/response pipeline via paired queuing ports.
 //!
 //! Demonstrates: FIFO message delivery, command→response round-trips,

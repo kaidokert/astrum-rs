@@ -62,6 +62,7 @@ impl KernelTestHarness {
     /// Shared kernel construction: builds schedule, configs, kernel, and
     /// transitions all partitions to Running. The `peripheral_fn` callback
     /// supplies peripheral regions for each partition index.
+    #[allow(deprecated)]
     fn build_kernel(
         n: usize,
         mut peripheral_fn: impl FnMut(usize) -> Vec<MpuRegion, 2>,
@@ -206,6 +207,7 @@ impl KernelTestHarness {
     /// The post-move fixup replicates boot.rs's inline sentinel guard:
     /// only sentinel partitions (size==0) have their MPU base updated;
     /// user-configured partitions keep their original base address.
+    #[allow(deprecated)]
     pub fn with_mixed_mpu_regions() -> Result<Self, HarnessError> {
         let n = 2;
         let mut schedule = ScheduleTable::new();
@@ -1392,6 +1394,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
+    #[allow(deprecated)]
     fn fix_stack_region_returns_false_for_out_of_bounds() {
         let mut h = KernelTestHarness::with_partitions(2).expect("harness setup");
         assert!(

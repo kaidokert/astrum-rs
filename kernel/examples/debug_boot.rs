@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Debug test for the unified harness boot sequence.
 //!
 //! # Purpose

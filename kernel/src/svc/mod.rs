@@ -1047,6 +1047,7 @@ where
     >,
 {
     fn default() -> Self {
+        #[allow(deprecated)]
         Self::new_empty(
             #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
@@ -1134,6 +1135,7 @@ where
     /// and a zero MPU region.  On `dynamic-mpu` builds a default
     /// [`DeviceRegistry::new()`] is used.  Addresses are patched later
     /// by [`boot_external()`](crate::boot::boot_external).
+    #[deprecated(note = "use Kernel::new() with PartitionMemory instead")]
     pub fn create_sentinels(schedule: ScheduleTable<{ C::SCHED }>) -> Result<Self, ConfigError> {
         use crate::partition::{MpuRegion, PartitionControlBlock};
 
@@ -1333,10 +1335,10 @@ where
     ///
     /// This is for backward compatibility with examples that manage
     /// partitions via `KernelState` separately.
-    ///
     // NOTE: Subtask 285 (new_empty initialization cleanup) was completed as part of
     // subtasks 281-284 which removed duplicated fields. The core, sync, msg, and ports
     // sub-structs are now initialized via Default::default().
+    #[deprecated(since = "0.1.0", note = "use Kernel::new() instead")]
     pub fn new_empty(
         #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
             'static,
@@ -2416,8 +2418,10 @@ where
     /// Returns `true` if the partition exists and the region was updated,
     /// `false` if the partition index is out of bounds or the MPU validation
     /// fails.
+    #[deprecated(note = "stack fields are set at construction via PartitionMemory")]
     #[inline(always)]
     pub fn fix_stack_region(&mut self, index: usize, base: u32, size: u32) -> bool {
+        #[allow(deprecated)]
         if let Some(pcb) = self.core.partitions_mut().get_mut(index) {
             pcb.fix_stack_region(base, size).is_ok()
         } else {
