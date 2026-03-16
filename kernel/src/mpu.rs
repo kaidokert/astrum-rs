@@ -158,6 +158,7 @@ pub fn configure_region(mpu: &cortex_m::peripheral::MPU, rbar: u32, rasr: u32) {
     }
 }
 
+use crate::klog;
 use crate::partition::{MpuRegion, PartitionControlBlock};
 
 /// MPU CTRL value: enable MPU (bit 0) + PRIVDEFENA (bit 2).
@@ -285,7 +286,13 @@ pub fn deny_all_regions() -> [(u32, u32); 4] {
 /// rather than causing a panic — critical for handler-mode safety where
 /// panics are unrecoverable.
 pub(crate) fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> [(u32, u32); 4] {
-    partition_mpu_regions(pcb).unwrap_or_else(|_| deny_all_regions())
+    match partition_mpu_regions(pcb) {
+        Ok(regions) => regions,
+        Err(_e) => {
+            klog!("MPU DENY-ALL partition {}: {:?}", pcb.id(), _e);
+            deny_all_regions()
+        }
+    }
 }
 
 /// Compute four (RBAR, RASR) pairs for a permissive MPU layout used by
@@ -941,6 +948,23 @@ mod tests {
         let pcb = make_pcb(0x0000_0000, 0x2000_0000, 16);
         let regions = partition_mpu_regions_or_deny_all(&pcb);
         assert_eq!(regions, deny_all_regions());
+    }
+
+    #[test]
+    fn partition_mpu_regions_or_deny_all_code_region_invalid_returns_deny_all() {
+        // Explicit invalid code region (size not power-of-2) triggers
+        // MpuError::CodeRegionInvalid through the klog! Err path.
+        let pcb = make_pcb(0x0000_0000, 0x2000_0000, 4096).with_code_mpu_region(MpuRegion::new(
+            0x0800_0000,
+            100,
+            0,
+        ));
+        let regions = partition_mpu_regions_or_deny_all(&pcb);
+        assert_eq!(
+            regions,
+            deny_all_regions(),
+            "invalid code region must produce deny-all MPU configuration"
+        );
     }
 
     // ------------------------------------------------------------------
