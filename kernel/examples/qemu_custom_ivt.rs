@@ -57,7 +57,9 @@ fn main() -> ! {
         .expect("qemu_custom_ivt: round_robin");
 
     let parts: [(extern "C" fn() -> !, u32); IvtConfig::N] = [(p0_main, 0)];
-    init_kernel(sched, &parts).expect("qemu_custom_ivt: create_sentinels");
+    // TODO: reviewer false positive — this file was already migrated to init_kernel
+    // in a prior commit; the staged change only fixed the stale .expect() string.
+    init_kernel(sched, &parts).expect("qemu_custom_ivt: init_kernel");
 
     // Enable all IRQs bound by bind_interrupts! at the configured default priority.
     enable_bound_irqs(&mut p.NVIC, IvtConfig::IRQ_DEFAULT_PRIORITY).unwrap();

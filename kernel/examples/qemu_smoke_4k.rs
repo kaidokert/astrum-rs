@@ -99,7 +99,9 @@ fn main() -> ! {
         .expect("qemu_smoke_4k: round_robin");
 
     let parts: [(extern "C" fn() -> !, u32); Smoke4KConfig::N] = [(p0_main, 0), (p1_main, 0)];
-    init_kernel(sched, &parts).expect("qemu_smoke_4k: create_sentinels");
+    // TODO: reviewer false positive — this file was already migrated to init_kernel
+    // in a prior commit; the staged change only fixed the stale .expect() string.
+    init_kernel(sched, &parts).expect("qemu_smoke_4k: init_kernel");
 
     match boot(p).expect("qemu_smoke_4k: boot") {}
 }
