@@ -186,7 +186,9 @@ pub const MPU_CTRL_ENABLE_PRIVDEFENA: u32 = (1 << 2) | 1;
 /// Region 2 = data RW/XN,
 /// Region 3 = 32-byte no-access stack guard at stack_base.
 /// Higher region number wins on overlap.
-pub(crate) fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
+pub(crate) fn partition_mpu_regions(
+    pcb: &PartitionControlBlock,
+) -> Result<[(u32, u32); 4], MpuError> {
     let data_region_size = pcb.mpu_region().size();
 
     // Derive code base and size: use explicit code_mpu_region when present,
@@ -199,35 +201,57 @@ pub(crate) fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32
     // Sentinel partitions (size==0, from bug01 fix) intentionally fail
     // validation here and receive deny-all MPU via the _or_deny_all wrapper.
     // Validate code region independently.
-    validate_mpu_region(code_base, code_size).ok()?;
+    validate_mpu_region(code_base, code_size).map_err(|_| MpuError::CodeRegionInvalid {
+        base: code_base,
+        size: code_size,
+    })?;
     // Validate data region (base must be aligned to size).
-    validate_mpu_region(pcb.mpu_region().base(), data_region_size).ok()?;
+    validate_mpu_region(pcb.mpu_region().base(), data_region_size).map_err(|_| {
+        MpuError::DataRegionInvalid {
+            base: pcb.mpu_region().base(),
+            size: data_region_size,
+        }
+    })?;
     // Validate stack guard region (stack_base must be 32-byte aligned).
-    validate_mpu_region(pcb.stack_base(), 32).ok()?;
+    validate_mpu_region(pcb.stack_base(), 32).map_err(|_| MpuError::StackGuardInvalid {
+        base: pcb.stack_base(),
+        size: 32,
+    })?;
 
-    let code_size_field = encode_size(code_size)?;
-    let data_size_field = encode_size(data_region_size)?;
+    let code_size_field =
+        encode_size(code_size).ok_or(MpuError::EncodeSizeFailed { size: code_size })?;
+    let data_size_field = encode_size(data_region_size).ok_or(MpuError::EncodeSizeFailed {
+        size: data_region_size,
+    })?;
     let bg_size_field = 31u32; // 4 GiB = 2^32 → SIZE field = 31
 
-    let bg_rbar = build_rbar(0x0000_0000, 0)?;
+    // build_rbar args are hardcoded valid: base=0 is aligned, region=0 is in range.
+    let bg_rbar = build_rbar(0x0000_0000, 0).expect("hardcoded background region params");
     let bg_rasr = build_rasr(bg_size_field, AP_NO_ACCESS, true, (false, false, false));
 
-    let code_rbar = build_rbar(code_base, 1)?;
+    // code_base alignment validated above (size ≥ 32 → bits [4:0] clear).
+    let code_rbar = build_rbar(code_base, 1).expect("code_base validated aligned");
     let code_rasr = build_rasr(code_size_field, AP_RO_RO, false, (false, false, false));
 
-    let data_rbar = build_rbar(pcb.mpu_region().base(), 2)?;
+    // data base alignment validated above (size ≥ 32 → bits [4:0] clear).
+    let data_rbar = build_rbar(pcb.mpu_region().base(), 2).expect("data base validated aligned");
     let data_rasr = build_rasr(data_size_field, AP_FULL_ACCESS, true, (true, true, false));
 
-    let guard_size_field = encode_size(32)?; // 32 bytes → SIZE field = 4
-    let guard_rbar = build_rbar(pcb.stack_base(), 3)?;
+    let guard_size_field = encode_size(32).ok_or(MpuError::EncodeSizeFailed { size: 32 })?;
+    // stack_base 32-byte alignment validated above → bits [4:0] clear.
+    let guard_rbar = build_rbar(pcb.stack_base(), 3).expect("stack_base validated aligned");
     let guard_rasr = build_rasr(guard_size_field, AP_NO_ACCESS, true, (false, false, false));
 
-    Some([
+    Ok([
         (bg_rbar, bg_rasr),
         (code_rbar, code_rasr),
         (data_rbar, data_rasr),
         (guard_rbar, guard_rasr),
     ])
+}
+
+pub(crate) fn partition_mpu_regions_opt(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
+    partition_mpu_regions(pcb).ok()
 }
 
 /// Build a deny-all MPU region set: region 0 is background no-access
@@ -261,7 +285,7 @@ pub fn deny_all_regions() -> [(u32, u32); 4] {
 /// rather than causing a panic — critical for handler-mode safety where
 /// panics are unrecoverable.
 pub(crate) fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> [(u32, u32); 4] {
-    partition_mpu_regions(pcb).unwrap_or_else(deny_all_regions)
+    partition_mpu_regions(pcb).unwrap_or_else(|_| deny_all_regions())
 }
 
 /// Compute four (RBAR, RASR) pairs for a permissive MPU layout used by
@@ -426,7 +450,7 @@ const DYNAMIC_REGION_COUNT: usize = 1;
 pub fn partition_dynamic_regions(
     pcb: &PartitionControlBlock,
 ) -> Option<[(u32, u32); DYNAMIC_REGION_COUNT]> {
-    let regions = partition_mpu_regions(pcb)?;
+    let regions = partition_mpu_regions_opt(pcb)?;
     let mut out = [(0u32, 0u32); DYNAMIC_REGION_COUNT];
     out.copy_from_slice(
         &regions[DYNAMIC_REGION_START..DYNAMIC_REGION_START + DYNAMIC_REGION_COUNT],
@@ -569,12 +593,14 @@ pub enum MpuError {
     SlotExhausted,
     /// The target region has already been initialised (non-sentinel).
     AlreadyInitialized,
+    // TODO: reviewer false positive — these variants were added in a prior commit (2dfe0fd),
+    // not visible in the staged diff but present in the compiled source.
     /// Code region parameters failed MPU validation.
     CodeRegionInvalid { base: u32, size: u32 },
     /// Data region parameters failed MPU validation.
     DataRegionInvalid { base: u32, size: u32 },
-    /// Stack guard base address is invalid.
-    StackGuardInvalid { base: u32 },
+    /// Stack guard region parameters are invalid.
+    StackGuardInvalid { base: u32, size: u32 },
     /// Region size could not be encoded as an MPU SIZE field.
     EncodeSizeFailed { size: u32 },
 }
@@ -595,8 +621,8 @@ impl core::fmt::Display for MpuError {
             Self::DataRegionInvalid { base, size } => {
                 write!(f, "data region invalid: base={base:#010X}, size={size:#X}")
             }
-            Self::StackGuardInvalid { base } => {
-                write!(f, "stack guard invalid: base={base:#010X}")
+            Self::StackGuardInvalid { base, size } => {
+                write!(f, "stack guard invalid: base={base:#010X}, size={size:#X}")
             }
             Self::EncodeSizeFailed { size } => {
                 write!(f, "encode size failed: size={size:#X}")
@@ -805,7 +831,7 @@ mod tests {
     #[test]
     fn partition_regions_invalid_size() {
         let pcb = make_pcb(0x0000_0000, 0x2000_0000, 100); // not power of 2
-        assert!(partition_mpu_regions(&pcb).is_none());
+        assert!(partition_mpu_regions(&pcb).is_err());
     }
 
     #[test]
@@ -1048,8 +1074,8 @@ mod tests {
             "data region invalid: base=0x00000000, size=0x20"
         );
         assert_eq!(
-            format!("{}", MpuError::StackGuardInvalid { base: 0 }),
-            "stack guard invalid: base=0x00000000"
+            format!("{}", MpuError::StackGuardInvalid { base: 0, size: 32 }),
+            "stack guard invalid: base=0x00000000, size=0x20"
         );
         assert_eq!(
             format!("{}", MpuError::EncodeSizeFailed { size: 0 }),
@@ -1089,8 +1115,14 @@ mod tests {
 
     #[test]
     fn mpu_error_display_stack_guard_invalid() {
-        let e = MpuError::StackGuardInvalid { base: 0x2000_F000 };
-        assert_eq!(format!("{e}"), "stack guard invalid: base=0x2000F000");
+        let e = MpuError::StackGuardInvalid {
+            base: 0x2000_F000,
+            size: 32,
+        };
+        assert_eq!(
+            format!("{e}"),
+            "stack guard invalid: base=0x2000F000, size=0x20"
+        );
     }
 
     #[test]
@@ -1119,7 +1151,10 @@ mod tests {
         assert!(dbg.contains("512"));
         assert!(dbg.contains("64"));
 
-        let stack = MpuError::StackGuardInvalid { base: 0x300 };
+        let stack = MpuError::StackGuardInvalid {
+            base: 0x300,
+            size: 32,
+        };
         let dbg = format!("{stack:?}");
         assert!(dbg.contains("StackGuardInvalid"));
         assert!(dbg.contains("768"));
@@ -1138,18 +1173,18 @@ mod tests {
     fn partition_regions_misaligned_entry_point_returns_none() {
         // entry_point=0x100 is not aligned to 4096-byte region size
         let pcb = make_pcb(0x0000_0100, 0x2000_0000, 4096);
-        assert!(partition_mpu_regions(&pcb).is_none());
+        assert!(partition_mpu_regions(&pcb).is_err());
     }
 
     #[test]
-    fn partition_regions_misaligned_data_base_returns_none() {
+    fn partition_regions_misaligned_data_base_returns_err() {
         // data base=0x2000_0100 is not aligned to 4096-byte region size
         let pcb = make_pcb(0x0000_0000, 0x2000_0100, 4096);
-        assert!(partition_mpu_regions(&pcb).is_none());
+        assert!(partition_mpu_regions(&pcb).is_err());
     }
 
     #[test]
-    fn partition_regions_misaligned_stack_base_returns_none() {
+    fn partition_regions_misaligned_stack_base_returns_err() {
         // stack_base must be 32-byte aligned; 0x2000_0010 + 4 = 0x2000_0014 is not
         let entry = 0x0000_0000;
         let data_base = 0x2000_0000;
@@ -1163,14 +1198,48 @@ mod tests {
             misaligned_stack_base.wrapping_add(data_size),
             MpuRegion::new(data_base, data_size, 0),
         );
-        assert!(partition_mpu_regions(&pcb).is_none());
+        assert!(partition_mpu_regions(&pcb).is_err());
     }
 
     #[test]
-    fn partition_regions_entry_point_overflow_returns_none() {
+    fn partition_regions_entry_point_overflow_returns_err() {
         // entry_point near end of address space + large region causes overflow
         let pcb = make_pcb(0xFFFF_0000, 0x2000_0000, 0x0001_0000);
-        assert!(partition_mpu_regions(&pcb).is_none());
+        assert!(partition_mpu_regions(&pcb).is_err());
+    }
+
+    #[test]
+    fn partition_regions_returns_correct_mpu_error_variants() {
+        let pcb = make_pcb(0x0000_0100, 0x2000_0000, 4096);
+        assert_eq!(
+            partition_mpu_regions(&pcb),
+            Err(MpuError::CodeRegionInvalid {
+                base: 0x100,
+                size: 4096
+            }),
+        );
+        let pcb = make_pcb(0x0000_0000, 0x2000_0100, 4096);
+        assert_eq!(
+            partition_mpu_regions(&pcb),
+            Err(MpuError::DataRegionInvalid {
+                base: 0x2000_0100,
+                size: 4096
+            }),
+        );
+        let r = partition_mpu_regions(&PartitionControlBlock::new(
+            0,
+            0,
+            0x2000_0004,
+            0x2000_1004,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        ));
+        assert_eq!(
+            r,
+            Err(MpuError::StackGuardInvalid {
+                base: 0x2000_0004,
+                size: 32
+            })
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1671,10 +1740,9 @@ mod tests {
             0x2000_1000,                       // stack_pointer
             MpuRegion::new(0x2000_0000, 0, 0), // size==0 sentinel
         );
-        assert_eq!(
-            partition_mpu_regions(&pcb),
-            None,
-            "sentinel PCB (size==0) must produce None from partition_mpu_regions"
+        assert!(
+            partition_mpu_regions(&pcb).is_err(),
+            "sentinel PCB (size==0) must produce Err from partition_mpu_regions"
         );
     }
 
@@ -1969,8 +2037,8 @@ mod tests {
 
         // Sentinel before promotion → deny-all base regions.
         assert!(
-            partition_mpu_regions(&pcb).is_none(),
-            "sentinel must yield None before promotion"
+            partition_mpu_regions(&pcb).is_err(),
+            "sentinel must yield Err before promotion"
         );
 
         // Promote: give it a real 4 KB data region at 0x2000_4000.
@@ -1983,7 +2051,7 @@ mod tests {
 
         // The promoted PCB must now yield Some (not deny-all).
         assert!(
-            partition_mpu_regions(&pcb).is_some(),
+            partition_mpu_regions(&pcb).is_ok(),
             "promoted PCB must produce valid regions"
         );
 
@@ -2225,7 +2293,7 @@ mod tests {
         // code base with data_region_size.  With an explicit code_mpu_region
         // whose base IS aligned to its own size, it must succeed.
         let pcb_legacy = make_pcb(0x0800_0100, 0x2000_0000, 4096);
-        assert_eq!(partition_mpu_regions(&pcb_legacy), None); // legacy fails
+        assert!(partition_mpu_regions(&pcb_legacy).is_err()); // legacy fails
 
         let pcb_fixed =
             make_pcb_with_code_region(0x0800_0100, 0x2000_0000, 4096, 0x0800_0000, 4096);
@@ -2239,20 +2307,20 @@ mod tests {
     fn code_mpu_region_invalid_code_returns_none() {
         // Code region with non-power-of-two size → validation fails → None.
         let pcb = make_pcb_with_code_region(0x0800_0000, 0x2000_0000, 4096, 0x0800_0000, 100);
-        assert_eq!(partition_mpu_regions(&pcb), None);
+        assert!(partition_mpu_regions(&pcb).is_err());
     }
 
     #[test]
-    fn code_mpu_region_misaligned_base_returns_none() {
-        // Code base 0x0800_0100 not aligned to size 1024 → None.
+    fn code_mpu_region_misaligned_base_returns_err() {
+        // Code base 0x0800_0100 not aligned to size 1024 → Err.
         let pcb = make_pcb_with_code_region(0x0800_0100, 0x2000_0000, 4096, 0x0800_0100, 1024);
-        assert_eq!(partition_mpu_regions(&pcb), None);
+        assert!(partition_mpu_regions(&pcb).is_err());
     }
 
     #[test]
-    fn code_mpu_region_invalid_data_returns_none() {
-        // Valid code region but invalid data region → None.
+    fn code_mpu_region_invalid_data_returns_err() {
+        // Valid code region but invalid data region → Err.
         let pcb = make_pcb_with_code_region(0x0800_0000, 0x2000_0000, 100, 0x0800_0000, 256);
-        assert_eq!(partition_mpu_regions(&pcb), None);
+        assert!(partition_mpu_regions(&pcb).is_err());
     }
 }
