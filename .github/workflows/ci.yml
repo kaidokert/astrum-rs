@@ -26,11 +26,19 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      # TODO: consider matrix strategy for combo checks (better parallelism and per-combo visibility)
+      - name: RTT duplicate-symbol regression check
+        run: |
+          echo "building examples with log-rtt"
+          cargo build -p kernel --examples --features log-rtt --target thumbv7m-none-eabi
+          echo "building multi-backend combos"
+          for combo in "log-rtt,log-swo" "log-rtt,log-defmt" "log-semihosting,log-rtt" "log-semihosting,log-defmt"; do
+            echo "combo: $combo"
+            cargo build -p kernel --examples --features "$combo" --target thumbv7m-none-eabi
+          done
+
       - name: Run CI
         run: ./scripts/ci.sh
-        # NOTE: ci.sh includes 'cargo build --examples --features log-rtt'
-        # to catch duplicate-symbol regressions at link time.
-        # TODO: consider extracting log-rtt link check into its own workflow step for visibility
 
   hardware:
     needs: qemu
