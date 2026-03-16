@@ -651,6 +651,8 @@ pub enum ConfigError {
         region_index: usize,
         detail: MpuError,
     },
+    /// A partition's code region failed MPU validation.
+    CodeRegionInvalid { partition_id: u8, detail: MpuError },
     /// A partition's entry point is not aligned to the required boundary.
     EntryPointMisaligned {
         partition_id: u8,
@@ -735,6 +737,13 @@ impl core::fmt::Display for ConfigError {
             } => write!(
                 f,
                 "partition {partition_id}: peripheral region {region_index} invalid: {detail}"
+            ),
+            Self::CodeRegionInvalid {
+                partition_id,
+                detail,
+            } => write!(
+                f,
+                "partition {partition_id}: code MPU region invalid: {detail}"
             ),
             Self::EntryPointMisaligned {
                 partition_id,
@@ -1882,6 +1891,26 @@ mod tests {
         assert!(msg.contains("3"), "should contain partition_id");
         assert!(msg.contains("0x08000002"), "should contain entry_point");
         assert!(msg.contains("4"), "should contain required_alignment");
+    }
+
+    #[test]
+    fn config_error_display_code_region_invalid() {
+        let msg = format!(
+            "{}",
+            ConfigError::CodeRegionInvalid {
+                partition_id: 5,
+                detail: MpuError::BaseNotAligned,
+            }
+        );
+        assert!(msg.contains("5"), "should contain partition_id");
+        assert!(
+            msg.contains("code MPU region invalid"),
+            "should contain code MPU region invalid"
+        );
+        assert!(
+            msg.contains(&format!("{}", MpuError::BaseNotAligned)),
+            "should contain MpuError detail"
+        );
     }
 
     #[test]
