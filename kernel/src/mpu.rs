@@ -187,28 +187,36 @@ pub const MPU_CTRL_ENABLE_PRIVDEFENA: u32 = (1 << 2) | 1;
 /// Region 3 = 32-byte no-access stack guard at stack_base.
 /// Higher region number wins on overlap.
 pub(crate) fn partition_mpu_regions(pcb: &PartitionControlBlock) -> Option<[(u32, u32); 4]> {
-    let region_size = pcb.mpu_region().size();
+    let data_region_size = pcb.mpu_region().size();
+
+    // Derive code base and size: use explicit code_mpu_region when present,
+    // otherwise fall back to entry_point / data_region_size (legacy behavior).
+    let (code_base, code_size) = match pcb.code_mpu_region() {
+        Some(region) => (region.base(), region.size()),
+        None => (pcb.entry_point(), data_region_size),
+    };
 
     // Sentinel partitions (size==0, from bug01 fix) intentionally fail
     // validation here and receive deny-all MPU via the _or_deny_all wrapper.
-    // Validate code region (entry_point must be aligned to region_size).
-    validate_mpu_region(pcb.entry_point(), region_size).ok()?;
+    // Validate code region independently.
+    validate_mpu_region(code_base, code_size).ok()?;
     // Validate data region (base must be aligned to size).
-    validate_mpu_region(pcb.mpu_region().base(), region_size).ok()?;
+    validate_mpu_region(pcb.mpu_region().base(), data_region_size).ok()?;
     // Validate stack guard region (stack_base must be 32-byte aligned).
     validate_mpu_region(pcb.stack_base(), 32).ok()?;
 
-    let size_field = encode_size(region_size)?;
+    let code_size_field = encode_size(code_size)?;
+    let data_size_field = encode_size(data_region_size)?;
     let bg_size_field = 31u32; // 4 GiB = 2^32 → SIZE field = 31
 
     let bg_rbar = build_rbar(0x0000_0000, 0)?;
     let bg_rasr = build_rasr(bg_size_field, AP_NO_ACCESS, true, (false, false, false));
 
-    let code_rbar = build_rbar(pcb.entry_point(), 1)?;
-    let code_rasr = build_rasr(size_field, AP_RO_RO, false, (false, false, false));
+    let code_rbar = build_rbar(code_base, 1)?;
+    let code_rasr = build_rasr(code_size_field, AP_RO_RO, false, (false, false, false));
 
     let data_rbar = build_rbar(pcb.mpu_region().base(), 2)?;
-    let data_rasr = build_rasr(size_field, AP_FULL_ACCESS, true, (true, true, false));
+    let data_rasr = build_rasr(data_size_field, AP_FULL_ACCESS, true, (true, true, false));
 
     let guard_size_field = encode_size(32)?; // 32 bytes → SIZE field = 4
     let guard_rbar = build_rbar(pcb.stack_base(), 3)?;
@@ -2025,5 +2033,63 @@ mod tests {
             cached, expected,
             "sentinel PCB must return deny-all data region"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // code_mpu_region: explicit code region in partition_mpu_regions
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn code_mpu_region_some_uses_explicit_base_and_size() {
+        // Code at 0x0800_0000 (256 bytes), data at 0x2000_0000 (4 KiB).
+        let code_region = MpuRegion::new(0x0800_0000, 256, 0);
+        let pcb = make_pcb(0x0800_0000, 0x2000_0000, 4096).with_code_mpu_region(code_region);
+        let regions = partition_mpu_regions(&pcb).unwrap();
+
+        // R1 (code): base = 0x0800_0000, size_field = encode_size(256) = 7
+        let (code_rbar, code_rasr) = regions[1];
+        assert_eq!(code_rbar, build_rbar(0x0800_0000, 1).unwrap());
+        assert_eq!((code_rasr >> 1) & 0x1F, 7); // SIZE = 7 (256 bytes)
+        assert_eq!((code_rasr >> 24) & 0x7, AP_RO_RO);
+        assert_eq!((code_rasr >> 28) & 1, 0); // XN = 0
+
+        // R2 (data): size_field = encode_size(4096) = 11, independent of code
+        let (data_rbar, data_rasr) = regions[2];
+        assert_eq!(data_rbar, build_rbar(0x2000_0000, 2).unwrap());
+        assert_eq!((data_rasr >> 1) & 0x1F, 11); // SIZE = 11 (4096 bytes)
+    }
+
+    #[test]
+    fn code_mpu_region_none_matches_legacy_output() {
+        // Without code_mpu_region, output must be identical to original impl.
+        let pcb_none = make_pcb(0x0000_0000, 0x2000_0000, 4096);
+        assert!(pcb_none.code_mpu_region().is_none());
+        let regions = partition_mpu_regions(&pcb_none).unwrap();
+
+        // R1 code uses entry_point as base, data_region_size as size
+        let (code_rbar, code_rasr) = regions[1];
+        assert_eq!(code_rbar, build_rbar(0x0000_0000, 1).unwrap());
+        assert_eq!((code_rasr >> 1) & 0x1F, 11); // SIZE = 11 (4096)
+
+        // R2 data also uses data_region_size
+        let (_, data_rasr) = regions[2];
+        assert_eq!((data_rasr >> 1) & 0x1F, 11); // SIZE = 11 (4096)
+    }
+
+    #[test]
+    fn code_mpu_region_invalid_code_returns_none() {
+        // Code region with non-power-of-two size → validation fails → None.
+        let bad_code = MpuRegion::new(0x0800_0000, 100, 0);
+        let pcb = make_pcb(0x0800_0000, 0x2000_0000, 4096).with_code_mpu_region(bad_code);
+        assert_eq!(partition_mpu_regions(&pcb), None);
+    }
+
+    #[test]
+    fn code_mpu_region_invalid_data_returns_none() {
+        // Valid code region but invalid data region → None.
+        let code_region = MpuRegion::new(0x0800_0000, 256, 0);
+        let pcb = make_pcb(0x0800_0000, 0x2000_0000, 100) // bad data size
+            .with_code_mpu_region(code_region);
+        assert_eq!(partition_mpu_regions(&pcb), None);
     }
 }
