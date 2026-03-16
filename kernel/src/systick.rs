@@ -329,7 +329,7 @@ mod tests {
         let mut stk0 = AlignedStack256B::default();
         let mut stk1 = AlignedStack256B::default();
         // MpuRegion with size=0 is a sentinel meaning "no user-configured data
-        // region"; boot_external() patches it from the actual stack address.
+        // region"; boot_preconfigured() patches it from the actual stack address.
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,

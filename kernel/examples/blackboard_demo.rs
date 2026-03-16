@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 //! 3-partition shared-config demo: blackboard + semaphore + events.
 //!
 //! Demonstrates: blackboard display/read with wake-all semantics,
@@ -229,32 +228,50 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let mut k = Kernel::<DemoConfig>::create_sentinels(sched).expect("kernel creation");
+    let eps: [extern "C" fn() -> !; DemoConfig::N] = [config_main, worker_a, worker_b];
+    // TODO: DRY — this ExternalPartitionMemory init block is duplicated across examples.
+    // Consider a safe Kernel API or helper that accepts entry points directly, eliminating
+    // the manual pointer arithmetic on partition_stacks! output.
+    let mut k = {
+        use kernel::{
+            partition::{ExternalPartitionMemory, MpuRegion},
+            StackStorage as _,
+        };
+        let stacks = kernel::partition_stacks!(DemoConfig, DemoConfig::N);
+        let sp = stacks.as_mut_ptr();
+        let mems: [_; DemoConfig::N] = core::array::from_fn(|i| {
+            // SAFETY: `sp` points to the first of `DemoConfig::N` contiguous
+            // `StackStorage` elements returned by `partition_stacks!`, and `i`
+            // is in 0..N, so `sp.add(i)` is in-bounds. Each index is visited
+            // exactly once by `from_fn`, so no aliasing occurs.
+            let s = unsafe { &mut *sp.add(i) };
+            ExternalPartitionMemory::from_aligned_stack(
+                s,
+                eps[i] as *const () as u32,
+                MpuRegion::new(0, 0, 0),
+                i as u8,
+            )
+            .expect("mem")
+        });
+        Kernel::<DemoConfig>::new(sched, &mems).expect("kernel creation")
+    };
 
     // Create blackboard and semaphore resources.
     let bb = k.blackboards_mut().create().unwrap() as u32;
     k.semaphores_mut().add(Semaphore::new(1, 1)).unwrap();
     let sem = 0u32; // first (and only) semaphore in the pool
 
-    store_kernel(k);
-
-    // Pack per-partition R0 values:
-    //   config_main (partition 0): only needs blackboard ID
-    //   worker_a    (partition 1): needs partition_id=1, sem, bb
-    //   worker_b    (partition 2): needs partition_id=2, sem, bb
-    let hints: [u32; DemoConfig::N] = [
+    // Set r0 hints: partition_id | sem | bb packed per partition.
+    let hints = [
         pack_r0(0, sem, bb),
         pack_r0(1, sem, bb),
         pack_r0(2, sem, bb),
     ];
-    let eps: [extern "C" fn() -> !; DemoConfig::N] = [config_main, worker_a, worker_b];
-    let parts: [(extern "C" fn() -> !, u32); DemoConfig::N] =
-        core::array::from_fn(|i| (eps[i], hints[i]));
-
-    // Use boot_external directly: this example creates resources on the kernel
-    // before boot, so r0 hints depend on runtime resource IDs and cannot be
-    // passed to init_kernel() ahead of time.
-    let stacks = unsafe { &mut *core::ptr::addr_of_mut!(__PARTITION_STACKS.0) };
-    match kernel::boot::boot_external::<DemoConfig, { DemoConfig::STACK_WORDS }>(&parts, p, stacks)
+    for (i, &h) in hints.iter().enumerate() {
+        k.partitions_mut().get_mut(i).expect("pcb").set_r0_hint(h);
+    }
+    store_kernel(k);
+    // SAFETY: PCBs populated by Kernel::new() with valid stacks.
+    match unsafe { kernel::boot::boot_preconfigured::<DemoConfig>(p) }
         .expect("blackboard_demo: boot") {}
 }

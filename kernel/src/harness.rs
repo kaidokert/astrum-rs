@@ -281,7 +281,7 @@ macro_rules! define_unified_harness {
             {<$Config as $crate::config::KernelConfig>::N}
         >::with_partition_count();
 
-        /// Boot-time MPU initialisation hook called from `boot::boot_external()`
+        /// Boot-time MPU initialisation hook called from `boot::boot_preconfigured()`
         /// before `SCB::set_pendsv()` triggers the first context switch.
         /// Programs static regions R0-R3 for the first scheduled partition.
         #[cfg(not(feature = "dynamic-mpu"))]
@@ -297,7 +297,7 @@ macro_rules! define_unified_harness {
             })?
         }
 
-        /// Boot-time MPU initialisation hook called from `boot::boot_external()`
+        /// Boot-time MPU initialisation hook called from `boot::boot_preconfigured()`
         /// before `SCB::set_pendsv()` triggers the first context switch.
         /// Programs static regions R0-R3 and dynamic slot 0 (R4) for the
         /// first scheduled partition.  Also populates dynamic slots 1-3

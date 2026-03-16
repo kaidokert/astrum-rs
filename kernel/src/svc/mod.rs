@@ -916,7 +916,7 @@ pub fn dispatch_syscall<const N: usize>(
 // after placement**, not during construction.  The correct pattern is:
 //
 //   1. Construct with stale / sentinel values (e.g. base = 0, size = 0).
-//   2. After placement in `boot_external()`, call the appropriate `fix_*()` method
+//   2. After placement in `boot_preconfigured()`, call the appropriate `fix_*()` method
 //      which recomputes the address from the live storage location.
 //   3. Verify the patched address falls within the `UNIFIED_KERNEL_STORAGE`
 //      range.
@@ -1084,7 +1084,7 @@ where
     ///
     /// Partition IDs are derived from array indices (0, 1, 2, …).
     /// PCBs are created with sentinel stack values (0, 0) that
-    /// [`boot_external()`](crate::boot::boot_external) patches later.
+    /// [`boot_preconfigured()`](crate::boot::boot_preconfigured) patches later.
     /// Entry points and MPU regions are preserved from each descriptor.
     pub fn new(
         schedule: ScheduleTable<{ C::SCHED }>,
@@ -1135,7 +1135,7 @@ where
     /// Each partition gets `id = index`, `entry_point = 0`, `stack = 0`,
     /// and a zero MPU region.  On `dynamic-mpu` builds a default
     /// [`DeviceRegistry::new()`] is used.  Addresses are patched later
-    /// by [`boot_external()`](crate::boot::boot_external).
+    /// by [`boot_preconfigured()`](crate::boot::boot_preconfigured).
     ///
     /// # Deprecated
     /// Use [`Kernel::new()`] with [`PartitionMemory`](crate::boot::PartitionMemory) instead.
@@ -1262,22 +1262,22 @@ where
                     },
                 )?;
             }
-            // Use sentinel stack values (0, 0).  boot_external() will
+            // Use sentinel stack values (0, 0).  boot_preconfigured() will
             // patch in the real addresses once the kernel is in its final
             // storage location, eliminating the stale-address window.
             let mpu_region = c.mpu_region;
             let pcb = PartitionControlBlock::new(
                 c.id,
                 c.entry_point,
-                0, // sentinel stack_base — patched by boot_external()
-                0, // sentinel sp — patched by boot_external()
+                0, // sentinel stack_base — patched by boot_preconfigured()
+                0, // sentinel sp — patched by boot_preconfigured()
                 mpu_region,
             )
             .with_peripheral_regions(&c.peripheral_regions);
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
             }
-            // Sentinel sp=0; boot_external() sets the real value.
+            // Sentinel sp=0; boot_preconfigured() sets the real value.
             core.set_sp(i, 0);
         }
         #[cfg(debug_assertions)]

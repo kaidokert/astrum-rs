@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 //! 2-partition command/response pipeline via paired queuing ports.
 //!
 //! Demonstrates: FIFO message delivery, command→response round-trips,
@@ -362,7 +361,30 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let mut k = Kernel::<DemoConfig>::create_sentinels(sched).expect("kernel creation");
+    let eps: [extern "C" fn() -> !; DemoConfig::N] = [commander_main, worker_main];
+    let mut k = {
+        use kernel::{
+            partition::{ExternalPartitionMemory, MpuRegion},
+            StackStorage as _,
+        };
+        let stacks = kernel::partition_stacks!(DemoConfig, DemoConfig::N);
+        let sp = stacks.as_mut_ptr();
+        let mems: [_; DemoConfig::N] = core::array::from_fn(|i| {
+            // SAFETY: `sp` points to the first of `DemoConfig::N` contiguous
+            // `StackStorage` elements returned by `partition_stacks!`, and `i`
+            // is in 0..N, so `sp.add(i)` is in-bounds. Each index is visited
+            // exactly once by `from_fn`, so no aliasing occurs.
+            let s = unsafe { &mut *sp.add(i) };
+            ExternalPartitionMemory::from_aligned_stack(
+                s,
+                eps[i] as *const () as u32,
+                MpuRegion::new(0, 0, 0),
+                i as u8,
+            )
+            .expect("mem")
+        });
+        Kernel::<DemoConfig>::new(sched, &mems).expect("kernel creation")
+    };
 
     // Command channel: commander (Source cs) -> worker (Destination cd)
     let cs = k
@@ -390,22 +412,12 @@ fn main() -> ! {
         .connect_ports(rs, rd)
         .expect("connect rs->rd");
 
-    store_kernel(k);
-
-    // Pack two port IDs into a single u32 passed to each partition via r0:
-    //   bits [31:16] = outgoing (Source) port ID
-    //   bits [15:0]  = incoming (Destination) port ID
-    // Commander: sends on cs, receives on rd.
-    // Worker:    sends on rs, receives on cd.
+    // Set r0 hints: bits [31:16] = outgoing port, bits [15:0] = incoming port.
     let hints = [(cs as u32) << 16 | rd as u32, (rs as u32) << 16 | cd as u32];
-    let eps: [extern "C" fn() -> !; DemoConfig::N] = [commander_main, worker_main];
-    let parts: [(extern "C" fn() -> !, u32); DemoConfig::N] =
-        core::array::from_fn(|i| (eps[i], hints[i]));
-
-    // Use boot_external directly: this example creates ports on the kernel
-    // before boot, so r0 hints depend on runtime resource IDs and cannot be
-    // passed to init_kernel() ahead of time.
-    let stacks = unsafe { &mut *core::ptr::addr_of_mut!(__PARTITION_STACKS.0) };
-    match kernel::boot::boot_external::<DemoConfig, { DemoConfig::STACK_WORDS }>(&parts, p, stacks)
-        .expect("queuing_demo: boot") {}
+    for (i, &h) in hints.iter().enumerate() {
+        k.partitions_mut().get_mut(i).expect("pcb").set_r0_hint(h);
+    }
+    store_kernel(k);
+    // SAFETY: PCBs populated by Kernel::new() with valid stacks.
+    match unsafe { kernel::boot::boot_preconfigured::<DemoConfig>(p) }.expect("queuing_demo: boot") {}
 }

@@ -338,7 +338,10 @@ impl PartitionControlBlock {
         self.r0_hint
     }
 
-    pub(crate) fn set_r0_hint(&mut self, hint: u32) {
+    // TODO: Evaluate whether `set_r0_hint` should be pub or pub(crate). Currently
+    // pub so examples can set r0 hints after kernel creation (e.g. when hints
+    // depend on runtime resource IDs). Consider a builder or init_kernel parameter instead.
+    pub fn set_r0_hint(&mut self, hint: u32) {
         self.r0_hint = hint;
     }
 
@@ -865,7 +868,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         }
         let base = stack.as_ptr() as u32;
         validate_stack_geometry(base, size_bytes, partition_id)?;
-        // Size==0 sentinel: boot_external() patches via fix_mpu_data_region_if_sentinel().
+        // Size==0 sentinel: boot_preconfigured() patches via fix_mpu_data_region_if_sentinel().
         if mpu_region.size() > 0 {
             validate_mpu_region(mpu_region.base(), mpu_region.size()).map_err(|detail| {
                 ConfigError::MpuRegionInvalid {
