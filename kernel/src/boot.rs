@@ -365,6 +365,15 @@ where
     })
     .map_err(|_| BootError::KernelNotInitialized)??;
 
+    // Store the kernel pointer for ISR access (AtomicPtr parallel path).
+    // Must happen before interrupts are enabled (step 8).
+    crate::state::with_kernel_mut::<C, _, _>(|k| {
+        // SAFETY: k points into UNIFIED_KERNEL_STORAGE which is 'static.
+        // Called before PendSV triggers the first context switch.
+        unsafe { crate::kernel_ptr::store_kernel_ptr(k) };
+    })
+    .map_err(|_| BootError::KernelNotInitialized)?;
+
     // Step 4: Configure AIRCR priority grouping and handler priorities.
     const { crate::config::assert_priority_order::<C>() }
     const { crate::config::assert_systick_reload::<C>() }
@@ -1121,5 +1130,60 @@ mod tests {
                 size: 1024,
             })
         );
+    }
+
+    /// Verify that `store_kernel_ptr` + `load_kernel_ptr` round-trips
+    /// correctly, mirroring the call added to `boot_preconfigured`.
+    #[test]
+    fn store_kernel_ptr_sets_valid_pointer_for_isr_access() {
+        use crate::{
+            compose_kernel_config, kernel_ptr, DebugEnabled, MsgMinimal, Partitions2, PortsTiny,
+            SyncMinimal,
+        };
+        compose_kernel_config!(BootTestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+
+        fn create_test_kernel() -> crate::svc::Kernel<BootTestConfig> {
+            #[cfg(not(feature = "dynamic-mpu"))]
+            {
+                crate::svc::Kernel::new_empty()
+            }
+            #[cfg(feature = "dynamic-mpu")]
+            {
+                let reg = crate::virtual_device::DeviceRegistry::default();
+                crate::svc::Kernel::new_empty(reg)
+            }
+        }
+
+        // Clear any prior state from other tests.
+        kernel_ptr::clear_kernel_ptr();
+
+        let mut kernel = create_test_kernel();
+        let expected_addr = &mut kernel as *mut _ as usize;
+
+        // Simulate boot_preconfigured: store pointer before interrupts.
+        // SAFETY: kernel lives for the duration of this test; cleared before drop.
+        unsafe { kernel_ptr::store_kernel_ptr(&mut kernel) };
+
+        // Verify load returns the same address.
+        // SAFETY: pointer just stored, kernel alive, no aliasing &mut.
+        let loaded = unsafe { kernel_ptr::load_kernel_ptr::<BootTestConfig>() };
+        assert!(
+            !loaded.is_null(),
+            "load_kernel_ptr must return non-null after store"
+        );
+        assert_eq!(
+            loaded as usize, expected_addr,
+            "AtomicPtr must point to the same kernel instance"
+        );
+
+        // Verify data integrity through the loaded pointer.
+        // SAFETY: loaded pointer is valid and we hold no other &mut.
+        let k = unsafe { &*loaded };
+        assert_eq!(
+            k.current_partition, 255,
+            "sentinel value must survive round-trip"
+        );
+
+        kernel_ptr::clear_kernel_ptr();
     }
 }
