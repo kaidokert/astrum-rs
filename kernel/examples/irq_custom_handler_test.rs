@@ -120,7 +120,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ CustomHandlerConfig::SCHED }>::round_robin(2, 3)
         .expect("custom_handler: round_robin");
     let parts: [(extern "C" fn() -> !, u32); CustomHandlerConfig::N] = [(p0_main, 0), (p1_main, 0)];
-    init_kernel(sched, &parts).expect("custom_handler: create");
+    init_kernel(sched, &parts).expect("irq_custom_handler_test: init_kernel");
     enable_bound_irqs(&mut p.NVIC, CustomHandlerConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     match boot(p).expect("custom_handler: boot") {}
 }

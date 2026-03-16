@@ -98,7 +98,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ MixedConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_mixed_model_test: round_robin");
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
-    init_kernel(sched, &parts).expect("irq_mixed_model_test: Kernel::create");
+    init_kernel(sched, &parts).expect("irq_mixed_model_test: init_kernel");
     enable_bound_irqs(&mut p.NVIC, MixedConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     match boot(p).expect("irq_mixed_model_test: boot") {}
 }

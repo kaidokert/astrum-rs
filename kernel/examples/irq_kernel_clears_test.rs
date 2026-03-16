@@ -101,7 +101,7 @@ fn main() -> ! {
         .expect("irq_kernel_clears_test: round_robin");
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0)];
-    init_kernel(sched, &parts).expect("irq_kernel_clears_test: Kernel::create");
+    init_kernel(sched, &parts).expect("irq_kernel_clears_test: init_kernel");
 
     // Unmask IRQ 60 so the software-triggered pend fires.
     enable_bound_irqs(&mut p.NVIC, KClearsConfig::IRQ_DEFAULT_PRIORITY).unwrap();

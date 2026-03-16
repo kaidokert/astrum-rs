@@ -86,7 +86,7 @@ fn main() -> ! {
         .expect("irq_unbound_test: round_robin");
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0)];
-    init_kernel(sched, &parts).expect("irq_unbound_test: Kernel::create");
+    init_kernel(sched, &parts).expect("irq_unbound_test: init_kernel");
 
     // Unmask bound IRQs (IRQ 5).
     enable_bound_irqs(&mut p.NVIC, UnboundConfig::IRQ_DEFAULT_PRIORITY).unwrap();

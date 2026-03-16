@@ -98,7 +98,7 @@ fn main() -> ! {
         .expect("irq_repend_stress: round_robin");
 
     let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0)];
-    init_kernel(sched, &parts).expect("irq_repend_stress: Kernel::create");
+    init_kernel(sched, &parts).expect("irq_repend_stress_test: init_kernel");
 
     // Unmask IRQ 0 so the software-triggered pend fires.
     enable_bound_irqs(&mut p.NVIC, StressConfig::IRQ_DEFAULT_PRIORITY).unwrap();
