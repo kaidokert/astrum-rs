@@ -446,9 +446,6 @@ pub(crate) fn peripheral_mpu_regions_or_disabled(pcb: &PartitionControlBlock) ->
 /// Calls [`partition_mpu_regions`] for base regions (falling back to
 /// [`deny_all_regions`] on error) and [`peripheral_mpu_regions_or_disabled`]
 /// for peripheral regions.
-// TODO: reviewer false positive — the function body is already correct for
-// Result<(), MpuError>: the Err branch falls back (no error-string return),
-// and the `?` operators propagate MpuError from the updated setters.
 pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) -> Result<(), MpuError> {
     let base = match partition_mpu_regions(pcb) {
         Ok(regions) => regions,
@@ -461,6 +458,7 @@ pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) -> Result<(), MpuEr
             deny_all_regions()
         }
     };
+    // Propagate MpuError from the PCB setters (e.g. CacheAlreadySealed).
     pcb.set_cached_base_regions(base)?;
     pcb.set_cached_periph_regions(peripheral_mpu_regions_or_disabled(pcb))?;
     pcb.seal_cache();
@@ -628,8 +626,6 @@ pub enum MpuError {
     SlotExhausted,
     /// The target region has already been initialised (non-sentinel).
     AlreadyInitialized,
-    // TODO: reviewer false positive — these variants were added in a prior commit (2dfe0fd),
-    // not visible in the staged diff but present in the compiled source.
     /// Code region parameters failed MPU validation.
     CodeRegionInvalid { base: u32, size: u32 },
     /// Data region parameters failed MPU validation.
@@ -2253,7 +2249,12 @@ mod tests {
         assert!(pcb.cache_sealed());
 
         // Second call must fail because the cache is already sealed.
-        assert!(precompute_mpu_cache(&mut pcb).is_err());
+        let err = precompute_mpu_cache(&mut pcb).unwrap_err();
+        assert!(
+            matches!(err, MpuError::CacheAlreadySealed),
+            "expected CacheAlreadySealed, got {:?}",
+            err
+        );
     }
 
     /// `precompute_mpu_cache` on a PCB whose data region size is not a

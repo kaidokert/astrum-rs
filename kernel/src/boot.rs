@@ -69,7 +69,10 @@ pub enum BootError {
     /// Sentinel MPU promotion failed for a partition.
     SentinelPromotionFailed { partition_index: usize },
     /// MPU cache population failed during boot precompute.
-    MpuCachePopulationFailed { partition_index: usize },
+    MpuCachePopulationFailed {
+        partition_index: usize,
+        source: crate::mpu::MpuError,
+    },
     /// Boot-time MPU initialization failed.
     BootMpuInitFailed { reason: &'static str },
     /// Kernel state not initialized when boot() was called.
@@ -141,10 +144,13 @@ impl core::fmt::Display for BootError {
                     "sentinel MPU promotion failed for partition {partition_index}"
                 )
             }
-            Self::MpuCachePopulationFailed { partition_index } => {
+            Self::MpuCachePopulationFailed {
+                partition_index,
+                source,
+            } => {
                 write!(
                     f,
-                    "MPU cache population failed for partition {partition_index}"
+                    "MPU cache population failed for partition {partition_index}: {source:?}"
                 )
             }
             Self::BootMpuInitFailed { reason } => {
@@ -365,8 +371,12 @@ where
         // Step 3: Precompute MPU cache entries.
         for i in 0..n {
             if let Some(pcb) = k.partitions_mut().get_mut(i) {
-                crate::mpu::precompute_mpu_cache(pcb)
-                    .map_err(|_| BootError::MpuCachePopulationFailed { partition_index: i })?;
+                crate::mpu::precompute_mpu_cache(pcb).map_err(|e| {
+                    BootError::MpuCachePopulationFailed {
+                        partition_index: i,
+                        source: e,
+                    }
+                })?;
             }
         }
 
@@ -884,19 +894,31 @@ mod tests {
 
     #[test]
     fn mpu_cache_population_failed_display() {
-        let err = BootError::MpuCachePopulationFailed { partition_index: 2 };
-        assert_eq!(
-            std::format!("{err}"),
-            "MPU cache population failed for partition 2"
+        use crate::mpu::MpuError;
+        let err = BootError::MpuCachePopulationFailed {
+            partition_index: 2,
+            source: MpuError::CacheAlreadySealed,
+        };
+        let msg = std::format!("{err}");
+        assert!(
+            msg.starts_with("MPU cache population failed for partition 2"),
+            "unexpected message: {msg}"
         );
+        assert!(msg.contains("CacheAlreadySealed"), "missing source: {msg}");
         // Verify variant identity and index discrimination.
         assert_eq!(
             err,
-            BootError::MpuCachePopulationFailed { partition_index: 2 }
+            BootError::MpuCachePopulationFailed {
+                partition_index: 2,
+                source: MpuError::CacheAlreadySealed,
+            }
         );
         assert_ne!(
             err,
-            BootError::MpuCachePopulationFailed { partition_index: 0 }
+            BootError::MpuCachePopulationFailed {
+                partition_index: 0,
+                source: MpuError::CacheAlreadySealed,
+            }
         );
         // Distinct from other partition-indexed variants with the same index.
         assert_ne!(err, BootError::StackInitFailed { partition_index: 2 });

@@ -2399,8 +2399,6 @@ mod tests {
     }
 
     // ── cache_sealed guard tests ────────────────────────────────────
-    // TODO: reviewer false positive — no consolidated `mutators_rejected_after_seal`
-    // test exists; post-seal rejection is covered by the individual tests below.
 
     #[test]
     fn cache_sealed_default_false_then_seal() {
