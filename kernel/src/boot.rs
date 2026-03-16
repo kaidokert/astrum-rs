@@ -443,60 +443,6 @@ where
     }
 }
 
-// NOTE: boot_external was removed in 3ef1a22 and is re-added here as a
-// deprecated compatibility shim so that downstream callers get a deprecation
-// warning instead of a hard compile error.
-/// Boot the kernel using an externally-provided `cortex_m::Peripherals` handle.
-///
-/// # Deprecation
-///
-/// This function was superseded by [`boot_preconfigured()`] which takes
-/// `cortex_m::Peripherals` by value internally via `cortex_m::Peripherals::take()`.
-/// Passing peripherals from the caller is no longer necessary because the boot
-/// sequence now owns peripheral acquisition.  This shim simply forwards to
-/// `boot_preconfigured()`.
-///
-/// # Safety
-///
-/// Same requirements as [`boot_preconfigured()`].
-#[deprecated(
-    since = "0.1.0",
-    note = "use boot_preconfigured() instead — peripherals are now taken internally"
-)]
-#[cfg(not(test))]
-pub unsafe fn boot_external<C: KernelConfig>(
-    peripherals: cortex_m::Peripherals,
-) -> Result<Never, BootError>
-where
-    [(); C::N]:,
-    [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
-    [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
-    [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
-    [(); C::DR]:,
-    C::Core:
-        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
-    C::Sync: SyncOps<
-        SemPool = SemaphorePool<{ C::S }, { C::SW }>,
-        MutPool = MutexPool<{ C::MS }, { C::MW }>,
-    >,
-    C::Msg: MsgOps<
-        MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
-        QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
-    >,
-    C::Ports: PortsOps<
-        SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
-        BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
-    >,
-{
-    // SAFETY: Caller guarantees the same invariants required by `boot_preconfigured`:
-    // stack memory regions are valid, writable, non-aliased, and the kernel is
-    // initialized. We forward `peripherals` directly.
-    unsafe { boot_preconfigured::<C>(peripherals) }
-}
-
 /// Validate PCBs have real stack addresses and entry points for preconfigured boot.
 pub fn validate_preconfigured_pcbs(
     partitions: &[crate::partition::PartitionControlBlock],
