@@ -588,10 +588,22 @@ impl PartitionConfig {
     /// Validate all fields of this partition configuration.
     ///
     /// Checks performed (in order):
-    /// 1. The MPU region `(base, size)` must pass [`validate_mpu_region`].
-    /// 2. Each peripheral region `(base, size)` must pass [`validate_mpu_region`].
-    /// 3. If present, the code MPU region `(base, size)` must pass [`validate_mpu_region`].
+    /// 1. The entry point must be 4-byte aligned (after stripping the Thumb bit).
+    /// 2. The MPU region `(base, size)` must pass [`validate_mpu_region`].
+    /// 3. Each peripheral region `(base, size)` must pass [`validate_mpu_region`].
+    /// 4. If present, the code MPU region `(base, size)` must pass [`validate_mpu_region`].
+    /// 5. If a code MPU region is present, the entry point must fall within it.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        // Entry-point alignment: bit[0] is the Thumb bit (allowed),
+        // but bit[1] must be zero for 4-byte alignment.
+        if (self.entry_point & 0b10) != 0 {
+            return Err(ConfigError::EntryPointMisaligned {
+                partition_id: self.id,
+                entry_point: self.entry_point,
+                required_alignment: 4,
+            });
+        }
+
         // MPU region validation
         validate_mpu_region(self.mpu_region.base(), self.mpu_region.size()).map_err(|detail| {
             ConfigError::MpuRegionInvalid {
@@ -620,6 +632,17 @@ impl PartitionConfig {
                     detail,
                 }
             })?;
+
+            // Entry point must fall within the code region.
+            let effective_entry = self.entry_point & !1; // strip Thumb bit
+            if effective_entry.wrapping_sub(region.base()) >= region.size() {
+                return Err(ConfigError::EntryPointOutsideCodeRegion {
+                    partition_id: self.id,
+                    entry_point: self.entry_point,
+                    region_base: region.base(),
+                    region_size: region.size(),
+                });
+            }
         }
 
         Ok(())
@@ -2232,6 +2255,48 @@ mod tests {
     fn validate_passes_when_code_mpu_region_is_none() {
         let cfg = valid_config();
         assert_eq!(cfg.code_mpu_region, None);
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    // ------------------------------------------------------------------
+    // PartitionConfig entry-point validation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn validate_rejects_misaligned_entry_point() {
+        let mut cfg = valid_config();
+        cfg.entry_point = 0x0800_0002; // bit[1] set → misaligned
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::EntryPointMisaligned {
+                partition_id: 0,
+                entry_point: 0x0800_0002,
+                required_alignment: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_entry_point_outside_code_region() {
+        let mut cfg = valid_config();
+        cfg.code_mpu_region = Some(MpuRegion::new(0x0800_0000, 4096, 0));
+        cfg.entry_point = 0x0900_0001; // well outside the 4 KiB region (Thumb bit set)
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::EntryPointOutsideCodeRegion {
+                partition_id: 0,
+                entry_point: 0x0900_0001,
+                region_base: 0x0800_0000,
+                region_size: 4096,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_accepts_aligned_entry_inside_code_region() {
+        let mut cfg = valid_config();
+        cfg.code_mpu_region = Some(MpuRegion::new(0x0800_0000, 4096, 0));
+        cfg.entry_point = 0x0800_0001; // Thumb bit set, aligned, inside region
         assert_eq!(cfg.validate(), Ok(()));
     }
 
