@@ -1205,6 +1205,18 @@ where
                         },
                     )?;
                 }
+                // Verify the entry point (Thumb bit stripped) falls within
+                // the code MPU region [base, base+size).
+                let effective_entry = c.entry_point & !1;
+                let region_end = code.base().wrapping_add(code.size());
+                if effective_entry < code.base() || effective_entry >= region_end {
+                    return Err(ConfigError::EntryPointOutsideCodeRegion {
+                        partition_id: c.id,
+                        entry_point: c.entry_point,
+                        region_base: code.base(),
+                        region_size: code.size(),
+                    });
+                }
             }
             for (j, region) in c.peripheral_regions.iter().enumerate() {
                 crate::mpu::validate_mpu_region(region.base(), region.size()).map_err(
@@ -3662,6 +3674,114 @@ mod tests {
             pcb.code_mpu_region().is_none(),
             "code region should be None when not configured"
         );
+    }
+
+    // ---- Kernel::new() entry-point-in-code-region validation tests ----
+
+    #[test]
+    fn kernel_new_rejects_entry_below_code_region() {
+        use crate::partition_core::AlignedStack256B;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
+        let code_mpu = MpuRegion::new(0x0800_1000, 4096, 0);
+        let mut stack = AlignedStack256B::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0000, data_mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(code_mpu);
+        let err = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
+            .err()
+            .expect("should reject entry below code region");
+        assert!(matches!(
+            err,
+            ConfigError::EntryPointOutsideCodeRegion {
+                partition_id: 0,
+                entry_point: 0x0800_0000,
+                region_base: 0x0800_1000,
+                region_size: 4096,
+            }
+        ));
+    }
+
+    #[test]
+    fn kernel_new_rejects_entry_at_code_region_end() {
+        use crate::partition_core::AlignedStack256B;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
+        let code_mpu = MpuRegion::new(0x0800_0000, 4096, 0);
+        let mut stack = AlignedStack256B::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_1000, data_mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(code_mpu);
+        let err = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
+            .err()
+            .expect("should reject entry at code region end");
+        assert!(matches!(
+            err,
+            ConfigError::EntryPointOutsideCodeRegion {
+                partition_id: 0,
+                entry_point: 0x0800_1000,
+                region_base: 0x0800_0000,
+                region_size: 4096,
+            }
+        ));
+    }
+
+    #[test]
+    fn kernel_new_accepts_entry_within_code_region() {
+        use crate::partition_core::AlignedStack256B;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
+        let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
+        let mut stack = AlignedStack256B::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0100, data_mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(code_mpu);
+        let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
+            .expect("entry within code region should be accepted");
+        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0100);
+    }
+
+    #[test]
+    fn kernel_new_strips_thumb_bit_for_code_region_check() {
+        use crate::partition_core::AlignedStack256B;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
+        let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
+        let mut stack = AlignedStack256B::default();
+        // entry 0x0800_0101 has Thumb bit; effective = 0x0800_0100
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0101, data_mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(code_mpu);
+        let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
+            .expect("entry with Thumb bit within code region should be accepted");
+        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0101);
+    }
+
+    #[test]
+    fn kernel_new_skips_entry_check_when_no_code_region() {
+        use crate::partition_core::AlignedStack256B;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
+        let mut stack = AlignedStack256B::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0FFF_0000, data_mpu, 0)
+            .unwrap();
+        Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
+            .expect("no code region means no entry point bounds check");
     }
 
     #[test]
