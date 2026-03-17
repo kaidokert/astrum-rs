@@ -3244,6 +3244,94 @@ mod tests {
     }
 
     #[test]
+    fn ext_pmem_periph_rejects_misaligned_base() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        // Base 0x4000_0080 not aligned to size 256.
+        let bad = MpuRegion::new(0x4000_0080, 256, 0);
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 3)
+            .unwrap()
+            .with_peripheral_regions(&[bad])
+            .unwrap_err();
+        match err {
+            ConfigError::PeripheralRegionInvalid {
+                partition_id: 3,
+                region_index: 0,
+                detail,
+            } => assert_eq!(detail, MpuError::BaseNotAligned),
+            other => panic!("expected PeripheralRegionInvalid/BaseNotAligned, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ext_pmem_periph_rejects_non_power_of_two_size() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        // Size 48 is not a power of two.
+        let bad = MpuRegion::new(0x4000_0000, 48, 0);
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 1)
+            .unwrap()
+            .with_peripheral_regions(&[bad])
+            .unwrap_err();
+        match err {
+            ConfigError::PeripheralRegionInvalid {
+                partition_id: 1,
+                region_index: 0,
+                detail,
+            } => assert_eq!(detail, MpuError::SizeNotPowerOfTwo),
+            other => panic!("expected PeripheralRegionInvalid/SizeNotPowerOfTwo, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ext_pmem_periph_accepts_valid_region() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let good = MpuRegion::new(0x4000_0000, 256, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 0)
+            .unwrap()
+            .with_peripheral_regions(&[good])
+            .unwrap();
+        assert_eq!(epm.peripheral_regions().len(), 1);
+        assert_eq!(epm.peripheral_regions()[0].base(), 0x4000_0000);
+        assert_eq!(epm.peripheral_regions()[0].size(), 256);
+    }
+
+    #[test]
+    fn ext_pmem_periph_mixed_rejects_on_first_invalid() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let good = MpuRegion::new(0x4000_0000, 256, 0);
+        // Second region: misaligned base.
+        let bad = MpuRegion::new(0x4000_0080, 256, 0);
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 2)
+            .unwrap()
+            .with_peripheral_regions(&[good, bad])
+            .unwrap_err();
+        match err {
+            ConfigError::PeripheralRegionInvalid {
+                partition_id: 2,
+                region_index: 1,
+                detail,
+            } => assert_eq!(detail, MpuError::BaseNotAligned),
+            other => panic!("expected PeripheralRegionInvalid at index 1, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ext_pmem_periph_zero_size_skipped_even_if_misaligned() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        // Zero-size region with misaligned base should be silently skipped.
+        let zero = MpuRegion::new(0xDEAD_BEEF, 0, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 0)
+            .unwrap()
+            .with_peripheral_regions(&[zero])
+            .unwrap();
+        assert_eq!(epm.peripheral_regions().len(), 0);
+    }
+
+    #[test]
     fn ext_pmem_accessors_return_correct_values() {
         let mut buf = Align256([0u32; 64]);
         let expected_base = buf.0.as_ptr() as u32;
