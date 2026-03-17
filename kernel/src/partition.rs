@@ -686,6 +686,8 @@ pub enum ConfigError {
         region_index: usize,
         detail: MpuError,
     },
+    /// Too many peripheral regions for a partition (exceeds heapless::Vec capacity).
+    PeripheralRegionCapacityExceeded { partition_id: u8 },
     /// A partition's code region failed MPU validation.
     CodeRegionInvalid { partition_id: u8, detail: MpuError },
     /// A partition's entry point is not aligned to the required boundary.
@@ -780,6 +782,10 @@ impl core::fmt::Display for ConfigError {
             } => write!(
                 f,
                 "partition {partition_id}: peripheral region {region_index} invalid: {detail}"
+            ),
+            Self::PeripheralRegionCapacityExceeded { partition_id } => write!(
+                f,
+                "partition {partition_id}: too many peripheral regions (capacity exceeded)"
             ),
             Self::CodeRegionInvalid {
                 partition_id,
@@ -914,6 +920,7 @@ pub struct ExternalPartitionMemory<'mem> {
     peripheral_regions: Vec<MpuRegion, 2>,
     code_mpu_region: Option<MpuRegion>,
     r0_hint: u32,
+    partition_id: u8,
 }
 
 impl<'mem> ExternalPartitionMemory<'mem> {
@@ -959,6 +966,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
             peripheral_regions: Vec::new(),
             code_mpu_region: None,
             r0_hint: 0,
+            partition_id,
         })
     }
 
@@ -977,12 +985,26 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         )
     }
 
-    /// Builder: attach peripheral MPU regions.
-    pub fn with_peripheral_regions(mut self, regions: &[MpuRegion]) -> Self {
-        for r in regions {
-            let _ = self.peripheral_regions.push(*r);
+    /// Builder: attach peripheral MPU regions; validates non-zero-size regions.
+    pub fn with_peripheral_regions(mut self, regions: &[MpuRegion]) -> Result<Self, ConfigError> {
+        for (i, r) in regions.iter().enumerate() {
+            if r.size() == 0 {
+                continue;
+            }
+            validate_mpu_region(r.base(), r.size()).map_err(|detail| {
+                ConfigError::PeripheralRegionInvalid {
+                    partition_id: self.partition_id,
+                    region_index: i,
+                    detail,
+                }
+            })?;
+            self.peripheral_regions.push(*r).map_err(|_| {
+                ConfigError::PeripheralRegionCapacityExceeded {
+                    partition_id: self.partition_id,
+                }
+            })?;
         }
-        self
+        Ok(self)
     }
 
     /// Builder: attach a code MPU region (separate from the data region).
@@ -992,17 +1014,14 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     pub fn with_code_mpu_region(mut self, region: MpuRegion) -> Result<Self, ConfigError> {
         validate_mpu_region(region.base(), region.size()).map_err(|detail| {
             ConfigError::CodeRegionInvalid {
-                partition_id: 0,
+                partition_id: self.partition_id,
                 detail,
             }
         })?;
         let effective_entry = self.entry_point & !1;
         if effective_entry.wrapping_sub(region.base()) >= region.size() {
-            // TODO: partition_id is hardcoded to 0 because ExternalPartitionMemory
-            // is a builder that doesn't know its final partition index. The Kernel
-            // path (svc/mod.rs) re-validates with the correct ID at construction time.
             return Err(ConfigError::EntryPointOutsideCodeRegion {
-                partition_id: 0,
+                partition_id: self.partition_id,
                 entry_point: self.entry_point,
                 region_base: region.base(),
                 region_size: region.size(),
@@ -3012,7 +3031,8 @@ mod tests {
         let periph = MpuRegion::new(0x4000_0000, 256, 0);
         let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1000, mpu, 0)
             .unwrap()
-            .with_peripheral_regions(&[periph]);
+            .with_peripheral_regions(&[periph])
+            .unwrap();
         assert_eq!(epm.peripheral_regions().len(), 1);
         assert_eq!(epm.peripheral_regions()[0], periph);
     }
@@ -3214,13 +3234,13 @@ mod tests {
         let r1 = MpuRegion::new(0x4000_0000, 256, 0);
         let r2 = MpuRegion::new(0x4000_1000, 256, 0);
         let r3 = MpuRegion::new(0x4000_2000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 0)
+        let result = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 0)
             .unwrap()
             .with_peripheral_regions(&[r1, r2, r3]);
-        // heapless::Vec<_, 2> silently drops the third push
-        assert_eq!(epm.peripheral_regions().len(), 2);
-        assert_eq!(epm.peripheral_regions()[0], r1);
-        assert_eq!(epm.peripheral_regions()[1], r2);
+        assert!(matches!(
+            result,
+            Err(ConfigError::PeripheralRegionCapacityExceeded { partition_id: 0 })
+        ));
     }
 
     #[test]
@@ -3231,7 +3251,8 @@ mod tests {
         let periph = MpuRegion::new(0x4000_0000, 256, 0x03);
         let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_ABC9, mpu, 5)
             .unwrap()
-            .with_peripheral_regions(&[periph]);
+            .with_peripheral_regions(&[periph])
+            .unwrap();
         assert_eq!(epm.entry_point(), 0x0800_ABC9);
         assert_eq!(epm.stack_base(), expected_base);
         assert_eq!(epm.stack_size_bytes(), 256);

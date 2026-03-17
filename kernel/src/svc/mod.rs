@@ -8208,10 +8208,8 @@ mod tests {
 
     #[test]
     fn kernel_new_rejects_peripheral_region_size_too_small() {
-        let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 100)).unwrap();
         let mut stk = AlignedStack1K::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(
+        let result = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
             0x0800_0000,
             MpuRegion::new(0x2000_0000, 4096, 0),
@@ -8219,7 +8217,6 @@ mod tests {
         )
         .unwrap()
         .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 16, 0x03)]);
-        let result = try_kernel_new_mem(s, core::slice::from_ref(&mem));
         assert!(matches!(
             result,
             Err(ConfigError::PeripheralRegionInvalid {
@@ -8232,10 +8229,8 @@ mod tests {
 
     #[test]
     fn kernel_new_rejects_peripheral_region_not_power_of_two() {
-        let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 100)).unwrap();
         let mut stk = AlignedStack1K::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(
+        let result = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
             0x0800_0000,
             MpuRegion::new(0x2000_0000, 4096, 0),
@@ -8243,7 +8238,6 @@ mod tests {
         )
         .unwrap()
         .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 100, 0x03)]);
-        let result = try_kernel_new_mem(s, core::slice::from_ref(&mem));
         assert!(matches!(
             result,
             Err(ConfigError::PeripheralRegionInvalid {
@@ -8256,11 +8250,9 @@ mod tests {
 
     #[test]
     fn kernel_new_rejects_peripheral_region_base_misaligned() {
-        let mut s = ScheduleTable::new();
-        s.add(ScheduleEntry::new(0, 100)).unwrap();
         let mut stk = AlignedStack1K::default();
         // base 0x4000_0100 is not aligned to size 4096 (0x1000)
-        let mem = ExternalPartitionMemory::from_aligned_stack(
+        let result = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
             0x0800_0000,
             MpuRegion::new(0x2000_0000, 4096, 0),
@@ -8268,7 +8260,6 @@ mod tests {
         )
         .unwrap()
         .with_peripheral_regions(&[MpuRegion::new(0x4000_0100, 4096, 0x03)]);
-        let result = try_kernel_new_mem(s, core::slice::from_ref(&mem));
         assert!(matches!(
             result,
             Err(ConfigError::PeripheralRegionInvalid {
@@ -8291,7 +8282,8 @@ mod tests {
             0,
         )
         .unwrap()
-        .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0x03)]);
+        .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0x03)])
+        .unwrap();
         let k = try_kernel_new_mem(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().get(0).unwrap().peripheral_regions().len(), 1);
         assert_eq!(
