@@ -3602,25 +3602,18 @@ mod tests {
 
     // ---- Kernel::new() code_mpu_region validation tests ----
 
-    /// Kernel::new() rejects a partition with an invalid code_mpu_region
-    /// (non-power-of-two size).
+    /// Invalid code_mpu_region is now rejected at builder time
+    /// (with_code_mpu_region), so Kernel::new() never sees it.
     #[test]
     fn kernel_new_rejects_invalid_code_mpu_region() {
         use crate::partition_core::AlignedStack256B;
-        let mut sched = ScheduleTable::<4>::new();
-        sched.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
-        sched.add_system_window(1).unwrap();
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let bad_code = MpuRegion::new(0x0800_0000, 100, 0); // 100 is not power-of-two
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0000, data_mpu, 0)
+        let err = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0000, data_mpu, 0)
             .unwrap()
             .with_code_mpu_region(bad_code)
-            .unwrap();
-        let err = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
-            .err()
-            .expect("should reject invalid code_mpu_region");
+            .unwrap_err();
         assert!(
             matches!(
                 err,

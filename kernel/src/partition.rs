@@ -990,6 +990,12 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     /// Returns `Err` if the entry point (with Thumb bit stripped) falls
     /// outside the region `[base, base+size)`.
     pub fn with_code_mpu_region(mut self, region: MpuRegion) -> Result<Self, ConfigError> {
+        validate_mpu_region(region.base(), region.size()).map_err(|detail| {
+            ConfigError::CodeRegionInvalid {
+                partition_id: 0,
+                detail,
+            }
+        })?;
         let effective_entry = self.entry_point & !1;
         if effective_entry.wrapping_sub(region.base()) >= region.size() {
             // TODO: partition_id is hardcoded to 0 because ExternalPartitionMemory
@@ -3045,6 +3051,56 @@ mod tests {
         let copied: MpuRegion = epm.code_mpu_region().copied().unwrap();
         assert_eq!(copied.base(), code.base());
         assert_eq!(copied.size(), code.size());
+    }
+
+    #[test]
+    fn ext_pmem_code_mpu_region_rejects_misaligned_base() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        // Base 0x0800_0100 is not aligned to size 1024 (0x400).
+        let code = MpuRegion::new(0x0800_0100, 1024, 0);
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0100, mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(code)
+            .unwrap_err();
+        match err {
+            ConfigError::CodeRegionInvalid { detail, .. } => {
+                assert_eq!(detail, MpuError::BaseNotAligned);
+            }
+            other => panic!("expected CodeRegionInvalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ext_pmem_code_mpu_region_rejects_non_power_of_two_size() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        // Size 48 is not a power of two.
+        let code = MpuRegion::new(0x0800_0000, 48, 0);
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(code)
+            .unwrap_err();
+        match err {
+            ConfigError::CodeRegionInvalid { detail, .. } => {
+                assert_eq!(detail, MpuError::SizeNotPowerOfTwo);
+            }
+            other => panic!("expected CodeRegionInvalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ext_pmem_code_mpu_region_accepts_valid_region() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let code = MpuRegion::new(0x0800_0000, 256, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0)
+            .unwrap()
+            .with_code_mpu_region(code)
+            .unwrap();
+        let got = epm.code_mpu_region().expect("should be Some");
+        assert_eq!(got.base(), 0x0800_0000);
+        assert_eq!(got.size(), 256);
     }
 
     // ------------------------------------------------------------------
