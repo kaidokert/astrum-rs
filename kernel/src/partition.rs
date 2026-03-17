@@ -963,9 +963,24 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     }
 
     /// Builder: attach a code MPU region (separate from the data region).
-    pub fn with_code_mpu_region(mut self, region: MpuRegion) -> Self {
+    ///
+    /// Returns `Err` if the entry point (with Thumb bit stripped) falls
+    /// outside the region `[base, base+size)`.
+    pub fn with_code_mpu_region(mut self, region: MpuRegion) -> Result<Self, ConfigError> {
+        let effective_entry = self.entry_point & !1;
+        if effective_entry.wrapping_sub(region.base()) >= region.size() {
+            // TODO: partition_id is hardcoded to 0 because ExternalPartitionMemory
+            // is a builder that doesn't know its final partition index. The Kernel
+            // path (svc/mod.rs) re-validates with the correct ID at construction time.
+            return Err(ConfigError::EntryPointOutsideCodeRegion {
+                partition_id: 0,
+                entry_point: self.entry_point,
+                region_base: region.base(),
+                region_size: region.size(),
+            });
+        }
         self.code_mpu_region = Some(region);
-        self
+        Ok(self)
     }
 
     /// Builder: set the initial r0 value passed to the partition entry point.
@@ -2946,7 +2961,8 @@ mod tests {
         let code = MpuRegion::new(0x0800_0000, 1024, 0);
         let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0)
             .unwrap()
-            .with_code_mpu_region(code);
+            .with_code_mpu_region(code)
+            .unwrap();
         let got = epm.code_mpu_region().expect("should be Some");
         assert_eq!(got.base(), 0x0800_0000);
         assert_eq!(got.size(), 1024);
@@ -2959,7 +2975,8 @@ mod tests {
         let code = MpuRegion::new(0x0800_0000, 512, 0);
         let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0)
             .unwrap()
-            .with_code_mpu_region(code);
+            .with_code_mpu_region(code)
+            .unwrap();
         let copied: MpuRegion = epm.code_mpu_region().copied().unwrap();
         assert_eq!(copied.base(), code.base());
         assert_eq!(copied.size(), code.size());
