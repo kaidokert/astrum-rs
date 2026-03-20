@@ -91,7 +91,8 @@ impl KernelTestHarness {
                 i as u8,
             )
             .map_err(HarnessError::KernelInit)?
-            .with_peripheral_regions(&peripheral_fn(i));
+            .with_peripheral_regions(&peripheral_fn(i))
+            .map_err(HarnessError::KernelInit)?;
             mems.push(mem).map_err(|_| HarnessError::ConfigsFull)?;
         }
         let mut kernel = Box::new(Kernel::new(schedule, &mems).map_err(HarnessError::KernelInit)?);

@@ -1,8 +1,3 @@
-// TODO: reviewer false positive — the "incomplete migration" finding is incorrect.
-// All ~20 example files were migrated to init_kernel in prior commits (see git log:
-// 5559cab, 15f91e3, f4002a2, etc.). This file (debug_boot.rs) is the only one that
-// constructs Kernel::new directly (not via init_kernel helper) because it tests the
-// raw boot sequence. The other two staged files only needed expect-string fixups.
 //! Debug test for the unified harness boot sequence.
 //!
 //! # Purpose
@@ -54,11 +49,12 @@ use kernel::{
 kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Manual stacks (not using define_unified_harness!)
+const STACK_WORDS: usize = 256;
 #[repr(C, align(1024))]
-struct AlignedStack([u32; TestConfig::STACK_WORDS]);
+struct AlignedStack([u32; STACK_WORDS]);
 
 static mut STACKS: [AlignedStack; TestConfig::N] = {
-    const ZERO: AlignedStack = AlignedStack([0; TestConfig::STACK_WORDS]);
+    const ZERO: AlignedStack = AlignedStack([0; STACK_WORDS]);
     [ZERO; TestConfig::N]
 };
 

@@ -49,7 +49,6 @@ check-rtt-lint:
 		echo "$$offenders"; \
 		exit 1; \
 	fi
-	# TODO: reviewer false positive — @echo below is Make's standard shell echo (@ suppresses command echo), not a .rs file
 	@echo "  ok — rtt_init_print! confined to boot.rs"
 
 # Run all QEMU integration examples
