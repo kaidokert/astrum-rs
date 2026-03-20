@@ -3430,6 +3430,74 @@ mod tests {
         }
     }
 
+    /// Exercises the full round-trip of reconfiguring a single partition's
+    /// `peripheral_reserved` from 2→0→2, verifying that stale RAM
+    /// descriptors are cleared by the owner check at each transition and
+    /// that `partition_region_values` returns the correct layout.
+    #[test]
+    fn reconfigure_partition_peripheral_reserved_round_trip() {
+        let ds = DynamicStrategy::<1>::with_partition_count();
+
+        // --- Phase 1: reserved=2, RAM lands in slot 2 (R6) ---
+        let (rb_r6, rs_r6) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb_r6, rs_r6)], 2).unwrap();
+
+        assert_eq!(ds.peripheral_reserved_for(0), 2);
+        let s2 = ds.slot(6).expect("RAM in R6 after reserved=2");
+        assert_eq!(s2.owner, 0);
+        assert_eq!(s2.base, 0x2000_0000);
+
+        let v = ds.partition_region_values(0);
+        // Slots 0-1 (R4-R5): peripheral cache (unconfigured → disabled).
+        assert_eq!(v[0], disabled_pair(4), "R4 disabled (no peripheral)");
+        assert_eq!(v[1], disabled_pair(5), "R5 disabled (no peripheral)");
+        // Slot 2 (R6): partition RAM.
+        assert_ne!(v[2].1, 0, "R6 RASR enabled for RAM");
+        // Slot 3 (R7): unused window.
+        assert_eq!(v[3], disabled_pair(7), "R7 disabled (unused)");
+
+        // --- Phase 2: reconfigure to reserved=0, RAM moves to slot 0 (R4) ---
+        let (rb_r4, rs_r4) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rb_r4, rs_r4)], 0).unwrap();
+
+        assert_eq!(ds.peripheral_reserved_for(0), 0);
+        // Old slot 2 (R6) must have been cleared by the owner check.
+        assert!(ds.slot(6).is_none(), "stale R6 cleared after 2→0");
+        // New slot 0 (R4) holds the RAM.
+        let s0 = ds.slot(4).expect("RAM in R4 after reserved=0");
+        assert_eq!(s0.owner, 0);
+        assert_eq!(s0.base, 0x2000_0000);
+
+        let v = ds.partition_region_values(0);
+        // Slot 0 (R4): partition RAM.
+        assert_ne!(v[0].1, 0, "R4 RASR enabled for RAM");
+        // Slots 1-3 (R5-R7): all disabled.
+        assert_eq!(v[1], disabled_pair(5), "R5 disabled");
+        assert_eq!(v[2], disabled_pair(6), "R6 disabled (stale cleared)");
+        assert_eq!(v[3], disabled_pair(7), "R7 disabled");
+
+        // --- Phase 3: reconfigure back to reserved=2, RAM returns to slot 2 (R6) ---
+        let (rb_r6b, rs_r6b) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb_r6b, rs_r6b)], 2).unwrap();
+
+        assert_eq!(ds.peripheral_reserved_for(0), 2);
+        // Old slot 0 (R4) must have been cleared.
+        assert!(ds.slot(4).is_none(), "stale R4 cleared after 0→2");
+        // Slot 2 (R6) holds the RAM again.
+        let s2b = ds.slot(6).expect("RAM in R6 after reserved=2 again");
+        assert_eq!(s2b.owner, 0);
+        assert_eq!(s2b.base, 0x2000_0000);
+
+        let v = ds.partition_region_values(0);
+        // Slots 0-1: peripheral cache (still unconfigured → disabled).
+        assert_eq!(v[0], disabled_pair(4), "R4 disabled (peripheral slot)");
+        assert_eq!(v[1], disabled_pair(5), "R5 disabled (peripheral slot)");
+        // Slot 2 (R6): partition RAM.
+        assert_ne!(v[2].1, 0, "R6 RASR enabled for RAM after round-trip");
+        // Slot 3 (R7): unused.
+        assert_eq!(v[3], disabled_pair(7), "R7 disabled");
+    }
+
     #[test]
     fn partition_region_values_out_of_range_returns_disabled() {
         // partition_id beyond the N=2 partition array: every slot must be disabled.
