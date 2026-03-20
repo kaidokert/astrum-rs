@@ -120,6 +120,7 @@ fn main() -> ! {
             )
             .expect("mem")
             .with_peripheral_regions(&periph_regions[i])
+            .expect("periph")
         });
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };

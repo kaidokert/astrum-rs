@@ -107,31 +107,31 @@ fn main() -> ! {
     let k = {
         let stacks = kernel::partition_stacks!(TestConfig, TestConfig::N);
         let [ref mut s0, ref mut s1] = *stacks;
-        let memories =
-            [
-                {
-                    // UART0 peripheral region for p0: exercises the non-trivial peripheral cache path.
-                    let base = s0.as_u32_slice().as_ptr() as u32;
-                    ExternalPartitionMemory::from_aligned_stack(
-                        s0,
-                        entry_fns[0] as usize as u32,
-                        MpuRegion::new(base, REGION_SZ, 0),
-                        0,
-                    )
-                    .expect("mem 0")
-                    .with_peripheral_regions(&[MpuRegion::new(0x4000_C000, 4096, AP_FULL_ACCESS)])
-                },
-                {
-                    let base = s1.as_u32_slice().as_ptr() as u32;
-                    ExternalPartitionMemory::from_aligned_stack(
-                        s1,
-                        entry_fns[1] as usize as u32,
-                        MpuRegion::new(base, REGION_SZ, 0),
-                        1,
-                    )
-                    .expect("mem 1")
-                },
-            ];
+        let memories = [
+            {
+                // UART0 peripheral region for p0: exercises the non-trivial peripheral cache path.
+                let base = s0.as_u32_slice().as_ptr() as u32;
+                ExternalPartitionMemory::from_aligned_stack(
+                    s0,
+                    entry_fns[0] as usize as u32,
+                    MpuRegion::new(base, REGION_SZ, 0),
+                    0,
+                )
+                .expect("mem 0")
+                .with_peripheral_regions(&[MpuRegion::new(0x4000_C000, 4096, AP_FULL_ACCESS)])
+                .expect("periph 0")
+            },
+            {
+                let base = s1.as_u32_slice().as_ptr() as u32;
+                ExternalPartitionMemory::from_aligned_stack(
+                    s1,
+                    entry_fns[1] as usize as u32,
+                    MpuRegion::new(base, REGION_SZ, 0),
+                    1,
+                )
+                .expect("mem 1")
+            },
+        ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
     store_kernel(k);
