@@ -99,6 +99,40 @@
 //! | Linker placement | `#[link_section = ".kernel_state"]` attribute |
 //! | Assembly visibility | `__kernel_state_start` symbol in linker script |
 
+// ---- Kernel-size feature selection: mutual exclusivity guards ----
+//
+// Pairwise checks ensure that any combination of two or three kernel-size
+// features is a compile error. Users must select exactly one.
+// The `_kernel-size-any` escape hatch suppresses these guards so that
+// `--all-features` can compile (kernel-16k wins in that case).
+
+#[cfg(all(
+    feature = "kernel-4k",
+    feature = "kernel-8k",
+    not(feature = "_kernel-size-any")
+))]
+compile_error!(
+    "Features `kernel-4k` and `kernel-8k` are mutually exclusive. Select only one kernel size."
+);
+
+#[cfg(all(
+    feature = "kernel-4k",
+    feature = "kernel-16k",
+    not(feature = "_kernel-size-any")
+))]
+compile_error!(
+    "Features `kernel-4k` and `kernel-16k` are mutually exclusive. Select only one kernel size."
+);
+
+#[cfg(all(
+    feature = "kernel-8k",
+    feature = "kernel-16k",
+    not(feature = "_kernel-size-any")
+))]
+compile_error!(
+    "Features `kernel-8k` and `kernel-16k` are mutually exclusive. Select only one kernel size."
+);
+
 use core::mem::{align_of, size_of, MaybeUninit};
 use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicBool, Ordering};
