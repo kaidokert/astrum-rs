@@ -131,7 +131,8 @@ fn main() -> ! {
                 0,
             )
             .expect("mem 0")
-            .with_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)]),
+            .with_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)])
+            .expect("periph 0"),
             ExternalPartitionMemory::new(
                 s1,
                 p1_main as *const () as u32,
