@@ -94,6 +94,11 @@ const DYNAMIC_SLOT_COUNT: usize = 4;
 /// Number of dynamic slots permanently occupied by partition RAM.
 const RAM_SLOT_COUNT: usize = 1;
 
+/// Number of leading dynamic slots reserved for peripheral MMIO regions
+/// when a partition has peripherals.  Partitions without peripherals
+/// reserve 0 slots.
+pub const PERIPHERAL_RESERVED_SLOTS: usize = 2;
+
 /// Upper bound (exclusive) on peripherals `wire_boot_peripherals` may wire.
 /// Accounts for the RAM slot and preserves at least one free dynamic slot
 /// for runtime `add_window`.
@@ -661,7 +666,7 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
 
         // Peripheral MMIO slots must be reserved as a pair (R4-R5) or
         // not at all.  Any other value is a configuration error.
-        if peripheral_reserved != 0 && peripheral_reserved != 2 {
+        if peripheral_reserved != 0 && peripheral_reserved != PERIPHERAL_RESERVED_SLOTS {
             return Err(MpuError::RegionCountMismatch);
         }
         // Validate peripheral_reserved is a valid slot index.
@@ -1450,6 +1455,67 @@ mod tests {
         let s2_final = ds.slot(4).expect("p2 RAM in R4");
         assert_eq!(s2_final.owner, 2, "p2 now owns R4");
         assert_eq!(s2_final.base, 0x2000_C000, "p2 RAM base in R4");
+    }
+
+    /// Simulates the boot-time loop that configures ALL partitions
+    /// (boot + non-boot) before `wire_boot_peripherals`, verifying
+    /// that every partition's `peripheral_reserved` is set correctly.
+    #[test]
+    fn boot_loop_configures_all_partitions_peripheral_reserved() {
+        let ds = DynamicStrategy::<3>::with_partition_count();
+        let boot_pid: u8 = 0;
+
+        // Partition regions: p0 has peripherals (reserved=PERIPHERAL_RESERVED_SLOTS),
+        // p1 has none (reserved=0), p2 has peripherals (reserved=PERIPHERAL_RESERVED_SLOTS).
+        let periph_empty = [false, true, false]; // false = has peripherals
+        let bases: [u32; 3] = [0x2000_0000, 0x2000_4000, 0x2000_8000];
+
+        // Helper matching the harness: peripheral_reserved from "has peripherals?" flag.
+        let pr_for = |empty: bool| -> usize {
+            if empty {
+                0
+            } else {
+                PERIPHERAL_RESERVED_SLOTS
+            }
+        };
+
+        // Step 1: configure boot partition (as the macro does first).
+        let region_num_boot = if periph_empty[0] {
+            4u32
+        } else {
+            4 + PERIPHERAL_RESERVED_SLOTS as u32
+        };
+        let (rb, rs) = data_region(bases[0], 4096, region_num_boot);
+        ds.configure_partition(boot_pid, &[(rb, rs)], pr_for(periph_empty[0]))
+            .unwrap();
+
+        // Step 2: configure all remaining partitions (the new loop).
+        for i in 0..3u8 {
+            if i == boot_pid {
+                continue;
+            }
+            let pr = pr_for(periph_empty[i as usize]);
+            let rn = if periph_empty[i as usize] {
+                4u32
+            } else {
+                4 + PERIPHERAL_RESERVED_SLOTS as u32
+            };
+            let (rb_i, rs_i) = data_region(bases[i as usize], 4096, rn);
+            ds.configure_partition(i, &[(rb_i, rs_i)], pr).unwrap();
+        }
+
+        // Verify: all partitions have correct peripheral_reserved.
+        assert_eq!(
+            ds.peripheral_reserved_for(0),
+            PERIPHERAL_RESERVED_SLOTS,
+            "p0 has peripherals"
+        );
+        assert_eq!(ds.peripheral_reserved_for(1), 0, "p1 has no peripherals");
+        assert_eq!(
+            ds.peripheral_reserved_for(2),
+            PERIPHERAL_RESERVED_SLOTS,
+            "p2 has peripherals"
+        );
     }
 
     // ------------------------------------------------------------------

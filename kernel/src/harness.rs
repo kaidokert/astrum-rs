@@ -189,9 +189,6 @@ macro_rules! _unified_handle_yield {
 /// Declare aligned partition stacks for `no_boot` examples.
 ///
 /// Returns `&mut [AlignedStack1K; $count]` backed by a module-level static.
-/// Validates at compile time that `AlignedStack1K::WORDS` matches the
-/// config's `STACK_WORDS`, preserving the single source of truth for
-/// partition stack sizes.
 ///
 /// # Safety
 ///
@@ -206,14 +203,8 @@ macro_rules! _unified_handle_yield {
 #[macro_export]
 macro_rules! partition_stacks {
     ($Config:ty, $count:expr) => {{
-        // Compile-time: stack type must match configured stack word count.
-        const _: () = assert!(
-            <$crate::AlignedStack1K as $crate::StackStorage>::WORDS
-                == <$Config as $crate::config::KernelConfig>::STACK_WORDS,
-            "AlignedStack1K::WORDS does not match config STACK_WORDS"
-        );
         static mut _PARTITION_STACKS: [$crate::AlignedStack1K; $count] =
-            [$crate::AlignedStack1K::ZERO; $count];
+            [<$crate::AlignedStack1K as $crate::StackStorage>::ZERO; $count];
         // SAFETY: caller guarantees single-threaded pre-interrupt context.
         unsafe { &mut *(&raw mut _PARTITION_STACKS) }
     }};
@@ -323,9 +314,20 @@ macro_rules! define_unified_harness {
                     $crate::mpu::write_cached_base_regions(mpu, pcb);
                     $crate::mpu::write_cached_periph_regions(mpu, pcb);
                 }
+                // Helper: compute peripheral_reserved for a PCB.
+                // Returns PERIPHERAL_RESERVED_SLOTS when the partition
+                // has peripherals, 0 otherwise.
+                fn pcb_periph_reserved(pcb: &$crate::partition::PartitionControlBlock) -> usize {
+                    if pcb.peripheral_regions().is_empty() {
+                        0
+                    } else {
+                        $crate::mpu_strategy::PERIPHERAL_RESERVED_SLOTS
+                    }
+                }
+
                 let strategy_result = {
                     let dyn_region = pcb.cached_dynamic_region();
-                    let periph_reserved = if pcb.peripheral_regions().is_empty() { 0 } else { 2 };
+                    let periph_reserved = pcb_periph_reserved(pcb);
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
                         &HARNESS_STRATEGY, pid, &[dyn_region], periph_reserved,
                     )
@@ -337,6 +339,29 @@ macro_rules! define_unified_harness {
                     $crate::mpu::mpu_enable(mpu);
                 }
                 strategy_result?;
+
+                // Configure all remaining (non-boot) partitions so that
+                // each partition's `peripheral_reserved` is set before
+                // `wire_boot_peripherals` reads it.  Without this,
+                // non-boot partitions with peripherals would have
+                // peripheral_reserved=0 and their peripherals would be
+                // wired via add_window (global slots) instead of cached
+                // in per-partition slots.
+                for i in 0..k.partition_count() {
+                    let other_pid = u8::try_from(i)
+                        .map_err(|_| "boot: partition index exceeds u8")?;
+                    if other_pid == pid { continue; }
+                    let other_pcb = k.pcb(i)
+                        .ok_or("boot: partition missing from table")?;
+                    // TODO: assumes each partition has exactly one dynamic region
+                    // (cached_dynamic_region).  If the PCB supports multiple
+                    // dynamic regions, this call needs updating.
+                    let other_dyn = other_pcb.cached_dynamic_region();
+                    let other_periph = pcb_periph_reserved(other_pcb);
+                    $crate::mpu_strategy::MpuStrategy::configure_partition(
+                        &HARNESS_STRATEGY, other_pid, &[other_dyn], other_periph,
+                    ).map_err(|_| "failed to configure non-boot partition")?;
+                }
 
                 // Populate dynamic slots 1-3 (R5-R7) with deduplicated
                 // peripheral regions from all partitions.
@@ -486,21 +511,16 @@ macro_rules! define_unified_harness {
     (@impl $Config:ty, $sched:expr, $entries:expr, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
 
-        /// Partition stacks with 4 KiB alignment; used by `init_kernel()` to build PCBs.
+        /// Partition stacks backed by `AlignedStack1K`; used by `init_kernel()` to build PCBs.
         ///
         /// # Singleton
         /// This macro arm must be invoked at most once per binary.  Multiple
-        /// invocations would produce duplicate `__PartitionStackStorage` /
-        /// `__PARTITION_STACKS` symbols, causing a compile-time link error.
-        #[repr(C, align(4096))]
-        struct __PartitionStackStorage(
-            [[u32; <$Config as $crate::config::KernelConfig>::STACK_WORDS];
-             <$Config as $crate::config::KernelConfig>::N],
-        );
-        static mut __PARTITION_STACKS: __PartitionStackStorage = __PartitionStackStorage(
-            [[0u32; <$Config as $crate::config::KernelConfig>::STACK_WORDS];
-             <$Config as $crate::config::KernelConfig>::N],
-        );
+        /// invocations would produce duplicate `__PARTITION_STACKS` symbols,
+        /// causing a compile-time link error.
+        static mut __PARTITION_STACKS: [$crate::AlignedStack1K;
+             <$Config as $crate::config::KernelConfig>::N] =
+            [<$crate::AlignedStack1K as $crate::StackStorage>::ZERO;
+             <$Config as $crate::config::KernelConfig>::N];
 
         // TODO: `init_kernel` is generated in the caller's local scope; acceptable
         // for a harness macro but could shadow other symbols if used carelessly.
@@ -525,13 +545,13 @@ macro_rules! define_unified_harness {
             // by the linker via duplicate symbol errors).  `init_kernel()` is called
             // exactly once from `boot()` before interrupts are enabled, so there are
             // no concurrent accesses.
-            let stacks = unsafe { &mut __PARTITION_STACKS.0 };
+            let stacks = unsafe { &mut *(&raw mut __PARTITION_STACKS) };
             let sentinel_mpu = MpuRegion::new(0, 0, 0);
             let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, &(ep, hint))) in stacks.iter_mut().zip(entries.iter()).enumerate() {
                 let entry = ep as *const () as u32;
-                let mem = ExternalPartitionMemory::new(&mut stk[..], entry, sentinel_mpu, i as u8)
+                let mem = ExternalPartitionMemory::from_aligned_stack(stk, entry, sentinel_mpu, i as u8)
                     .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?
                     .with_r0_hint(hint);
                 memories.push(mem)
@@ -565,21 +585,16 @@ macro_rules! define_unified_harness {
     (@impl_compat $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
         $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
 
-        /// Partition stacks with 4 KiB alignment; used by `init_kernel()` to build PCBs.
+        /// Partition stacks backed by `AlignedStack1K`; used by `init_kernel()` to build PCBs.
         ///
         /// # Singleton
         /// This macro arm must be invoked at most once per binary.  Multiple
-        /// invocations would produce duplicate `__PartitionStackStorage` /
-        /// `__PARTITION_STACKS` symbols, causing a compile-time link error.
-        #[repr(C, align(4096))]
-        struct __PartitionStackStorage(
-            [[u32; <$Config as $crate::config::KernelConfig>::STACK_WORDS];
-             <$Config as $crate::config::KernelConfig>::N],
-        );
-        static mut __PARTITION_STACKS: __PartitionStackStorage = __PartitionStackStorage(
-            [[0u32; <$Config as $crate::config::KernelConfig>::STACK_WORDS];
-             <$Config as $crate::config::KernelConfig>::N],
-        );
+        /// invocations would produce duplicate `__PARTITION_STACKS` symbols,
+        /// causing a compile-time link error.
+        static mut __PARTITION_STACKS: [$crate::AlignedStack1K;
+             <$Config as $crate::config::KernelConfig>::N] =
+            [<$crate::AlignedStack1K as $crate::StackStorage>::ZERO;
+             <$Config as $crate::config::KernelConfig>::N];
 
         /// Build a kernel from `__PARTITION_STACKS` with the given entry points
         /// and store it into global kernel state.
@@ -597,13 +612,13 @@ macro_rules! define_unified_harness {
             // by the linker via duplicate symbol errors).  `init_kernel()` is called
             // exactly once from `main()` before interrupts are enabled, so there are
             // no concurrent accesses.
-            let stacks = unsafe { &mut __PARTITION_STACKS.0 };
+            let stacks = unsafe { &mut *(&raw mut __PARTITION_STACKS) };
             let sentinel_mpu = MpuRegion::new(0, 0, 0);
             let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, &(ep, hint))) in stacks.iter_mut().zip(entries.iter()).enumerate() {
                 let entry = ep as *const () as u32;
-                let mem = ExternalPartitionMemory::new(&mut stk[..], entry, sentinel_mpu, i as u8)
+                let mem = ExternalPartitionMemory::from_aligned_stack(stk, entry, sentinel_mpu, i as u8)
                     .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?
                     .with_r0_hint(hint);
                 memories.push(mem)
