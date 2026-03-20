@@ -3370,4 +3370,33 @@ mod tests {
             "dynamic window from P0 visible to P1"
         );
     }
+
+    #[test]
+    fn partition_region_values_unconfigured_returns_disabled() {
+        // Partition 0 is never configured: peripheral_reserved defaults to 0,
+        // partition_ram is None. All RASR values must be 0 (disabled).
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let vals = ds.partition_region_values(0);
+        for (i, &(_rbar, rasr)) in vals.iter().enumerate() {
+            assert_eq!(
+                rasr, 0,
+                "slot {} RASR must be 0 for unconfigured partition",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn partition_region_values_out_of_range_returns_disabled() {
+        // partition_id beyond the N=2 partition array: every slot must be disabled.
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let vals = ds.partition_region_values(255);
+        for (i, &(_rbar, rasr)) in vals.iter().enumerate() {
+            assert_eq!(
+                rasr, 0,
+                "slot {} RASR must be 0 for out-of-range partition_id",
+                i
+            );
+        }
+    }
 }
