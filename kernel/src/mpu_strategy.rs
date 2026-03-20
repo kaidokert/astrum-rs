@@ -903,6 +903,17 @@ mod tests {
         )
     }
 
+    /// Helper: build a PCB with an explicit partition id.
+    fn make_pcb_id(id: u8, entry: u32, data_base: u32, data_size: u32) -> PartitionControlBlock {
+        PartitionControlBlock::new(
+            id,
+            entry,
+            data_base,
+            data_base.wrapping_add(data_size),
+            MpuRegion::new(data_base, data_size, 0),
+        )
+    }
+
     // ------------------------------------------------------------------
     // configure_partition: slice-to-array conversion and dispatch
     // ------------------------------------------------------------------
@@ -1526,19 +1537,20 @@ mod tests {
         ds.configure_partition(0, &[(rbar, rasr)], 0).unwrap();
         assert!(ds.slot(4).is_some(), "RAM in R4 with reservation=0");
 
-        // Reconfigure with reservation=2.
+        // Reconfigure partition 1 with reservation=2.
         let (rbar2, rasr2) = data_region(0x2000_8000, 4096, 6);
         ds.configure_partition(1, &[(rbar2, rasr2)], 2).unwrap();
-        assert!(
-            ds.slot(4).is_none(),
-            "R4 cleared after switch to reservation=2"
-        );
+        // Raw slot 0 still holds partition 0's RAM; per-partition
+        // filtering hides it from partition 1's view.
+        let s4 = ds.slot(4).expect("partition 0 RAM persists in slot 4");
+        assert_eq!(s4.owner, 0, "slot 4 belongs to partition 0");
         let desc = ds.slot(6).expect("RAM should be in R6");
         assert_eq!(desc.base, 0x2000_8000);
         assert_eq!(desc.owner, 1);
 
-        // R4-R5 disabled in compute_region_values.
-        let v = ds.compute_region_values();
+        // Partition 1's view: R4-R5 disabled (reserved, no peripherals
+        // cached), R6 holds its RAM.
+        let v = ds.partition_region_values(1);
         assert_eq!(v[0].1, 0, "R4 disabled");
         assert_eq!(v[1].1, 0, "R5 disabled");
         assert_eq!(v[2].1, rasr2, "R6 holds partition RAM");
@@ -1978,7 +1990,7 @@ mod tests {
             make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
         assert_eq!(ds.wire_boot_peripherals(&[pcb]), 1);
 
-        let v1 = ds.compute_region_values();
+        let v1 = ds.partition_region_values(0);
         assert_eq!(
             v1[0].0,
             build_rbar(0x4000_0000, 4).unwrap(),
@@ -2000,7 +2012,7 @@ mod tests {
         let (rbar_r4, rasr_r4) = data_region(0x2000_8000, 4096, 4);
         ds.configure_partition(1, &[(rbar_r4, rasr_r4)], 0).unwrap();
 
-        let v2 = ds.compute_region_values();
+        let v2 = ds.partition_region_values(1);
         assert_eq!(
             v2[0].0,
             build_rbar(0x2000_8000, 4).unwrap(),
@@ -2015,15 +2027,17 @@ mod tests {
         assert_eq!(v2[3].1, 0, "R7 disabled (no windows)");
 
         // ---- Phase 3: switch back to peripheral partition (reserved=2) ----
-        // configure_partition moves peripheral_reserved from 0→2:
-        //   - clears slot[0] (old RAM at R4)
-        //   - places RAM in slot[2] (R6)
-        //   - R4-R5 are now empty (reserved for peripherals)
+        // configure_partition restores peripheral_reserved=2 for partition 0,
+        // placing RAM back in slot[2] (R6).  The peripheral cache from
+        // phase 1 persists, so partition 0's view still shows R4 as the
+        // cached peripheral (not empty).
         ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
 
-        // Verify R4 is properly cleared (peripheral slot empty before wiring).
-        let v3_pre = ds.compute_region_values();
-        assert_eq!(v3_pre[0].1, 0, "R4 empty before peripheral re-wiring");
+        let v3_pre = ds.partition_region_values(0);
+        assert_ne!(
+            v3_pre[0].1, 0,
+            "R4 shows cached peripheral from phase 1 wiring"
+        );
         assert_eq!(
             v3_pre[2].1, rasr_r6,
             "R6 holds partition RAM after switch-back"
@@ -2037,7 +2051,7 @@ mod tests {
             make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
         assert_eq!(ds.wire_boot_peripherals(&[pcb2]), 1);
 
-        let v3 = ds.compute_region_values();
+        let v3 = ds.partition_region_values(0);
         assert_eq!(
             v3[0].0,
             build_rbar(0x4000_0000, 4).unwrap(),
@@ -2106,23 +2120,32 @@ mod tests {
 
         // Partition 0: UART0 peripheral at 0x4000_C000, 4 KiB.
         // Partition 1: GPIO  peripheral at 0x4002_5000, 4 KiB.
-        let pcb0 =
-            make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_C000, 4096)]);
-        let pcb1 =
-            make_pcb(0x0, 0x2000_8000, 4096).with_peripheral_regions(&[periph(0x4002_5000, 4096)]);
+        let pcb0 = make_pcb_id(0, 0x0, 0x2000_0000, 4096)
+            .with_peripheral_regions(&[periph(0x4000_C000, 4096)]);
+        let pcb1 = make_pcb_id(1, 0x0, 0x2000_8000, 4096)
+            .with_peripheral_regions(&[periph(0x4002_5000, 4096)]);
         // Partition 2: no peripherals.
-        let pcb_none = make_pcb(0x0, 0x2001_0000, 4096);
+        let pcb_none = make_pcb_id(2, 0x0, 0x2001_0000, 4096);
 
         // --- (1) wire_boot_peripherals populates reserved slots and
-        //         compute_region_values returns non-zero RASR for them ---
+        //         partition_region_values returns non-zero RASR for them ---
         let ds = DynamicStrategy::new();
-        let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        let (rbar_r6_0, rasr_r6_0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rbar_r6_0, rasr_r6_0)], 2)
+            .unwrap();
+        let (rbar_r6_1, rasr_r6_1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rbar_r6_1, rasr_r6_1)], 2)
+            .unwrap();
         let wired = ds.wire_boot_peripherals(&[pcb0.clone(), pcb1.clone()]);
         assert_eq!(wired, 2, "both peripherals must be wired");
-        let vals = ds.compute_region_values();
-        assert_ne!(vals[0].1, 0, "R4 RASR must be non-zero (UART0)");
-        assert_ne!(vals[1].1, 0, "R5 RASR must be non-zero (GPIO)");
+        // Partition 0's view: R4 = UART0, R5 disabled.
+        let vals_p0 = ds.partition_region_values(0);
+        assert_ne!(vals_p0[0].1, 0, "R4 RASR must be non-zero (UART0)");
+        assert_eq!(vals_p0[1].1, 0, "R5 RASR disabled (no second peripheral)");
+        // Partition 1's view: R4 = GPIO, R5 disabled.
+        let vals_p1 = ds.partition_region_values(1);
+        assert_ne!(vals_p1[0].1, 0, "R4 RASR must be non-zero (GPIO)");
+        assert_eq!(vals_p1[1].1, 0, "R5 RASR disabled (no second peripheral)");
 
         // --- (2) peripheral_mpu_regions_or_disabled returns per-partition
         //         R4/R5 values for context-switch reprogramming ---
