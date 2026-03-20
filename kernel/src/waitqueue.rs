@@ -59,6 +59,19 @@ impl<const W: usize> WaitQueue<W> {
     }
 }
 
+/// Compute a safe absolute expiry tick from the current tick and a timeout.
+///
+/// Enforces a minimum 2-tick gap (`current_tick + max(timeout_ticks, 2)`) to
+/// prevent same-tick or next-tick expiry races: if the SysTick handler fires
+/// between the syscall and the partition's transition to `Waiting`, a 0- or
+/// 1-tick timeout could already appear expired.
+///
+/// Uses saturating arithmetic to handle `u64` overflow gracefully.
+pub const fn safe_expiry(current_tick: u64, timeout_ticks: u64) -> u64 {
+    let effective = if timeout_ticks < 2 { 2 } else { timeout_ticks };
+    current_tick.saturating_add(effective)
+}
+
 /// Fixed-capacity FIFO wait queue storing `(partition_id, expiry_tick)` pairs.
 ///
 /// Used by synchronization primitives that support blocking with timeouts
@@ -838,5 +851,34 @@ mod tests {
         let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
         q.drain_expired(100, &mut out);
         assert_eq!(out.as_slice(), &[1, 2, 3]);
+    }
+
+    // ---- safe_expiry tests ----
+
+    #[test]
+    fn safe_expiry_zero_timeout_bumped_to_two() {
+        assert_eq!(safe_expiry(100, 0), 102);
+    }
+
+    #[test]
+    fn safe_expiry_one_tick_bumped_to_two() {
+        assert_eq!(safe_expiry(100, 1), 102);
+    }
+
+    #[test]
+    fn safe_expiry_two_tick_unchanged() {
+        assert_eq!(safe_expiry(100, 2), 102);
+    }
+
+    #[test]
+    fn safe_expiry_large_timeout_unchanged() {
+        assert_eq!(safe_expiry(100, 50), 150);
+        assert_eq!(safe_expiry(100, 100), 200);
+    }
+
+    #[test]
+    fn safe_expiry_overflow_saturates() {
+        assert_eq!(safe_expiry(u64::MAX, 5), u64::MAX);
+        assert_eq!(safe_expiry(u64::MAX - 1, 100), u64::MAX);
     }
 }
