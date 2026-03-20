@@ -270,13 +270,14 @@ impl<const N: usize> DynamicStrategy<N> {
             let pr = pr.borrow();
             let reserved = pr.get(partition_id as usize).copied().unwrap_or(0);
             let mut out = [(0u32, 0u32); DYNAMIC_SLOT_COUNT];
-            // Fill from shared slots with cross-partition RAM filtering.
+            // Fill from shared slots, disabling peripheral-reserved and RAM
+            // slots (0..=owner_res) for non-owner partitions to prevent leakage.
             for (idx, (slot, dst)) in slots.iter().zip(out.iter_mut()).enumerate() {
                 let region = DYNAMIC_REGION_BASE as u32 + idx as u32;
                 *dst = match slot {
                     Some(desc) if desc.owner != partition_id => {
                         let owner_res = pr.get(desc.owner as usize).copied().unwrap_or(0);
-                        if idx == owner_res {
+                        if idx <= owner_res {
                             disabled_pair(region as u8)
                         } else {
                             rpair(desc.base, desc.permissions, region)
@@ -3369,6 +3370,49 @@ mod tests {
             (build_rbar(0x2000_2000, 7).unwrap(), win_rasr),
             "dynamic window from P0 visible to P1"
         );
+    }
+
+    #[test]
+    fn partition_region_values_no_peripheral_slot_leakage() {
+        // P0 has reserved=2 with two peripherals wired into slots 0-1.
+        // P1 has reserved=0 (RAM at slot 0). P1 must NOT see P0's
+        // peripheral descriptor at slot 1 (R5) — the cross-partition
+        // filter must disable peripheral-reserved slots, not just RAM.
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        let (rb1, _rs1) = data_region(0x2000_8000, 4096, 4);
+        ds.configure_partition(1, &[(rb1, _rs1)], 0).unwrap();
+
+        // Wire two peripherals for P0 into reserved slots 0 and 1.
+        let pcb0 = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_0000, 4096), periph(0x4001_0000, 256)]);
+        let pcb1 = PartitionControlBlock::new(
+            1,
+            0x0,
+            0x2000_8000,
+            0x2000_9000,
+            MpuRegion::new(0x2000_8000, 4096, 0),
+        );
+        ds.wire_boot_peripherals(&[pcb0, pcb1]);
+
+        let v1 = ds.partition_region_values(1);
+        // Slot 1 (R5): P0's peripheral — must be disabled for P1.
+        // Before the fix, idx(1) == owner_res(2) was false, leaking
+        // P0's peripheral RASR to P1. With idx <= owner_res, it is
+        // correctly disabled.
+        assert_eq!(
+            v1[1].1, 0,
+            "P0 peripheral slot 1 must be disabled for P1 (RASR=0)"
+        );
+        // Slot 2 (R6): P0's RAM — must be disabled for P1.
+        assert_eq!(v1[2], disabled_pair(6), "P0 RAM disabled for P1");
     }
 
     #[test]
