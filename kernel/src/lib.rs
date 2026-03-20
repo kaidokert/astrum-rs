@@ -62,7 +62,9 @@ pub mod mpu_strategy;
 pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
-pub use partition::{ExternalPartitionMemory, PartitionMemory};
+pub use partition::{
+    ExternalPartitionMemory, PartitionBody, PartitionEntry, PartitionMemory, PartitionSpec,
+};
 pub mod partition_core;
 pub use partition_core::{
     AlignedStack1K, AlignedStack256B, AlignedStack2K, AlignedStack4K, AlignedStack512B,
@@ -197,6 +199,23 @@ mod reexport_tests {
         assert_eq!(DefaultConfig::S, 1); // SyncMinimal
         assert_eq!(DefaultConfig::QS, 1); // MsgMinimal
         assert_eq!(DefaultConfig::SP, 1); // PortsTiny
+    }
+
+    #[test]
+    fn partition_type_aliases_via_root() {
+        // PartitionBody, PartitionEntry, PartitionSpec are re-exported at crate root.
+        #[allow(clippy::empty_loop)]
+        extern "C" fn _body(_: u32) -> ! {
+            loop {}
+        }
+        #[allow(clippy::empty_loop)]
+        extern "C" fn _entry() -> ! {
+            loop {}
+        }
+        let _: PartitionBody = _body;
+        let _: PartitionEntry = _entry;
+        let spec: PartitionSpec = (_entry, 99);
+        assert_eq!(spec.1, 99);
     }
 
     #[test]

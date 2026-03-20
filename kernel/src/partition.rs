@@ -892,6 +892,15 @@ impl<const N: usize> PartitionTable<N> {
     }
 }
 
+/// Signature for a partition body function that receives an argument in `r0`.
+pub type PartitionBody = extern "C" fn(u32) -> !;
+
+/// Signature for a partition entry point (no arguments, diverging).
+pub type PartitionEntry = extern "C" fn() -> !;
+
+/// A partition descriptor: entry point paired with its `r0` argument.
+pub type PartitionSpec = (PartitionEntry, u32);
+
 /// Canonical public alias for [`ExternalPartitionMemory`].
 pub type PartitionMemory<'mem> = ExternalPartitionMemory<'mem>;
 
@@ -3397,5 +3406,37 @@ mod tests {
                 required_alignment: 4,
             }
         );
+    }
+
+    // ---- type alias tests ----
+
+    #[allow(clippy::empty_loop)]
+    extern "C" fn _dummy_body(_r0: u32) -> ! {
+        loop {}
+    }
+
+    #[allow(clippy::empty_loop)]
+    extern "C" fn _dummy_entry() -> ! {
+        loop {}
+    }
+
+    #[test]
+    fn partition_body_alias_accepts_correct_signature() {
+        let _: PartitionBody = _dummy_body;
+    }
+
+    #[test]
+    fn partition_entry_alias_accepts_correct_signature() {
+        let _: PartitionEntry = _dummy_entry;
+    }
+
+    #[test]
+    fn partition_spec_holds_entry_and_arg() {
+        let spec: PartitionSpec = (_dummy_entry, 42);
+        assert_eq!(
+            spec.0 as *const () as usize,
+            _dummy_entry as *const () as usize
+        );
+        assert_eq!(spec.1, 42);
     }
 }

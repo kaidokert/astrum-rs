@@ -232,6 +232,9 @@ macro_rules! svc_r01 {
 #[macro_export]
 macro_rules! partition_trampoline {
     ($name:ident => $body:path) => {
+        // Compile-time check: $body must match the PartitionBody signature.
+        const _: $crate::partition::PartitionBody = $body;
+
         #[cfg(target_arch = "arm")]
         // TODO: migrate to #[unsafe(no_mangle)] when moving to edition 2024;
         // currently edition 2021 where only #[naked] requires unsafe().
@@ -249,7 +252,7 @@ macro_rules! partition_trampoline {
         #[no_mangle]
         pub extern "C" fn $name() -> ! {
             // On host targets, call the body with 0.
-            let body: extern "C" fn(u32) -> ! = $body;
+            let body: $crate::partition::PartitionBody = $body;
             body(0)
         }
     };
