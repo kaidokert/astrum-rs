@@ -263,7 +263,8 @@ impl<const N: usize> DynamicStrategy<N> {
     /// [`cached_peripheral_regions`](Self::cached_peripheral_regions),
     /// which provides per-partition peripheral mappings.
     ///
-    /// This is the testable, hardware-free counterpart of [`Self::program_regions`].
+    /// This is the testable, hardware-free counterpart that computes a
+    /// global view of all dynamic-slot (RBAR, RASR) values.
     pub fn compute_region_values(&self) -> [(u32, u32); DYNAMIC_SLOT_COUNT] {
         with_cs(|cs| {
             let slots = self.slots.borrow(cs);
@@ -642,28 +643,6 @@ impl<const N: usize> DynamicStrategy<N> {
             owner: part_id,
             rbar: slot_rbar(base, slot_idx),
         })
-    }
-
-    /// Program regions R4-R7 into the MPU hardware.
-    ///
-    /// Delegates to [`mpu::with_mpu_disabled`] to disable the MPU,
-    /// write each of the four dynamic slots' (RBAR, RASR) pairs via
-    /// [`mpu::configure_region`], then re-enable with PRIVDEFENA and
-    /// DSB+ISB barriers.
-    ///
-    /// Regions R0-R3 (static background/code/data/guard) are left unchanged.
-    ///
-    /// The caller must pass an `&MPU` reference obtained from the
-    /// peripheral singleton to make the hardware dependency explicit.
-    #[cfg(not(test))]
-    pub fn program_regions(&self, mpu_periph: &cortex_m::peripheral::MPU) {
-        let values = self.compute_region_values();
-
-        mpu::with_mpu_disabled(mpu_periph, |mpu| {
-            for &(rbar, rasr) in &values {
-                mpu::configure_region(mpu, rbar, rasr);
-            }
-        });
     }
 }
 
