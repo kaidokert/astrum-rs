@@ -3231,4 +3231,93 @@ mod tests {
             }
         }
     }
+
+    // ------------------------------------------------------------------
+    // wire_boot_peripherals: per-partition peripheral_reserved isolation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn wire_boot_peripherals_respects_per_partition_reserved() {
+        // Partition 0: reserved=2, 1 peripheral  → cached in slot 0, slot 1 disabled
+        // Partition 1: reserved=0, 1 peripheral  → wired via add_window, cache all-disabled
+        //
+        // Using different reserved counts (2 vs 0) proves the strategy reads
+        // the per-partition value from peripheral_reserved_for(), not a global.
+        let ds = DynamicStrategy::<2>::with_partition_count();
+
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        let (rb1, rs1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+
+        let pcb0 = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+
+        let pcb1 = PartitionControlBlock::new(
+            1,
+            0x0,
+            0x2000_8000,
+            0x2000_9000,
+            MpuRegion::new(0x2000_8000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4001_0000, 256)]);
+
+        let wired = ds.wire_boot_peripherals(&[pcb0, pcb1]);
+        // Partition 0: wired=0 < reserved=2 → slot 0, delta=1, wired→1.
+        // Partition 1: wired=1, reserved=0 → not reserved, desc_idx=0 >= 0
+        //   → falls through to add_window → slot 1, delta=1, wired→2.
+        assert_eq!(wired, 2, "1 reserved-slot wire + 1 add_window wire");
+
+        // Expected RASR values for each peripheral size.
+        let rasr_4k = build_rasr(
+            4096u32.trailing_zeros() - 1,
+            AP_FULL_ACCESS,
+            true,
+            (true, false, true),
+        );
+
+        // Partition 0 (reserved=2): peripheral cached in slot 0, slot 1 disabled.
+        let cached0 = ds.cached_peripheral_regions(0);
+        assert_eq!(
+            cached0[0],
+            (
+                build_rbar(0x4000_0000, DYNAMIC_REGION_BASE as u32).unwrap(),
+                rasr_4k
+            ),
+            "partition 0 cache[0] must hold the 4KiB peripheral"
+        );
+        assert_eq!(
+            cached0[1],
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+            "partition 0 cache[1] must be disabled (only 1 peripheral)"
+        );
+
+        // Partition 1 (reserved=0): no cache slots available, both disabled.
+        // The peripheral was wired via add_window but is not cached because
+        // reserved=0 means build_partition_cache_entry returns None.
+        let cached1 = ds.cached_peripheral_regions(1);
+        assert_eq!(
+            cached1[0],
+            disabled_pair(DYNAMIC_REGION_BASE),
+            "partition 1 cache[0] must be disabled (reserved=0)"
+        );
+        assert_eq!(
+            cached1[1],
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+            "partition 1 cache[1] must be disabled (reserved=0)"
+        );
+
+        // Cross-check: the two partitions' caches must differ — partition 0
+        // has an active peripheral in slot 0, partition 1 does not.
+        assert_ne!(
+            cached0[0], cached1[0],
+            "partition 0 cache[0] (active) must differ from partition 1 cache[0] (disabled)"
+        );
+    }
 }
