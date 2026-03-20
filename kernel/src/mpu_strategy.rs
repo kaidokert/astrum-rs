@@ -128,6 +128,9 @@ fn compute_peripheral_rasr(size: u32) -> u32 {
 /// Per-partition pre-computed (RBAR, RASR) pairs for peripheral regions R4-R5.
 type PeripheralCache<const N: usize> = [[(u32, u32); 2]; N];
 
+/// Per-partition private-RAM (RBAR, RASR) descriptor, indexed by partition_id.
+type PartitionRamCache<const N: usize> = [Option<(u32, u32)>; N];
+
 /// Dynamic MPU strategy — manages regions R4-R7 at runtime.
 ///
 /// ## Two-tier MPU region scheme
@@ -173,6 +176,9 @@ pub struct DynamicStrategy<const N: usize = DYNAMIC_SLOT_COUNT> {
     peripheral_reserved: Mutex<RefCell<[usize; N]>>,
     /// Pre-computed (RBAR, RASR) pairs for R4-R5, indexed by partition_id.
     peripheral_cache: Mutex<RefCell<PeripheralCache<N>>>,
+    /// Per-partition private-RAM (RBAR, RASR) pair, indexed by `partition_id`.
+    /// Set by `configure_partition`; `None` until configured.
+    partition_ram: Mutex<RefCell<PartitionRamCache<N>>>,
 }
 
 impl<const N: usize> Default for DynamicStrategy<N> {
@@ -212,6 +218,7 @@ impl<const N: usize> DynamicStrategy<N> {
             slots: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
             peripheral_reserved: Mutex::new(RefCell::new([0; N])),
             peripheral_cache: Mutex::new(RefCell::new([DISABLED; N])),
+            partition_ram: Mutex::new(RefCell::new([None; N])),
         }
     }
 
@@ -220,6 +227,15 @@ impl<const N: usize> DynamicStrategy<N> {
         with_cs(|cs| {
             let pr = self.peripheral_reserved.borrow(cs);
             pr.borrow().get(partition_id as usize).copied().unwrap_or(0)
+        })
+    }
+
+    /// Return the stored private-RAM (RBAR, RASR) pair for `partition_id`,
+    /// or `None` if the partition has not been configured or is out of range.
+    pub fn partition_ram_for(&self, partition_id: u8) -> Option<(u32, u32)> {
+        with_cs(|cs| {
+            let pr = self.partition_ram.borrow(cs);
+            pr.borrow().get(partition_id as usize).copied().flatten()
         })
     }
 
@@ -645,6 +661,11 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
                 });
             }
             *pr_entry = peripheral_reserved;
+            // Store the raw (RBAR, RASR) pair in partition_ram.
+            let mut ram = self.partition_ram.borrow(cs).borrow_mut();
+            if let Some(entry) = ram.get_mut(partition_id as usize) {
+                *entry = Some((rbar, rasr));
+            }
             Ok(())
         })
     }
@@ -1558,6 +1579,40 @@ mod tests {
         let s2_final = ds.slot(4).expect("p2 RAM in R4");
         assert_eq!(s2_final.owner, 2, "p2 now owns R4");
         assert_eq!(s2_final.base, 0x2000_C000, "p2 RAM base in R4");
+    }
+
+    // ------------------------------------------------------------------
+    // DynamicStrategy::partition_ram_for
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn partition_ram_for_returns_none_unconfigured() {
+        let ds = DynamicStrategy::<3>::with_partition_count();
+        assert_eq!(ds.partition_ram_for(0), None);
+        assert_eq!(ds.partition_ram_for(1), None);
+        assert_eq!(ds.partition_ram_for(2), None);
+        // Out-of-range returns None.
+        assert_eq!(ds.partition_ram_for(3), None);
+        assert_eq!(ds.partition_ram_for(255), None);
+    }
+
+    #[test]
+    fn partition_ram_for_returns_values_after_configure() {
+        let ds = DynamicStrategy::<3>::with_partition_count();
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 4);
+        let (rb1, rs1) = data_region(0x2000_4000, 4096, 6);
+
+        ds.configure_partition(0, &[(rb0, rs0)], 0).unwrap();
+        ds.configure_partition(1, &[(rb1, rs1)], 2).unwrap();
+
+        let ram0 = ds.partition_ram_for(0).expect("p0 configured");
+        assert_eq!(ram0, (rb0, rs0));
+
+        let ram1 = ds.partition_ram_for(1).expect("p1 configured");
+        assert_eq!(ram1, (rb1, rs1));
+
+        // p2 still unconfigured.
+        assert_eq!(ds.partition_ram_for(2), None);
     }
 
     // ------------------------------------------------------------------
