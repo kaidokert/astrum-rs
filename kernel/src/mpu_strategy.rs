@@ -1486,6 +1486,77 @@ mod tests {
         assert_eq!(ds.slot(6).expect("p1 RAM in R6").owner, 1);
     }
 
+    #[test]
+    fn three_partition_heterogeneous_peripheral_reserved() {
+        // 3 partitions: p0 reserved=2, p1 reserved=0, p2 reserved=2.
+        let ds = DynamicStrategy::<3>::with_partition_count();
+
+        // --- Configure each partition ---
+        // p0: reserved=2 → RAM lands in slot 2 (region 6).
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+
+        // p1: reserved=0 → RAM lands in slot 0 (region 4).
+        let (rb1, rs1) = data_region(0x2000_4000, 4096, 4);
+        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+
+        // p2: reserved=2 → RAM lands in slot 2 (region 6).
+        let (rb2, rs2) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(2, &[(rb2, rs2)], 2).unwrap();
+
+        // --- Verify peripheral_reserved_for returns correct per-partition values ---
+        assert_eq!(ds.peripheral_reserved_for(0), 2, "p0 reserved=2");
+        assert_eq!(ds.peripheral_reserved_for(1), 0, "p1 reserved=0");
+        assert_eq!(ds.peripheral_reserved_for(2), 2, "p2 reserved=2");
+
+        // --- Verify RAM slot placement per partition ---
+        // p0: reserved=2, RAM must be in slot 2 (region 6), owned by partition 0.
+        let s0 = ds.slot(6).expect("p0 or p2 RAM in R6");
+        // After p2 configures, it overwrites region 6; verify p2 owns it now.
+        assert_eq!(s0.owner, 2, "p2 last wrote R6");
+        assert_eq!(s0.base, 0x2000_8000, "p2 RAM base");
+
+        // p1: reserved=0, RAM must be in slot 0 (region 4), owned by partition 1.
+        let s1 = ds.slot(4).expect("p1 RAM in R4");
+        assert_eq!(s1.owner, 1, "p1 owns R4");
+        assert_eq!(s1.base, 0x2000_4000, "p1 RAM base");
+
+        // --- Verify cross-partition owner isolation ---
+        // Reconfigure p0 with reserved=2 again; must NOT clear p1's slot 0.
+        let (rb0b, rs0b) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb0b, rs0b)], 2).unwrap();
+
+        // p1's RAM in R4 must survive p0's reconfiguration.
+        let s1_after = ds.slot(4).expect("p1 RAM survives p0 reconfig");
+        assert_eq!(s1_after.owner, 1, "p1 still owns R4");
+        assert_eq!(s1_after.base, 0x2000_4000, "p1 RAM base unchanged");
+
+        // p0 now owns R6 again.
+        let s0_after = ds.slot(6).expect("p0 RAM in R6 after reconfig");
+        assert_eq!(s0_after.owner, 0, "p0 owns R6 after reconfig");
+        assert_eq!(s0_after.base, 0x2000_0000, "p0 RAM base");
+
+        // Reconfigure p2 with reserved=0; must NOT clear p0's slot 2 (R6)
+        // because owner differs. p2 should land in slot 0 (R4) now.
+        let (rb2b, rs2b) = data_region(0x2000_C000, 4096, 4);
+        ds.configure_partition(2, &[(rb2b, rs2b)], 0).unwrap();
+        assert_eq!(
+            ds.peripheral_reserved_for(2),
+            0,
+            "p2 switched to reserved=0"
+        );
+
+        // p0's R6 must survive p2's switch.
+        let s0_final = ds.slot(6).expect("p0 RAM survives p2 switch");
+        assert_eq!(s0_final.owner, 0, "p0 still owns R6");
+
+        // p2 now in R4; p1 was overwritten since both target slot 0.
+        // (Both p1 and p2 with reserved=0 share slot 0 — last writer wins.)
+        let s2_final = ds.slot(4).expect("p2 RAM in R4");
+        assert_eq!(s2_final.owner, 2, "p2 now owns R4");
+        assert_eq!(s2_final.base, 0x2000_C000, "p2 RAM base in R4");
+    }
+
     // ------------------------------------------------------------------
     // DynamicStrategy::add_window validation integration
     // ------------------------------------------------------------------
