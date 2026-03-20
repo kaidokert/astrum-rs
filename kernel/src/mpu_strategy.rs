@@ -682,14 +682,14 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
         with_cs(|cs| {
             let mut slots = self.slots.borrow(cs).borrow_mut();
             let pr = self.peripheral_reserved.borrow(cs);
-            // Use the maximum reserved count across all partitions so
-            // that add_window never places a peripheral in a slot that
-            // another partition's cache may disable or overwrite.
-            let max_reserved = pr.borrow().iter().copied().max().unwrap_or(0);
-            // Skip peripheral-reserved slots (0..max_reserved) and the
-            // partition-RAM slot (max_reserved), scanning from
-            // max_reserved+1 onwards for a free entry.
-            let first_window = max_reserved + 1;
+            // Use the owner partition's reserved count: each partition
+            // has its own peripheral cache region(s) at the start of
+            // its slot view, so only that partition's count matters.
+            let reserved = pr.borrow().get(owner as usize).copied().unwrap_or(0);
+            // Skip peripheral-reserved slots (0..reserved) and the
+            // partition-RAM slot (reserved), scanning from
+            // reserved+1 onwards for a free entry.
+            let first_window = reserved + 1;
             for (idx, slot) in slots.iter_mut().enumerate().skip(first_window) {
                 if slot.is_none() {
                     *slot = Some(WindowDescriptor {
@@ -1814,11 +1814,9 @@ mod tests {
 
     #[test]
     fn add_window_skips_reserved_slots_heterogeneous_counts() {
-        // p0 reserved=2, p1 reserved=0 → max_reserved=2.
-        // Slot layout: [0: periph, 1: periph, 2: RAM, 3: window].
-        // add_window skips 0..=2 (reserved + RAM), first free is slot 3 → region 7.
-        // TODO: reviewer false positive — N=3 is the partition count, not slot count;
-        // DYNAMIC_SLOT_COUNT (4) governs slots. with_partition_count() takes no args.
+        // Per-partition peripheral_reserved: p0 reserved=2, p1 reserved=0.
+        // owner=1 (reserved=0): skip 0 peripheral + 1 RAM → first_window=1 → slot 1 → region 5.
+        // owner=0 (reserved=2): skip 2 peripheral + 1 RAM → first_window=3 → slot 3 → region 7.
         let ds = DynamicStrategy::<3>::with_partition_count();
 
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
@@ -1827,14 +1825,11 @@ mod tests {
         let (rb1, rs1) = data_region(0x2001_0000, 4096, 4);
         ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
 
-        // First window lands in slot 3 (region 7).
-        assert_eq!(ds.add_window(0x2002_0000, 256, 0, 0), Ok(7));
+        // owner=1 has reserved=0, so first_window=1 → slot 1 → region 5.
+        assert_eq!(ds.add_window(0x2002_0000, 256, 0, 1), Ok(5));
 
-        // Only one runtime slot was available; second call is exhausted.
-        assert_eq!(
-            ds.add_window(0x2003_0000, 256, 0, 0),
-            Err(MpuError::SlotExhausted)
-        );
+        // owner=0 has reserved=2, so first_window=3 → slot 3 → region 7.
+        assert_eq!(ds.add_window(0x2003_0000, 256, 0, 0), Ok(7));
     }
 
     // ------------------------------------------------------------------
