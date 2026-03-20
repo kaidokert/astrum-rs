@@ -404,8 +404,8 @@ macro_rules! define_unified_harness {
         /// - Static mode: R0-R3 (base) + R4-R5 (peripheral) via
         ///   `apply_partition_mpu_cached` (self-contained disable/enable cycle).
         /// - Dynamic mode: single disable/enable cycle writing R0-R3
-        ///   (base partition) then R4-R7 (dynamic strategy), avoiding
-        ///   redundant MPU state transitions and overlapping writes.
+        ///   (base partition) then R4-R7 from pre-configured strategy
+        ///   values (configured once at boot, not per-switch).
         #[export_name = "__pendsv_program_mpu"]
         extern "C" fn __pendsv_program_mpu() {
             // SAFETY: PendSV is the lowest-priority exception and CAN be
@@ -451,13 +451,6 @@ macro_rules! define_unified_harness {
                         $crate::mpu::write_cached_base_regions(&p.MPU, pcb);
                     }
 
-                    // Update dynamic strategy: reconfigure the partition's
-                    // private-RAM slot and peripheral reservation count.
-                    let periph_reserved = if pcb.peripheral_regions().is_empty() { 0 } else { 2 };
-                    let dyn_region = pcb.cached_dynamic_region();
-                    let _ = $crate::mpu_strategy::MpuStrategy::configure_partition(
-                        &HARNESS_STRATEGY, pid, &[dyn_region], periph_reserved,
-                    );
                 }
 
                 // Return pid for dynamic-mode peripheral cache lookup.
