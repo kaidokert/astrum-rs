@@ -4,10 +4,26 @@
 //! [`Kernel`] instance owned by `main()`. Call [`store_kernel_ptr`] before
 //! enabling interrupts, then ISRs call [`load_kernel_ptr`] to obtain access.
 //!
-//! ```ignore
-//! // main(): unsafe { store_kernel_ptr(&mut kernel) };
-//! // ISR:   let p = unsafe { load_kernel_ptr::<C>() };
-//! //        if !p.is_null() { let k = unsafe { &mut *p }; ... }
+//! # Pattern A usage (main-local kernel)
+//!
+//! ```rust,ignore
+//! fn main() -> ! {
+//!     let mut kernel = Kernel::new(/* ... */);
+//!     // SAFETY: kernel lives for the remainder of main() (forever in embedded).
+//!     unsafe { store_kernel_ptr(&mut kernel) };
+//!     // Enable interrupts — ISRs can now access the kernel.
+//!     // ...
+//!     loop { /* idle */ }
+//! }
+//!
+//! #[interrupt]
+//! fn UART0() {
+//!     // SAFETY: C matches the KernelConfig used in main(); kernel is alive.
+//!     // Caller must ensure no higher-priority ISR creates an aliasing &mut
+//!     // (e.g., by masking interrupts while the reference is held).
+//!     let p = unsafe { load_kernel_ptr::<MyConfig>() };
+//!     if !p.is_null() { let k = unsafe { &mut *p }; k.handle_uart_irq(); }
+//! }
 //! ```
 
 use core::ptr;
@@ -42,7 +58,14 @@ where
 }
 
 /// Load the kernel pointer (Acquire ordering). Returns null if no
-/// kernel has been stored.
+/// kernel has been stored (or after [`clear_kernel_ptr`]).
+///
+/// Returns a raw pointer rather than a reference because the true lifetime
+/// is *not* `'static` (the kernel may live on the stack of `main()`), and
+/// on Cortex-M with priority-based nesting, multiple ISRs could call this
+/// concurrently — returning `&mut` would instantly create aliasing UB.
+/// The caller must convert to a reference only when they can guarantee
+/// exclusive access for the duration of that borrow.
 ///
 /// # Safety
 ///
@@ -100,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn load_returns_none_before_store() {
+    fn load_returns_null_before_store() {
         let _guard = TEST_LOCK.lock().unwrap();
         clear_kernel_ptr();
         // SAFETY: No pointer stored; returns null without dereferencing.
@@ -117,10 +140,13 @@ mod tests {
         unsafe { store_kernel_ptr(&mut kernel) };
 
         // SAFETY: Pointer just stored, kernel alive, no aliasing &mut.
-        let ptr = unsafe { load_kernel_ptr::<TestConfig>() };
-        assert!(!ptr.is_null(), "expected non-null after store");
-        // SAFETY: ptr is valid and we hold no other &mut to kernel.
-        let k = unsafe { &*ptr };
+        let loaded = unsafe { load_kernel_ptr::<TestConfig>() };
+        assert!(
+            !loaded.is_null(),
+            "load_kernel_ptr must return non-null after store"
+        );
+        // SAFETY: loaded pointer is valid and we hold no other &mut.
+        let k = unsafe { &*loaded };
         assert_eq!(k.current_partition, 255, "sentinel must survive round-trip");
         assert!(
             k.active_partition.is_none(),
