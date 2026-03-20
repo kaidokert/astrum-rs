@@ -288,6 +288,74 @@ impl<const N: usize> DynamicStrategy<N> {
         })
     }
 
+    /// Per-partition (RBAR, RASR) for R4-R7: peripherals from cache,
+    /// RAM from `partition_ram_for`, cross-partition RAM disabled.
+    pub fn partition_region_values(&self, partition_id: u8) -> [(u32, u32); DYNAMIC_SLOT_COUNT] {
+        fn rpair(base: u32, perm: u32, region: u32) -> (u32, u32) {
+            crate::mpu::build_rbar(base, region)
+                .map(|r| (r, perm))
+                .unwrap_or(disabled_pair(region as u8))
+        }
+        with_cs(|cs| {
+            let slots = self.slots.borrow(cs);
+            let slots = slots.borrow();
+            let pr = self.peripheral_reserved.borrow(cs);
+            let pr = pr.borrow();
+            let reserved = pr.get(partition_id as usize).copied().unwrap_or(0);
+            let mut out = [(0u32, 0u32); DYNAMIC_SLOT_COUNT];
+            // Fill from shared slots with cross-partition RAM filtering.
+            for (idx, (slot, dst)) in slots.iter().zip(out.iter_mut()).enumerate() {
+                let region = DYNAMIC_REGION_BASE as u32 + idx as u32;
+                *dst = match slot {
+                    Some(desc) if desc.owner != partition_id => {
+                        let owner_res = pr.get(desc.owner as usize).copied().unwrap_or(0);
+                        if idx == owner_res {
+                            disabled_pair(region as u8)
+                        } else {
+                            rpair(desc.base, desc.permissions, region)
+                        }
+                    }
+                    Some(desc) => rpair(desc.base, desc.permissions, region),
+                    None => disabled_pair(region as u8),
+                };
+            }
+            // Override peripheral-reserved slots 0..reserved from cache.
+            // TODO: if reserved ever exceeds 2, the fallback default array size
+            // (2) will leave slots 2..reserved filled from shared slots instead
+            // of disabled/peripherals. Revisit when >2 peripheral slots needed.
+            if reserved >= 2 {
+                let pcache = self.peripheral_cache.borrow(cs);
+                let pcache = pcache.borrow();
+                let cache = pcache.get(partition_id as usize).copied().unwrap_or([
+                    disabled_pair(DYNAMIC_REGION_BASE),
+                    disabled_pair(DYNAMIC_REGION_BASE + 1),
+                ]);
+                for (dst, val) in out
+                    .iter_mut()
+                    .zip(cache.iter())
+                    .take(reserved.min(cache.len()))
+                {
+                    *dst = *val;
+                }
+            }
+            // Override the RAM slot with this partition's own RAM.
+            let ram_reg = DYNAMIC_REGION_BASE as u32 + reserved as u32;
+            let ram_pair = self
+                .partition_ram
+                .borrow(cs)
+                .borrow()
+                .get(partition_id as usize)
+                .copied()
+                .flatten()
+                .map(|(rb, rs)| rpair(rb & crate::mpu::RBAR_ADDR_MASK, rs, ram_reg))
+                .unwrap_or(disabled_pair(ram_reg as u8));
+            if let Some(dst) = out.get_mut(reserved) {
+                *dst = ram_pair;
+            }
+            out
+        })
+    }
+
     /// Directly overwrite a slot with an arbitrary descriptor.
     ///
     /// This bypasses `add_window` validation and is intended **only** for
@@ -3587,6 +3655,73 @@ mod tests {
         assert_ne!(
             cached0[0], cached2[0],
             "partition 0 and 2 must have different cached peripherals"
+        );
+    }
+
+    // -- partition_region_values ----------------------------------------
+
+    #[test]
+    fn partition_region_values_homogeneous_reserved0() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 4);
+        let (rb1, rs1) = data_region(0x2000_1000, 4096, 4);
+        ds.configure_partition(0, &[(rb0, rs0)], 0).unwrap();
+        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+        let v0 = ds.partition_region_values(0);
+        assert_eq!(v0[0], (build_rbar(0x2000_0000, 4).unwrap(), rs0));
+        assert_eq!(v0[1].1, 0);
+        assert_eq!(v0[2].1, 0);
+        assert_eq!(v0[3].1, 0);
+        let v1 = ds.partition_region_values(1);
+        assert_eq!(v1[0], (build_rbar(0x2000_1000, 4).unwrap(), rs1));
+    }
+
+    #[test]
+    fn partition_region_values_homogeneous_reserved2() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        let (rb1, rs1) = data_region(0x2000_1000, 4096, 6);
+        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        ds.configure_partition(1, &[(rb1, rs1)], 2).unwrap();
+        let v0 = ds.partition_region_values(0);
+        assert_eq!(v0[0], disabled_pair(4));
+        assert_eq!(v0[1], disabled_pair(5));
+        assert_eq!(v0[2], (build_rbar(0x2000_0000, 6).unwrap(), rs0));
+        assert_eq!(v0[3].1, 0);
+        let v1 = ds.partition_region_values(1);
+        assert_eq!(v1[2], (build_rbar(0x2000_1000, 6).unwrap(), rs1));
+    }
+
+    #[test]
+    fn partition_region_values_heterogeneous() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        let (rb1, rs1) = data_region(0x2000_1000, 4096, 4);
+        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+        let v1 = ds.partition_region_values(1);
+        assert_eq!(v1[0], (build_rbar(0x2000_1000, 4).unwrap(), rs1));
+        assert_eq!(v1[2], disabled_pair(6), "P0 RAM disabled for P1");
+        let v0 = ds.partition_region_values(0);
+        assert_eq!(v0[2], (build_rbar(0x2000_0000, 6).unwrap(), rs0));
+        assert_eq!(v0[0], disabled_pair(4), "R4 from peripheral cache");
+    }
+
+    #[test]
+    fn partition_region_values_preserves_dynamic_window() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        let (rb1, rs1) = data_region(0x2000_1000, 4096, 4);
+        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+        let sf = encode_size(256).unwrap();
+        let win_rasr = build_rasr(sf, AP_RO_RO, true, (false, false, false));
+        ds.add_window(0x2000_2000, 256, win_rasr, 0).unwrap();
+        let v1 = ds.partition_region_values(1);
+        assert_eq!(
+            v1[3],
+            (build_rbar(0x2000_2000, 7).unwrap(), win_rasr),
+            "dynamic window from P0 visible to P1"
         );
     }
 }
