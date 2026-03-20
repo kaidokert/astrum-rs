@@ -166,11 +166,11 @@ type PeripheralCache<const N: usize> = [[(u32, u32); 2]; N];
 /// cached. Defaults to `DYNAMIC_SLOT_COUNT` (4) for backwards compatibility.
 pub struct DynamicStrategy<const N: usize = DYNAMIC_SLOT_COUNT> {
     slots: Mutex<RefCell<[Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT]>>,
-    /// Number of leading slots (0 or 2) reserved for peripheral MMIO regions.
-    /// Set by `configure_partition`; `wire_boot_peripherals` populates these
-    /// slots with peripheral descriptors so `compute_region_values` emits
-    /// them during PendSV context switches.
-    peripheral_reserved: Mutex<RefCell<usize>>,
+    /// Per-partition count of leading slots (0 or 2) reserved for peripheral
+    /// MMIO regions, indexed by `partition_id`. Set by `configure_partition`;
+    /// `wire_boot_peripherals` populates these slots with peripheral
+    /// descriptors so `compute_region_values` emits them during PendSV.
+    peripheral_reserved: Mutex<RefCell<[usize; N]>>,
     /// Pre-computed (RBAR, RASR) pairs for R4-R5, indexed by partition_id.
     peripheral_cache: Mutex<RefCell<PeripheralCache<N>>>,
 }
@@ -210,9 +210,17 @@ impl<const N: usize> DynamicStrategy<N> {
         ];
         Self {
             slots: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
-            peripheral_reserved: Mutex::new(RefCell::new(0)),
+            peripheral_reserved: Mutex::new(RefCell::new([0; N])),
             peripheral_cache: Mutex::new(RefCell::new([DISABLED; N])),
         }
+    }
+
+    /// Return the peripheral-reserved slot count for `partition_id` (0 if out of range).
+    pub fn peripheral_reserved_for(&self, partition_id: u8) -> usize {
+        with_cs(|cs| {
+            let pr = self.peripheral_reserved.borrow(cs);
+            pr.borrow().get(partition_id as usize).copied().unwrap_or(0)
+        })
     }
 
     /// Return a copy of the descriptor for a given hardware region ID (4-7),
@@ -346,7 +354,7 @@ impl<const N: usize> DynamicStrategy<N> {
     /// cached RASR is zero (disabled) for a mappable peripheral.
     #[cfg(debug_assertions)]
     pub fn debug_verify_cache_consistency(&self, part: &crate::partition::PartitionControlBlock) {
-        let reserved = with_cs(|cs| *self.peripheral_reserved.borrow(cs).borrow());
+        let reserved = self.peripheral_reserved_for(part.id());
         let check_count = reserved.min(2);
         let cached = self.cached_peripheral_regions(part.id());
         for (ci, region) in part
@@ -453,9 +461,9 @@ impl<const N: usize> DynamicStrategy<N> {
         // each (worst case: all distinct).
         let mut seen: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
         let mut wired = 0usize;
-        let reserved = with_cs(|cs| *self.peripheral_reserved.borrow(cs).borrow());
 
         for part in partitions.iter() {
+            let reserved = self.peripheral_reserved_for(part.id());
             let mut part_descs: [Option<WindowDescriptor>; 2] = [None; 2];
             let mut desc_idx = 0usize;
 
@@ -593,6 +601,10 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
         if peripheral_reserved != 0 && peripheral_reserved != 2 {
             return Err(MpuError::RegionCountMismatch);
         }
+        // Validate peripheral_reserved is a valid slot index.
+        if peripheral_reserved >= DYNAMIC_SLOT_COUNT {
+            return Err(MpuError::RegionCountMismatch);
+        }
 
         let (rbar, rasr) = regions[0];
         let base = rbar & crate::mpu::RBAR_ADDR_MASK;
@@ -605,23 +617,36 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
 
         with_cs(|cs| {
             let mut slots = self.slots.borrow(cs).borrow_mut();
+            let mut pr = self.peripheral_reserved.borrow(cs).borrow_mut();
+            // Validate partition_id is within the strategy's capacity.
+            let pr_entry = match pr.get_mut(partition_id as usize) {
+                Some(entry) => entry,
+                None => return Err(MpuError::RegionCountMismatch),
+            };
             // Clear any previously-occupied RAM slot so the strategy
             // state doesn't carry stale descriptors when the reservation
             // count changes between configure_partition calls.
-            let prev_reserved = *self.peripheral_reserved.borrow(cs).borrow();
+            // Only clear if the slot is owned by this partition.
+            let prev_reserved = *pr_entry;
             if prev_reserved != peripheral_reserved {
-                slots[prev_reserved] = None;
+                if let Some(slot) = slots.get_mut(prev_reserved) {
+                    if slot.is_some_and(|d| d.owner == partition_id) {
+                        *slot = None;
+                    }
+                }
             }
-            slots[ram_slot] = Some(WindowDescriptor {
-                base,
-                size,
-                permissions: rasr,
-                owner: partition_id,
-                rbar: slot_rbar(base, ram_slot),
-            });
-            *self.peripheral_reserved.borrow(cs).borrow_mut() = peripheral_reserved;
-        });
-        Ok(())
+            if let Some(slot) = slots.get_mut(ram_slot) {
+                *slot = Some(WindowDescriptor {
+                    base,
+                    size,
+                    permissions: rasr,
+                    owner: partition_id,
+                    rbar: slot_rbar(base, ram_slot),
+                });
+            }
+            *pr_entry = peripheral_reserved;
+            Ok(())
+        })
     }
 
     fn add_window(
@@ -635,7 +660,8 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
 
         with_cs(|cs| {
             let mut slots = self.slots.borrow(cs).borrow_mut();
-            let reserved = *self.peripheral_reserved.borrow(cs).borrow();
+            let pr = self.peripheral_reserved.borrow(cs);
+            let reserved = pr.borrow().get(owner as usize).copied().unwrap_or(0);
             // Skip peripheral-reserved slots (0..reserved) and the
             // partition-RAM slot (reserved), scanning from reserved+1
             // onwards for a free entry.
@@ -1424,6 +1450,40 @@ mod tests {
         assert_eq!(v[0].1, 0, "R4 disabled");
         assert_eq!(v[1].1, 0, "R5 disabled");
         assert_eq!(v[2].1, rasr2, "R6 holds partition RAM");
+    }
+
+    // ------------------------------------------------------------------
+    // peripheral_reserved_for + per-partition isolation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn peripheral_reserved_for_defaults_and_out_of_range() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        assert_eq!(ds.peripheral_reserved_for(0), 0);
+        assert_eq!(ds.peripheral_reserved_for(1), 0);
+        assert_eq!(ds.peripheral_reserved_for(5), 0, "out-of-range → 0");
+        assert_eq!(ds.peripheral_reserved_for(255), 0, "out-of-range → 0");
+    }
+
+    #[test]
+    fn peripheral_reserved_for_tracks_per_partition() {
+        let ds = DynamicStrategy::<4>::with_partition_count();
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        assert_eq!(ds.peripheral_reserved_for(0), 2);
+        assert_eq!(ds.peripheral_reserved_for(1), 0, "partition 1 untouched");
+    }
+
+    #[test]
+    fn configure_partition_owner_check_prevents_cross_partition_clear() {
+        let ds = DynamicStrategy::<4>::with_partition_count();
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 4);
+        ds.configure_partition(0, &[(rb0, rs0)], 0).unwrap();
+        // Partition 1 with reserved=2 must NOT clear partition 0's slot 0.
+        let (rb1, rs1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rb1, rs1)], 2).unwrap();
+        assert_eq!(ds.slot(4).expect("p0 RAM survives").owner, 0);
+        assert_eq!(ds.slot(6).expect("p1 RAM in R6").owner, 1);
     }
 
     // ------------------------------------------------------------------
@@ -2768,7 +2828,7 @@ mod tests {
         let rasr = periph_rasr(4096);
         let r = |b| (b, 4096u32, rasr);
         let ds = DynamicStrategy::<4>::new();
-        with_cs(|cs| *ds.peripheral_reserved.borrow(cs).borrow_mut() = 2);
+        with_cs(|cs| ds.peripheral_reserved.borrow(cs).borrow_mut()[0] = 2);
         let mut seen: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
         // Branch 1: reserved slot → delta=1, slot populated.
         assert_eq!(
