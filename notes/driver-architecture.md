@@ -71,11 +71,12 @@ The `heapless::Vec` capacity of 2 covers the common case without allocation.
 ### 1.3 MPU Window Allocation
 
 `DynamicStrategy` manages MPU regions R4-R7 at runtime.  The field
-`peripheral_reserved` (0 or 2) controls how many leading slots are
-reserved for peripheral MMIO regions.  The partition-RAM region always
-occupies the slot immediately after the reserved block (index
-`peripheral_reserved`), and `add_window` scans from `peripheral_reserved + 1`
-onwards.  From `kernel/src/mpu_strategy.rs`:
+`peripheral_reserved` is a per-partition array `[usize; N]` indexed by
+partition ID — each partition independently records how many leading
+slots (0 or 2) are reserved for its peripheral MMIO regions.
+`add_window` looks up the calling partition's reserved count via
+`owner`, places the partition-RAM region at index `reserved`, and scans
+from `reserved + 1` onwards.  From `kernel/src/mpu_strategy.rs`:
 
 ```rust
 fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8)
@@ -84,7 +85,8 @@ fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8)
     crate::mpu::validate_mpu_region(base, size)?;
     with_cs(|cs| {
         let mut slots = self.slots.borrow(cs).borrow_mut();
-        let reserved = *self.peripheral_reserved.borrow(cs).borrow();
+        let pr = self.peripheral_reserved.borrow(cs);
+        let reserved = pr.borrow().get(owner as usize).copied().unwrap_or(0);
         let first_window = reserved + 1;
         for (idx, slot) in slots.iter_mut().enumerate().skip(first_window) {
             if slot.is_none() {
@@ -97,14 +99,18 @@ fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8)
 }
 ```
 
-**Slot layout by configuration:**
+**Slot layout by configuration (per-partition):**
 
-| Slot | Region | `peripheral_reserved=0`  | `peripheral_reserved=2`  |
-|------|--------|--------------------------|--------------------------|
-| 0    | R4     | Partition RAM            | Peripheral 0 (MMIO)     |
-| 1    | R5     | Dynamic window           | Peripheral 1 (MMIO)     |
-| 2    | R6     | Dynamic window           | Partition RAM            |
-| 3    | R7     | Dynamic window           | Dynamic window           |
+Different partitions can have different reserved counts, so the slot
+layout varies per-partition depending on each partition's
+`peripheral_reserved` value:
+
+| Slot | Region | `reserved=0` (partition A) | `reserved=2` (partition B) |
+|------|--------|----------------------------|----------------------------|
+| 0    | R4     | Partition RAM              | Peripheral 0 (MMIO)       |
+| 1    | R5     | Dynamic window             | Peripheral 1 (MMIO)       |
+| 2    | R6     | Dynamic window             | Partition RAM              |
+| 3    | R7     | Dynamic window             | Dynamic window             |
 
 #### 1.3.1 Peripheral Region Attributes
 
