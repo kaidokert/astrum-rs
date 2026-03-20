@@ -396,40 +396,37 @@ impl<const N: usize> DynamicStrategy<N> {
         }
     }
 
-    /// Wire a single unseen peripheral region via a three-way branch:
+    /// Wire a single unseen peripheral region via a two-way branch:
     ///
-    /// 1. **Reserved slot** (`wired < reserved`): store the descriptor in
-    ///    the next free reserved slot (R4 or R5) and bump the wired count.
-    /// 2. **Cache-only** (`desc_idx < reserved.min(2)`): the peripheral
-    ///    fits in the per-partition cache and does NOT consume a dynamic
-    ///    slot — this preserves R6-R7 for `sys_buf_lend` windows.
-    /// 3. **`add_window` fallback**: allocate a dynamic slot via the
+    /// 1. **Reserved slot** (`desc_idx < reserved`): store the descriptor
+    ///    in the partition's reserved cache slot (R4 or R5).  Multiple
+    ///    partitions may time-share the same physical slot; the
+    ///    context-switch cache restores each partition's values.
+    /// 2. **`add_window` fallback**: allocate a dynamic slot via the
     ///    normal [`add_window`](MpuStrategy::add_window) path.
     ///
     /// Returns `Ok(wired-count delta)`.
     fn try_wire_region(
         &self,
         seen: &mut heapless::Vec<(u32, u32, usize, u32), 8>,
-        wired: usize,
+        _wired: usize,
         desc_idx: usize,
         reserved: usize,
         region: (u32, u32, u32),
         part_id: u8,
     ) -> Result<usize, MpuError> {
         let (base, size, rasr) = region;
-        let (slot_idx, delta) = if wired < reserved {
+        let (slot_idx, delta) = if desc_idx < reserved.min(2) {
             with_cs(|cs| {
-                self.slots.borrow(cs).borrow_mut()[wired] = Some(WindowDescriptor {
+                self.slots.borrow(cs).borrow_mut()[desc_idx] = Some(WindowDescriptor {
                     base,
                     size,
                     permissions: rasr,
                     owner: part_id,
-                    rbar: slot_rbar(base, wired),
+                    rbar: slot_rbar(base, desc_idx),
                 });
             });
-            (wired, 1)
-        } else if desc_idx < reserved.min(2) {
-            (desc_idx, 0)
+            (desc_idx, 1)
         } else {
             let rn = self.add_window(base, size, rasr, part_id)?;
             ((rn - DYNAMIC_REGION_BASE) as usize, 1)
@@ -525,10 +522,13 @@ impl<const N: usize> DynamicStrategy<N> {
         }
 
         #[cfg(debug_assertions)]
-        debug_assert!(
-            wired < BOOT_WIRE_LIMIT,
-            "boot wiring consumed all dynamic window slots ({wired}/{BOOT_WIRE_LIMIT}), none left for runtime add_window",
-        );
+        {
+            let has_free = with_cs(|cs| self.slots.borrow(cs).borrow().iter().any(|s| s.is_none()));
+            debug_assert!(
+                has_free,
+                "boot wiring consumed all dynamic window slots, none left for runtime add_window",
+            );
+        }
 
         wired
     }
@@ -661,11 +661,14 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
         with_cs(|cs| {
             let mut slots = self.slots.borrow(cs).borrow_mut();
             let pr = self.peripheral_reserved.borrow(cs);
-            let reserved = pr.borrow().get(owner as usize).copied().unwrap_or(0);
-            // Skip peripheral-reserved slots (0..reserved) and the
-            // partition-RAM slot (reserved), scanning from reserved+1
-            // onwards for a free entry.
-            let first_window = reserved + 1;
+            // Use the maximum reserved count across all partitions so
+            // that add_window never places a peripheral in a slot that
+            // another partition's cache may disable or overwrite.
+            let max_reserved = pr.borrow().iter().copied().max().unwrap_or(0);
+            // Skip peripheral-reserved slots (0..max_reserved) and the
+            // partition-RAM slot (max_reserved), scanning from
+            // max_reserved+1 onwards for a free entry.
+            let first_window = max_reserved + 1;
             for (idx, slot) in slots.iter_mut().enumerate().skip(first_window) {
                 if slot.is_none() {
                     *slot = Some(WindowDescriptor {
@@ -2895,7 +2898,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn try_wire_region_three_way_branch() {
+    fn try_wire_region_two_way_branch() {
         let rasr = periph_rasr(4096);
         let r = |b| (b, 4096u32, rasr);
         let ds = DynamicStrategy::<4>::new();
@@ -2908,10 +2911,11 @@ mod tests {
         );
         let s = ds.slot(4).expect("R4 occupied");
         assert_eq!((s.base, s.size, s.permissions), (0x4000_0000, 4096, rasr));
-        // Branch 2: cache-only → delta=0.
+        // Reserved slot from a different partition (desc_idx=0 < reserved=2)
+        // still wires with delta=1 (shared slot, context-switch restores).
         assert_eq!(
-            ds.try_wire_region(&mut seen, 2, 0, 2, r(0x4001_0000), 0),
-            Ok(0)
+            ds.try_wire_region(&mut seen, 2, 0, 2, r(0x4001_0000), 1),
+            Ok(1)
         );
         // Branch 3: add_window fallback → delta=1.
         let ds2 = DynamicStrategy::<4>::new();
@@ -3389,6 +3393,125 @@ mod tests {
         assert_ne!(
             cached0[0], cached1[0],
             "partition 0 cache[0] (active) must differ from partition 1 cache[0] (disabled)"
+        );
+    }
+
+    #[test]
+    fn wire_boot_peripherals_three_partitions_mixed_reserved() {
+        // Partition 0: reserved=2, 1 peripheral (4KiB)  → cached in slot 0
+        // Partition 1: reserved=0, 1 peripheral (256B)  → wired via add_window
+        // Partition 2: reserved=2, 1 peripheral (1KiB)  → cached in own cache
+        //
+        // Extends the 2-partition test to 3 partitions, proving that
+        // per-partition reserved counts are independent across partitions.
+        let ds = DynamicStrategy::<3>::with_partition_count();
+
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        let (rb1, rs1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+        let (rb2, rs2) = data_region(0x2001_0000, 4096, 6);
+        ds.configure_partition(2, &[(rb2, rs2)], 2).unwrap();
+
+        let pcb0 = PartitionControlBlock::new(
+            0,
+            0x0,
+            0x2000_0000,
+            0x2000_1000,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
+
+        let pcb1 = PartitionControlBlock::new(
+            1,
+            0x0,
+            0x2000_8000,
+            0x2000_9000,
+            MpuRegion::new(0x2000_8000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4001_0000, 256)]);
+
+        let pcb2 = PartitionControlBlock::new(
+            2,
+            0x0,
+            0x2001_0000,
+            0x2001_1000,
+            MpuRegion::new(0x2001_0000, 4096, 0),
+        )
+        .with_peripheral_regions(&[periph(0x4002_0000, 1024)]);
+
+        let wired = ds.wire_boot_peripherals(&[pcb0, pcb1, pcb2]);
+        // P0: desc_idx=0 < reserved=2 → reserved slot 0, delta=1, wired→1
+        // P1: reserved=0 → add_window (slot 3), delta=1, wired→2
+        // P2: desc_idx=0 < reserved=2 → reserved slot 0 (shared), delta=1, wired→3
+        assert_eq!(
+            wired, 3,
+            "each partition's peripheral is wired independently"
+        );
+
+        // Expected RASR for each peripheral size.
+        let rasr_4k = build_rasr(
+            4096u32.trailing_zeros() - 1,
+            AP_FULL_ACCESS,
+            true,
+            (true, false, true),
+        );
+        let rasr_1k = build_rasr(
+            1024u32.trailing_zeros() - 1,
+            AP_FULL_ACCESS,
+            true,
+            (true, false, true),
+        );
+
+        // Partition 0 (reserved=2): peripheral cached in slot 0, slot 1 disabled.
+        let cached0 = ds.cached_peripheral_regions(0);
+        assert_eq!(
+            cached0[0],
+            (
+                build_rbar(0x4000_0000, DYNAMIC_REGION_BASE as u32).unwrap(),
+                rasr_4k
+            ),
+            "partition 0 cache[0] must hold the 4KiB peripheral"
+        );
+        assert_eq!(
+            cached0[1],
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+            "partition 0 cache[1] must be disabled"
+        );
+
+        // Partition 1 (reserved=0): all cache slots disabled.
+        let cached1 = ds.cached_peripheral_regions(1);
+        assert_eq!(
+            cached1[0],
+            disabled_pair(DYNAMIC_REGION_BASE),
+            "partition 1 cache[0] must be disabled (reserved=0)"
+        );
+        assert_eq!(
+            cached1[1],
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+            "partition 1 cache[1] must be disabled (reserved=0)"
+        );
+
+        // Partition 2 (reserved=2): 1KiB peripheral cached in slot 0, slot 1 disabled.
+        let cached2 = ds.cached_peripheral_regions(2);
+        assert_eq!(
+            cached2[0],
+            (
+                build_rbar(0x4002_0000, DYNAMIC_REGION_BASE as u32).unwrap(),
+                rasr_1k
+            ),
+            "partition 2 cache[0] must hold the 1KiB peripheral"
+        );
+        assert_eq!(
+            cached2[1],
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+            "partition 2 cache[1] must be disabled"
+        );
+
+        // Cross-check: partitions 0 and 2 have different cached peripherals.
+        assert_ne!(
+            cached0[0], cached2[0],
+            "partition 0 and 2 must have different cached peripherals"
         );
     }
 }
