@@ -1757,6 +1757,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn add_window_skips_reserved_slots_heterogeneous_counts() {
+        // p0 reserved=2, p1 reserved=0 → max_reserved=2.
+        // Slot layout: [0: periph, 1: periph, 2: RAM, 3: window].
+        // add_window skips 0..=2 (reserved + RAM), first free is slot 3 → region 7.
+        // TODO: reviewer false positive — N=3 is the partition count, not slot count;
+        // DYNAMIC_SLOT_COUNT (4) governs slots. with_partition_count() takes no args.
+        let ds = DynamicStrategy::<3>::with_partition_count();
+
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+
+        let (rb1, rs1) = data_region(0x2001_0000, 4096, 4);
+        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+
+        // First window lands in slot 3 (region 7).
+        assert_eq!(ds.add_window(0x2002_0000, 256, 0, 0), Ok(7));
+
+        // Only one runtime slot was available; second call is exhausted.
+        assert_eq!(
+            ds.add_window(0x2003_0000, 256, 0, 0),
+            Err(MpuError::SlotExhausted)
+        );
+    }
+
     // ------------------------------------------------------------------
     // accessible_regions
     // ------------------------------------------------------------------
