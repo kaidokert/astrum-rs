@@ -106,7 +106,7 @@ macro_rules! define_pendsv {
             let pid = k.next_partition();
             // Pre-compute dynamic region values before disabling MPU to
             // minimise the window where the MPU is off.
-            let dynamic_values = $strategy.compute_region_values();
+            let dynamic_values = $strategy.partition_region_values(pid);
             // Single MPU disable/enable cycle for both base (R0-R3) and
             // dynamic (R4-R7) regions.
             $crate::mpu::mpu_disable(&p.MPU);

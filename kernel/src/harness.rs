@@ -443,19 +443,12 @@ macro_rules! define_unified_harness {
                 Err(_) => return,
             };
 
-            // Dynamic mode: write R4-R7 strategy regions, then
-            // override R4-R5 with cached peripheral regions and re-enable.
+            // Dynamic mode: write per-partition R4-R7 strategy regions
+            // (peripherals, RAM, cross-partition filtering) and re-enable.
             #[cfg(feature = "dynamic-mpu")]
             if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
-                let values = HARNESS_STRATEGY.compute_region_values();
+                let values = HARNESS_STRATEGY.partition_region_values(pid);
                 for &(rbar, rasr) in &values {
-                    $crate::mpu::configure_region(&p.MPU, rbar, rasr);
-                }
-
-                // Overwrite R4-R5 with per-partition peripheral regions
-                // from the DynamicStrategy's boot-time cache.
-                let periph = HARNESS_STRATEGY.cached_peripheral_regions(pid);
-                for &(rbar, rasr) in &periph {
                     $crate::mpu::configure_region(&p.MPU, rbar, rasr);
                 }
 
