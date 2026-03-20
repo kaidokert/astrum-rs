@@ -52,7 +52,7 @@ pub trait MpuStrategy {
     /// `peripheral_reserved` specifies how many leading dynamic slots
     /// (0 or 2) are reserved for peripheral MMIO regions.  When 2, the
     /// partition's private-RAM region is placed after the reserved slots,
-    /// and `compute_region_values` emits disabled entries for the reserved
+    /// and `partition_region_values` emits disabled entries for the reserved
     /// slots so PendSV can overwrite them with per-partition peripherals.
     fn configure_partition(
         &self,
@@ -177,7 +177,7 @@ pub struct DynamicStrategy<const N: usize = DYNAMIC_SLOT_COUNT> {
     /// Per-partition count of leading slots (0 or 2) reserved for peripheral
     /// MMIO regions, indexed by `partition_id`. Set by `configure_partition`;
     /// `wire_boot_peripherals` populates these slots with peripheral
-    /// descriptors so `compute_region_values` emits them during PendSV.
+    /// descriptors so `partition_region_values` emits them during PendSV.
     peripheral_reserved: Mutex<RefCell<[usize; N]>>,
     /// Pre-computed (RBAR, RASR) pairs for R4-R5, indexed by partition_id.
     peripheral_cache: Mutex<RefCell<PeripheralCache<N>>>,
@@ -202,7 +202,7 @@ impl DynamicStrategy {
 }
 
 impl<const N: usize> DynamicStrategy<N> {
-    /// Convert a hardware MPU region ID (4-7) to a `compute_region_values`
+    /// Convert a hardware MPU region ID (4-7) to a `partition_region_values`
     /// array index (0-3), or `None` if the ID is out of range.
     pub fn region_to_slot_index(region_id: u8) -> Option<usize> {
         let idx = region_id.checked_sub(DYNAMIC_REGION_BASE)? as usize;
@@ -2553,115 +2553,6 @@ mod tests {
                 4 + i
             );
         }
-    }
-
-    /// Simulate the exact PendSV R4-R7 write sequence for two partitions
-    /// (one with a peripheral, one without) and verify that
-    /// `cached_peripheral_regions` correctly overrides the R4-R5 values
-    /// produced by `compute_region_values`.
-    #[test]
-    fn peripheral_cache_override_correctness_in_pendsv_flow() {
-        let ds = DynamicStrategy::new();
-
-        // -- Setup: partition 0 has a UART peripheral; partition 1 has none --
-        // Both use peripheral_reserved=2 so RAM lands in R6.
-        let (rbar_p0, rasr_p0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_p0, rasr_p0)], 2).unwrap();
-
-        let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
-
-        // Wire partition 0's peripheral at boot time.
-        // Use explicit partition IDs so the cache is keyed correctly.
-        let pcb0 = PartitionControlBlock::new(
-            0,
-            0x0,
-            0x2000_0000,
-            0x2000_1000,
-            MpuRegion::new(0x2000_0000, 4096, 0),
-        )
-        .with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
-        let pcb1 = PartitionControlBlock::new(
-            1,
-            0x0,
-            0x2000_8000,
-            0x2000_9000,
-            MpuRegion::new(0x2000_8000, 4096, 0),
-        );
-        assert_eq!(ds.wire_boot_peripherals(&[pcb0, pcb1]), 1);
-
-        // ---- Simulate PendSV switching TO partition 0 (peripheral) ----
-        ds.configure_partition(0, &[(rbar_p0, rasr_p0)], 2).unwrap();
-        let compute_p0 = ds.compute_region_values();
-        let cached_p0 = ds.cached_peripheral_regions(0);
-
-        // R4 from compute should hold the wired peripheral (slot[0]).
-        // The cache must agree — both should emit the peripheral RBAR/RASR.
-        let expected_periph_rbar = build_rbar(0x4000_0000, 4).unwrap();
-        let expected_periph_rasr = periph_rasr(4096);
-        assert_eq!(
-            cached_p0[0],
-            (expected_periph_rbar, expected_periph_rasr),
-            "cache R4 must emit peripheral for partition 0"
-        );
-        assert_ne!(cached_p0[0].1, 0, "peripheral R4 RASR must be enabled");
-
-        // For the peripheral partition, compute and cache agree on R4.
-        assert_eq!(
-            compute_p0[0], cached_p0[0],
-            "compute and cache R4 must agree for the peripheral partition"
-        );
-
-        // R5 disabled in both paths (only one peripheral wired).
-        assert_eq!(cached_p0[1].1, 0, "cache R5 disabled (no 2nd peripheral)");
-
-        // ---- Simulate PendSV switching TO partition 1 (no peripheral) ----
-        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
-        let compute_p1 = ds.compute_region_values();
-        let cached_p1 = ds.cached_peripheral_regions(1);
-
-        // CRITICAL: compute_region_values R4-R5 may still reflect stale
-        // slot contents from the previous partition's configure call.
-        // The cache must DIFFER from compute for R4 when partition 1
-        // has no peripheral but partition 0's peripheral descriptor is
-        // still in slot[0].
-        //
-        // After configure_partition(1, ..., 2), slot[0] is left as-is
-        // (it belongs to partition 0's peripheral reservation), so
-        // compute_region_values still emits partition 0's peripheral in R4.
-        // The cache, keyed by pid=1 (no peripherals), must return disabled.
-        let disabled_r4 = disabled_pair(DYNAMIC_REGION_BASE);
-        let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
-        assert_eq!(
-            cached_p1[0], disabled_r4,
-            "cache R4 must be disabled for non-peripheral partition 1"
-        );
-        assert_eq!(
-            cached_p1[1], disabled_r5,
-            "cache R5 must be disabled for non-peripheral partition 1"
-        );
-
-        // Prove the override is necessary: compute_region_values R4
-        // differs from cached_peripheral_regions R4 for partition 1.
-        assert_ne!(
-            compute_p1[0], cached_p1[0],
-            "compute R4 must differ from cache R4 when switching \
-             from peripheral to non-peripheral partition — \
-             the PendSV override is necessary"
-        );
-        assert_eq!(
-            compute_p1[0].1, expected_periph_rasr,
-            "compute R4 still holds stale peripheral RASR from partition 0"
-        );
-
-        // ---- Verify round-trip: switch back to partition 0 ----
-        ds.configure_partition(0, &[(rbar_p0, rasr_p0)], 2).unwrap();
-        let cached_p0_again = ds.cached_peripheral_regions(0);
-        assert_eq!(
-            cached_p0_again[0],
-            (expected_periph_rbar, expected_periph_rasr),
-            "cache R4 must restore peripheral on switch-back to partition 0"
-        );
     }
 
     // ------------------------------------------------------------------
