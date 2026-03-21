@@ -11,6 +11,7 @@ pub mod fmt;
 pub mod hal;
 pub mod i2c;
 pub mod ids;
+pub mod partition;
 pub mod spi;
 pub mod syscall;
 pub mod uart;

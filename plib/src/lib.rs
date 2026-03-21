@@ -13,6 +13,11 @@
 pub use rtos_traits::api::decode_rc;
 pub use rtos_traits::api::SvcError;
 
+// ── Re-exported partition types (from rtos-traits) ────────────────────
+pub use rtos_traits::partition::{
+    EntryAddr, IsrHandler, PartitionBody, PartitionEntry, PartitionSpec,
+};
+
 /// Status information for a queuing port, returned by [`sys_queuing_status`].
 ///
 /// Layout must match the kernel's `QueuingPortStatus` (both are `#[repr(C)]`).
@@ -1739,5 +1744,25 @@ mod tests {
         assert_eq!(result, Ok(()));
         // 4-byte header only
         assert_eq!(buf.available(), 4);
+    }
+
+    #[test]
+    #[allow(clippy::empty_loop)]
+    fn partition_type_reexports_accessible() {
+        extern "C" fn ep() -> ! {
+            loop {}
+        }
+        extern "C" fn bp(_: u32) -> ! {
+            loop {}
+        }
+        unsafe extern "C" fn ih() {}
+        let _: crate::PartitionEntry = ep;
+        let _: crate::PartitionBody = bp;
+        let _: crate::IsrHandler = ih;
+        let spec = crate::PartitionSpec::new(ep, 42);
+        assert_eq!(spec.r0(), 42);
+        let pe: crate::PartitionEntry = ep;
+        assert_eq!(crate::PartitionSpec::from((pe, 7)).r0(), 7);
+        assert_eq!(u32::from(crate::EntryAddr::from(0x1000u32)), 0x1000);
     }
 }
