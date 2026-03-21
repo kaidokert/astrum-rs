@@ -104,8 +104,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_queuing_test: round_robin");
     let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
-    cfgs[0].entry_point = EntryAddr::from_fn(p0_main).raw();
-    cfgs[1].entry_point = EntryAddr::from_fn(p1_main).raw();
+    cfgs[0].entry_point = EntryAddr::from_fn(p0_main);
+    cfgs[1].entry_point = EntryAddr::from_fn(p1_main);
     #[cfg(not(feature = "dynamic-mpu"))]
     let mut k =
         Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("plib_queuing_test: kernel");

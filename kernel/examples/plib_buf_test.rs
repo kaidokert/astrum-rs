@@ -150,8 +150,8 @@ fn main() -> ! {
         .expect("plib_buf_test: add P1");
     sched.add_system_window(1).expect("plib_buf_test: sys1");
     let mut cfgs = PartitionConfig::sentinel_array::<2>();
-    cfgs[0].entry_point = EntryAddr::from_fn(p0_main).raw();
-    cfgs[1].entry_point = EntryAddr::from_fn(p1_idle).raw();
+    cfgs[0].entry_point = EntryAddr::from_fn(p0_main);
+    cfgs[1].entry_point = EntryAddr::from_fn(p1_idle);
     #[cfg(not(feature = "dynamic-mpu"))]
     let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("plib_buf_test: kernel");
     #[cfg(feature = "dynamic-mpu")]

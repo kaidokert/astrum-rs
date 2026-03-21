@@ -11,7 +11,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::{entry_point_addr, PartitionConfig};
+use kernel::partition::{EntryAddr, PartitionConfig};
 use kernel::sampling::PortDirection;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
@@ -104,8 +104,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_queuing_timed_test: round_robin");
     let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
-    cfgs[0].entry_point = entry_point_addr(p0_main);
-    cfgs[1].entry_point = entry_point_addr(p1_main);
+    cfgs[0].entry_point = EntryAddr::from_fn(p0_main);
+    cfgs[1].entry_point = EntryAddr::from_fn(p1_main);
     #[cfg(not(feature = "dynamic-mpu"))]
     let mut k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[])
         .expect("plib_queuing_timed_test: kernel");

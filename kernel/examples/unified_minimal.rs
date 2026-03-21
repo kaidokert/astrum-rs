@@ -9,7 +9,7 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -31,7 +31,11 @@ fn make_schedule() -> ScheduleTable<{ TestConfig::SCHED }> {
     sched
 }
 
-kernel::define_unified_harness!(TestConfig, make_schedule(), &[(partition_main, 0)]);
+kernel::define_unified_harness!(
+    TestConfig,
+    make_schedule(),
+    &[PartitionSpec::new(partition_main, 0)]
+);
 
 #[entry]
 fn main() -> ! {

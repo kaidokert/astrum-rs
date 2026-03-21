@@ -58,7 +58,7 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("peripherals");
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("sched");
     let mut cfgs = PartitionConfig::sentinel_array::<{ TestConfig::N }>();
-    cfgs[0].entry_point = EntryAddr::from_fn(p0_main).raw();
+    cfgs[0].entry_point = EntryAddr::from_fn(p0_main);
     #[cfg(not(feature = "dynamic-mpu"))]
     let mut k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
     #[cfg(feature = "dynamic-mpu")]
