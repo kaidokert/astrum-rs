@@ -22,7 +22,9 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     Smoke4KConfig[kernel::partition_core::AlignedStack4K] < Partitions2,
@@ -72,6 +74,7 @@ kernel::define_unified_harness!(Smoke4KConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     let rc = plib::sys_yield().unwrap_or(u32::MAX);
     P0_YIELD_RC.store(rc, Ordering::Release);
@@ -80,6 +83,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     let rc = plib::sys_yield().unwrap_or(u32::MAX);
     P1_YIELD_RC.store(rc, Ordering::Release);

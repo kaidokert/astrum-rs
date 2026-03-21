@@ -21,7 +21,9 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(SmokeConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
@@ -80,6 +82,7 @@ kernel::define_unified_harness!(SmokeConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // Signal first so the semaphore count is >0 before P1 runs.
     // TODO: SemaphoreId call-site fix from ce7dd01; included here for build correctness
@@ -93,6 +96,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     // TODO: SemaphoreId call-site fix from ce7dd01; included here for build correctness
     let rc = plib::sys_sem_wait(plib::SemaphoreId::new(0)).unwrap_or(u32::MAX);

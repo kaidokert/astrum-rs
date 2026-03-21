@@ -41,6 +41,7 @@ kernel::define_unified_harness!(no_boot, Cfg, |tick, k| {
         if tick > 100 { klog!("FAIL: timeout"); kexit!(failure); }
     }
 });
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     PARTS_RAN.fetch_or(1, Ordering::Release);
     let port = plib::QueuingPortId::new(SRC_PORT.load(Ordering::Acquire));
@@ -48,6 +49,7 @@ extern "C" fn p0_main() -> ! {
     if plib::sys_queuing_send(port, &msg).is_ok() { P0_SENT.store(1, Ordering::Release); }
     loop { plib::sys_yield().expect("sys_yield"); }
 }
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     PARTS_RAN.fetch_or(2, Ordering::Release);
     let port = plib::QueuingPortId::new(DST_PORT.load(Ordering::Acquire));

@@ -19,7 +19,9 @@ use kernel::kpanic as _;
 use kernel::partition::STARVATION_THRESHOLD;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions3, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions3, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     Config<Partitions3, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -74,6 +76,7 @@ kernel::define_unified_harness!(Config, |tick, k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     loop {
         if plib::sys_yield().is_ok() {
@@ -82,6 +85,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     if let Err(e) = plib::sys_sem_wait(plib::SemaphoreId::new(0)) {
         P1_SEM_ERR.store(e.to_u32(), Ordering::Release);
@@ -91,6 +95,7 @@ extern "C" fn p1_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p2_main;
 extern "C" fn p2_main() -> ! {
     loop {
         cortex_m::asm::nop();
