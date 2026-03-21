@@ -904,6 +904,38 @@ pub type PartitionSpec = (PartitionEntry, u32);
 /// Canonical public alias for [`ExternalPartitionMemory`].
 pub type PartitionMemory<'mem> = ExternalPartitionMemory<'mem>;
 
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for u32 {}
+    impl Sealed for super::PartitionEntry {}
+}
+
+/// Conversion trait for values that can serve as a partition entry address.
+///
+/// Implemented for `u32` (raw address) and `PartitionEntry` (function pointer),
+/// so that [`ExternalPartitionMemory::new`] and [`ExternalPartitionMemory::from_aligned_stack`]
+/// accept either form without manual casting.
+///
+/// This trait is sealed — external crates cannot implement it for new types.
+pub trait IntoEntryAddr: sealed::Sealed {
+    /// Convert to the raw `u32` address used internally.
+    fn into_entry_addr(self) -> u32;
+}
+
+impl IntoEntryAddr for u32 {
+    #[inline]
+    fn into_entry_addr(self) -> u32 {
+        self
+    }
+}
+
+impl IntoEntryAddr for PartitionEntry {
+    #[inline]
+    fn into_entry_addr(self) -> u32 {
+        self as *const () as usize as u32
+    }
+}
+
 /// Validate stack base alignment and address-space overflow.
 /// Assumes `size_bytes` has already been checked as a valid power-of-two >= 32.
 fn validate_stack_geometry(
@@ -937,10 +969,11 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     /// and the MPU region.
     pub fn new(
         stack: &'mem mut [u32],
-        entry_point: u32,
+        entry_point: impl IntoEntryAddr,
         mpu_region: MpuRegion,
         partition_id: u8,
     ) -> Result<Self, ConfigError> {
+        let entry_point = entry_point.into_entry_addr();
         let size_bytes: u32 = stack
             .len()
             .checked_mul(core::mem::size_of::<u32>())
@@ -982,7 +1015,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     /// Convenience constructor from a [`StackStorage`] implementer.
     pub fn from_aligned_stack<S: StackStorage>(
         storage: &'mem mut S,
-        entry_point: u32,
+        entry_point: impl IntoEntryAddr,
         mpu_region: MpuRegion,
         partition_id: u8,
     ) -> Result<Self, ConfigError> {
@@ -3406,6 +3439,37 @@ mod tests {
                 required_alignment: 4,
             }
         );
+    }
+
+    // ---- IntoEntryAddr tests ----
+
+    #[test]
+    fn into_entry_addr_u32_is_identity() {
+        assert_eq!(0x0800_0100u32.into_entry_addr(), 0x0800_0100);
+    }
+
+    #[test]
+    fn into_entry_addr_partition_entry_converts() {
+        #[allow(clippy::empty_loop)]
+        extern "C" fn test_entry() -> ! {
+            loop {}
+        }
+        let ep: PartitionEntry = test_entry;
+        let addr = ep.into_entry_addr();
+        assert_eq!(addr, test_entry as *const () as usize as u32);
+    }
+
+    #[test]
+    fn ext_pmem_new_accepts_partition_entry() {
+        #[allow(clippy::empty_loop)]
+        extern "C" fn test_entry() -> ! {
+            loop {}
+        }
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0, 0, 0);
+        let ep: PartitionEntry = test_entry;
+        let pmem = ExternalPartitionMemory::new(&mut buf.0, ep, mpu, 0).unwrap();
+        assert_eq!(pmem.entry_point(), test_entry as *const () as usize as u32);
     }
 
     // ---- type alias tests ----

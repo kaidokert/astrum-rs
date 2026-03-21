@@ -63,7 +63,8 @@ pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
 pub use partition::{
-    ExternalPartitionMemory, PartitionBody, PartitionEntry, PartitionMemory, PartitionSpec,
+    ExternalPartitionMemory, IntoEntryAddr, PartitionBody, PartitionEntry, PartitionMemory,
+    PartitionSpec,
 };
 pub mod partition_core;
 pub use partition_core::{
