@@ -15,7 +15,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     buf_syscall,
     mpu_strategy::MpuStrategy,
-    partition::{entry_point_addr, ExternalPartitionMemory, MpuRegion},
+    partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -112,8 +112,8 @@ fn main() -> ! {
         let [ref mut s0, ref mut s1] = *stacks;
         let mpu = MpuRegion::new(0, 0, 0);
         let memories = [
-            ExternalPartitionMemory::new(s0, entry_point_addr(p0_main), mpu, 0).expect("mem 0"),
-            ExternalPartitionMemory::new(s1, entry_point_addr(p1_main), mpu, 1).expect("mem 1"),
+            ExternalPartitionMemory::new(s0, EntryAddr::from_fn(p0_main), mpu, 0).expect("mem 0"),
+            ExternalPartitionMemory::new(s1, EntryAddr::from_fn(p1_main), mpu, 1).expect("mem 1"),
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };

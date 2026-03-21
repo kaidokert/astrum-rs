@@ -30,9 +30,9 @@ use cortex_m_semihosting::{debug, hprintln};
 #[cfg(target_arch = "arm")]
 use kernel::syscall::{SYS_BUF_ALLOC, SYS_BUF_RELEASE, SYS_BUF_WRITE};
 use kernel::{
-    entry_point_addr, mpu,
+    mpu,
     mpu_strategy::{DynamicStrategy, MpuStrategy},
-    partition::{ExternalPartitionMemory, MpuRegion},
+    partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -311,14 +311,14 @@ fn main() -> ! {
     let memories = [
         ExternalPartitionMemory::new(
             &mut s0.0,
-            entry_point_addr(partition_p1_entry),
+            EntryAddr::from_fn(partition_p1_entry),
             MpuRegion::new(DATA_BASES[0], DATA_SIZES[0], 0),
             0,
         )
         .expect("partition memory 0"),
         ExternalPartitionMemory::new(
             &mut s1.0,
-            entry_point_addr(partition_p2_entry),
+            EntryAddr::from_fn(partition_p2_entry),
             MpuRegion::new(DATA_BASES[1], DATA_SIZES[1], 0),
             1,
         )
