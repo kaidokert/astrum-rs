@@ -8,7 +8,11 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::{partition::PartitionConfig, sampling::PortDirection, scheduler::ScheduleTable};
+use kernel::{
+    partition::{entry_point_addr, PartitionConfig},
+    sampling::PortDirection,
+    scheduler::ScheduleTable,
+};
 use kernel::{svc::Kernel, DebugEnabled, MsgSmall, Partitions1, PortsSmall, SyncMinimal};
 kernel::compose_kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgSmall, PortsSmall, DebugEnabled>
@@ -54,7 +58,7 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("peripherals");
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("sched");
     let mut cfgs = PartitionConfig::sentinel_array::<{ TestConfig::N }>();
-    cfgs[0].entry_point = p0_main as *const () as u32;
+    cfgs[0].entry_point = entry_point_addr(p0_main);
     #[cfg(not(feature = "dynamic-mpu"))]
     let mut k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
     #[cfg(feature = "dynamic-mpu")]

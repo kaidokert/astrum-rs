@@ -24,7 +24,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::PartitionConfig;
+use kernel::partition::{entry_point_addr, PartitionConfig};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
@@ -133,7 +133,7 @@ fn main() -> ! {
     sched.add_system_window(1).expect("sys0");
 
     let mut cfgs = PartitionConfig::sentinel_array::<1>();
-    cfgs[0].entry_point = partition_main as *const () as u32;
+    cfgs[0].entry_point = entry_point_addr(partition_main);
     #[cfg(not(feature = "dynamic-mpu"))]
     let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
     #[cfg(feature = "dynamic-mpu")]
