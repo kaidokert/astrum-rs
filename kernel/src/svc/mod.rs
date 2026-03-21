@@ -1242,7 +1242,7 @@ where
             let stack_pointer = stack_base.wrapping_add(c.stack_size);
             let mut pcb = PartitionControlBlock::new(
                 c.id,
-                c.entry_point.raw(),
+                c.entry_point,
                 stack_base,
                 stack_pointer,
                 mpu_region,

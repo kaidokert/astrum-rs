@@ -104,7 +104,7 @@ pub struct PartitionControlBlock {
     id: u8,
     state: PartitionState,
     stack_pointer: u32,
-    entry_point: u32,
+    entry_point: EntryAddr,
     stack_base: u32,
     stack_size: u32,
     mpu_region: MpuRegion,
@@ -143,7 +143,7 @@ pub struct PartitionControlBlock {
 impl PartitionControlBlock {
     pub fn new(
         id: u8,
-        entry_point: u32,
+        entry_point: impl Into<EntryAddr>,
         stack_base: u32,
         stack_pointer: u32,
         mpu_region: MpuRegion,
@@ -152,7 +152,7 @@ impl PartitionControlBlock {
             id,
             state: PartitionState::Ready,
             stack_pointer,
-            entry_point,
+            entry_point: entry_point.into(),
             stack_base,
             stack_size: stack_pointer.wrapping_sub(stack_base),
             mpu_region,
@@ -222,7 +222,7 @@ impl PartitionControlBlock {
         self.stack_pointer
     }
 
-    pub fn entry_point(&self) -> u32 {
+    pub fn entry_point(&self) -> EntryAddr {
         self.entry_point
     }
 

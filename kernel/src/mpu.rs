@@ -196,7 +196,7 @@ pub(crate) fn partition_mpu_regions(
     // otherwise fall back to entry_point / data_region_size (legacy behavior).
     let (code_base, code_size) = match pcb.code_mpu_region() {
         Some(region) => (region.base(), region.size()),
-        None => (pcb.entry_point(), data_region_size),
+        None => (pcb.entry_point().raw(), data_region_size),
     };
 
     // Sentinel partitions (size==0, from bug01 fix) intentionally fail
