@@ -263,6 +263,9 @@ macro_rules! partition_trampoline {
             let body: $crate::partition::PartitionBody = $body;
             body(0)
         }
+
+        // Compile-time check: the generated trampoline must be PartitionEntry.
+        const _: $crate::partition::PartitionEntry = $name;
     };
 }
 
