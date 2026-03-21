@@ -904,8 +904,8 @@ pub type IsrHandler = unsafe extern "C" fn();
 /// A partition descriptor: entry point paired with its `r0` argument.
 #[derive(Clone, Copy, Debug)]
 pub struct PartitionSpec {
-    pub entry_point: PartitionEntry,
-    pub r0: u32,
+    entry_point: PartitionEntry,
+    r0: u32,
 }
 
 impl PartitionSpec {
@@ -921,6 +921,16 @@ impl PartitionSpec {
         // callee never observes the parameter through the Rust calling convention.
         let entry_point: PartitionEntry = unsafe { core::mem::transmute(body) };
         Self { entry_point, r0 }
+    }
+
+    /// Returns the partition entry-point function pointer.
+    pub const fn entry_point(&self) -> PartitionEntry {
+        self.entry_point
+    }
+
+    /// Returns the `r0` argument hint for this partition.
+    pub const fn r0(&self) -> u32 {
+        self.r0
     }
 }
 
@@ -3606,20 +3616,20 @@ mod tests {
     fn partition_spec_new_holds_entry_and_arg() {
         let spec = PartitionSpec::new(_dummy_entry, 42);
         assert_eq!(
-            entry_point_addr(spec.entry_point),
+            entry_point_addr(spec.entry_point()),
             entry_point_addr(_dummy_entry)
         );
-        assert_eq!(spec.r0, 42);
+        assert_eq!(spec.r0(), 42);
     }
 
     #[test]
     fn partition_spec_from_body_holds_entry_and_arg() {
         let spec = PartitionSpec::from_body(_dummy_body, 7);
         assert_eq!(
-            entry_point_addr(spec.entry_point),
+            entry_point_addr(spec.entry_point()),
             body_point_addr(_dummy_body)
         );
-        assert_eq!(spec.r0, 7);
+        assert_eq!(spec.r0(), 7);
     }
 
     #[test]
@@ -3627,9 +3637,9 @@ mod tests {
         let ep: PartitionEntry = _dummy_entry;
         let spec: PartitionSpec = (ep, 99).into();
         assert_eq!(
-            entry_point_addr(spec.entry_point),
+            entry_point_addr(spec.entry_point()),
             entry_point_addr(_dummy_entry)
         );
-        assert_eq!(spec.r0, 99);
+        assert_eq!(spec.r0(), 99);
     }
 }

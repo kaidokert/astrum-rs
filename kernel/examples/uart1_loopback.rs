@@ -147,7 +147,10 @@ fn SysTick() {
     });
 }
 
-fn boot(partitions: &[PartitionSpec], mut peripherals: cortex_m::Peripherals) -> ! {
+fn boot(
+    partitions: &[PartitionSpec],
+    mut peripherals: cortex_m::Peripherals,
+) -> Result<kernel::harness::Never, kernel::harness::BootError> {
     use cortex_m::peripheral::scb::SystemHandler;
     use cortex_m::peripheral::syst::SystClkSource;
     use cortex_m::peripheral::SCB;
@@ -160,10 +163,10 @@ fn boot(partitions: &[PartitionSpec], mut peripherals: cortex_m::Peripherals) ->
         let stacks = &mut *ptr;
         let ptr2 = &raw mut PARTITION_SP;
         let partition_sp = &mut *ptr2;
-        for (i, &(ep, hint)) in partitions.iter().enumerate() {
+        for (i, spec) in partitions.iter().enumerate() {
             let stk = &mut stacks[i].0;
-            let ix =
-                kernel::context::init_stack_frame(stk, ep, Some(hint)).expect("init_stack_frame");
+            let ix = kernel::context::init_stack_frame(stk, spec.entry_point(), Some(spec.r0()))
+                .ok_or(kernel::harness::BootError::StackInitFailed { partition_index: i })?;
             partition_sp[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
         }
         const { kernel::config::assert_priority_order::<DemoConfig>() }
@@ -430,7 +433,10 @@ fn main() -> ! {
         }
     });
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [
+        PartitionSpec::new(p1_main, 0),
+        PartitionSpec::new(p2_main, 0),
+    ];
     #[allow(clippy::diverging_sub_expression, unreachable_code)]
     {
         let _result: Result<kernel::harness::Never, kernel::harness::BootError> = boot(&parts, p);

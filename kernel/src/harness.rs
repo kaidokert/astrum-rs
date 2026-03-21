@@ -546,9 +546,9 @@ macro_rules! define_unified_harness {
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
                 let mem = ExternalPartitionMemory::from_aligned_stack(
-                    stk, spec.entry_point, sentinel_mpu, i as u8)
+                    stk, spec.entry_point(), sentinel_mpu, i as u8)
                     .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?
-                    .with_r0_hint(spec.r0);
+                    .with_r0_hint(spec.r0());
                 memories.push(mem)
                     .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?;
             }
@@ -614,9 +614,9 @@ macro_rules! define_unified_harness {
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
                 let mem = ExternalPartitionMemory::from_aligned_stack(
-                    stk, spec.entry_point, sentinel_mpu, i as u8)
+                    stk, spec.entry_point(), sentinel_mpu, i as u8)
                     .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?
-                    .with_r0_hint(spec.r0);
+                    .with_r0_hint(spec.r0());
                 memories.push(mem)
                     .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?;
             }
