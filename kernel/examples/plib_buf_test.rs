@@ -16,7 +16,7 @@ use kernel::kpanic as _;
 use kernel::partition::{EntryAddr, PartitionConfig};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -85,6 +85,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     hprintln!("p0: entering");
     // 1. Allocate a writable buffer slot (no timeout).
@@ -129,6 +130,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_idle;
 extern "C" fn p1_idle() -> ! {
     loop {
         cortex_m::asm::nop();

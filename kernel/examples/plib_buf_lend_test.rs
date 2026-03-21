@@ -12,7 +12,7 @@ use kernel::kpanic as _;
 use kernel::partition::{EntryAddr, PartitionConfig};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -60,6 +60,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     kernel::kexit!(failure);
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     let slot = match plib::sys_buf_alloc(true, 0) {
         Ok(id) => {
@@ -93,6 +94,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     while LENT.load(Ordering::Acquire) == 0 {
         cortex_m::asm::nop();

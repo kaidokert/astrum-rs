@@ -19,7 +19,9 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -72,6 +74,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     kernel::kexit!(success);
 });
 
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     // 1. sys_yield: expect Ok(0)
     match plib::sys_yield() {
