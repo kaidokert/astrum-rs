@@ -4,7 +4,9 @@ use heapless::Vec;
 use crate::debug::DebugBuffer;
 use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
 use crate::partition_core::StackStorage;
-pub use rtos_traits::partition::{EntryAddr, IsrHandler, PartitionBody, PartitionEntry};
+pub use rtos_traits::partition::{
+    EntryAddr, IsrHandler, PartitionBody, PartitionEntry, PartitionSpec,
+};
 
 /// Default data-region RASR attributes: full read-write access with
 /// Normal memory (TEX=0, S=1, C=1, B=0).  The RASR enable bit and size
@@ -890,58 +892,6 @@ impl<const N: usize> PartitionTable<N> {
     /// Returns a mutable slice of all partition control blocks.
     pub fn as_slice_mut(&mut self) -> &mut [PartitionControlBlock] {
         &mut self.partitions
-    }
-}
-
-/// A partition descriptor: entry point address paired with its `r0` argument.
-#[derive(Clone, Copy, Debug)]
-pub struct PartitionSpec {
-    entry_point: EntryAddr,
-    r0: u32,
-}
-
-impl PartitionSpec {
-    pub fn new(entry_point: PartitionEntry, r0: u32) -> Self {
-        Self {
-            entry_point: EntryAddr::from_fn(entry_point),
-            r0,
-        }
-    }
-
-    /// Create a spec from a body-style `extern "C" fn(u32) -> !`.
-    pub fn from_body(body: PartitionBody, r0: u32) -> Self {
-        Self {
-            entry_point: EntryAddr::from_body(body),
-            r0,
-        }
-    }
-
-    /// Returns the partition entry-point address.
-    pub const fn entry_point(&self) -> EntryAddr {
-        self.entry_point
-    }
-
-    /// Returns the `r0` argument hint for this partition.
-    pub const fn r0(&self) -> u32 {
-        self.r0
-    }
-}
-
-impl From<(PartitionEntry, u32)> for PartitionSpec {
-    fn from((entry_point, r0): (PartitionEntry, u32)) -> Self {
-        Self::new(entry_point, r0)
-    }
-}
-
-impl From<(PartitionBody, u32)> for PartitionSpec {
-    fn from((body, r0): (PartitionBody, u32)) -> Self {
-        Self::from_body(body, r0)
-    }
-}
-
-impl From<PartitionEntry> for PartitionSpec {
-    fn from(entry_point: PartitionEntry) -> Self {
-        Self::new(entry_point, 0)
     }
 }
 

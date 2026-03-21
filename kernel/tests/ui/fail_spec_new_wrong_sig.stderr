@@ -12,7 +12,7 @@ error[E0308]: mismatched types
    = note: expected fn pointer `extern "C" fn() -> !`
                  found fn item `extern "C" fn(u32) -> ! {body_fn}`
 note: associated function defined here
-  --> src/partition.rs
+  --> $WORKSPACE/rtos-traits/src/partition.rs
    |
    |     pub fn new(entry_point: PartitionEntry, r0: u32) -> Self {
    |            ^^^
