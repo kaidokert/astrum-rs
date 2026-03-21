@@ -63,13 +63,9 @@ pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
 /// Re-exports from [`partition`].
-///
-/// **Deprecated:** [`body_point_addr`] and [`entry_point_addr`] are deprecated.
-/// Use [`EntryAddr::from_body`] and [`EntryAddr::from_fn`] instead.
-#[allow(deprecated)]
 pub use partition::{
-    body_point_addr, entry_point_addr, EntryAddr, ExternalPartitionMemory, IsrHandler,
-    PartitionBody, PartitionEntry, PartitionMemory, PartitionSpec,
+    EntryAddr, ExternalPartitionMemory, IsrHandler, PartitionBody, PartitionEntry, PartitionMemory,
+    PartitionSpec,
 };
 pub mod partition_core;
 pub use partition_core::{
@@ -243,27 +239,6 @@ mod reexport_tests {
         // Confirm it is the same type from the partition module.
         let _h2: crate::partition::IsrHandler = another_isr;
         assert_eq!(_h as *const () as usize, _h2 as *const () as usize);
-    }
-
-    #[test]
-    fn entry_point_addr_via_root() {
-        // entry_point_addr is re-exported at crate root.
-        #[allow(clippy::empty_loop)]
-        extern "C" fn _ep() -> ! {
-            loop {}
-        }
-        let addr = entry_point_addr(_ep);
-        assert_eq!(addr, _ep as *const () as u32);
-    }
-
-    #[test]
-    fn body_point_addr_via_root() {
-        #[allow(clippy::empty_loop)]
-        extern "C" fn _bp(_r0: u32) -> ! {
-            loop {}
-        }
-        let addr = body_point_addr(_bp);
-        assert_eq!(addr, _bp as *const () as u32);
     }
 
     #[test]

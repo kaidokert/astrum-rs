@@ -1017,36 +1017,6 @@ impl From<EntryAddr> for u32 {
 
 /// Coerce a [`PartitionEntry`] fn-item to a raw `u32` address.
 ///
-/// Rust fn-items do not automatically coerce to fn-pointers in
-/// `impl Trait` position, so passing a bare function name to
-/// [`ExternalPartitionMemory::new`] would fail to compile.
-/// This helper forces the fn-item → fn-pointer coercion and returns
-/// the address as a `u32` that satisfies `Into<EntryAddr>`.
-///
-/// # Deprecated
-/// Use [`EntryAddr::from_fn`] instead.
-#[deprecated(since = "0.1.0", note = "use EntryAddr::from_fn() instead")]
-#[inline]
-pub fn entry_point_addr(f: PartitionEntry) -> u32 {
-    f as *const () as usize as u32
-}
-
-/// Coerce a [`PartitionBody`] fn-item to a raw `u32` address.
-///
-/// This is the [`PartitionBody`] analogue of [`entry_point_addr`].
-/// Rust fn-items do not automatically coerce to fn-pointers in
-/// `impl Trait` position, so this helper forces the fn-item →
-/// fn-pointer coercion and returns the address as a `u32` that
-/// satisfies `Into<EntryAddr>`.
-///
-/// # Deprecated
-/// Use [`EntryAddr::from_body`] instead.
-#[deprecated(since = "0.1.0", note = "use EntryAddr::from_body() instead")]
-#[inline]
-pub fn body_point_addr(f: PartitionBody) -> u32 {
-    f as *const () as usize as u32
-}
-
 /// Validate stack base alignment and address-space overflow.
 /// Assumes `size_bytes` has already been checked as a valid power-of-two >= 32.
 fn validate_stack_geometry(
