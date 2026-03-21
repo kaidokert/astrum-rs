@@ -17,7 +17,8 @@ use kernel::{
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    AlignedStack1K, DebugEnabled, MsgSmall, Partitions2, PortsTiny, StackStorage as _, SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgSmall, PartitionEntry, Partitions2, PortsTiny,
+    StackStorage as _, SyncMinimal,
 };
 #[allow(unused_imports)]
 use kernel::kpanic as _;
@@ -74,7 +75,7 @@ fn main() -> ! {
     if sched.add(ScheduleEntry::new(1, 2)).is_err() { loop { kexit!(failure); } }
     #[cfg(feature = "dynamic-mpu")]
     if sched.add_system_window(1).is_err() { loop { kexit!(failure); } }
-    let entry_fns: [extern "C" fn() -> !; Cfg::N] = [p0_main, p1_main];
+    let entry_fns: [PartitionEntry; Cfg::N] = [p0_main, p1_main];
     let mut k = {
         // SAFETY: called once from main before any interrupt handler runs.
         let ptr = &raw mut STACKS;

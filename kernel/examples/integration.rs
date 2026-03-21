@@ -15,8 +15,8 @@ use kernel::partition::{ExternalPartitionMemory, MpuRegion, PartitionState};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::{
-    boot, events, AlignedStack1K, DebugEnabled, MsgStandard, Partitions4, PortsTiny,
-    StackStorage as _, SyncMinimal,
+    boot, events, AlignedStack1K, DebugEnabled, MsgStandard, PartitionEntry, Partitions4,
+    PortsTiny, StackStorage as _, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(IntegrationConfig<Partitions4, SyncMinimal, MsgStandard, PortsTiny, DebugEnabled>);
@@ -92,7 +92,7 @@ fn main() -> ! {
     s.add(ScheduleEntry::new(0, 3)).unwrap();
     s.add(ScheduleEntry::new(1, 3)).unwrap();
     const NUM_PARTS: usize = 2;
-    let entry_fns: [extern "C" fn() -> !; NUM_PARTS] = [p0_main, p1_main];
+    let entry_fns: [PartitionEntry; NUM_PARTS] = [p0_main, p1_main];
     let mut k = {
         // SAFETY: called once from main before any interrupt handler runs.
         let ptr = &raw mut STACKS;
