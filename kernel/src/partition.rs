@@ -908,6 +908,7 @@ mod sealed {
     pub trait Sealed {}
     impl Sealed for u32 {}
     impl Sealed for super::PartitionEntry {}
+    impl Sealed for super::PartitionBody {}
 }
 
 /// Conversion trait for values that can serve as a partition entry address.
@@ -930,6 +931,13 @@ impl IntoEntryAddr for u32 {
 }
 
 impl IntoEntryAddr for PartitionEntry {
+    #[inline]
+    fn into_entry_addr(self) -> u32 {
+        self as *const () as usize as u32
+    }
+}
+
+impl IntoEntryAddr for PartitionBody {
     #[inline]
     fn into_entry_addr(self) -> u32 {
         self as *const () as usize as u32
@@ -3470,6 +3478,30 @@ mod tests {
         let ep: PartitionEntry = test_entry;
         let pmem = ExternalPartitionMemory::new(&mut buf.0, ep, mpu, 0).unwrap();
         assert_eq!(pmem.entry_point(), test_entry as *const () as usize as u32);
+    }
+
+    #[test]
+    fn into_entry_addr_partition_body_converts() {
+        #[allow(clippy::empty_loop)]
+        extern "C" fn test_body(_r0: u32) -> ! {
+            loop {}
+        }
+        let body: PartitionBody = test_body;
+        let addr = body.into_entry_addr();
+        assert_eq!(addr, test_body as *const () as usize as u32);
+    }
+
+    #[test]
+    fn ext_pmem_new_accepts_partition_body() {
+        #[allow(clippy::empty_loop)]
+        extern "C" fn test_body(_r0: u32) -> ! {
+            loop {}
+        }
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0, 0, 0);
+        let body: PartitionBody = test_body;
+        let pmem = ExternalPartitionMemory::new(&mut buf.0, body, mpu, 0).unwrap();
+        assert_eq!(pmem.entry_point(), test_body as *const () as usize as u32);
     }
 
     // ---- type alias tests ----
