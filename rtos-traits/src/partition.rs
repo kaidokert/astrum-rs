@@ -57,6 +57,34 @@ impl From<PartitionEntry> for PartitionSpec {
     }
 }
 
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::PartitionEntry {}
+    impl Sealed for super::PartitionBody {}
+}
+
+/// Trait abstracting over both `PartitionEntry` and `PartitionBody` function
+/// pointer types, converting either into an [`EntryAddr`].
+///
+/// Sealed: external crates cannot implement this trait.
+pub trait EntryPointFn: sealed::Sealed {
+    fn into_entry_addr(self) -> EntryAddr;
+}
+
+impl EntryPointFn for PartitionEntry {
+    #[inline]
+    fn into_entry_addr(self) -> EntryAddr {
+        EntryAddr::from_fn(self)
+    }
+}
+
+impl EntryPointFn for PartitionBody {
+    #[inline]
+    fn into_entry_addr(self) -> EntryAddr {
+        EntryAddr::from_body(self)
+    }
+}
+
 /// Type-safe wrapper for a partition entry-point address.
 ///
 /// Internally stores a `u32`, which is the native pointer width on Cortex-M.
@@ -256,5 +284,37 @@ mod tests {
     #[should_panic(expected = "exceeds u32::MAX")]
     fn entry_addr_from_body_catches_truncation_on_64bit() {
         let _ = EntryAddr::from_body(_dummy_body);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn entry_point_fn_partition_entry() {
+        let ep: PartitionEntry = _dummy_entry;
+        let addr = ep.into_entry_addr();
+        assert_eq!(addr.raw(), _dummy_entry as *const () as usize as u32);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn entry_point_fn_partition_body() {
+        let body: PartitionBody = _dummy_body;
+        let addr = body.into_entry_addr();
+        assert_eq!(addr.raw(), _dummy_body as *const () as usize as u32);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn entry_point_fn_entry_catches_truncation_on_64bit() {
+        let ep: PartitionEntry = _dummy_entry;
+        let _ = ep.into_entry_addr();
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn entry_point_fn_body_catches_truncation_on_64bit() {
+        let body: PartitionBody = _dummy_body;
+        let _ = body.into_entry_addr();
     }
 }
