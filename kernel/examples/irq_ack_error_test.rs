@@ -17,7 +17,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 use plib::SvcError;
 
 kernel::compose_kernel_config!(ErrTestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -53,6 +55,7 @@ fn unwrap_or_fail<T>(r: Result<T, plib::SvcError>, ctx: &str) {
     }
 }
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // Error-path tests: run once before entering normal event loop.
     //
@@ -86,6 +89,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         unwrap_or_fail(

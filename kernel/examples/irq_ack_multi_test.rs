@@ -10,7 +10,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(AckMultiConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
@@ -81,9 +83,11 @@ fn ack_loop(evt: u32, irq: u8, ctr: &AtomicU32, tag: &str) -> ! {
     }
 }
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     ack_loop(0x01, 0, &P0_ACK, "p0")
 }
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     ack_loop(0x02, 1, &P1_ACK, "p1")
 }
