@@ -19,7 +19,7 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -74,7 +74,7 @@ fn main() -> ! {
     hprintln!("plib_debug_print_test: start");
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("round_robin");
-    let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
+    let parts: [PartitionSpec; TestConfig::N] = [(partition_main, 0)];
     init_kernel(sched, &parts).expect("kernel");
 
     match boot(p).expect("boot") {}

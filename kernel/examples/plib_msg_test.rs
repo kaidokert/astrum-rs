@@ -22,7 +22,7 @@ use kernel::message::MessageQueue;
 use kernel::scheduler::ScheduleTable;
 // TODO: subtask requests MsgStandard, but MsgSmall (MAX_MSG_SIZE=4, QUEUES=2)
 // is sufficient for this 4-byte payload test and is the minimal config.
-use kernel::{DebugEnabled, MsgSmall, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgSmall, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>
@@ -123,7 +123,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_msg_test: round_robin");
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
     init_kernel(sched, &parts).expect("plib_msg_test: kernel");
     with_kernel_mut(|k| {
         k.messages_mut()
