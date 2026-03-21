@@ -22,7 +22,7 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
     Smoke4KConfig[kernel::partition_core::AlignedStack4K] < Partitions2,
@@ -96,7 +96,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Smoke4KConfig::SCHED }>::round_robin(2, 3)
         .expect("qemu_smoke_4k: round_robin");
 
-    let parts: [(extern "C" fn() -> !, u32); Smoke4KConfig::N] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; Smoke4KConfig::N] = [(p0_main, 0), (p1_main, 0)];
     init_kernel(sched, &parts).expect("qemu_smoke_4k: init_kernel");
 
     match boot(p).expect("qemu_smoke_4k: boot") {}

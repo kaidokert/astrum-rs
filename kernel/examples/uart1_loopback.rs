@@ -29,11 +29,11 @@ use kernel::{
     svc::{Kernel, YieldResult},
     uart_hal::UartRegs,
     virtual_device::VirtualDevice,
-    DebugEnabled, MsgMinimal, Partitions4, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionSpec, Partitions4, PortsTiny, SyncMinimal,
 };
 
 const NUM_PARTITIONS: usize = 2;
-const STACK_WORDS: usize = DemoConfig::STACK_WORDS;
+const STACK_WORDS: usize = 256;
 const STACK_BYTES: u32 = (STACK_WORDS * 4) as u32;
 const HW_UART_DEV: u32 = 2;
 
@@ -147,7 +147,7 @@ fn SysTick() {
     });
 }
 
-fn boot(partitions: &[(extern "C" fn() -> !, u32)], mut peripherals: cortex_m::Peripherals) -> ! {
+fn boot(partitions: &[PartitionSpec], mut peripherals: cortex_m::Peripherals) -> ! {
     use cortex_m::peripheral::scb::SystemHandler;
     use cortex_m::peripheral::syst::SystClkSource;
     use cortex_m::peripheral::SCB;
@@ -429,7 +429,7 @@ fn main() -> ! {
         }
     });
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p1_main, 0), (p2_main, 0)];
     #[allow(clippy::diverging_sub_expression, unreachable_code)]
     {
         let _result: Result<kernel::harness::Never, kernel::harness::BootError> = boot(&parts, p);

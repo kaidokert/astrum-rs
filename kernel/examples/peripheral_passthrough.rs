@@ -20,7 +20,7 @@ use kernel::kpanic as _;
 use kernel::{
     partition::MpuRegion,
     scheduler::{ScheduleEntry, ScheduleTable},
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(PassthroughConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -79,7 +79,7 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ PassthroughConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched");
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(partition_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [(partition_main, 0)];
     init_kernel(sched, &parts).expect("kernel");
     with_kernel_mut(|k| {
         k.partitions_mut()
