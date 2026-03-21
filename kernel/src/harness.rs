@@ -395,7 +395,7 @@ macro_rules! define_unified_harness {
         });
 
         #[used]
-        static _SVC: unsafe extern "C" fn(&mut $crate::context::ExceptionFrame) =
+        static _SVC: $crate::svc::SvcDispatchFn =
             $crate::svc::SVC_HANDLER;
 
         /// PendSV MPU programming shim: reprogram MPU regions for the
