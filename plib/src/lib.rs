@@ -1759,10 +1759,15 @@ mod tests {
         let _: crate::PartitionEntry = ep;
         let _: crate::PartitionBody = bp;
         let _: crate::IsrHandler = ih;
-        let spec = crate::PartitionSpec::new(ep, 42);
-        assert_eq!(spec.r0(), 42);
-        let pe: crate::PartitionEntry = ep;
-        assert_eq!(crate::PartitionSpec::from((pe, 7)).r0(), 7);
+        // On 64-bit hosts the debug_assert in EntryAddr::from_fn would fire,
+        // so only exercise function-pointer constructors on 32-bit targets.
+        #[cfg(target_pointer_width = "32")]
+        {
+            let spec = crate::PartitionSpec::new(ep, 42);
+            assert_eq!(spec.r0(), 42);
+            let pe: crate::PartitionEntry = ep;
+            assert_eq!(crate::PartitionSpec::from((pe, 7)).r0(), 7);
+        }
         assert_eq!(u32::from(crate::EntryAddr::from(0x1000u32)), 0x1000);
     }
 }
