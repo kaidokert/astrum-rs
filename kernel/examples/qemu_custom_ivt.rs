@@ -56,7 +56,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ IvtConfig::SCHED }>::round_robin(1, 3)
         .expect("qemu_custom_ivt: round_robin");
 
-    let parts: [PartitionSpec; IvtConfig::N] = [(p0_main, 0)];
+    let parts: [PartitionSpec; IvtConfig::N] = [PartitionSpec::new(p0_main, 0)];
     init_kernel(sched, &parts).expect("qemu_custom_ivt: init_kernel");
 
     // Enable all IRQs bound by bind_interrupts! at the configured default priority.

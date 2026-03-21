@@ -112,7 +112,10 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ SmokeConfig::SCHED }>::round_robin(2, 3)
         .expect("qemu_smoke: round_robin");
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [
+        PartitionSpec::new(p0_main, 0),
+        PartitionSpec::new(p1_main, 0),
+    ];
     init_kernel(sched, &parts).expect("qemu_smoke: Kernel::create");
     with_kernel_mut(|k| {
         k.semaphores_mut()

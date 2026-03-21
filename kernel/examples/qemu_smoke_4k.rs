@@ -96,7 +96,10 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Smoke4KConfig::SCHED }>::round_robin(2, 3)
         .expect("qemu_smoke_4k: round_robin");
 
-    let parts: [PartitionSpec; Smoke4KConfig::N] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; Smoke4KConfig::N] = [
+        PartitionSpec::new(p0_main, 0),
+        PartitionSpec::new(p1_main, 0),
+    ];
     init_kernel(sched, &parts).expect("qemu_smoke_4k: init_kernel");
 
     match boot(p).expect("qemu_smoke_4k: boot") {}
