@@ -133,9 +133,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("svcall_primask: sched");
     let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
-    // TODO: PartitionConfig.entry_point is u32; should accept EntryAddr directly
-    cfgs[0].entry_point = EntryAddr::from_fn(p0_main).raw();
-    cfgs[1].entry_point = EntryAddr::from_fn(p1_main).raw();
+    cfgs[0].entry_point = EntryAddr::from_fn(p0_main);
+    cfgs[1].entry_point = EntryAddr::from_fn(p1_main);
     #[cfg(not(feature = "dynamic-mpu"))]
     let k = Kernel::<Config>::with_config(sched, &cfgs, &[]).expect("svcall_primask: kernel");
     #[cfg(feature = "dynamic-mpu")]
