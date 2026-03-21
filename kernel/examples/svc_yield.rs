@@ -37,8 +37,7 @@ use kernel::kpanic as _;
 // Force the linker to pull in the SVCall assembly trampoline + dispatch_svc
 // from the kernel library.
 #[used]
-static _SVC_HANDLER: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) =
-    kernel::svc::SVC_HANDLER;
+static _SVC_HANDLER: kernel::SvcDispatchFn = kernel::svc::SVC_HANDLER;
 
 #[allow(dead_code)]
 static mut PSTACK: [u32; 256] = [0; 256];

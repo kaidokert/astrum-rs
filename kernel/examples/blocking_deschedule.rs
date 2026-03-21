@@ -42,7 +42,7 @@ kernel::define_unified_kernel!(Cfg, |k| {
 });
 
 #[used]
-static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
+static _SVC: kernel::SvcDispatchFn = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();
 
 #[repr(C, align(1024))]

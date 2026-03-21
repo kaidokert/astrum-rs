@@ -74,7 +74,7 @@ kernel::compose_kernel_config!(
 kernel::define_unified_kernel!(TestConfig, |_k| {});
 
 #[used]
-static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
+static _SVC: kernel::SvcDispatchFn = kernel::svc::SVC_HANDLER;
 static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 kernel::define_pendsv_dynamic!(STRATEGY, TestConfig);
 

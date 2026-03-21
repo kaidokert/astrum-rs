@@ -62,7 +62,7 @@ static mut STACKS: [AlignedStack; TestConfig::N] = {
 kernel::define_unified_kernel!(TestConfig, |_k| {});
 
 #[used]
-static _SVC: unsafe extern "C" fn(&mut kernel::context::ExceptionFrame) = kernel::svc::SVC_HANDLER;
+static _SVC: kernel::SvcDispatchFn = kernel::svc::SVC_HANDLER;
 
 // Simple PendSV handler
 kernel::define_pendsv!();
