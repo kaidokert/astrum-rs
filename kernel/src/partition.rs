@@ -540,10 +540,10 @@ impl PartitionConfig {
     /// Use this when the partition has real MPU regions known at build time.
     /// `peripheral_regions` defaults to empty; chain field assignment if
     /// peripherals are needed.
-    pub fn new(id: u8, entry_point: impl IntoEntryAddr, mpu_region: MpuRegion) -> Self {
+    pub fn new(id: u8, entry_point: impl Into<EntryAddr>, mpu_region: MpuRegion) -> Self {
         Self {
             id,
-            entry_point: entry_point.into_entry_addr(),
+            entry_point: entry_point.into(),
             mpu_region,
             peripheral_regions: Vec::new(),
             r0_hint: 0,
@@ -1015,61 +1015,13 @@ impl From<EntryAddr> for u32 {
     }
 }
 
-mod sealed {
-    pub trait Sealed {}
-    impl Sealed for u32 {}
-    impl Sealed for super::PartitionEntry {}
-    impl Sealed for super::PartitionBody {}
-    impl Sealed for super::EntryAddr {}
-}
-
-/// Conversion trait for values that can serve as a partition entry address.
-///
-/// Implemented for `u32` (raw address) and `PartitionEntry` (function pointer),
-/// so that [`ExternalPartitionMemory::new`] and [`ExternalPartitionMemory::from_aligned_stack`]
-/// accept either form without manual casting.
-///
-/// This trait is sealed — external crates cannot implement it for new types.
-pub trait IntoEntryAddr: sealed::Sealed {
-    /// Convert to a type-safe [`EntryAddr`].
-    fn into_entry_addr(self) -> EntryAddr;
-}
-
-impl IntoEntryAddr for u32 {
-    #[inline]
-    fn into_entry_addr(self) -> EntryAddr {
-        EntryAddr(self)
-    }
-}
-
-impl IntoEntryAddr for PartitionEntry {
-    #[inline]
-    fn into_entry_addr(self) -> EntryAddr {
-        EntryAddr(self as *const () as usize as u32)
-    }
-}
-
-impl IntoEntryAddr for PartitionBody {
-    #[inline]
-    fn into_entry_addr(self) -> EntryAddr {
-        EntryAddr(self as *const () as usize as u32)
-    }
-}
-
-impl IntoEntryAddr for EntryAddr {
-    #[inline]
-    fn into_entry_addr(self) -> EntryAddr {
-        self
-    }
-}
-
 /// Coerce a [`PartitionEntry`] fn-item to a raw `u32` address.
 ///
 /// Rust fn-items do not automatically coerce to fn-pointers in
 /// `impl Trait` position, so passing a bare function name to
 /// [`ExternalPartitionMemory::new`] would fail to compile.
 /// This helper forces the fn-item → fn-pointer coercion and returns
-/// the address as a `u32` that satisfies [`IntoEntryAddr`].
+/// the address as a `u32` that satisfies `Into<EntryAddr>`.
 ///
 /// # Deprecated
 /// Use [`EntryAddr::from_fn`] instead.
@@ -1085,7 +1037,7 @@ pub fn entry_point_addr(f: PartitionEntry) -> u32 {
 /// Rust fn-items do not automatically coerce to fn-pointers in
 /// `impl Trait` position, so this helper forces the fn-item →
 /// fn-pointer coercion and returns the address as a `u32` that
-/// satisfies [`IntoEntryAddr`].
+/// satisfies `Into<EntryAddr>`.
 ///
 /// # Deprecated
 /// Use [`EntryAddr::from_body`] instead.
@@ -1128,11 +1080,11 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     /// and the MPU region.
     pub fn new(
         stack: &'mem mut [u32],
-        entry_point: impl IntoEntryAddr,
+        entry_point: impl Into<EntryAddr>,
         mpu_region: MpuRegion,
         partition_id: u8,
     ) -> Result<Self, ConfigError> {
-        let entry_point = entry_point.into_entry_addr();
+        let entry_point = entry_point.into();
         let size_bytes: u32 = stack
             .len()
             .checked_mul(core::mem::size_of::<u32>())
@@ -1174,7 +1126,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     /// Convenience constructor from a [`StackStorage`] implementer.
     pub fn from_aligned_stack<S: StackStorage>(
         storage: &'mem mut S,
-        entry_point: impl IntoEntryAddr,
+        entry_point: impl Into<EntryAddr>,
         mpu_region: MpuRegion,
         partition_id: u8,
     ) -> Result<Self, ConfigError> {
@@ -3607,12 +3559,12 @@ mod tests {
         );
     }
 
-    // ---- IntoEntryAddr tests ----
+    // ---- Into<EntryAddr> tests ----
 
     #[test]
     fn into_entry_addr_u32_is_identity() {
         assert_eq!(
-            0x0800_0100u32.into_entry_addr(),
+            EntryAddr::from(0x0800_0100u32),
             EntryAddr::from(0x0800_0100u32)
         );
     }
@@ -3624,7 +3576,7 @@ mod tests {
             loop {}
         }
         let ep: PartitionEntry = test_entry;
-        let addr = ep.into_entry_addr();
+        let addr = EntryAddr::from(ep);
         assert_eq!(addr.raw(), test_entry as *const () as usize as u32);
     }
 
@@ -3648,7 +3600,7 @@ mod tests {
             loop {}
         }
         let body: PartitionBody = test_body;
-        let addr = body.into_entry_addr();
+        let addr = EntryAddr::from(body);
         assert_eq!(addr.raw(), test_body as *const () as usize as u32);
     }
 
@@ -3751,7 +3703,7 @@ mod tests {
     #[test]
     fn entry_addr_into_entry_addr_impl() {
         let addr = EntryAddr::from(0x0800_0100u32);
-        assert_eq!(addr.into_entry_addr(), EntryAddr::from(0x0800_0100u32));
+        assert_eq!(addr, EntryAddr::from(0x0800_0100u32));
     }
 
     #[test]

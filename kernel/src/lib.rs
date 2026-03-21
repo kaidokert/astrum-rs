@@ -68,8 +68,8 @@ pub mod partition;
 /// Use [`EntryAddr::from_body`] and [`EntryAddr::from_fn`] instead.
 #[allow(deprecated)]
 pub use partition::{
-    body_point_addr, entry_point_addr, EntryAddr, ExternalPartitionMemory, IntoEntryAddr,
-    IsrHandler, PartitionBody, PartitionEntry, PartitionMemory, PartitionSpec,
+    body_point_addr, entry_point_addr, EntryAddr, ExternalPartitionMemory, IsrHandler,
+    PartitionBody, PartitionEntry, PartitionMemory, PartitionSpec,
 };
 pub mod partition_core;
 pub use partition_core::{

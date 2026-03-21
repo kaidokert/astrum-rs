@@ -1,6 +1,6 @@
 //! Cortex-M exception and context switch frame definitions.
 
-use crate::partition::IntoEntryAddr;
+use crate::partition::EntryAddr;
 
 /// Hardware-stacked exception frame (ascending address order: r0 at lowest).
 #[repr(C)]
@@ -58,10 +58,10 @@ pub const EXC_RETURN_THREAD_PSP: u32 = 0xFFFF_FFFD;
 /// if too small. Layout: `[r4..r11 | r0..r3, r12, lr, pc, xpsr]`.
 pub fn init_stack_frame(
     stack: &mut [u32],
-    entry_point: impl IntoEntryAddr,
+    entry_point: impl Into<EntryAddr>,
     r0_arg: Option<u32>,
 ) -> Option<usize> {
-    let addr = entry_point.into_entry_addr().raw();
+    let addr = entry_point.into().raw();
     let len = stack.len();
     if len < CONTEXT_FRAME_WORDS {
         return None;
