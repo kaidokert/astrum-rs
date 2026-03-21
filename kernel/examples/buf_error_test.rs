@@ -20,7 +20,7 @@ use kernel::{
     buf_syscall,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::SvcError,
-    DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(
@@ -53,6 +53,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // Setup: allocate and lend to P1.
     let slot = match buf_syscall::buf_alloc(true, 0) {
@@ -96,6 +97,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         cortex_m::asm::wfi();

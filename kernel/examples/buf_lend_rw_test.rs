@@ -18,7 +18,7 @@ use kernel::{
     partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal,
 };
 
 const NP: usize = 2;
@@ -49,6 +49,7 @@ static BUF_ADDR: AtomicU32 = AtomicU32::new(0);
 static MIRROR: AtomicU32 = AtomicU32::new(0);
 static P1_DONE: AtomicU32 = AtomicU32::new(0);
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // 1. Allocate a writable buffer slot.
     let slot = buf_syscall::buf_alloc(true, 0).expect("alloc");
@@ -79,6 +80,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         let addr = BUF_ADDR.load(Ordering::Acquire);

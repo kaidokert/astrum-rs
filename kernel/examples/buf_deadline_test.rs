@@ -16,7 +16,7 @@ use cortex_m_semihosting::hprintln;
 use kernel::{
     buf_syscall,
     scheduler::{ScheduleEntry, ScheduleTable},
-    DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(
@@ -53,6 +53,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // 1. Allocate a writable buffer slot (second arg is max_ticks, not size; 0 = no deadline).
     let slot = match buf_syscall::buf_alloc(true, 0) {
@@ -88,6 +89,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         cortex_m::asm::wfi();

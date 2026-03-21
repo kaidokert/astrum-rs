@@ -9,7 +9,7 @@ use cortex_m_semihosting::hprintln;
 use kernel::{
     buf_syscall,
     scheduler::{ScheduleEntry, ScheduleTable},
-    DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(
@@ -40,6 +40,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
         kernel::kexit!(failure);
     }
 });
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     let slot = match buf_syscall::buf_alloc(true, 0) {
         Ok(s) => s,
@@ -70,6 +71,7 @@ extern "C" fn p0_main() -> ! {
         cortex_m::asm::wfi();
     }
 }
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     while ADDR.load(Ordering::Acquire) == 0 {
         cortex_m::asm::nop();

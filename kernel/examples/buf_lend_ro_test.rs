@@ -18,7 +18,7 @@ use kernel::{
     partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal,
 };
 
 const NP: usize = 2;
@@ -48,6 +48,7 @@ static MIRROR: AtomicU32 = AtomicU32::new(0);
 // P1 stores 1 on mismatch, 2 on success.
 static P1_RESULT: AtomicU32 = AtomicU32::new(0);
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     let slot = buf_syscall::buf_alloc(true, 0).expect("alloc");
     buf_syscall::buf_write(slot, &MAGIC).expect("write");
@@ -72,6 +73,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         let addr = BUF_ADDR.load(Ordering::Acquire);
