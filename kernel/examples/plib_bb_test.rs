@@ -111,7 +111,10 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_bb_test: round_robin");
 
-    let parts: [PartitionSpec; 2] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; 2] = [
+        PartitionSpec::new(p0_main, 0),
+        PartitionSpec::new(p1_main, 0),
+    ];
     init_kernel(sched, &parts).expect("plib_bb_test: kernel");
     with_kernel_mut(|k| {
         k.blackboards_mut()

@@ -119,7 +119,10 @@ fn main() -> ! {
     hprintln!("custom_handler: start");
     let sched = ScheduleTable::<{ CustomHandlerConfig::SCHED }>::round_robin(2, 3)
         .expect("custom_handler: round_robin");
-    let parts: [PartitionSpec; CustomHandlerConfig::N] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; CustomHandlerConfig::N] = [
+        PartitionSpec::new(p0_main, 0),
+        PartitionSpec::new(p1_main, 0),
+    ];
     init_kernel(sched, &parts).expect("irq_custom_handler_test: init_kernel");
     enable_bound_irqs(&mut p.NVIC, CustomHandlerConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     match boot(p).expect("custom_handler: boot") {}

@@ -103,7 +103,10 @@ fn main() -> ! {
     sched.add_system_window(1).ok();
     sched.add(ScheduleEntry::new(1, 3)).ok();
     sched.add_system_window(1).ok();
-    let parts: [PartitionSpec; 2] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; 2] = [
+        PartitionSpec::new(p0_main, 0),
+        PartitionSpec::new(p1_main, 0),
+    ];
     init_kernel(sched, &parts).expect("kernel");
     match boot(p).expect("boot") {}
 }
