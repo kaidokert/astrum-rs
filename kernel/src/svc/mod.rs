@@ -1112,7 +1112,7 @@ where
         for (i, m) in memories.iter().enumerate() {
             let cfg = PartitionConfig {
                 id: u8::try_from(i).map_err(|_| ConfigError::PartitionTableFull)?,
-                entry_point: m.entry_point(),
+                entry_point: crate::partition::EntryAddr::from(m.entry_point()),
                 mpu_region: *m.mpu_region(),
                 peripheral_regions: m.peripheral_regions().clone(),
                 r0_hint: m.r0_hint(),
@@ -1215,11 +1215,11 @@ where
                 }
                 // Verify the entry point (Thumb bit stripped) falls within
                 // the code MPU region [base, base+size).
-                let effective_entry = c.entry_point & !1;
+                let effective_entry = c.entry_point.raw() & !1;
                 if effective_entry.wrapping_sub(code.base()) >= code.size() {
                     return Err(ConfigError::EntryPointOutsideCodeRegion {
                         partition_id: c.id,
-                        entry_point: c.entry_point,
+                        entry_point: c.entry_point.raw(),
                         region_base: code.base(),
                         region_size: code.size(),
                     });
@@ -1242,7 +1242,7 @@ where
             let stack_pointer = stack_base.wrapping_add(c.stack_size);
             let mut pcb = PartitionControlBlock::new(
                 c.id,
-                c.entry_point,
+                c.entry_point.raw(),
                 stack_base,
                 stack_pointer,
                 mpu_region,

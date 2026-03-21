@@ -519,7 +519,7 @@ impl PartitionControlBlock {
 #[derive(Debug, Clone)]
 pub struct PartitionConfig {
     pub id: u8,
-    pub entry_point: u32,
+    pub entry_point: EntryAddr,
     pub mpu_region: MpuRegion,
     /// Optional peripheral register block regions for user-space drivers.
     /// Supports up to 2 peripheral regions (Approach D).
@@ -540,10 +540,10 @@ impl PartitionConfig {
     /// Use this when the partition has real MPU regions known at build time.
     /// `peripheral_regions` defaults to empty; chain field assignment if
     /// peripherals are needed.
-    pub fn new(id: u8, entry_point: u32, mpu_region: MpuRegion) -> Self {
+    pub fn new(id: u8, entry_point: impl IntoEntryAddr, mpu_region: MpuRegion) -> Self {
         Self {
             id,
-            entry_point,
+            entry_point: EntryAddr::from(entry_point.into_entry_addr()),
             mpu_region,
             peripheral_regions: Vec::new(),
             r0_hint: 0,
@@ -560,7 +560,7 @@ impl PartitionConfig {
     pub fn sentinel(id: u8) -> Self {
         Self {
             id,
-            entry_point: 0,
+            entry_point: EntryAddr::from(0u32),
             mpu_region: MpuRegion::new(0, 0, 0),
             peripheral_regions: Vec::new(),
             r0_hint: 0,
@@ -596,10 +596,10 @@ impl PartitionConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Entry-point alignment: bit[0] is the Thumb bit (allowed),
         // but bit[1] must be zero for 4-byte alignment.
-        if (self.entry_point & 0b10) != 0 {
+        if (self.entry_point.raw() & 0b10) != 0 {
             return Err(ConfigError::EntryPointMisaligned {
                 partition_id: self.id,
-                entry_point: self.entry_point,
+                entry_point: self.entry_point.raw(),
                 required_alignment: 4,
             });
         }
@@ -634,11 +634,11 @@ impl PartitionConfig {
             })?;
 
             // Entry point must fall within the code region.
-            let effective_entry = self.entry_point & !1; // strip Thumb bit
+            let effective_entry = self.entry_point.raw() & !1; // strip Thumb bit
             if effective_entry.wrapping_sub(region.base()) >= region.size() {
                 return Err(ConfigError::EntryPointOutsideCodeRegion {
                     partition_id: self.id,
-                    entry_point: self.entry_point,
+                    entry_point: self.entry_point.raw(),
                     region_base: region.base(),
                     region_size: region.size(),
                 });
@@ -2318,7 +2318,7 @@ mod tests {
     fn valid_config() -> PartitionConfig {
         PartitionConfig {
             id: 0,
-            entry_point: 0x0800_0000,
+            entry_point: EntryAddr::from(0x0800_0000u32),
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
             peripheral_regions: Vec::new(),
             r0_hint: 0,
@@ -2477,7 +2477,7 @@ mod tests {
     #[test]
     fn validate_rejects_misaligned_entry_point() {
         let mut cfg = valid_config();
-        cfg.entry_point = 0x0800_0002; // bit[1] set → misaligned
+        cfg.entry_point = EntryAddr::from(0x0800_0002u32); // bit[1] set → misaligned
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::EntryPointMisaligned {
@@ -2492,7 +2492,7 @@ mod tests {
     fn validate_rejects_entry_point_outside_code_region() {
         let mut cfg = valid_config();
         cfg.code_mpu_region = Some(MpuRegion::new(0x0800_0000, 4096, 0));
-        cfg.entry_point = 0x0900_0001; // well outside the 4 KiB region (Thumb bit set)
+        cfg.entry_point = EntryAddr::from(0x0900_0001u32); // well outside the 4 KiB region (Thumb bit set)
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::EntryPointOutsideCodeRegion {
@@ -2508,7 +2508,7 @@ mod tests {
     fn validate_accepts_aligned_entry_inside_code_region() {
         let mut cfg = valid_config();
         cfg.code_mpu_region = Some(MpuRegion::new(0x0800_0000, 4096, 0));
-        cfg.entry_point = 0x0800_0001; // Thumb bit set, aligned, inside region
+        cfg.entry_point = EntryAddr::from(0x0800_0001u32); // Thumb bit set, aligned, inside region
         assert_eq!(cfg.validate(), Ok(()));
     }
 
@@ -2552,6 +2552,13 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
         let cfg = PartitionConfig::new(0, 0x0800_0000, mpu);
         assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn config_new_accepts_entry_addr() {
+        let m = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
+        let c = PartitionConfig::new(0, EntryAddr::from(0x0800_0000u32), m);
+        assert_eq!(c.entry_point.raw(), 0x0800_0000);
     }
 
     // ------------------------------------------------------------------
