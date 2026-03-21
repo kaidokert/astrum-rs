@@ -15,7 +15,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     buf_syscall,
     mpu_strategy::MpuStrategy,
-    partition::{ExternalPartitionMemory, MpuRegion},
+    partition::{ExternalPartitionMemory, MpuRegion, PartitionEntry},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -110,12 +110,10 @@ fn main() -> ! {
         let ptr = (&raw mut __PARTITION_STACKS).cast::<[[u32; TestConfig::STACK_WORDS]; NP]>();
         let stacks = unsafe { &mut *ptr };
         let [ref mut s0, ref mut s1] = *stacks;
-        let ep0 = p0_main as *const () as u32;
-        let ep1 = p1_main as *const () as u32;
         let mpu = MpuRegion::new(0, 0, 0);
         let memories = [
-            ExternalPartitionMemory::new(s0, ep0, mpu, 0).expect("mem 0"),
-            ExternalPartitionMemory::new(s1, ep1, mpu, 1).expect("mem 1"),
+            ExternalPartitionMemory::new(s0, p0_main as PartitionEntry, mpu, 0).expect("mem 0"),
+            ExternalPartitionMemory::new(s1, p1_main as PartitionEntry, mpu, 1).expect("mem 1"),
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };

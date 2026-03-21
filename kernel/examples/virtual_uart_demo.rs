@@ -21,7 +21,7 @@
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    partition::{ExternalPartitionMemory, MpuRegion},
+    partition::{ExternalPartitionMemory, MpuRegion, PartitionEntry},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     virtual_device::VirtualDevice,
@@ -169,9 +169,9 @@ fn main() -> ! {
         let stacks: &mut [AlignedStack1K; NUM_PARTITIONS] = unsafe { &mut *ptr };
         let [ref mut s0, ref mut s1] = *stacks;
         [
-            ExternalPartitionMemory::new(&mut s0.0, p1_main as *const () as u32, sentinel_mpu, 0)
+            ExternalPartitionMemory::new(&mut s0.0, p1_main as PartitionEntry, sentinel_mpu, 0)
                 .expect("ext mem"),
-            ExternalPartitionMemory::new(&mut s1.0, p2_main as *const () as u32, sentinel_mpu, 1)
+            ExternalPartitionMemory::new(&mut s1.0, p2_main as PartitionEntry, sentinel_mpu, 1)
                 .expect("ext mem"),
         ]
     };

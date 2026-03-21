@@ -258,7 +258,7 @@ fn SysTick() {
                         let slot = k.buffers.get(*SLOT).unwrap();
                         let slot_idx = DynamicStrategy::<4>::region_to_slot_index(*RID)
                             .expect("RID must map to a valid dynamic slot");
-                        let rasr = STRATEGY.compute_region_values()[slot_idx].1;
+                        let rasr = STRATEGY.partition_region_values(0)[slot_idx].1;
                         let ok = slot.state() == kernel::buffer_pool::BorrowState::Free
                             && slot.mpu_region().is_none()
                             && STRATEGY.slot(*RID).is_none()
@@ -308,6 +308,7 @@ fn main() -> ! {
     let ptr = &raw mut STACKS;
     let stacks: &mut [AlignedStack; NP] = unsafe { &mut *ptr };
     let [s0, s1] = stacks;
+    // TODO: pass PartitionEntry instead of raw 0 once partitions have real entry functions
     let memories = [
         ExternalPartitionMemory::new(
             &mut s0.0,

@@ -391,6 +391,7 @@ fn main() -> ! {
         let [ref mut s0, ref mut s1] = *stacks;
         let base0 = s0.0.as_ptr() as u32;
         let base1 = s1.0.as_ptr() as u32;
+        // TODO: pass PartitionEntry instead of raw 0 once partitions have real entry functions
         let memories = [
             ExternalPartitionMemory::new(&mut s0.0, 0, MpuRegion::new(base0, STACK_BYTES, 0), 0)
                 .expect("ext mem"),
