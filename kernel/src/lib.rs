@@ -63,8 +63,8 @@ pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
 pub use partition::{
-    ExternalPartitionMemory, IntoEntryAddr, PartitionBody, PartitionEntry, PartitionMemory,
-    PartitionSpec,
+    entry_point_addr, ExternalPartitionMemory, IntoEntryAddr, PartitionBody, PartitionEntry,
+    PartitionMemory, PartitionSpec,
 };
 pub mod partition_core;
 pub use partition_core::{
@@ -217,6 +217,17 @@ mod reexport_tests {
         let _: PartitionEntry = _entry;
         let spec = PartitionSpec::new(_entry, 99);
         assert_eq!(spec.r0, 99);
+    }
+
+    #[test]
+    fn entry_point_addr_via_root() {
+        // entry_point_addr is re-exported at crate root.
+        #[allow(clippy::empty_loop)]
+        extern "C" fn _ep() -> ! {
+            loop {}
+        }
+        let addr = entry_point_addr(_ep);
+        assert_eq!(addr, _ep as *const () as u32);
     }
 
     #[test]
