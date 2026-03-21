@@ -10,7 +10,8 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    scheduler::ScheduleTable, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    scheduler::ScheduleTable, DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny,
+    SyncMinimal,
 };
 
 kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -112,8 +113,7 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("callee_save_check: start");
     let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(2, 2).expect("sched");
-    let parts: [(extern "C" fn() -> !, u32); Cfg::N] =
-        [(partition_0_entry, 0), (partition_1_entry, 0)];
+    let parts: [PartitionSpec; Cfg::N] = [(partition_0_entry, 0), (partition_1_entry, 0)];
     init_kernel(sched, &parts).expect("kernel");
     match boot(p).expect("boot") {}
 }

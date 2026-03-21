@@ -24,7 +24,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
-    DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -83,7 +83,7 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 2))
         .expect("static schedule entry must fit");
 
-    let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
+    let parts: [PartitionSpec; TestConfig::N] = [(partition_main, 0)];
     init_kernel(sched, &parts).expect("kernel creation");
 
     match boot(p).expect("priv_drop_test: boot failed") {}

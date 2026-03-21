@@ -10,7 +10,7 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncStandard};
+use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncStandard};
 
 kernel::compose_kernel_config!(
     TestConfig < Partitions2,
@@ -79,8 +79,7 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(0, 3)).unwrap();
     sched.add(ScheduleEntry::new(1, 2)).unwrap();
 
-    let entries: [(extern "C" fn() -> !, u32); TestConfig::N] =
-        [(partition_idle, 0), (partition_idle, 0)];
+    let entries: [PartitionSpec; TestConfig::N] = [(partition_idle, 0), (partition_idle, 0)];
     init_kernel(sched, &entries).expect("kernel creation");
 
     match boot(p).expect("scheduler_tick: boot") {}
