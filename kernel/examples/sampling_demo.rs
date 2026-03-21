@@ -165,7 +165,7 @@ fn main() -> ! {
             let stk = unsafe { &mut *stacks_ptr.add(i) };
             ExternalPartitionMemory::from_aligned_stack(
                 stk,
-                entry_fns[i] as *const () as u32,
+                entry_fns[i],
                 MpuRegion::new(0, 0, 0),
                 i as u8,
             )

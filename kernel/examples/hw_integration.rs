@@ -84,7 +84,7 @@ fn main() -> ! {
         let memories: [_; Cfg::N] = core::array::from_fn(|i| {
             match ExternalPartitionMemory::from_aligned_stack(
                 stk_iter.next().expect("stack"),
-                entry_fns[i] as *const () as u32,
+                entry_fns[i],
                 MpuRegion::new(0, 0, 0),
                 i as u8,
             ) {

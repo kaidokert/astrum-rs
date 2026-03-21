@@ -243,13 +243,8 @@ fn main() -> ! {
             // is in 0..N, so `sp.add(i)` is in-bounds. Each index is visited
             // exactly once by `from_fn`, so no aliasing occurs.
             let s = unsafe { &mut *sp.add(i) };
-            ExternalPartitionMemory::from_aligned_stack(
-                s,
-                eps[i] as *const () as u32,
-                MpuRegion::new(0, 0, 0),
-                i as u8,
-            )
-            .expect("mem")
+            ExternalPartitionMemory::from_aligned_stack(s, eps[i], MpuRegion::new(0, 0, 0), i as u8)
+                .expect("mem")
         });
         Kernel::<DemoConfig>::new(sched, &mems).expect("kernel creation")
     };

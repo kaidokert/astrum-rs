@@ -114,7 +114,7 @@ fn main() -> ! {
                 let base = s0.as_u32_slice().as_ptr() as u32;
                 ExternalPartitionMemory::from_aligned_stack(
                     s0,
-                    entry_fns[0] as usize as u32,
+                    entry_fns[0],
                     MpuRegion::new(base, REGION_SZ, 0),
                     0,
                 )
@@ -126,7 +126,7 @@ fn main() -> ! {
                 let base = s1.as_u32_slice().as_ptr() as u32;
                 ExternalPartitionMemory::from_aligned_stack(
                     s1,
-                    entry_fns[1] as usize as u32,
+                    entry_fns[1],
                     MpuRegion::new(base, REGION_SZ, 0),
                     1,
                 )

@@ -98,10 +98,11 @@ fn main() -> ! {
         let ptr = &raw mut STACKS;
         let stacks = unsafe { &mut *ptr };
         let mut stk_iter = stacks.iter_mut();
+        // TODO: unwrap() calls are acceptable in example main() -> ! but could use expect() for clarity
         let memories: [_; NUM_PARTS] = core::array::from_fn(|i| {
             ExternalPartitionMemory::from_aligned_stack(
                 stk_iter.next().unwrap(),
-                entry_fns[i] as *const () as u32,
+                entry_fns[i],
                 MpuRegion::new(0, 0, 0),
                 i as u8,
             )
