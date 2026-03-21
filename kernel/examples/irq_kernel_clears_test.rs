@@ -100,7 +100,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ KClearsConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_kernel_clears_test: round_robin");
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(p0_main, 0)];
     init_kernel(sched, &parts).expect("irq_kernel_clears_test: init_kernel");
 
     // Unmask IRQ 60 so the software-triggered pend fires.

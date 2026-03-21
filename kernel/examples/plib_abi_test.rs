@@ -99,7 +99,7 @@ fn main() -> ! {
     hprintln!("plib_abi_test: start");
 
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("round_robin");
-    let parts: [PartitionSpec; TestConfig::N] = [(partition_main, 0)];
+    let parts: [PartitionSpec; TestConfig::N] = [PartitionSpec::new(partition_main, 0)];
     init_kernel(sched, &parts).expect("kernel");
 
     match boot(p).expect("boot") {}
