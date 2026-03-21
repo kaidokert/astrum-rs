@@ -14,7 +14,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
+use kernel::partition::{entry_point_addr, PartitionConfig};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
@@ -133,8 +133,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("svcall_primask: sched");
     let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
-    cfgs[0].entry_point = p0_main as *const () as u32;
-    cfgs[1].entry_point = p1_main as *const () as u32;
+    cfgs[0].entry_point = entry_point_addr(p0_main);
+    cfgs[1].entry_point = entry_point_addr(p1_main);
     #[cfg(not(feature = "dynamic-mpu"))]
     let k = Kernel::<Config>::with_config(sched, &cfgs, &[]).expect("svcall_primask: kernel");
     #[cfg(feature = "dynamic-mpu")]

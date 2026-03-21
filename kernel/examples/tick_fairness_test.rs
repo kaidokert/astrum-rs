@@ -11,7 +11,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::PartitionConfig;
+use kernel::partition::{entry_point_addr, PartitionConfig};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
@@ -109,8 +109,8 @@ fn main() -> ! {
         .expect("tick_fairness: sched");
 
     let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
-    cfgs[0].entry_point = p0_main as *const () as u32;
-    cfgs[1].entry_point = p1_main as *const () as u32;
+    cfgs[0].entry_point = entry_point_addr(p0_main);
+    cfgs[1].entry_point = entry_point_addr(p1_main);
 
     #[cfg(not(feature = "dynamic-mpu"))]
     let k =
