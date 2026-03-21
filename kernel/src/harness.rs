@@ -517,20 +517,22 @@ macro_rules! define_unified_harness {
 
         // TODO: `init_kernel` is generated in the caller's local scope; acceptable
         // for a harness macro but could shadow other symbols if used carelessly.
-        /// Build a kernel from `__PARTITION_STACKS` with the given entry points
-        /// and store it into global kernel state.
+        /// Build a kernel from `__PARTITION_STACKS` with the given
+        /// [`PartitionSpec`]($crate::partition::PartitionSpec) entries and
+        /// store it into global kernel state.
         ///
-        /// Each entry in `entries` is `(entry_point_fn, r0_hint)`.  The function
-        /// pointer is converted to a `u32` address and written into the
-        /// corresponding partition memory descriptor.  `r0_hint` is forwarded
-        /// via `with_r0_hint` so that `boot_preconfigured` can pass it to
+        /// Each entry in `entries` is a `PartitionSpec` — an
+        /// `(entry_point_fn, r0_hint)` pair.  The function pointer is
+        /// converted to a `u32` address and written into the corresponding
+        /// partition memory descriptor.  `r0_hint` is forwarded via
+        /// `with_r0_hint` so that `boot_preconfigured` can pass it to
         /// `init_stack_frame` as `r0`.  MPU regions use sentinel values
         /// `(base=0, size=0, attrs=0)` because the harness does not configure
         /// per-partition MPU regions.
         fn init_kernel(
             sched: $crate::scheduler::ScheduleTable<
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
-            entries: &[(extern "C" fn() -> !, u32)],
+            entries: &[$crate::partition::PartitionSpec],
         ) -> Result<(), $crate::harness::BootError> {
             use $crate::partition::{ExternalPartitionMemory, MpuRegion};
             // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
@@ -589,15 +591,16 @@ macro_rules! define_unified_harness {
             [<$crate::AlignedStack1K as $crate::StackStorage>::ZERO;
              <$Config as $crate::config::KernelConfig>::N];
 
-        /// Build a kernel from `__PARTITION_STACKS` with the given entry points
-        /// and store it into global kernel state.
+        /// Build a kernel from `__PARTITION_STACKS` with the given
+        /// [`PartitionSpec`]($crate::partition::PartitionSpec) entries and
+        /// store it into global kernel state.
         ///
         /// See the `@impl` arm's `init_kernel` for full documentation.
         #[allow(dead_code)]
         fn init_kernel(
             sched: $crate::scheduler::ScheduleTable<
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
-            entries: &[(extern "C" fn() -> !, u32)],
+            entries: &[$crate::partition::PartitionSpec],
         ) -> Result<(), $crate::harness::BootError> {
             use $crate::partition::{ExternalPartitionMemory, MpuRegion};
             // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
