@@ -3635,7 +3635,7 @@ mod tests {
         let mpu = MpuRegion::new(0, 0, 0);
         let ep: PartitionEntry = test_entry;
         let pmem = ExternalPartitionMemory::new(&mut buf.0, ep, mpu, 0).unwrap();
-        assert_eq!(pmem.entry_point(), entry_point_addr(test_entry));
+        assert_eq!(pmem.entry_point(), EntryAddr::from_fn(test_entry).raw());
     }
 
     #[test]
@@ -3659,30 +3659,7 @@ mod tests {
         let mpu = MpuRegion::new(0, 0, 0);
         let body: PartitionBody = test_body;
         let pmem = ExternalPartitionMemory::new(&mut buf.0, body, mpu, 0).unwrap();
-        assert_eq!(pmem.entry_point(), body_point_addr(test_body));
-    }
-
-    #[test]
-    fn body_point_addr_sanity() {
-        #[allow(clippy::empty_loop)]
-        extern "C" fn test_body(_r0: u32) -> ! {
-            loop {}
-        }
-        let addr = body_point_addr(test_body);
-        assert_eq!(addr, test_body as *const () as usize as u32);
-    }
-
-    #[test]
-    fn body_point_addr_external_pmem() {
-        #[allow(clippy::empty_loop)]
-        extern "C" fn test_body(_r0: u32) -> ! {
-            loop {}
-        }
-        let mut buf = Align256([0u32; 64]);
-        let mpu = MpuRegion::new(0, 0, 0);
-        let addr = body_point_addr(test_body);
-        let pmem = ExternalPartitionMemory::new(&mut buf.0, addr, mpu, 0).unwrap();
-        assert_eq!(pmem.entry_point(), body_point_addr(test_body));
+        assert_eq!(pmem.entry_point(), EntryAddr::from_body(test_body).raw());
     }
 
     // ---- type alias tests ----
@@ -3711,8 +3688,8 @@ mod tests {
     fn partition_spec_new_holds_entry_and_arg() {
         let spec = PartitionSpec::new(_dummy_entry, 42);
         assert_eq!(
-            entry_point_addr(spec.entry_point()),
-            entry_point_addr(_dummy_entry)
+            EntryAddr::from_fn(spec.entry_point()).raw(),
+            EntryAddr::from_fn(_dummy_entry).raw()
         );
         assert_eq!(spec.r0(), 42);
     }
@@ -3721,8 +3698,8 @@ mod tests {
     fn partition_spec_from_body_holds_entry_and_arg() {
         let spec = PartitionSpec::from_body(_dummy_body, 7);
         assert_eq!(
-            entry_point_addr(spec.entry_point()),
-            body_point_addr(_dummy_body)
+            EntryAddr::from_fn(spec.entry_point()).raw(),
+            EntryAddr::from_body(_dummy_body).raw()
         );
         assert_eq!(spec.r0(), 7);
     }
@@ -3732,8 +3709,8 @@ mod tests {
         let ep: PartitionEntry = _dummy_entry;
         let spec: PartitionSpec = (ep, 99).into();
         assert_eq!(
-            entry_point_addr(spec.entry_point()),
-            entry_point_addr(_dummy_entry)
+            EntryAddr::from_fn(spec.entry_point()).raw(),
+            EntryAddr::from_fn(_dummy_entry).raw()
         );
         assert_eq!(spec.r0(), 99);
     }
@@ -3803,15 +3780,15 @@ mod tests {
     }
 
     #[test]
-    fn entry_addr_from_fn_matches_entry_point_addr() {
+    fn entry_addr_from_fn_consistent() {
         let addr = EntryAddr::from_fn(_dummy_entry);
-        assert_eq!(addr.raw(), entry_point_addr(_dummy_entry));
+        assert_eq!(addr.raw(), _dummy_entry as *const () as usize as u32);
     }
 
     #[test]
-    fn entry_addr_from_body_matches_body_point_addr() {
+    fn entry_addr_from_body_consistent() {
         let addr = EntryAddr::from_body(_dummy_body);
-        assert_eq!(addr.raw(), body_point_addr(_dummy_body));
+        assert_eq!(addr.raw(), _dummy_body as *const () as usize as u32);
     }
 
     #[test]
