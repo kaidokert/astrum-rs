@@ -893,30 +893,31 @@ impl<const N: usize> PartitionTable<N> {
     }
 }
 
-/// A partition descriptor: entry point paired with its `r0` argument.
+/// A partition descriptor: entry point address paired with its `r0` argument.
 #[derive(Clone, Copy, Debug)]
 pub struct PartitionSpec {
-    entry_point: PartitionEntry,
+    entry_point: EntryAddr,
     r0: u32,
 }
 
 impl PartitionSpec {
-    pub const fn new(entry_point: PartitionEntry, r0: u32) -> Self {
-        Self { entry_point, r0 }
+    pub fn new(entry_point: PartitionEntry, r0: u32) -> Self {
+        Self {
+            entry_point: EntryAddr::from_fn(entry_point),
+            r0,
+        }
     }
 
     /// Create a spec from a body-style `extern "C" fn(u32) -> !`.
     pub fn from_body(body: PartitionBody, r0: u32) -> Self {
-        // SAFETY: Both are extern "C" diverging fn ptrs differing only in
-        // their first parameter.  The transmute is sound because the kernel's
-        // init_stack_frame writes `r0` into the initial exception frame, so the
-        // callee never observes the parameter through the Rust calling convention.
-        let entry_point: PartitionEntry = unsafe { core::mem::transmute(body) };
-        Self { entry_point, r0 }
+        Self {
+            entry_point: EntryAddr::from_body(body),
+            r0,
+        }
     }
 
-    /// Returns the partition entry-point function pointer.
-    pub const fn entry_point(&self) -> PartitionEntry {
+    /// Returns the partition entry-point address.
+    pub const fn entry_point(&self) -> EntryAddr {
         self.entry_point
     }
 
@@ -928,7 +929,7 @@ impl PartitionSpec {
 
 impl From<(PartitionEntry, u32)> for PartitionSpec {
     fn from((entry_point, r0): (PartitionEntry, u32)) -> Self {
-        Self { entry_point, r0 }
+        Self::new(entry_point, r0)
     }
 }
 
@@ -940,7 +941,7 @@ impl From<(PartitionBody, u32)> for PartitionSpec {
 
 impl From<PartitionEntry> for PartitionSpec {
     fn from(entry_point: PartitionEntry) -> Self {
-        Self { entry_point, r0: 0 }
+        Self::new(entry_point, 0)
     }
 }
 
@@ -3545,7 +3546,7 @@ mod tests {
     fn partition_spec_new_holds_entry_and_arg() {
         let spec = PartitionSpec::new(_dummy_entry, 42);
         assert_eq!(
-            EntryAddr::from_fn(spec.entry_point()).raw(),
+            spec.entry_point().raw(),
             EntryAddr::from_fn(_dummy_entry).raw()
         );
         assert_eq!(spec.r0(), 42);
@@ -3555,7 +3556,7 @@ mod tests {
     fn partition_spec_from_body_holds_entry_and_arg() {
         let spec = PartitionSpec::from_body(_dummy_body, 7);
         assert_eq!(
-            EntryAddr::from_fn(spec.entry_point()).raw(),
+            spec.entry_point().raw(),
             EntryAddr::from_body(_dummy_body).raw()
         );
         assert_eq!(spec.r0(), 7);
@@ -3566,7 +3567,7 @@ mod tests {
         let ep: PartitionEntry = _dummy_entry;
         let spec: PartitionSpec = (ep, 99).into();
         assert_eq!(
-            EntryAddr::from_fn(spec.entry_point()).raw(),
+            spec.entry_point().raw(),
             EntryAddr::from_fn(_dummy_entry).raw()
         );
         assert_eq!(spec.r0(), 99);
@@ -3576,7 +3577,7 @@ mod tests {
     fn partition_spec_from_body_tuple() {
         let spec: PartitionSpec = (_dummy_body as PartitionBody, 42u32).into();
         assert_eq!(
-            EntryAddr::from_fn(spec.entry_point()).raw(),
+            spec.entry_point().raw(),
             EntryAddr::from_body(_dummy_body).raw()
         );
         assert_eq!(spec.r0(), 42);
@@ -3586,10 +3587,25 @@ mod tests {
     fn partition_spec_from_entry_only() {
         let spec: PartitionSpec = (_dummy_entry as PartitionEntry).into();
         assert_eq!(
-            EntryAddr::from_fn(spec.entry_point()).raw(),
+            spec.entry_point().raw(),
             EntryAddr::from_fn(_dummy_entry).raw()
         );
         assert_eq!(spec.r0(), 0);
+    }
+
+    #[test]
+    fn partition_spec_entry_point_returns_entry_addr() {
+        let spec = PartitionSpec::new(_dummy_entry, 0);
+        let addr: EntryAddr = spec.entry_point();
+        assert_eq!(addr, EntryAddr::from_fn(_dummy_entry));
+    }
+
+    #[test]
+    fn partition_spec_no_unsafe() {
+        // from_body uses EntryAddr::from_body, no transmute
+        let spec = PartitionSpec::from_body(_dummy_body, 99);
+        assert_eq!(spec.entry_point(), EntryAddr::from_body(_dummy_body));
+        assert_eq!(spec.r0(), 99);
     }
 
     // ---- EntryAddr tests ----
