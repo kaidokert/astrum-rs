@@ -215,8 +215,8 @@ mod reexport_tests {
         }
         let _: PartitionBody = _body;
         let _: PartitionEntry = _entry;
-        let spec: PartitionSpec = (_entry, 99);
-        assert_eq!(spec.1, 99);
+        let spec = PartitionSpec::new(_entry, 99);
+        assert_eq!(spec.r0, 99);
     }
 
     #[test]

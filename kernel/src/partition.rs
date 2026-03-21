@@ -899,7 +899,33 @@ pub type PartitionBody = extern "C" fn(u32) -> !;
 pub type PartitionEntry = extern "C" fn() -> !;
 
 /// A partition descriptor: entry point paired with its `r0` argument.
-pub type PartitionSpec = (PartitionEntry, u32);
+#[derive(Clone, Copy, Debug)]
+pub struct PartitionSpec {
+    pub entry_point: PartitionEntry,
+    pub r0: u32,
+}
+
+impl PartitionSpec {
+    pub const fn new(entry_point: PartitionEntry, r0: u32) -> Self {
+        Self { entry_point, r0 }
+    }
+
+    /// Create a spec from a body-style `extern "C" fn(u32) -> !`.
+    pub fn from_body(body: PartitionBody, r0: u32) -> Self {
+        // SAFETY: Both are extern "C" diverging fn ptrs differing only in
+        // their first parameter.  The transmute is sound because the kernel's
+        // init_stack_frame writes `r0` into the initial exception frame, so the
+        // callee never observes the parameter through the Rust calling convention.
+        let entry_point: PartitionEntry = unsafe { core::mem::transmute(body) };
+        Self { entry_point, r0 }
+    }
+}
+
+impl From<(PartitionEntry, u32)> for PartitionSpec {
+    fn from((entry_point, r0): (PartitionEntry, u32)) -> Self {
+        Self { entry_point, r0 }
+    }
+}
 
 /// Canonical public alias for [`ExternalPartitionMemory`].
 pub type PartitionMemory<'mem> = ExternalPartitionMemory<'mem>;
@@ -942,6 +968,18 @@ impl IntoEntryAddr for PartitionBody {
     fn into_entry_addr(self) -> u32 {
         self as *const () as usize as u32
     }
+}
+
+/// Coerce a [`PartitionEntry`] fn-item to a raw `u32` address.
+///
+/// Rust fn-items do not automatically coerce to fn-pointers in
+/// `impl Trait` position, so passing a bare function name to
+/// [`ExternalPartitionMemory::new`] would fail to compile.
+/// This helper forces the fn-item → fn-pointer coercion and returns
+/// the address as a `u32` that satisfies [`IntoEntryAddr`].
+#[inline]
+pub fn entry_point_addr(f: PartitionEntry) -> u32 {
+    f as *const () as usize as u32
 }
 
 /// Validate stack base alignment and address-space overflow.
@@ -3526,13 +3564,29 @@ mod tests {
         let _: PartitionEntry = _dummy_entry;
     }
 
+    fn ep_addr(spec: &PartitionSpec) -> usize {
+        spec.entry_point as *const () as usize
+    }
+
     #[test]
-    fn partition_spec_holds_entry_and_arg() {
-        let spec: PartitionSpec = (_dummy_entry, 42);
-        assert_eq!(
-            spec.0 as *const () as usize,
-            _dummy_entry as *const () as usize
-        );
-        assert_eq!(spec.1, 42);
+    fn partition_spec_new_holds_entry_and_arg() {
+        let spec = PartitionSpec::new(_dummy_entry, 42);
+        assert_eq!(ep_addr(&spec), _dummy_entry as *const () as usize);
+        assert_eq!(spec.r0, 42);
+    }
+
+    #[test]
+    fn partition_spec_from_body_holds_entry_and_arg() {
+        let spec = PartitionSpec::from_body(_dummy_body, 7);
+        assert_eq!(ep_addr(&spec), _dummy_body as *const () as usize);
+        assert_eq!(spec.r0, 7);
+    }
+
+    #[test]
+    fn partition_spec_from_tuple_compat() {
+        let ep: PartitionEntry = _dummy_entry;
+        let spec: PartitionSpec = (ep, 99).into();
+        assert_eq!(ep_addr(&spec), _dummy_entry as *const () as usize);
+        assert_eq!(spec.r0, 99);
     }
 }
