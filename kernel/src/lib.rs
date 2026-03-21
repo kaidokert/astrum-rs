@@ -95,6 +95,7 @@ pub mod tick;
 pub use svc::SvcDispatchFn;
 #[cfg(not(test))]
 pub use systick::handle_systick;
+pub use systick::TickHandlerFn;
 #[cfg(feature = "dynamic-mpu")]
 pub mod uart_hal;
 #[cfg(feature = "dynamic-mpu")]

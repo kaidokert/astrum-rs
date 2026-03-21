@@ -56,6 +56,13 @@ use cortex_m::interrupt::Mutex;
 use crate::config::KernelConfig;
 use crate::svc::Kernel;
 
+/// Type alias for SysTick handler callback signature.
+///
+/// A `TickHandlerFn<C>` receives a mutable reference to the kernel and the
+/// current tick count.  It is called after the kernel's internal SysTick
+/// processing completes.
+pub type TickHandlerFn<C> = fn(&mut Kernel<'_, C>, u64);
+
 /// Simple SysTick handler that advances the schedule and triggers PendSV.
 ///
 /// This function is designed to be called from an `#[exception]` SysTick handler.
@@ -187,8 +194,8 @@ where
     let kernel = unsafe { &mut *(kernel_ptr as *mut Kernel<'_, C>) };
     // SAFETY: The handler_ptr was created from a valid fn(&mut Kernel<'_, C>, u64) in register_handler.
     // Function pointers have the same size/alignment as *const (), and the type is preserved.
-    let handler: fn(&mut Kernel<'_, C>, u64) =
-        unsafe { core::mem::transmute::<*const (), fn(&mut Kernel<'_, C>, u64)>(handler_ptr) };
+    let handler: TickHandlerFn<C> =
+        unsafe { core::mem::transmute::<*const (), TickHandlerFn<C>>(handler_ptr) };
     handler(kernel, tick);
 }
 
@@ -211,10 +218,8 @@ where
 /// 2. `invoke_handler` must be called with matching type parameter `C`
 /// 3. Handler invocation must occur in a context where `&mut Kernel<'_, C>` is valid
 ///    (typically within a critical section in the SysTick exception)
-pub fn register_handler<C: KernelConfig>(
-    kernel: &mut Kernel<'_, C>,
-    handler: fn(&mut Kernel<'_, C>, u64),
-) where
+pub fn register_handler<C: KernelConfig>(kernel: &mut Kernel<'_, C>, handler: TickHandlerFn<C>)
+where
     [(); C::N]:,
     [(); C::SCHED]:,
     #[cfg(feature = "dynamic-mpu")]
@@ -442,6 +447,18 @@ mod tests {
 
         assert_eq!(TICK_FROM_KERNEL.load(Ordering::SeqCst), 12345);
         clear_handler();
+    }
+
+    #[test]
+    fn tick_handler_fn_type_alias_compatible() {
+        // Verify that a function with the correct signature is assignable to TickHandlerFn.
+        fn my_handler(_kernel: &mut Kernel<'_, TestConfig>, _tick: u64) {}
+        let f: TickHandlerFn<TestConfig> = my_handler;
+        // Confirm the function pointer round-trips to the same address.
+        assert_eq!(f as *const () as usize, my_handler as *const () as usize);
+        // Also confirm the existing `handler` test helper is assignable.
+        let g: TickHandlerFn<TestConfig> = handler;
+        assert_eq!(g as *const () as usize, handler as *const () as usize);
     }
 
     #[test]
