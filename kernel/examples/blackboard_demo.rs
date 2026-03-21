@@ -26,6 +26,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     semaphore::Semaphore,
     svc::Kernel,
+    PartitionEntry,
 };
 
 // ---------------------------------------------------------------------------
@@ -228,15 +229,12 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let eps: [extern "C" fn() -> !; DemoConfig::N] = [config_main, worker_a, worker_b];
+    let eps: [PartitionEntry; DemoConfig::N] = [config_main, worker_a, worker_b];
     // TODO: DRY — this ExternalPartitionMemory init block is duplicated across examples.
     // Consider a safe Kernel API or helper that accepts entry points directly, eliminating
     // the manual pointer arithmetic on partition_stacks! output.
     let mut k = {
-        use kernel::{
-            partition::{ExternalPartitionMemory, MpuRegion},
-            StackStorage as _,
-        };
+        use kernel::partition::{ExternalPartitionMemory, MpuRegion};
         let stacks = kernel::partition_stacks!(DemoConfig, DemoConfig::N);
         let sp = stacks.as_mut_ptr();
         let mems: [_; DemoConfig::N] = core::array::from_fn(|i| {

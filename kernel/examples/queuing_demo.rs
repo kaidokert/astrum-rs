@@ -22,6 +22,7 @@ use kernel::{
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
+    PartitionEntry,
 };
 use plib::SvcError;
 
@@ -361,12 +362,9 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let eps: [extern "C" fn() -> !; DemoConfig::N] = [commander_main, worker_main];
+    let eps: [PartitionEntry; DemoConfig::N] = [commander_main, worker_main];
     let mut k = {
-        use kernel::{
-            partition::{ExternalPartitionMemory, MpuRegion},
-            StackStorage as _,
-        };
+        use kernel::partition::{ExternalPartitionMemory, MpuRegion};
         let stacks = kernel::partition_stacks!(DemoConfig, DemoConfig::N);
         let sp = stacks.as_mut_ptr();
         let mems: [_; DemoConfig::N] = core::array::from_fn(|i| {

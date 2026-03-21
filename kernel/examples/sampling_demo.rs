@@ -23,7 +23,7 @@ use kernel::{
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    StackStorage as _,
+    PartitionEntry,
 };
 
 // Actual partition count (3) differs from DemoConfig::N (4, from Partitions4 capacity).
@@ -156,8 +156,7 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let entry_fns: [extern "C" fn() -> !; NUM_PARTITIONS] =
-        [sensor_main, control_main, display_main];
+    let entry_fns: [PartitionEntry; NUM_PARTITIONS] = [sensor_main, control_main, display_main];
     let k = {
         let stacks = kernel::partition_stacks!(DemoConfig, NUM_PARTITIONS);
         let stacks_ptr = stacks.as_mut_ptr();
