@@ -1227,7 +1227,7 @@ mod tests {
     fn r0_hint_propagates_through_with_config() {
         use crate::{
             compose_kernel_config,
-            partition::{MpuRegion, PartitionConfig},
+            partition::{EntryAddr, MpuRegion, PartitionConfig},
             scheduler::{ScheduleEntry, ScheduleTable},
             DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
         };
@@ -1243,7 +1243,7 @@ mod tests {
         let cfgs = [
             PartitionConfig {
                 id: 0,
-                entry_point: 0x0800_0001,
+                entry_point: EntryAddr::from(0x0800_0001u32),
                 mpu_region: MpuRegion::new(0, 0, 0),
                 peripheral_regions: heapless::Vec::new(),
                 r0_hint: 0xDEAD_BEEF,
@@ -1253,7 +1253,7 @@ mod tests {
             },
             PartitionConfig {
                 id: 1,
-                entry_point: 0x0800_0001,
+                entry_point: EntryAddr::from(0x0800_0001u32),
                 mpu_region: MpuRegion::new(0, 0, 0),
                 peripheral_regions: heapless::Vec::new(),
                 r0_hint: 0xCAFE_BABE,
