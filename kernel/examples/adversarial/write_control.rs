@@ -23,7 +23,7 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::{
     kpanic as _,
-    partition::{ExternalPartitionMemory, MpuRegion, PartitionEntry},
+    partition::{entry_point_addr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     AlignedStack1K, DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, StackStorage as _,
@@ -114,7 +114,7 @@ fn main() -> ! {
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
     let mem0 = ExternalPartitionMemory::new(
         &mut stack0.0,
-        partition_main as PartitionEntry,
+        entry_point_addr(partition_main),
         sentinel_mpu,
         0,
     )
