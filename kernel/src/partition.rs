@@ -1056,6 +1056,10 @@ impl IntoEntryAddr for EntryAddr {
 /// [`ExternalPartitionMemory::new`] would fail to compile.
 /// This helper forces the fn-item → fn-pointer coercion and returns
 /// the address as a `u32` that satisfies [`IntoEntryAddr`].
+///
+/// # Deprecated
+/// Use [`EntryAddr::from_fn`] instead.
+#[deprecated(since = "0.1.0", note = "use EntryAddr::from_fn() instead")]
 #[inline]
 pub fn entry_point_addr(f: PartitionEntry) -> u32 {
     f as *const () as usize as u32
@@ -1068,6 +1072,10 @@ pub fn entry_point_addr(f: PartitionEntry) -> u32 {
 /// `impl Trait` position, so this helper forces the fn-item →
 /// fn-pointer coercion and returns the address as a `u32` that
 /// satisfies [`IntoEntryAddr`].
+///
+/// # Deprecated
+/// Use [`EntryAddr::from_body`] instead.
+#[deprecated(since = "0.1.0", note = "use EntryAddr::from_body() instead")]
 #[inline]
 pub fn body_point_addr(f: PartitionBody) -> u32 {
     f as *const () as usize as u32

@@ -62,6 +62,11 @@ pub mod mpu_strategy;
 pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
+/// Re-exports from [`partition`].
+///
+/// **Deprecated:** [`body_point_addr`] and [`entry_point_addr`] are deprecated.
+/// Use [`EntryAddr::from_body`] and [`EntryAddr::from_fn`] instead.
+#[allow(deprecated)]
 pub use partition::{
     body_point_addr, entry_point_addr, EntryAddr, ExternalPartitionMemory, IntoEntryAddr,
     IsrHandler, PartitionBody, PartitionEntry, PartitionMemory, PartitionSpec,
@@ -110,6 +115,7 @@ pub mod test_harness;
 pub mod test_mmap;
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod reexport_tests {
     //! Verify that all config presets, traits, and DefaultConfig are
     //! accessible via the crate root (i.e. `crate::TypeName`).
