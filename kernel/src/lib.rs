@@ -16,7 +16,7 @@
 #[cfg(all(not(test), target_arch = "arm", not(feature = "custom-ivt")))]
 #[link_section = ".vector_table.interrupts"]
 #[no_mangle]
-pub static __INTERRUPTS: [unsafe extern "C" fn(); 1] = [DefaultHandler; 1];
+pub static __INTERRUPTS: [IsrHandler; 1] = [DefaultHandler; 1];
 
 #[cfg(all(not(test), target_arch = "arm", not(feature = "custom-ivt")))]
 extern "C" {

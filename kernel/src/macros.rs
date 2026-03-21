@@ -315,7 +315,7 @@ macro_rules! __make_irq_binding {
 macro_rules! __ref_handler_if_custom {
     // handler: form – emit a const reference to keep the function alive.
     (($pid:expr, $evt:expr, handler: $handler:path)) => {
-        const _: unsafe extern "C" fn() = $handler;
+        const _: $crate::IsrHandler = $handler;
     };
     // 2-tuple: no custom handler.
     (($pid:expr, $evt:expr)) => {};
@@ -337,23 +337,23 @@ macro_rules! __ref_handler_if_custom {
 macro_rules! __make_irq_handler {
     // 2-tuple: standard dispatch
     (($pid:expr, $evt:expr), $default:path) => {
-        $default as unsafe extern "C" fn()
+        $default as $crate::IsrHandler
     };
     // handler: form – custom ISR
     (($pid:expr, $evt:expr, handler: $handler:path), $default:path) => {
-        $handler as unsafe extern "C" fn()
+        $handler as $crate::IsrHandler
     };
     // 3-tuple with explicit clear model: standard dispatch
     (($pid:expr, $evt:expr, $clear:expr), $default:path) => {
-        $default as unsafe extern "C" fn()
+        $default as $crate::IsrHandler
     };
     // clear: WriteRegister keyword form: standard dispatch
     (($pid:expr, $evt:expr, clear: WriteRegister($addr:expr, $value:expr)), $default:path) => {
-        $default as unsafe extern "C" fn()
+        $default as $crate::IsrHandler
     };
     // clear: ClearBit keyword form: standard dispatch
     (($pid:expr, $evt:expr, clear: ClearBit($addr:expr, $bit:expr)), $default:path) => {
-        $default as unsafe extern "C" fn()
+        $default as $crate::IsrHandler
     };
 }
 
@@ -491,9 +491,9 @@ macro_rules! bind_interrupts {
         #[cfg(all(not(test), target_arch = "arm"))]
         #[link_section = ".vector_table.interrupts"]
         #[no_mangle]
-        pub static __INTERRUPTS: [unsafe extern "C" fn(); $count] = {
-            const DEFAULT: unsafe extern "C" fn() =
-                __irq_dispatch as unsafe extern "C" fn();
+        pub static __INTERRUPTS: [$crate::IsrHandler; $count] = {
+            const DEFAULT: $crate::IsrHandler =
+                __irq_dispatch as $crate::IsrHandler;
             let mut table = [DEFAULT; $count];
             $( table[$irq as usize] = $crate::__make_irq_handler!($args, __irq_dispatch); )+
             table
@@ -765,7 +765,9 @@ mod tests {
     // ---- __make_irq_handler! unit tests ----
 
     unsafe extern "C" fn test_default_dispatch() {}
+    const _: crate::IsrHandler = test_default_dispatch;
     unsafe extern "C" fn test_custom_isr() {}
+    const _: crate::IsrHandler = test_custom_isr;
 
     #[test]
     fn make_irq_handler_2tuple_returns_default() {
@@ -801,6 +803,23 @@ mod tests {
         assert_ne!(
             h as *const () as usize,
             test_default_dispatch as *const () as usize
+        );
+    }
+
+    #[test]
+    fn make_irq_handler_output_is_isr_handler() {
+        // Verify the macro output is assignable to IsrHandler (not just any fn pointer).
+        let h: crate::IsrHandler = __make_irq_handler!((0, 0x01), test_default_dispatch);
+        assert_eq!(
+            h as *const () as usize,
+            test_default_dispatch as *const () as usize
+        );
+
+        let h2: crate::IsrHandler =
+            __make_irq_handler!((0, 0x01, handler: test_custom_isr), test_default_dispatch);
+        assert_eq!(
+            h2 as *const () as usize,
+            test_custom_isr as *const () as usize
         );
     }
 
