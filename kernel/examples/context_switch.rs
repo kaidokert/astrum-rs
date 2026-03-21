@@ -14,7 +14,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
-    DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(DemoConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -44,12 +44,14 @@ kernel::define_unified_harness!(DemoConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = partition_0_entry;
 extern "C" fn partition_0_entry() -> ! {
     loop {
         PARTITION_RUNNING.store(0, Ordering::Release);
         cortex_m::asm::nop();
     }
 }
+const _: PartitionEntry = partition_1_entry;
 extern "C" fn partition_1_entry() -> ! {
     loop {
         PARTITION_RUNNING.store(1, Ordering::Release);

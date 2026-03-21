@@ -10,7 +10,9 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncStandard};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncStandard,
+};
 
 kernel::compose_kernel_config!(
     TestConfig < Partitions2,
@@ -64,6 +66,7 @@ kernel::define_unified_harness!(TestConfig, |_tick, k| {
     }
 });
 
+const _: PartitionEntry = partition_idle;
 extern "C" fn partition_idle() -> ! {
     loop {
         cortex_m::asm::nop();

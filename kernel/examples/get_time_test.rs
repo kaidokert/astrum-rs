@@ -27,7 +27,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
-    DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -68,6 +68,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 });
 
 /// Partition entry: spin calling SYS_GET_TIME and publish each reading.
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     loop {
         let t = plib::sys_get_time().unwrap_or(0);

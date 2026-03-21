@@ -21,7 +21,9 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+};
 
 // Ultra-fast SysTick: 12 MHz * 1 µs / 1e6 = 12 cycles per tick.
 // At only 12 cycles the SysTick handler body (dropped-tick detection,
@@ -63,6 +65,7 @@ kernel::define_unified_harness!(TestConfig, |tick, k| {
     }
 });
 
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     // Busy work to add execution time pressure, increasing the chance
     // that SysTick re-pends before the handler completes.
