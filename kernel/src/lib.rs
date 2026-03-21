@@ -64,8 +64,8 @@ pub mod mutex;
 pub mod partition;
 /// Re-exports from [`partition`].
 pub use partition::{
-    EntryAddr, ExternalPartitionMemory, IsrHandler, PartitionBody, PartitionEntry, PartitionMemory,
-    PartitionSpec,
+    EntryAddr, EntryPointFn, ExternalPartitionMemory, IsrHandler, PartitionBody, PartitionEntry,
+    PartitionMemory, PartitionSpec,
 };
 pub mod partition_core;
 pub use partition_core::{
@@ -240,6 +240,27 @@ mod reexport_tests {
         // Confirm it is the same type from the partition module.
         let _h2: crate::partition::IsrHandler = another_isr;
         assert_eq!(_h as *const () as usize, _h2 as *const () as usize);
+    }
+
+    #[test]
+    fn entry_point_fn_reexport_via_root() {
+        // Both PartitionEntry and PartitionBody must satisfy EntryPointFn
+        // through the kernel crate re-export.
+        fn accepts_entry<F: EntryPointFn>(_f: F) {}
+
+        #[allow(clippy::empty_loop)]
+        extern "C" fn body(_: u32) -> ! {
+            loop {}
+        }
+        #[allow(clippy::empty_loop)]
+        extern "C" fn entry() -> ! {
+            loop {}
+        }
+
+        let pe: PartitionEntry = entry;
+        let pb: PartitionBody = body;
+        accepts_entry(pe);
+        accepts_entry(pb);
     }
 
     #[test]

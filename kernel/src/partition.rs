@@ -5,7 +5,7 @@ use crate::debug::DebugBuffer;
 use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
 use crate::partition_core::StackStorage;
 pub use rtos_traits::partition::{
-    EntryAddr, IsrHandler, PartitionBody, PartitionEntry, PartitionSpec,
+    EntryAddr, EntryPointFn, IsrHandler, PartitionBody, PartitionEntry, PartitionSpec,
 };
 
 /// Default data-region RASR attributes: full read-write access with
