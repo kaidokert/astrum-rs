@@ -14,7 +14,7 @@ use kernel::partition::{EntryAddr, PartitionConfig, STARVATION_THRESHOLD};
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
 use kernel::svc::Kernel;
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
     Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -91,6 +91,7 @@ kernel::define_unified_harness!(Config, |tick, k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     loop {
         P0_COUNT.fetch_add(1, Ordering::Release);
@@ -98,6 +99,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     // Block on an empty semaphore — transitions to Waiting immediately.
     if let Err(e) = plib::sys_sem_wait(plib::SemaphoreId::new(0)) {

@@ -14,7 +14,7 @@ use kernel::partition::{EntryAddr, PartitionConfig};
 use kernel::sampling::PortDirection;
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
-use kernel::{DebugEnabled, MsgSmall, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgSmall, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>
@@ -68,6 +68,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // Copy const to stack so pointer is in MPU-accessible partition memory.
     let payload = PAYLOAD;
@@ -80,6 +81,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     // Yield once so P0 sends before we receive.
     let _ = plib::sys_yield();

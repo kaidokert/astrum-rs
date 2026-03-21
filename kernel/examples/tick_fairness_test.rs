@@ -14,7 +14,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::{EntryAddr, PartitionConfig};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
 
 // Fast SysTick: 12 MHz * 83 µs / 1e6 ≈ 996 cycles per tick.
 kernel::compose_kernel_config!(
@@ -85,6 +85,7 @@ kernel::define_unified_harness!(Config, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     loop {
         COUNTS[0].fetch_add(1, Ordering::Release);
@@ -92,6 +93,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         COUNTS[1].fetch_add(1, Ordering::Release);
