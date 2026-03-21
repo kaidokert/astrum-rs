@@ -27,7 +27,9 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::irq_dispatch::{ClearStrategy, IrqClearModel};
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionBody, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+};
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
@@ -73,6 +75,7 @@ kernel::define_unified_harness!(ClearBitConfig, |tick, _k| {
     }
 });
 
+const _: PartitionBody = p0_main_body;
 extern "C" fn p0_main_body(_r0: u32) -> ! {
     loop {
         // Block until event 0x01 is signalled by the IRQ dispatch handler.

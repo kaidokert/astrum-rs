@@ -10,7 +10,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionBody, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     UnboundConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -54,6 +56,7 @@ kernel::define_unified_harness!(UnboundConfig, |tick, _k| {
     }
 });
 
+const _: PartitionBody = p0_main_body;
 extern "C" fn p0_main_body(_r0: u32) -> ! {
     loop {
         match plib::sys_event_wait(plib::EventMask::new(0x01)) {

@@ -13,7 +13,9 @@ use kernel::message::MessageQueue;
 use kernel::sampling::PortDirection;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsSmall, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsSmall, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsSmall, DebugEnabled>);
 
@@ -46,6 +48,7 @@ fn chk(bit: u32, ok: bool) {
     }
 }
 
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     chk(0, plib::sys_yield() == Ok(0));
     chk(
