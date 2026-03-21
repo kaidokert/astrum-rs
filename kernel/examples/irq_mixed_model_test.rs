@@ -12,7 +12,9 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::irq_dispatch::{ClearStrategy, IrqClearModel};
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
@@ -65,6 +67,7 @@ kernel::define_unified_harness!(MixedConfig, |tick, _k| {
 });
 
 /// Partition 0: PartitionAcks — event_wait + SYS_IRQ_ACK loop.
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     loop {
         if let Err(e) = plib::sys_event_wait(plib::EventMask::new(0x01)) {
@@ -80,6 +83,7 @@ extern "C" fn p0_main() -> ! {
 }
 
 /// Partition 1: KernelClears — event_wait only, no ack needed.
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         if let Err(e) = plib::sys_event_wait(plib::EventMask::new(0x02)) {

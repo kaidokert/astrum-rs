@@ -13,7 +13,10 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, IsrHandler, MsgMinimal, PartitionBody, PartitionSpec, Partitions1, PortsTiny,
+    SyncMinimal,
+};
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
@@ -22,6 +25,7 @@ kernel::compose_kernel_config!(
 );
 
 // SAFETY: vector-table entry; runs in ISR context.
+const _: IsrHandler = irq0_handler;
 unsafe extern "C" fn irq0_handler() {
     DISPATCH_COUNT.fetch_add(1, Ordering::Release);
     // `handler:` form bypasses __irq_dispatch, so manual signal + mask
@@ -81,6 +85,7 @@ kernel::define_unified_harness!(Cfg, |tick, _k| {
     }
 });
 
+const _: PartitionBody = p0_body;
 extern "C" fn p0_body(_r0: u32) -> ! {
     loop {
         // TODO: uses `if let Err` (discards Ok value) unlike match-based examples

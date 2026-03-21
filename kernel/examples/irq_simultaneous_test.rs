@@ -11,7 +11,9 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::SvcError;
 use kernel::syscall::SYS_EVT_WAIT;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(SimulIrqConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
@@ -70,6 +72,7 @@ kernel::define_unified_harness!(SimulIrqConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     loop {
         let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x01u32, 0u32);
@@ -84,6 +87,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         let rc = kernel::svc!(SYS_EVT_WAIT, 0u32, 0x02u32, 0u32);
