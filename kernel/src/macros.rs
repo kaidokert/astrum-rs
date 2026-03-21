@@ -234,7 +234,9 @@ macro_rules! svc_r01 {
 #[macro_export]
 macro_rules! partition_trampoline {
     ($name:ident => $body:path) => {
-        // Compile-time check: $body must match the PartitionBody signature.
+        // Compile-time check: on ARM the const assert is the only type gate;
+        // on non-ARM the `let` binding in the host shim already validates.
+        #[cfg(target_arch = "arm")]
         const _: $crate::partition::PartitionBody = $body;
 
         #[cfg(target_arch = "arm")]
@@ -254,6 +256,10 @@ macro_rules! partition_trampoline {
         #[no_mangle]
         pub extern "C" fn $name() -> ! {
             // On host targets, call the body with 0.
+            // TODO: the `let` type-check triggers a misleading "try calling
+            // the function" hint from rustc on signature mismatch; consider a
+            // const-assert wrapper that suppresses it once a clean approach
+            // is found.
             let body: $crate::partition::PartitionBody = $body;
             body(0)
         }

@@ -1,0 +1,20 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail_trampoline_wrong_sig.rs:15:1
+   |
+11 | extern "C" fn wrong_sig() -> ! {
+   | ------------------------------ function `wrong_sig` defined here
+...
+15 | kernel::partition_trampoline!(wrong_entry => wrong_sig);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | incorrect number of function parameters
+   | expected due to this
+   |
+   = note: expected fn pointer `extern "C" fn(u32) -> !`
+                 found fn item `extern "C" fn() -> ! {wrong_sig}`
+   = note: this error originates in the macro `kernel::partition_trampoline` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: use parentheses to call this function
+  --> src/macros.rs
+   |
+   |             let body: $crate::partition::PartitionBody = $body();
+   |                                                               ++
