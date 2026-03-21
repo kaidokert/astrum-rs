@@ -245,7 +245,7 @@ fn main() -> ! {
             let stk = &mut STACKS[i].0;
             let ix = kernel::context::init_stack_frame(
                 stk,
-                partition_main as *const () as u32,
+                partition_main as PartitionEntry,
                 Some(i as u32),
             )
             .expect("init_stack_frame");

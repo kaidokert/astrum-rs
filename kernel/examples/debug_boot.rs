@@ -40,7 +40,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::kpanic as _;
 use kernel::{
     context::init_stack_frame,
-    partition::{ExternalPartitionMemory, MpuRegion, PartitionEntry},
+    partition::{ExternalPartitionMemory, IntoEntryAddr, MpuRegion, PartitionEntry},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -171,8 +171,8 @@ fn main() -> ! {
         let ptr = &raw mut STACKS;
         let stacks = &mut *ptr;
 
-        let ep = partition_main as *const () as u32;
-        hprintln!("debug_boot: entry point = {:#010x}", ep);
+        let ep: PartitionEntry = partition_main;
+        hprintln!("debug_boot: entry point = {:#010x}", ep.into_entry_addr());
 
         let stk = &mut stacks[0].0;
         let ix = init_stack_frame(stk, ep, Some(0)).expect("init_stack_frame");

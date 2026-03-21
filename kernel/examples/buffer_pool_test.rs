@@ -341,10 +341,7 @@ fn main() -> ! {
     // Initialize partition stacks
     // SAFETY: before interrupts; single-core exclusive access.
     unsafe {
-        let entries = [
-            partition_p1_entry as *const () as u32,
-            partition_p2_entry as *const () as u32,
-        ];
+        let entries: [kernel::PartitionEntry; NP] = [partition_p1_entry, partition_p2_entry];
         for i in 0..NP {
             let stk = &mut STACKS[i].0;
             let ix = kernel::context::init_stack_frame(stk, entries[i], Some(i as u32))

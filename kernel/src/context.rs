@@ -1,5 +1,7 @@
 //! Cortex-M exception and context switch frame definitions.
 
+use crate::partition::IntoEntryAddr;
+
 /// Hardware-stacked exception frame (ascending address order: r0 at lowest).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +56,12 @@ pub const EXC_RETURN_THREAD_PSP: u32 = 0xFFFF_FFFD;
 /// Write an initial context-switch frame at the top of `stack` so PendSV can
 /// "return" into `entry_point`. Returns the stack-pointer index, or `None`
 /// if too small. Layout: `[r4..r11 | r0..r3, r12, lr, pc, xpsr]`.
-pub fn init_stack_frame(stack: &mut [u32], entry_point: u32, r0_arg: Option<u32>) -> Option<usize> {
+pub fn init_stack_frame(
+    stack: &mut [u32],
+    entry_point: impl IntoEntryAddr,
+    r0_arg: Option<u32>,
+) -> Option<usize> {
+    let addr = entry_point.into_entry_addr();
     let len = stack.len();
     if len < CONTEXT_FRAME_WORDS {
         return None;
@@ -70,7 +77,7 @@ pub fn init_stack_frame(stack: &mut [u32], entry_point: u32, r0_arg: Option<u32>
     stack[ef + 3] = 0; // r3
     stack[ef + 4] = 0; // r12
     stack[ef + 5] = EXC_RETURN_THREAD_PSP; // lr
-    stack[ef + 6] = entry_point; // pc
+    stack[ef + 6] = addr; // pc
     stack[ef + 7] = XPSR_THUMB; // xpsr
     Some(base)
 }

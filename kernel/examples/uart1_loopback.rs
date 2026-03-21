@@ -162,8 +162,8 @@ fn boot(partitions: &[PartitionSpec], mut peripherals: cortex_m::Peripherals) ->
         let partition_sp = &mut *ptr2;
         for (i, &(ep, hint)) in partitions.iter().enumerate() {
             let stk = &mut stacks[i].0;
-            let ix = kernel::context::init_stack_frame(stk, ep as *const () as u32, Some(hint))
-                .expect("init_stack_frame");
+            let ix =
+                kernel::context::init_stack_frame(stk, ep, Some(hint)).expect("init_stack_frame");
             partition_sp[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
         }
         const { kernel::config::assert_priority_order::<DemoConfig>() }
