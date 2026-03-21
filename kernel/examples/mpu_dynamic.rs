@@ -29,7 +29,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     mpu::{self, RBAR_ADDR_MASK},
     mpu_strategy::{DynamicStrategy, MpuStrategy},
-    partition::{entry_point_addr, ExternalPartitionMemory, MpuRegion},
+    partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -167,14 +167,14 @@ fn main() -> ! {
         let memories = [
             ExternalPartitionMemory::new(
                 &mut s0.0,
-                entry_point_addr(partition_main),
+                EntryAddr::from_fn(partition_main),
                 MpuRegion::new(DATA_BASES[0], DATA_SZ, 0),
                 0,
             )
             .expect("ext mem"),
             ExternalPartitionMemory::new(
                 &mut s1.0,
-                entry_point_addr(partition_main),
+                EntryAddr::from_fn(partition_main),
                 MpuRegion::new(DATA_BASES[1], DATA_SZ, 0),
                 1,
             )
@@ -202,7 +202,7 @@ fn main() -> ! {
             let stk = &mut STACKS[i].0;
             let ix = kernel::context::init_stack_frame(
                 stk,
-                entry_point_addr(partition_main),
+                EntryAddr::from_fn(partition_main),
                 Some(i as u32),
             )
             .expect("init_stack_frame");
