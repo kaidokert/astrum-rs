@@ -10,7 +10,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::{entry_point_addr, PartitionConfig, STARVATION_THRESHOLD};
+use kernel::partition::{EntryAddr, PartitionConfig, STARVATION_THRESHOLD};
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
 use kernel::svc::Kernel;
@@ -117,8 +117,9 @@ fn main() -> ! {
         ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1).expect("round_robin");
 
     let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
-    cfgs[0].entry_point = entry_point_addr(p0_main);
-    cfgs[1].entry_point = entry_point_addr(p1_main);
+    // TODO: PartitionConfig.entry_point is u32; should accept EntryAddr directly
+    cfgs[0].entry_point = EntryAddr::from_fn(p0_main).raw();
+    cfgs[1].entry_point = EntryAddr::from_fn(p1_main).raw();
     #[cfg(not(feature = "dynamic-mpu"))]
     let mut k = Kernel::<Config>::with_config(sched, &cfgs, &[]).expect("Kernel::create");
     #[cfg(feature = "dynamic-mpu")]

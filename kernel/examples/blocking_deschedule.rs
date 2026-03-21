@@ -21,7 +21,7 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    partition::{entry_point_addr, MpuRegion, PartitionConfig, PartitionState},
+    partition::{EntryAddr, MpuRegion, PartitionConfig, PartitionState},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{try_transition, Kernel},
@@ -192,7 +192,7 @@ fn main() -> ! {
         let stk = &mut STACKS[0].0;
         let ix = kernel::context::init_stack_frame(
             stk,
-            entry_point_addr(partition_main),
+            EntryAddr::from_fn(partition_main),
             Some(dst as u32),
         )
         .unwrap();
