@@ -3545,20 +3545,14 @@ mod tests {
     #[test]
     fn partition_spec_new_holds_entry_and_arg() {
         let spec = PartitionSpec::new(_dummy_entry, 42);
-        assert_eq!(
-            spec.entry_point().raw(),
-            EntryAddr::from_fn(_dummy_entry).raw()
-        );
+        assert_eq!(spec.entry_point(), EntryAddr::from_fn(_dummy_entry));
         assert_eq!(spec.r0(), 42);
     }
 
     #[test]
     fn partition_spec_from_body_holds_entry_and_arg() {
         let spec = PartitionSpec::from_body(_dummy_body, 7);
-        assert_eq!(
-            spec.entry_point().raw(),
-            EntryAddr::from_body(_dummy_body).raw()
-        );
+        assert_eq!(spec.entry_point(), EntryAddr::from_body(_dummy_body));
         assert_eq!(spec.r0(), 7);
     }
 
@@ -3566,30 +3560,21 @@ mod tests {
     fn partition_spec_from_tuple_compat() {
         let ep: PartitionEntry = _dummy_entry;
         let spec: PartitionSpec = (ep, 99).into();
-        assert_eq!(
-            spec.entry_point().raw(),
-            EntryAddr::from_fn(_dummy_entry).raw()
-        );
+        assert_eq!(spec.entry_point(), EntryAddr::from_fn(_dummy_entry));
         assert_eq!(spec.r0(), 99);
     }
 
     #[test]
     fn partition_spec_from_body_tuple() {
         let spec: PartitionSpec = (_dummy_body as PartitionBody, 42u32).into();
-        assert_eq!(
-            spec.entry_point().raw(),
-            EntryAddr::from_body(_dummy_body).raw()
-        );
+        assert_eq!(spec.entry_point(), EntryAddr::from_body(_dummy_body));
         assert_eq!(spec.r0(), 42);
     }
 
     #[test]
     fn partition_spec_from_entry_only() {
         let spec: PartitionSpec = (_dummy_entry as PartitionEntry).into();
-        assert_eq!(
-            spec.entry_point().raw(),
-            EntryAddr::from_fn(_dummy_entry).raw()
-        );
+        assert_eq!(spec.entry_point(), EntryAddr::from_fn(_dummy_entry));
         assert_eq!(spec.r0(), 0);
     }
 

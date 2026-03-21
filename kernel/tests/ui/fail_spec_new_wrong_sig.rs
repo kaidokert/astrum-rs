@@ -16,7 +16,6 @@ extern "C" fn body_fn(_arg: u32) -> ! {
     loop {}
 }
 
-const _SPEC: kernel::partition::PartitionSpec =
-    kernel::partition::PartitionSpec::new(body_fn, 0);
-
-fn main() {}
+fn main() {
+    let _spec = kernel::partition::PartitionSpec::new(body_fn, 0);
+}
