@@ -12,7 +12,9 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::virtual_device::VirtualDevice;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -63,6 +65,7 @@ kernel::define_unified_harness!(TestConfig, |tick, k| {
     }
 });
 
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     let dev = plib::DeviceId::new(0);
     match plib::sys_dev_open(dev) {

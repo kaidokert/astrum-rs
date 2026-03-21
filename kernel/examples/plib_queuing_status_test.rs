@@ -13,7 +13,9 @@ use kernel::{
     sampling::PortDirection,
     scheduler::ScheduleTable,
 };
-use kernel::{svc::Kernel, DebugEnabled, MsgSmall, Partitions1, PortsSmall, SyncMinimal};
+use kernel::{
+    svc::Kernel, DebugEnabled, MsgSmall, PartitionEntry, Partitions1, PortsSmall, SyncMinimal,
+};
 kernel::compose_kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgSmall, PortsSmall, DebugEnabled>
 );
@@ -36,6 +38,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     hprintln!("plib_queuing_status_test: FAIL ({:#x},{:#x})", s, st);
     kernel::kexit!(failure);
 });
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // Copy to stack so pointer is in MPU-accessible partition memory.
     let payload = [0xDE_u8, 0xAD, 0xBE, 0xEF];

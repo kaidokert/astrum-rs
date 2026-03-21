@@ -25,7 +25,9 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -88,6 +90,7 @@ fn unwrap_or_fail<T>(r: Result<T, plib::SvcError>, ctx: &str) -> T {
     }
 }
 
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     loop {
         // Wait for event bit signalled by the IRQ dispatch handler.
