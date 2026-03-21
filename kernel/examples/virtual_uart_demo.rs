@@ -25,8 +25,8 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
     virtual_device::VirtualDevice,
-    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions4, PortsTiny, StackStorage as _,
-    SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, PartitionEntry, Partitions4, PortsTiny,
+    StackStorage as _, SyncMinimal,
 };
 
 const NUM_PARTITIONS: usize = 2;
@@ -52,6 +52,7 @@ kernel::define_unified_harness!(DemoConfig);
 // ---------------------------------------------------------------------------
 // P1: opens UART-A, writes message, yields, later reads response
 // ---------------------------------------------------------------------------
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     hprintln!("[P1] opening UART-A (dev {:?})", UART_A);
     assert_or_fail(
@@ -96,6 +97,7 @@ extern "C" fn p1_main() -> ! {
 // ---------------------------------------------------------------------------
 // P2: opens UART-B, reads message from P1, writes response
 // ---------------------------------------------------------------------------
+const _: PartitionEntry = p2_main;
 extern "C" fn p2_main() -> ! {
     hprintln!("[P2] opening UART-B (dev {:?})", UART_B);
     assert_or_fail(

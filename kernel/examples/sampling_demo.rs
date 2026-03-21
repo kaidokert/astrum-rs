@@ -98,6 +98,7 @@ static CONTROL_SRC: AtomicU32 = AtomicU32::new(0);
 static CONTROL_DST: AtomicU32 = AtomicU32::new(0);
 static DISPLAY_DST: AtomicU32 = AtomicU32::new(0);
 
+const _: PartitionEntry = sensor_main;
 extern "C" fn sensor_main() -> ! {
     let src = plib::SamplingPortId::new(SENSOR_SRC.load(Ordering::Acquire));
     let mut v = 0u8;
@@ -109,6 +110,7 @@ extern "C" fn sensor_main() -> ! {
         let _ = plib::sys_yield();
     }
 }
+const _: PartitionEntry = control_main;
 extern "C" fn control_main() -> ! {
     let src = plib::SamplingPortId::new(CONTROL_SRC.load(Ordering::Acquire));
     let dst = plib::SamplingPortId::new(CONTROL_DST.load(Ordering::Acquire));
@@ -126,6 +128,7 @@ extern "C" fn control_main() -> ! {
         let _ = plib::sys_yield();
     }
 }
+const _: PartitionEntry = display_main;
 extern "C" fn display_main() -> ! {
     let dst = plib::SamplingPortId::new(DISPLAY_DST.load(Ordering::Acquire));
     let mut cyc: u32 = 0;

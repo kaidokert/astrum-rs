@@ -35,7 +35,7 @@ use kernel::{
     partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal,
 };
 
 const NP: usize = 2;
@@ -98,6 +98,7 @@ static P2_READ_RESULT: AtomicU32 = AtomicU32::new(0);
 /// copies data from partition memory into the kernel buffer while validating
 /// ownership), releases the slot, and sets P1_READY so the kernel can proceed
 /// with the lend operation (a privileged action with no user-space syscall).
+const _: PartitionEntry = partition_p1_entry;
 extern "C" fn partition_p1_entry() -> ! {
     #[cfg(target_arch = "arm")]
     {
@@ -157,6 +158,7 @@ extern "C" fn partition_p1_entry() -> ! {
 }
 
 /// P2: read lent buffer data through its MPU window and verify contents.
+const _: PartitionEntry = partition_p2_entry;
 extern "C" fn partition_p2_entry() -> ! {
     loop {
         let addr = LENT_BUF_ADDR.load(Ordering::Acquire);

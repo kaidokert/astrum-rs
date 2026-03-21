@@ -29,7 +29,7 @@ use kernel::{
     svc::{Kernel, YieldResult},
     uart_hal::UartRegs,
     virtual_device::VirtualDevice,
-    DebugEnabled, MsgMinimal, PartitionSpec, Partitions4, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions4, PortsTiny, SyncMinimal,
 };
 
 const NUM_PARTITIONS: usize = 2;
@@ -195,6 +195,7 @@ fn boot(
 
 const DEV: plib::DeviceId = plib::DeviceId::new(HW_UART_DEV as u8);
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     // --- Open the device ---
     if plib::sys_dev_open(DEV).is_err() {
@@ -254,6 +255,7 @@ extern "C" fn p1_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p2_main;
 extern "C" fn p2_main() -> ! {
     // --- Open the device ---
     if plib::sys_dev_open(DEV).is_err() {
