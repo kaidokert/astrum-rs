@@ -1,0 +1,22 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail_spec_new_wrong_sig.rs:20:43
+   |
+15 | extern "C" fn body_fn(_arg: u32) -> ! {
+   | ------------------------------------- function `body_fn` defined here
+...
+20 |     kernel::partition::PartitionSpec::new(body_fn, 0);
+   |     ------------------------------------- ^^^^^^^ incorrect number of function parameters
+   |     |
+   |     arguments to this function are incorrect
+   |
+   = note: expected fn pointer `extern "C" fn() -> !`
+                 found fn item `extern "C" fn(u32) -> ! {body_fn}`
+note: associated function defined here
+  --> src/partition.rs
+   |
+   |     pub const fn new(entry_point: PartitionEntry, r0: u32) -> Self {
+   |                  ^^^
+help: use parentheses to call this function
+   |
+20 |     kernel::partition::PartitionSpec::new(body_fn(/* u32 */), 0);
+   |                                                  +++++++++++
