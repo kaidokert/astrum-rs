@@ -4,7 +4,7 @@
 #![feature(generic_const_exprs)]
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
 kernel::compose_kernel_config!(Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 kernel::define_unified_harness!(Config, |tick, k| {
     if tick >= 10 && k.partition_sp().first() == Some(&0xDEAD0001) {
@@ -33,6 +33,7 @@ fn main() -> ! {
     hprintln!("pendsv_stack_overflow_test: start");
     let sched =
         kernel::scheduler::ScheduleTable::<{ Config::SCHED }>::round_robin(2, 1).expect("sched");
-    init_kernel(sched, &[(p0_overflow, 0), (p1_healthy, 0)]).expect("kernel");
+    let parts: [PartitionSpec; 2] = [(p0_overflow, 0), (p1_healthy, 0)];
+    init_kernel(sched, &parts).expect("kernel");
     match boot(p).expect("boot") {}
 }

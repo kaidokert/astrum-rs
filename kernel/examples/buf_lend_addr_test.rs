@@ -9,7 +9,7 @@ use cortex_m_semihosting::hprintln;
 use kernel::{
     buf_syscall,
     scheduler::{ScheduleEntry, ScheduleTable},
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(
@@ -98,6 +98,7 @@ fn main() -> ! {
     sched.add_system_window(1).ok();
     sched.add(ScheduleEntry::new(1, 3)).ok();
     sched.add_system_window(1).ok();
-    init_kernel(sched, &[(p0_main, 0), (p1_main, 0)]).expect("kernel");
+    let parts: [PartitionSpec; 2] = [(p0_main, 0), (p1_main, 0)];
+    init_kernel(sched, &parts).expect("kernel");
     match boot(p).expect("boot") {}
 }
