@@ -943,11 +943,54 @@ impl From<(PartitionEntry, u32)> for PartitionSpec {
 /// Canonical public alias for [`ExternalPartitionMemory`].
 pub type PartitionMemory<'mem> = ExternalPartitionMemory<'mem>;
 
+/// Type-safe wrapper for a partition entry-point address.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct EntryAddr(u32);
+
+impl EntryAddr {
+    /// Return the raw `u32` address.
+    #[inline]
+    pub fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl core::fmt::Debug for EntryAddr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "EntryAddr({:#010x})", self.0)
+    }
+}
+
+impl PartialEq<u32> for EntryAddr {
+    fn eq(&self, other: &u32) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<EntryAddr> for u32 {
+    fn eq(&self, other: &EntryAddr) -> bool {
+        *self == other.0
+    }
+}
+
+impl From<u32> for EntryAddr {
+    fn from(v: u32) -> Self {
+        Self(v)
+    }
+}
+
+impl From<EntryAddr> for u32 {
+    fn from(v: EntryAddr) -> Self {
+        v.0
+    }
+}
+
 mod sealed {
     pub trait Sealed {}
     impl Sealed for u32 {}
     impl Sealed for super::PartitionEntry {}
     impl Sealed for super::PartitionBody {}
+    impl Sealed for super::EntryAddr {}
 }
 
 /// Conversion trait for values that can serve as a partition entry address.
@@ -980,6 +1023,13 @@ impl IntoEntryAddr for PartitionBody {
     #[inline]
     fn into_entry_addr(self) -> u32 {
         self as *const () as usize as u32
+    }
+}
+
+impl IntoEntryAddr for EntryAddr {
+    #[inline]
+    fn into_entry_addr(self) -> u32 {
+        self.0
     }
 }
 
@@ -3641,5 +3691,57 @@ mod tests {
             entry_point_addr(_dummy_entry)
         );
         assert_eq!(spec.r0(), 99);
+    }
+
+    // ---- EntryAddr tests ----
+
+    #[test]
+    fn entry_addr_from_u32() {
+        let addr = EntryAddr::from(0x0800_0000u32);
+        assert_eq!(addr.raw(), 0x0800_0000);
+    }
+
+    #[test]
+    fn entry_addr_raw_round_trip() {
+        let raw = 0x0800_1234u32;
+        let addr = EntryAddr::from(raw);
+        assert_eq!(addr.raw(), raw);
+    }
+
+    #[test]
+    fn entry_addr_partial_eq_u32_both_directions() {
+        let addr = EntryAddr::from(0x0800_0100u32);
+        assert_eq!(addr, 0x0800_0100u32);
+        assert_eq!(0x0800_0100u32, addr);
+        assert_ne!(addr, 0x0800_0001u32);
+    }
+
+    #[test]
+    fn entry_addr_into_u32() {
+        let addr = EntryAddr::from(0x2000_0000u32);
+        let v: u32 = addr.into();
+        assert_eq!(v, 0x2000_0000);
+    }
+
+    #[test]
+    fn entry_addr_into_entry_addr_impl() {
+        let addr = EntryAddr::from(0x0800_0100u32);
+        assert_eq!(addr.into_entry_addr(), 0x0800_0100);
+    }
+
+    #[test]
+    fn entry_addr_debug_hex() {
+        let addr = EntryAddr::from(0x0800_0000u32);
+        let dbg = format!("{:?}", addr);
+        assert_eq!(dbg, "EntryAddr(0x08000000)");
+    }
+
+    #[test]
+    fn entry_addr_copy_and_eq() {
+        let a = EntryAddr::from(42u32);
+        let b = a; // Copy
+        let c = EntryAddr::from(99u32);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
     }
 }
