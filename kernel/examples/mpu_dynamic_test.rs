@@ -26,7 +26,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     mpu::{self, build_rasr, encode_size, AP_FULL_ACCESS, RBAR_ADDR_MASK},
     mpu_strategy::{DynamicStrategy, MpuStrategy},
-    partition::{ExternalPartitionMemory, MpuRegion},
+    partition::{ExternalPartitionMemory, MpuRegion, PartitionEntry},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -35,7 +35,7 @@ use kernel::{
 kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 const NP: usize = TestConfig::N;
-const STACK_WORDS: usize = TestConfig::STACK_WORDS;
+const STACK_WORDS: usize = 256;
 /// Partition 0: 4 KiB data region at 0x2000_0000.
 /// Partition 1: 8 KiB data region at 0x2000_8000.
 const DATA_BASES: [u32; NP] = [0x2000_0000, 0x2000_8000];
@@ -213,14 +213,14 @@ fn main() -> ! {
         let memories = [
             ExternalPartitionMemory::new(
                 &mut s0.0,
-                0,
+                partition_main as PartitionEntry,
                 MpuRegion::new(DATA_BASES[0], DATA_SIZES[0], 0),
                 0,
             )
             .expect("ext mem"),
             ExternalPartitionMemory::new(
                 &mut s1.0,
-                0,
+                partition_main as PartitionEntry,
                 MpuRegion::new(DATA_BASES[1], DATA_SIZES[1], 0),
                 1,
             )

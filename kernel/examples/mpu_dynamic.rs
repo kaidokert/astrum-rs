@@ -29,7 +29,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     mpu::{self, RBAR_ADDR_MASK},
     mpu_strategy::{DynamicStrategy, MpuStrategy},
-    partition::{ExternalPartitionMemory, MpuRegion},
+    partition::{ExternalPartitionMemory, MpuRegion, PartitionEntry},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -167,14 +167,14 @@ fn main() -> ! {
         let memories = [
             ExternalPartitionMemory::new(
                 &mut s0.0,
-                0,
+                partition_main as PartitionEntry,
                 MpuRegion::new(DATA_BASES[0], DATA_SZ, 0),
                 0,
             )
             .expect("ext mem"),
             ExternalPartitionMemory::new(
                 &mut s1.0,
-                0,
+                partition_main as PartitionEntry,
                 MpuRegion::new(DATA_BASES[1], DATA_SZ, 0),
                 1,
             )

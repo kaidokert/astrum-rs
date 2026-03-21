@@ -19,7 +19,7 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::{
     kpanic as _,
-    partition::{ExternalPartitionMemory, MpuRegion},
+    partition::{ExternalPartitionMemory, MpuRegion, PartitionEntry},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
@@ -121,10 +121,10 @@ fn main() -> ! {
     let mut stack1 = AlignedStack1K::ZERO;
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
     let mem0 =
-        ExternalPartitionMemory::new(&mut stack0.0, p0_main as *const () as u32, sentinel_mpu, 0)
+        ExternalPartitionMemory::new(&mut stack0.0, p0_main as PartitionEntry, sentinel_mpu, 0)
             .expect("ext mem 0");
     let mem1 =
-        ExternalPartitionMemory::new(&mut stack1.0, p1_main as *const () as u32, sentinel_mpu, 1)
+        ExternalPartitionMemory::new(&mut stack1.0, p1_main as PartitionEntry, sentinel_mpu, 1)
             .expect("ext mem 1");
     let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0, mem1];
 
