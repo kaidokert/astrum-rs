@@ -11,7 +11,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::SvcError;
 use kernel::syscall::SYS_EVT_WAIT;
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(SimulIrqConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
@@ -106,7 +106,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ SimulIrqConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_simultaneous_test: round_robin");
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
     init_kernel(sched, &parts).expect("irq_simultaneous_test: init_kernel");
 
     // Unmask bound IRQs so software-triggered pends fire.

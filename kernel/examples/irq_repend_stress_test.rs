@@ -21,7 +21,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(StressConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
@@ -97,7 +97,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ StressConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_repend_stress: round_robin");
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0)];
     init_kernel(sched, &parts).expect("irq_repend_stress_test: init_kernel");
 
     // Unmask IRQ 0 so the software-triggered pend fires.
