@@ -13,7 +13,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::{entry_point_addr, PartitionConfig};
+use kernel::partition::{EntryAddr, PartitionConfig};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
@@ -150,8 +150,8 @@ fn main() -> ! {
         .expect("plib_buf_test: add P1");
     sched.add_system_window(1).expect("plib_buf_test: sys1");
     let mut cfgs = PartitionConfig::sentinel_array::<2>();
-    cfgs[0].entry_point = entry_point_addr(p0_main);
-    cfgs[1].entry_point = entry_point_addr(p1_idle);
+    cfgs[0].entry_point = EntryAddr::from_fn(p0_main).raw();
+    cfgs[1].entry_point = EntryAddr::from_fn(p1_idle).raw();
     #[cfg(not(feature = "dynamic-mpu"))]
     let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("plib_buf_test: kernel");
     #[cfg(feature = "dynamic-mpu")]

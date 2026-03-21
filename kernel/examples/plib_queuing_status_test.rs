@@ -9,7 +9,7 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    partition::{entry_point_addr, PartitionConfig},
+    partition::{EntryAddr, PartitionConfig},
     sampling::PortDirection,
     scheduler::ScheduleTable,
 };
@@ -58,7 +58,7 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("peripherals");
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("sched");
     let mut cfgs = PartitionConfig::sentinel_array::<{ TestConfig::N }>();
-    cfgs[0].entry_point = entry_point_addr(p0_main);
+    cfgs[0].entry_point = EntryAddr::from_fn(p0_main).raw();
     #[cfg(not(feature = "dynamic-mpu"))]
     let mut k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
     #[cfg(feature = "dynamic-mpu")]
