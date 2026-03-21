@@ -948,6 +948,22 @@ pub type PartitionMemory<'mem> = ExternalPartitionMemory<'mem>;
 pub struct EntryAddr(u32);
 
 impl EntryAddr {
+    /// Create an `EntryAddr` from a [`PartitionEntry`] function pointer.
+    ///
+    /// Forces the fn-item → fn-pointer coercion and wraps the address.
+    #[inline]
+    pub fn from_fn(f: PartitionEntry) -> Self {
+        Self(f as *const () as usize as u32)
+    }
+
+    /// Create an `EntryAddr` from a [`PartitionBody`] function pointer.
+    ///
+    /// Forces the fn-item → fn-pointer coercion and wraps the address.
+    #[inline]
+    pub fn from_body(f: PartitionBody) -> Self {
+        Self(f as *const () as usize as u32)
+    }
+
     /// Return the raw `u32` address.
     #[inline]
     pub fn raw(self) -> u32 {
@@ -3743,5 +3759,29 @@ mod tests {
         let c = EntryAddr::from(99u32);
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn entry_addr_from_fn_round_trip() {
+        let addr = EntryAddr::from_fn(_dummy_entry);
+        assert_eq!(addr.raw(), _dummy_entry as *const () as usize as u32);
+    }
+
+    #[test]
+    fn entry_addr_from_body_round_trip() {
+        let addr = EntryAddr::from_body(_dummy_body);
+        assert_eq!(addr.raw(), _dummy_body as *const () as usize as u32);
+    }
+
+    #[test]
+    fn entry_addr_from_fn_matches_entry_point_addr() {
+        let addr = EntryAddr::from_fn(_dummy_entry);
+        assert_eq!(addr.raw(), entry_point_addr(_dummy_entry));
+    }
+
+    #[test]
+    fn entry_addr_from_body_matches_body_point_addr() {
+        let addr = EntryAddr::from_body(_dummy_body);
+        assert_eq!(addr.raw(), body_point_addr(_dummy_body));
     }
 }
