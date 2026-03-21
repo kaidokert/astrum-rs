@@ -31,6 +31,15 @@ use crate::context::ExceptionFrame;
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
 
+/// Function-pointer type for SVC dispatch hooks and handlers.
+///
+/// Every function that the kernel invokes from the SVCall exception — whether
+/// the built-in `dispatch_svc` or an application-installed hook — must match
+/// this signature: it receives a mutable reference to the saved exception
+/// frame so it can inspect syscall arguments and write back return values.
+// TODO: define_irq_table! macro does not exist yet; adopt SvcDispatchFn there once it is added.
+pub type SvcDispatchFn = unsafe extern "C" fn(&mut ExceptionFrame);
+
 // ---------------------------------------------------------------------------
 // Kernel struct-move invariant
 // ---------------------------------------------------------------------------
@@ -430,7 +439,7 @@ core::arch::global_asm!(
 /// Reference this function pointer to ensure the linker includes the SVCall
 /// assembly trampoline and `dispatch_svc` in the final binary. Without an
 /// explicit Rust-level reference, the linker may discard the object.
-pub static SVC_HANDLER: unsafe extern "C" fn(&mut ExceptionFrame) = dispatch_svc;
+pub static SVC_HANDLER: SvcDispatchFn = dispatch_svc;
 
 /// Optional application-provided dispatch hook. When set, `dispatch_svc`
 /// forwards every SVC frame to this function instead of using the built-in
@@ -439,8 +448,7 @@ pub static SVC_HANDLER: unsafe extern "C" fn(&mut ExceptionFrame) = dispatch_svc
 ///
 /// Protected by a `cortex_m::interrupt::Mutex` so that reads and writes
 /// are performed inside critical sections on single-core Cortex-M.
-static SVC_DISPATCH_HOOK: Mutex<RefCell<Option<unsafe extern "C" fn(&mut ExceptionFrame)>>> =
-    Mutex::new(RefCell::new(None));
+static SVC_DISPATCH_HOOK: Mutex<RefCell<Option<SvcDispatchFn>>> = Mutex::new(RefCell::new(None));
 
 /// Execute `f` inside a critical section.
 ///
@@ -475,7 +483,7 @@ where
 /// Cortex-M.  The hook itself is `unsafe extern "C"` because it will
 /// be invoked from the SVCall exception with a raw `ExceptionFrame`
 /// pointer, but *installing* it is a safe operation.
-pub fn set_dispatch_hook(hook: unsafe extern "C" fn(&mut ExceptionFrame)) {
+pub fn set_dispatch_hook(hook: SvcDispatchFn) {
     with_cs(|cs| {
         SVC_DISPATCH_HOOK.borrow(cs).replace(Some(hook));
     });
@@ -4563,7 +4571,7 @@ mod tests {
     }
 
     /// Read the current hook value inside a critical section (test helper).
-    fn read_dispatch_hook() -> Option<unsafe extern "C" fn(&mut ExceptionFrame)> {
+    fn read_dispatch_hook() -> Option<SvcDispatchFn> {
         with_cs(|cs| *SVC_DISPATCH_HOOK.borrow(cs).borrow())
     }
 

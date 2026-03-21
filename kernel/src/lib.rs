@@ -91,6 +91,7 @@ pub mod systick;
 pub mod tick;
 
 // Re-export handle_systick at crate root for convenience
+pub use svc::SvcDispatchFn;
 #[cfg(not(test))]
 pub use systick::handle_systick;
 #[cfg(feature = "dynamic-mpu")]
