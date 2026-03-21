@@ -10,7 +10,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::{ExternalPartitionMemory, MpuRegion, PartitionEntry};
+use kernel::partition::{entry_point_addr, ExternalPartitionMemory, MpuRegion};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{
@@ -144,10 +144,10 @@ fn main() -> ! {
     let mut stk1 = AlignedStack1K::ZERO;
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
     let mem0 =
-        ExternalPartitionMemory::new(&mut stk0.0, p0_main as PartitionEntry, sentinel_mpu, 0)
+        ExternalPartitionMemory::new(&mut stk0.0, entry_point_addr(p0_main), sentinel_mpu, 0)
             .expect("ext mem");
     let mem1 =
-        ExternalPartitionMemory::new(&mut stk1.0, p1_main as PartitionEntry, sentinel_mpu, 1)
+        ExternalPartitionMemory::new(&mut stk1.0, entry_point_addr(p1_main), sentinel_mpu, 1)
             .expect("ext mem");
     let k = Kernel::<Config>::new(sched, &[mem0, mem1]).expect("basepri: kernel");
     store_kernel(k);

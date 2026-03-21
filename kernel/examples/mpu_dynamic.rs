@@ -29,7 +29,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     mpu::{self, RBAR_ADDR_MASK},
     mpu_strategy::{DynamicStrategy, MpuStrategy},
-    partition::{ExternalPartitionMemory, MpuRegion, PartitionEntry},
+    partition::{entry_point_addr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
     DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
@@ -167,14 +167,14 @@ fn main() -> ! {
         let memories = [
             ExternalPartitionMemory::new(
                 &mut s0.0,
-                partition_main as PartitionEntry,
+                entry_point_addr(partition_main),
                 MpuRegion::new(DATA_BASES[0], DATA_SZ, 0),
                 0,
             )
             .expect("ext mem"),
             ExternalPartitionMemory::new(
                 &mut s1.0,
-                partition_main as PartitionEntry,
+                entry_point_addr(partition_main),
                 MpuRegion::new(DATA_BASES[1], DATA_SZ, 0),
                 1,
             )
@@ -196,12 +196,13 @@ fn main() -> ! {
     // PARTITION_SP for the PendSV assembly handler — not redundant with
     // kernel creation which only records stack metadata in partition configs).
     // SAFETY: before interrupts; single-core exclusive.
+    // TODO: reviewer false positive — SAFETY comment above was outside the diff context window.
     unsafe {
         for i in 0..NP {
             let stk = &mut STACKS[i].0;
             let ix = kernel::context::init_stack_frame(
                 stk,
-                partition_main as PartitionEntry,
+                entry_point_addr(partition_main),
                 Some(i as u32),
             )
             .expect("init_stack_frame");
