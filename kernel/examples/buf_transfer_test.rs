@@ -19,7 +19,7 @@ use kernel::{
     partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal,
 };
 
 const NP: usize = 2;
@@ -51,6 +51,7 @@ fn fail_p1() -> ! {
     }
 }
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     let slot = buf_syscall::buf_alloc(true, 0).unwrap_or_else(|_| fail_p0("alloc"));
     let n = buf_syscall::buf_write(slot, &MAGIC).unwrap_or_else(|_| fail_p0("write"));
@@ -80,6 +81,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     while TRANSFERRED.load(Ordering::Acquire) != 1 {
         cortex_m::asm::nop();

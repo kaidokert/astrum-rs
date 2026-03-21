@@ -10,8 +10,8 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    scheduler::ScheduleTable, DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny,
-    SyncMinimal,
+    scheduler::ScheduleTable, DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2,
+    PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -86,6 +86,7 @@ extern "C" {
     fn callee_save_stress() -> u32;
 }
 
+const _: PartitionEntry = partition_0_entry;
 extern "C" fn partition_0_entry() -> ! {
     loop {
         // SAFETY: callee_save_stress is a self-contained assembly function
@@ -99,6 +100,7 @@ extern "C" fn partition_0_entry() -> ! {
     }
 }
 
+const _: PartitionEntry = partition_1_entry;
 extern "C" fn partition_1_entry() -> ! {
     loop {
         cortex_m::asm::nop();

@@ -25,7 +25,7 @@ use kernel::{
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{try_transition, Kernel},
-    DebugEnabled, MsgSmall, Partitions1, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgSmall, PartitionBody, PartitionEntry, Partitions1, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(Cfg<Partitions1, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
@@ -58,6 +58,7 @@ static BLOCK_TICK: AtomicU32 = AtomicU32::new(0);
 static BLOCKED: AtomicU32 = AtomicU32::new(0);
 
 /// Partition: waits a bit, then calls blocking recv on empty queue.
+const _: PartitionBody = partition_main_body;
 extern "C" fn partition_main_body(r0: u32) -> ! {
     let port = plib::QueuingPortId::new(r0);
     // Wait for a few ticks
@@ -79,6 +80,7 @@ extern "C" fn partition_main_body(r0: u32) -> ! {
     }
 }
 kernel::partition_trampoline!(partition_main => partition_main_body);
+const _: PartitionEntry = partition_main;
 
 #[exception]
 fn SysTick() {

@@ -10,7 +10,10 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, IsrHandler, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny,
+    SyncMinimal,
+};
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
@@ -23,6 +26,7 @@ kernel::compose_kernel_config!(
 /// This function is placed in the Cortex-M vector table by `bind_interrupts!`
 /// and is only called by hardware as an exception entry point.
 /// It runs in ISR context with interrupts of equal/lower priority masked.
+const _: IsrHandler = custom_irq60_handler;
 unsafe extern "C" fn custom_irq60_handler() {
     ISR_COUNTER.fetch_add(1, Ordering::Relaxed);
     #[cfg(target_arch = "arm")]
@@ -69,6 +73,7 @@ kernel::define_unified_harness!(CustomHandlerConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     loop {
         let bits = match plib::sys_event_wait(plib::EventMask::new(0x01)) {
@@ -91,6 +96,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         let bits = match plib::sys_event_wait(plib::EventMask::new(0x02)) {
