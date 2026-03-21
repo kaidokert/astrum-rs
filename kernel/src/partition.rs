@@ -3530,7 +3530,7 @@ mod tests {
         let mpu = MpuRegion::new(0, 0, 0);
         let ep: PartitionEntry = test_entry;
         let pmem = ExternalPartitionMemory::new(&mut buf.0, ep, mpu, 0).unwrap();
-        assert_eq!(pmem.entry_point(), test_entry as *const () as usize as u32);
+        assert_eq!(pmem.entry_point(), entry_point_addr(test_entry));
     }
 
     #[test]
@@ -3554,11 +3554,11 @@ mod tests {
         let mpu = MpuRegion::new(0, 0, 0);
         let body: PartitionBody = test_body;
         let pmem = ExternalPartitionMemory::new(&mut buf.0, body, mpu, 0).unwrap();
-        assert_eq!(pmem.entry_point(), test_body as *const () as usize as u32);
+        assert_eq!(pmem.entry_point(), body_point_addr(test_body));
     }
 
     #[test]
-    fn body_point_addr_round_trip() {
+    fn body_point_addr_sanity() {
         #[allow(clippy::empty_loop)]
         extern "C" fn test_body(_r0: u32) -> ! {
             loop {}
@@ -3568,7 +3568,7 @@ mod tests {
     }
 
     #[test]
-    fn ext_pmem_new_accepts_body_point_addr() {
+    fn body_point_addr_external_pmem() {
         #[allow(clippy::empty_loop)]
         extern "C" fn test_body(_r0: u32) -> ! {
             loop {}
@@ -3577,7 +3577,7 @@ mod tests {
         let mpu = MpuRegion::new(0, 0, 0);
         let addr = body_point_addr(test_body);
         let pmem = ExternalPartitionMemory::new(&mut buf.0, addr, mpu, 0).unwrap();
-        assert_eq!(pmem.entry_point(), test_body as *const () as usize as u32);
+        assert_eq!(pmem.entry_point(), body_point_addr(test_body));
     }
 
     // ---- type alias tests ----
@@ -3602,21 +3602,23 @@ mod tests {
         let _: PartitionEntry = _dummy_entry;
     }
 
-    fn ep_addr(spec: &PartitionSpec) -> usize {
-        spec.entry_point as *const () as usize
-    }
-
     #[test]
     fn partition_spec_new_holds_entry_and_arg() {
         let spec = PartitionSpec::new(_dummy_entry, 42);
-        assert_eq!(ep_addr(&spec), _dummy_entry as *const () as usize);
+        assert_eq!(
+            entry_point_addr(spec.entry_point),
+            entry_point_addr(_dummy_entry)
+        );
         assert_eq!(spec.r0, 42);
     }
 
     #[test]
     fn partition_spec_from_body_holds_entry_and_arg() {
         let spec = PartitionSpec::from_body(_dummy_body, 7);
-        assert_eq!(ep_addr(&spec), _dummy_body as *const () as usize);
+        assert_eq!(
+            entry_point_addr(spec.entry_point),
+            body_point_addr(_dummy_body)
+        );
         assert_eq!(spec.r0, 7);
     }
 
@@ -3624,7 +3626,10 @@ mod tests {
     fn partition_spec_from_tuple_compat() {
         let ep: PartitionEntry = _dummy_entry;
         let spec: PartitionSpec = (ep, 99).into();
-        assert_eq!(ep_addr(&spec), _dummy_entry as *const () as usize);
+        assert_eq!(
+            entry_point_addr(spec.entry_point),
+            entry_point_addr(_dummy_entry)
+        );
         assert_eq!(spec.r0, 99);
     }
 }
