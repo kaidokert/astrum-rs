@@ -1101,7 +1101,7 @@ fn validate_stack_geometry(
 #[derive(Debug)]
 pub struct ExternalPartitionMemory<'mem> {
     stack: &'mem mut [u32],
-    entry_point: u32,
+    entry_point: EntryAddr,
     mpu_region: MpuRegion,
     peripheral_regions: Vec<MpuRegion, 2>,
     code_mpu_region: Option<MpuRegion>,
@@ -1118,7 +1118,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         mpu_region: MpuRegion,
         partition_id: u8,
     ) -> Result<Self, ConfigError> {
-        let entry_point = entry_point.into_entry_addr();
+        let entry_point = EntryAddr::from(entry_point.into_entry_addr());
         let size_bytes: u32 = stack
             .len()
             .checked_mul(core::mem::size_of::<u32>())
@@ -1139,10 +1139,10 @@ impl<'mem> ExternalPartitionMemory<'mem> {
             })?;
         }
         // Strip Thumb bit (bit[0]) and check 4-byte alignment (bit[1] must be 0).
-        if (entry_point & 0b10) != 0 {
+        if (entry_point.raw() & 0b10) != 0 {
             return Err(ConfigError::EntryPointMisaligned {
                 partition_id,
-                entry_point,
+                entry_point: entry_point.raw(),
                 required_alignment: 4,
             });
         }
@@ -1205,11 +1205,11 @@ impl<'mem> ExternalPartitionMemory<'mem> {
                 detail,
             }
         })?;
-        let effective_entry = self.entry_point & !1;
+        let effective_entry = self.entry_point.raw() & !1;
         if effective_entry.wrapping_sub(region.base()) >= region.size() {
             return Err(ConfigError::EntryPointOutsideCodeRegion {
                 partition_id: self.partition_id,
-                entry_point: self.entry_point,
+                entry_point: self.entry_point.raw(),
                 region_base: region.base(),
                 region_size: region.size(),
             });
@@ -1224,7 +1224,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         self
     }
 
-    pub fn entry_point(&self) -> u32 {
+    pub fn entry_point(&self) -> EntryAddr {
         self.entry_point
     }
     pub fn r0_hint(&self) -> u32 {

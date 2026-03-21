@@ -1112,7 +1112,7 @@ where
         for (i, m) in memories.iter().enumerate() {
             let cfg = PartitionConfig {
                 id: u8::try_from(i).map_err(|_| ConfigError::PartitionTableFull)?,
-                entry_point: crate::partition::EntryAddr::from(m.entry_point()),
+                entry_point: m.entry_point(),
                 mpu_region: *m.mpu_region(),
                 peripheral_regions: m.peripheral_regions().clone(),
                 r0_hint: m.r0_hint(),
