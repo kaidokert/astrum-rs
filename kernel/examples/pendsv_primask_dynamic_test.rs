@@ -25,7 +25,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
 
 // Fast SysTick: 12 MHz * 83 µs / 1e6 = 996 cycles per tick.
 kernel::compose_kernel_config!(
@@ -100,7 +100,7 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 1)).expect("sched p1");
     sched.add_system_window(1).expect("syswin 1");
 
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
     init_kernel(sched, &parts).expect("pendsv_primask_dynamic_test: Kernel::create");
 
     match boot(p).expect("pendsv_primask_dynamic_test: boot") {}
