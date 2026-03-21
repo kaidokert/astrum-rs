@@ -10,7 +10,9 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
 use kernel::split_isr::StaticIsrRing;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, IsrHandler, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+};
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
@@ -22,6 +24,14 @@ static RING: StaticIsrRing<4, 4> = StaticIsrRing::new();
 static PAYLOAD_IDX: AtomicU32 = AtomicU32::new(0);
 static POP_COUNT: AtomicU32 = AtomicU32::new(0);
 
+const _: IsrHandler = ring_buffer_isr;
+/// Vector-table ISR: pushes tagged payload into the ring buffer and signals P0.
+///
+/// # Safety
+///
+/// Must only be called by hardware via the interrupt vector table. Assumes
+/// single-core Cortex-M (sole producer for `RING`). The corresponding NVIC
+/// line must be masked before the partition drains the ring buffer.
 #[allow(dead_code)]
 unsafe extern "C" fn ring_buffer_isr() {
     let idx = PAYLOAD_IDX.load(Ordering::Relaxed) as u8;

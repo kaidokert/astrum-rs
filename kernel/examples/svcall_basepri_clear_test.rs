@@ -75,6 +75,9 @@ kernel::define_unified_harness!(Config, |tick, _k| {
 /// Must be called from SVCall exception context with a valid `ExceptionFrame`.
 /// The caller must ensure `f` points to the hardware-stacked exception frame on
 /// the process stack, and that kernel state has been initialised via `store_kernel`.
+// TODO: reviewer false positive — verifying_dispatch_hook is an SVC dispatch hook
+// (signature: `fn(&mut ExceptionFrame)`), not an ISR handler (`fn()`). IsrHandler
+// type assertion does not apply here.
 unsafe extern "C" fn verifying_dispatch_hook(f: &mut kernel::context::ExceptionFrame) {
     #[cfg(target_arch = "arm")]
     {

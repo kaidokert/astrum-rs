@@ -88,6 +88,9 @@ kernel::define_unified_harness!(Config, |tick, _k| {
 /// # Safety
 ///
 /// Must be called from SVCall exception context with a valid `ExceptionFrame`.
+// TODO: reviewer false positive — verifying_dispatch_hook is an SVC dispatch hook
+// (signature: `fn(&mut ExceptionFrame)`), not an ISR handler (`fn()`). IsrHandler
+// type assertion does not apply here.
 unsafe extern "C" fn verifying_dispatch_hook(f: &mut kernel::context::ExceptionFrame) {
     // Read PRIMASK and BASEPRI from Handler mode (privileged, real values).
     // cortex_m 0.7 Primask::is_inactive() returns true when PRIMASK bit == 1

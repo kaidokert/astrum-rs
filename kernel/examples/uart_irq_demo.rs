@@ -14,7 +14,9 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
 use kernel::split_isr::StaticIsrRing;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, IsrHandler, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+};
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
@@ -41,6 +43,15 @@ static RING: StaticIsrRing<4, 1> = StaticIsrRing::new();
 static POP_COUNT: AtomicU32 = AtomicU32::new(0);
 static PUSH_FAIL: AtomicU32 = AtomicU32::new(0);
 
+const _: IsrHandler = uart0_rx_isr;
+/// Vector-table ISR: reads UART0 data register, pushes the byte into the
+/// ring buffer, signals P0, and masks the NVIC line.
+///
+/// # Safety
+///
+/// Must only be called by hardware via the interrupt vector table. Assumes
+/// single-core Cortex-M (sole producer for `RING`). UART0_DR must be a valid
+/// memory-mapped register at the expected address.
 #[allow(dead_code)]
 unsafe extern "C" fn uart0_rx_isr() {
     // SAFETY: UART0_DR (0x4000_C000) is the memory-mapped Data Register for

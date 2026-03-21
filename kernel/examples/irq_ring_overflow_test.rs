@@ -14,7 +14,9 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
 use kernel::split_isr::StaticIsrRing;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, IsrHandler, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+};
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
@@ -37,6 +39,15 @@ static DBG_ERR_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Debug: volatile read of overflow_count from partition.
 static DBG_VOL: AtomicU32 = AtomicU32::new(0xBEEF);
 
+const _: IsrHandler = overflow_isr;
+/// Vector-table ISR: burst-pushes or recovery-pushes into the ring buffer
+/// depending on `ISR_PHASE`, then signals P0 and masks the NVIC line.
+///
+/// # Safety
+///
+/// Must only be called by hardware via the interrupt vector table. Assumes
+/// single-core Cortex-M (sole producer for `RING`). The corresponding NVIC
+/// line must be masked before the partition drains the ring buffer.
 #[allow(dead_code)]
 unsafe extern "C" fn overflow_isr() {
     let phase = ISR_PHASE.load(Ordering::Acquire);
