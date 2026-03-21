@@ -61,21 +61,32 @@ impl From<PartitionEntry> for PartitionSpec {
 ///
 /// Internally stores a `u32`, which is the native pointer width on Cortex-M.
 /// The `usize`-to-`u32` cast in `from_fn`/`from_body` is lossless on 32-bit
-/// targets; on wider hosts (e.g. 64-bit simulator builds) the cast will
-/// truncate — callers must ensure addresses fit in 32 bits in that scenario.
-// TODO: consider a compile_error!() or debug_assert for non-32-bit targets
-//       if this crate is ever built for 64-bit hosted tests.
+/// targets; on wider hosts (e.g. 64-bit simulator builds) the cast would
+/// truncate. `from_fn` and `from_body` contain a `debug_assert!` that
+/// catches this at runtime in debug builds.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct EntryAddr(u32);
 
 impl EntryAddr {
     #[inline]
     pub fn from_fn(f: PartitionEntry) -> Self {
-        Self(f as *const () as usize as u32)
+        let addr = f as *const () as usize;
+        debug_assert!(
+            addr <= u32::MAX as usize,
+            "EntryAddr::from_fn: address {:#x} exceeds u32::MAX, truncation would occur",
+            addr
+        );
+        Self(addr as u32)
     }
     #[inline]
     pub fn from_body(f: PartitionBody) -> Self {
-        Self(f as *const () as usize as u32)
+        let addr = f as *const () as usize;
+        debug_assert!(
+            addr <= u32::MAX as usize,
+            "EntryAddr::from_body: address {:#x} exceeds u32::MAX, truncation would occur",
+            addr
+        );
+        Self(addr as u32)
     }
     #[inline]
     pub fn raw(self) -> u32 {
@@ -135,12 +146,14 @@ mod tests {
         loop {}
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_fn() {
         let addr = EntryAddr::from_fn(_dummy_entry);
         assert_eq!(addr.raw(), _dummy_entry as *const () as usize as u32);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_body() {
         let addr = EntryAddr::from_body(_dummy_body);
@@ -167,6 +180,7 @@ mod tests {
         assert_eq!(v, 0x2000_0000);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_partition_entry() {
         let ep: PartitionEntry = _dummy_entry;
@@ -174,6 +188,7 @@ mod tests {
         assert_eq!(addr.raw(), ep as *const () as usize as u32);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_partition_body() {
         let body: PartitionBody = _dummy_body;
@@ -223,5 +238,23 @@ mod tests {
         assert_eq!(addr, 0x0800_0100u32);
         assert_eq!(0x0800_0100u32, addr);
         assert_ne!(addr, 0x0800_0001u32);
+    }
+
+    /// On 64-bit hosts, function addresses exceed `u32::MAX`, so the
+    /// `debug_assert!` in `from_fn` must fire to catch truncation.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn entry_addr_from_fn_catches_truncation_on_64bit() {
+        let _ = EntryAddr::from_fn(_dummy_entry);
+    }
+
+    /// On 64-bit hosts, function addresses exceed `u32::MAX`, so the
+    /// `debug_assert!` in `from_body` must fire to catch truncation.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn entry_addr_from_body_catches_truncation_on_64bit() {
+        let _ = EntryAddr::from_body(_dummy_body);
     }
 }

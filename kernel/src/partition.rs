@@ -3422,6 +3422,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn into_entry_addr_partition_entry_converts() {
         #[allow(clippy::empty_loop)]
@@ -3433,6 +3434,7 @@ mod tests {
         assert_eq!(addr.raw(), test_entry as *const () as usize as u32);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn ext_pmem_new_accepts_partition_entry() {
         #[allow(clippy::empty_loop)]
@@ -3446,6 +3448,7 @@ mod tests {
         assert_eq!(pmem.entry_point(), EntryAddr::from_fn(test_entry).raw());
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn into_entry_addr_partition_body_converts() {
         #[allow(clippy::empty_loop)]
@@ -3457,6 +3460,7 @@ mod tests {
         assert_eq!(addr.raw(), test_body as *const () as usize as u32);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn ext_pmem_new_accepts_partition_body() {
         #[allow(clippy::empty_loop)]
@@ -3492,6 +3496,7 @@ mod tests {
         let _: PartitionEntry = _dummy_entry;
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn partition_spec_new_holds_entry_and_arg() {
         let spec = PartitionSpec::new(_dummy_entry, 42);
@@ -3499,6 +3504,7 @@ mod tests {
         assert_eq!(spec.r0(), 42);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn partition_spec_from_body_holds_entry_and_arg() {
         let spec = PartitionSpec::from_body(_dummy_body, 7);
@@ -3506,6 +3512,7 @@ mod tests {
         assert_eq!(spec.r0(), 7);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn partition_spec_from_tuple_compat() {
         let ep: PartitionEntry = _dummy_entry;
@@ -3514,6 +3521,7 @@ mod tests {
         assert_eq!(spec.r0(), 99);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn partition_spec_from_body_tuple() {
         let spec: PartitionSpec = (_dummy_body as PartitionBody, 42u32).into();
@@ -3521,6 +3529,7 @@ mod tests {
         assert_eq!(spec.r0(), 42);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn partition_spec_from_entry_only() {
         let spec: PartitionSpec = (_dummy_entry as PartitionEntry).into();
@@ -3528,6 +3537,7 @@ mod tests {
         assert_eq!(spec.r0(), 0);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn partition_spec_entry_point_returns_entry_addr() {
         let spec = PartitionSpec::new(_dummy_entry, 0);
@@ -3535,6 +3545,7 @@ mod tests {
         assert_eq!(addr, EntryAddr::from_fn(_dummy_entry));
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn partition_spec_no_unsafe() {
         // from_body uses EntryAddr::from_body, no transmute
@@ -3595,30 +3606,35 @@ mod tests {
         assert_ne!(a, c);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_fn_round_trip() {
         let addr = EntryAddr::from_fn(_dummy_entry);
         assert_eq!(addr.raw(), _dummy_entry as *const () as usize as u32);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_body_round_trip() {
         let addr = EntryAddr::from_body(_dummy_body);
         assert_eq!(addr.raw(), _dummy_body as *const () as usize as u32);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_fn_consistent() {
         let addr = EntryAddr::from_fn(_dummy_entry);
         assert_eq!(addr.raw(), _dummy_entry as *const () as usize as u32);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_body_consistent() {
         let addr = EntryAddr::from_body(_dummy_body);
         assert_eq!(addr.raw(), _dummy_body as *const () as usize as u32);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_partition_entry_round_trip() {
         let ep: PartitionEntry = _dummy_entry;
@@ -3626,6 +3642,7 @@ mod tests {
         assert_eq!(addr.raw(), ep as *const () as usize as u32);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_partition_body_round_trip() {
         let body: PartitionBody = _dummy_body;
@@ -3633,6 +3650,7 @@ mod tests {
         assert_eq!(addr.raw(), body as *const () as usize as u32);
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_partition_entry_into() {
         let ep: PartitionEntry = _dummy_entry;
@@ -3640,6 +3658,7 @@ mod tests {
         assert_eq!(addr, EntryAddr::from_fn(ep));
     }
 
+    #[cfg(target_pointer_width = "32")]
     #[test]
     fn entry_addr_from_partition_body_into() {
         let body: PartitionBody = _dummy_body;
