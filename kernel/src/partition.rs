@@ -4,7 +4,7 @@ use heapless::Vec;
 use crate::debug::DebugBuffer;
 use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
 use crate::partition_core::StackStorage;
-pub use rtos_traits::partition::EntryAddr;
+pub use rtos_traits::partition::{EntryAddr, IsrHandler, PartitionBody, PartitionEntry};
 
 /// Default data-region RASR attributes: full read-write access with
 /// Normal memory (TEX=0, S=1, C=1, B=0).  The RASR enable bit and size
@@ -892,15 +892,6 @@ impl<const N: usize> PartitionTable<N> {
         &mut self.partitions
     }
 }
-
-/// Signature for a partition body function that receives an argument in `r0`.
-pub type PartitionBody = extern "C" fn(u32) -> !;
-
-/// Signature for a partition entry point (no arguments, diverging).
-pub type PartitionEntry = extern "C" fn() -> !;
-
-/// Signature for an interrupt service routine handler (bare, no arguments, no return value).
-pub type IsrHandler = unsafe extern "C" fn();
 
 /// A partition descriptor: entry point paired with its `r0` argument.
 #[derive(Clone, Copy, Debug)]
