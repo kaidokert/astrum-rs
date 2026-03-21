@@ -4,6 +4,7 @@ use heapless::Vec;
 use crate::debug::DebugBuffer;
 use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
 use crate::partition_core::StackStorage;
+pub use rtos_traits::partition::EntryAddr;
 
 /// Default data-region RASR attributes: full read-write access with
 /// Normal memory (TEX=0, S=1, C=1, B=0).  The RASR enable bit and size
@@ -954,78 +955,6 @@ impl From<PartitionEntry> for PartitionSpec {
 
 /// Canonical public alias for [`ExternalPartitionMemory`].
 pub type PartitionMemory<'mem> = ExternalPartitionMemory<'mem>;
-
-/// Type-safe wrapper for a partition entry-point address.
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub struct EntryAddr(u32);
-
-impl EntryAddr {
-    /// Create an `EntryAddr` from a [`PartitionEntry`] function pointer.
-    ///
-    /// Forces the fn-item → fn-pointer coercion and wraps the address.
-    #[inline]
-    pub fn from_fn(f: PartitionEntry) -> Self {
-        Self(f as *const () as usize as u32)
-    }
-
-    /// Create an `EntryAddr` from a [`PartitionBody`] function pointer.
-    ///
-    /// Forces the fn-item → fn-pointer coercion and wraps the address.
-    #[inline]
-    pub fn from_body(f: PartitionBody) -> Self {
-        Self(f as *const () as usize as u32)
-    }
-
-    /// Return the raw `u32` address.
-    #[inline]
-    pub fn raw(self) -> u32 {
-        self.0
-    }
-}
-
-impl core::fmt::Debug for EntryAddr {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "EntryAddr({:#010x})", self.0)
-    }
-}
-
-impl PartialEq<u32> for EntryAddr {
-    fn eq(&self, other: &u32) -> bool {
-        self.0 == *other
-    }
-}
-
-impl PartialEq<EntryAddr> for u32 {
-    fn eq(&self, other: &EntryAddr) -> bool {
-        *self == other.0
-    }
-}
-
-impl From<PartitionEntry> for EntryAddr {
-    #[inline]
-    fn from(f: PartitionEntry) -> Self {
-        Self::from_fn(f)
-    }
-}
-
-impl From<PartitionBody> for EntryAddr {
-    #[inline]
-    fn from(f: PartitionBody) -> Self {
-        Self::from_body(f)
-    }
-}
-
-impl From<u32> for EntryAddr {
-    fn from(v: u32) -> Self {
-        Self(v)
-    }
-}
-
-impl From<EntryAddr> for u32 {
-    fn from(v: EntryAddr) -> Self {
-        v.0
-    }
-}
 
 /// Coerce a [`PartitionEntry`] fn-item to a raw `u32` address.
 ///
