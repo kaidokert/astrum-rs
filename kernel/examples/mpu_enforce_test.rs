@@ -20,8 +20,8 @@ use kernel::{
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, StackStorage as _,
-    SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny,
+    StackStorage as _, SyncMinimal,
 };
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -65,7 +65,7 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("mpu_enforce_test: start");
 
-    let entry_fns: [extern "C" fn() -> !; TestConfig::N] = [p0_entry, p1_entry];
+    let entry_fns: [PartitionEntry; TestConfig::N] = [p0_entry, p1_entry];
 
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched entry 0");

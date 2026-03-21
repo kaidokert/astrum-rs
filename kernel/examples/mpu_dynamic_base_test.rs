@@ -19,7 +19,8 @@ use kernel::{
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, StackStorage as _, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, StackStorage as _,
+    SyncMinimal,
 };
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -99,7 +100,7 @@ kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("mpu_dynamic_base_test: start");
-    let entry_fns: [extern "C" fn() -> !; NP] = [p0_entry, p1_entry];
+    let entry_fns: [PartitionEntry; NP] = [p0_entry, p1_entry];
     // dynamic-mpu requires system windows in the schedule.
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched 0");
