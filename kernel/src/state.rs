@@ -142,25 +142,45 @@ use crate::svc::Kernel;
 
 /// Maximum size in bytes for kernel state storage.
 ///
+/// Selected at compile time via the kernel-size feature ladder:
+///
+/// | Feature      | Size  |
+/// |--------------|-------|
+/// | `kernel-4k`  | 4 KiB |
+/// | `kernel-8k`  | 8 KiB |
+/// | `kernel-16k` | 16 KiB |
+/// | *(none)*     | 32 KiB |
+///
+/// The `_kernel-size-any` escape hatch (for `--all-features`) resolves to
+/// 16 KiB, the largest non-default tier.
+///
 /// This must be large enough to hold `Kernel<'mem, C>` for any configuration used.
 /// The `init_kernel_state` function includes a compile-time assertion to verify
 /// that the actual kernel size does not exceed this limit.
 ///
-/// Current allocation: 32 KiB, sufficient for configurations such as
-/// Partitions2 × AlignedStack4K (2 × 4 KiB = 8 KiB for stacks) as well as
-/// up to 4 partitions using `AlignedStack1K`, plus metadata, schedule entries,
-/// and moderate IPC pool sizes. For larger configurations, increase this value
-/// and ensure the target has sufficient RAM.
-///
 /// # Relationship to literal-pool offset limit
 ///
-/// `MAX_KERNEL_SIZE` (32 KiB) and [`LITERAL_POOL_OFFSET_LIMIT`](crate::pendsv::LITERAL_POOL_OFFSET_LIMIT)
+/// `MAX_KERNEL_SIZE` and [`LITERAL_POOL_OFFSET_LIMIT`](crate::pendsv::LITERAL_POOL_OFFSET_LIMIT)
 /// (64 KiB) are **independent constraints**. `MAX_KERNEL_SIZE` governs
 /// how much RAM is reserved for the entire `Kernel<'mem, C>` struct, while the
 /// literal-pool offset limit is a conservative sanity-check for struct
 /// field offsets accessed by PendSV assembly (which uses literal-pool
 /// indirection, not Thumb2 imm12 encoding).
 /// The `define_pendsv!(@assert_offsets)` macro enforces this at compile time.
+#[cfg(feature = "_kernel-size-any")]
+pub const MAX_KERNEL_SIZE: usize = 16 * 1024;
+#[cfg(all(feature = "kernel-4k", not(feature = "_kernel-size-any")))]
+pub const MAX_KERNEL_SIZE: usize = 4 * 1024;
+#[cfg(all(feature = "kernel-8k", not(feature = "_kernel-size-any")))]
+pub const MAX_KERNEL_SIZE: usize = 8 * 1024;
+#[cfg(all(feature = "kernel-16k", not(feature = "_kernel-size-any")))]
+pub const MAX_KERNEL_SIZE: usize = 16 * 1024;
+#[cfg(not(any(
+    feature = "kernel-4k",
+    feature = "kernel-8k",
+    feature = "kernel-16k",
+    feature = "_kernel-size-any",
+)))]
 pub const MAX_KERNEL_SIZE: usize = 32 * 1024;
 
 /// Generates an alignment constant and a storage struct from a single
@@ -645,6 +665,30 @@ mod tests {
         use core::ptr::addr_of;
         let ptr = addr_of!(UNIFIED_KERNEL_STORAGE);
         assert!(!ptr.is_null());
+    }
+
+    /// Verify MAX_KERNEL_SIZE matches the expected value for the active feature.
+    ///
+    /// Default (no kernel-size feature): 32 KiB.
+    /// With `kernel-4k`: 4 KiB, `kernel-8k`: 8 KiB, `kernel-16k`: 16 KiB.
+    /// Tests run with default features, so we expect 32 KiB.
+    #[test]
+    fn max_kernel_size_matches_feature() {
+        #[cfg(feature = "_kernel-size-any")]
+        assert_eq!(MAX_KERNEL_SIZE, 16 * 1024);
+        #[cfg(all(feature = "kernel-4k", not(feature = "_kernel-size-any")))]
+        assert_eq!(MAX_KERNEL_SIZE, 4 * 1024);
+        #[cfg(all(feature = "kernel-8k", not(feature = "_kernel-size-any")))]
+        assert_eq!(MAX_KERNEL_SIZE, 8 * 1024);
+        #[cfg(all(feature = "kernel-16k", not(feature = "_kernel-size-any")))]
+        assert_eq!(MAX_KERNEL_SIZE, 16 * 1024);
+        #[cfg(not(any(
+            feature = "kernel-4k",
+            feature = "kernel-8k",
+            feature = "kernel-16k",
+            feature = "_kernel-size-any",
+        )))]
+        assert_eq!(MAX_KERNEL_SIZE, 32 * 1024);
     }
 
     #[test]
