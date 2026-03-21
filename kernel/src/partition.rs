@@ -989,6 +989,20 @@ impl PartialEq<EntryAddr> for u32 {
     }
 }
 
+impl From<PartitionEntry> for EntryAddr {
+    #[inline]
+    fn from(f: PartitionEntry) -> Self {
+        Self::from_fn(f)
+    }
+}
+
+impl From<PartitionBody> for EntryAddr {
+    #[inline]
+    fn from(f: PartitionBody) -> Self {
+        Self::from_body(f)
+    }
+}
+
 impl From<u32> for EntryAddr {
     fn from(v: u32) -> Self {
         Self(v)
@@ -3798,5 +3812,33 @@ mod tests {
     fn entry_addr_from_body_matches_body_point_addr() {
         let addr = EntryAddr::from_body(_dummy_body);
         assert_eq!(addr.raw(), body_point_addr(_dummy_body));
+    }
+
+    #[test]
+    fn entry_addr_from_partition_entry_round_trip() {
+        let ep: PartitionEntry = _dummy_entry;
+        let addr = EntryAddr::from(ep);
+        assert_eq!(addr.raw(), ep as *const () as usize as u32);
+    }
+
+    #[test]
+    fn entry_addr_from_partition_body_round_trip() {
+        let body: PartitionBody = _dummy_body;
+        let addr = EntryAddr::from(body);
+        assert_eq!(addr.raw(), body as *const () as usize as u32);
+    }
+
+    #[test]
+    fn entry_addr_from_partition_entry_into() {
+        let ep: PartitionEntry = _dummy_entry;
+        let addr: EntryAddr = ep.into();
+        assert_eq!(addr, EntryAddr::from_fn(ep));
+    }
+
+    #[test]
+    fn entry_addr_from_partition_body_into() {
+        let body: PartitionBody = _dummy_body;
+        let addr: EntryAddr = body.into();
+        assert_eq!(addr, EntryAddr::from_body(body));
     }
 }
