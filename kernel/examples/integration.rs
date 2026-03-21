@@ -28,11 +28,13 @@ static P_RAN: AtomicU32 = AtomicU32::new(u32::MAX);
 static SW: AtomicU32 = AtomicU32::new(0);
 static IPC: AtomicU32 = AtomicU32::new(0);
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     loop {
         P_RAN.store(0, Ordering::Release);
     }
 }
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         P_RAN.store(1, Ordering::Release);

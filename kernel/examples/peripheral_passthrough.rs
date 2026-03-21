@@ -20,7 +20,7 @@ use kernel::kpanic as _;
 use kernel::{
     partition::MpuRegion,
     scheduler::{ScheduleEntry, ScheduleTable},
-    DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(PassthroughConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -40,6 +40,7 @@ kernel::define_unified_harness!(PassthroughConfig);
 /// Partition stores the UARTFR value here after a successful volatile read.
 static UARTFR_VALUE: AtomicU32 = AtomicU32::new(0);
 
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     // Volatile read of UART0 Flag Register.
     // If the MPU peripheral window is not programmed this faults (DACCVIOL).

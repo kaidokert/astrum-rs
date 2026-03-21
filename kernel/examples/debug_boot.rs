@@ -43,7 +43,7 @@ use kernel::{
     partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -70,6 +70,7 @@ kernel::define_pendsv!();
 // Atomic flag to indicate partition ran
 static PARTITION_RAN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     // Set flag instead of using semihosting (which requires privileged mode)
     PARTITION_RAN.store(true, core::sync::atomic::Ordering::Release);

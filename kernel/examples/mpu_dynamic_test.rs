@@ -29,7 +29,7 @@ use kernel::{
     partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -81,6 +81,7 @@ fn expected_rasr(pid: usize) -> u32 {
     build_rasr(sf, AP_FULL_ACCESS, true, (true, true, false))
 }
 
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     loop {
         cortex_m::asm::nop();

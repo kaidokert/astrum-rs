@@ -32,7 +32,7 @@ use kernel::{
     partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal,
 };
 
 const NP: usize = 2;
@@ -71,6 +71,7 @@ static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 
 kernel::define_pendsv_dynamic!(STRATEGY, TestConfig);
 
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     loop {
         cortex_m::asm::nop();

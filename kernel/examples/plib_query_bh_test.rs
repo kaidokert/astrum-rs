@@ -27,7 +27,7 @@ use kernel::kpanic as _;
 use kernel::partition::{EntryAddr, PartitionConfig};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
-use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -75,6 +75,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     let dev = plib::DeviceId::new(0);
     // Start with u32::MAX so the first sample (expected 0) is detected as a
