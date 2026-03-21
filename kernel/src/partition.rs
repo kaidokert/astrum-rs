@@ -940,6 +940,18 @@ impl From<(PartitionEntry, u32)> for PartitionSpec {
     }
 }
 
+impl From<(PartitionBody, u32)> for PartitionSpec {
+    fn from((body, r0): (PartitionBody, u32)) -> Self {
+        Self::from_body(body, r0)
+    }
+}
+
+impl From<PartitionEntry> for PartitionSpec {
+    fn from(entry_point: PartitionEntry) -> Self {
+        Self { entry_point, r0: 0 }
+    }
+}
+
 /// Canonical public alias for [`ExternalPartitionMemory`].
 pub type PartitionMemory<'mem> = ExternalPartitionMemory<'mem>;
 
@@ -3638,6 +3650,26 @@ mod tests {
             EntryAddr::from_fn(_dummy_entry).raw()
         );
         assert_eq!(spec.r0(), 99);
+    }
+
+    #[test]
+    fn partition_spec_from_body_tuple() {
+        let spec: PartitionSpec = (_dummy_body as PartitionBody, 42u32).into();
+        assert_eq!(
+            EntryAddr::from_fn(spec.entry_point()).raw(),
+            EntryAddr::from_body(_dummy_body).raw()
+        );
+        assert_eq!(spec.r0(), 42);
+    }
+
+    #[test]
+    fn partition_spec_from_entry_only() {
+        let spec: PartitionSpec = (_dummy_entry as PartitionEntry).into();
+        assert_eq!(
+            EntryAddr::from_fn(spec.entry_point()).raw(),
+            EntryAddr::from_fn(_dummy_entry).raw()
+        );
+        assert_eq!(spec.r0(), 0);
     }
 
     // ---- EntryAddr tests ----
