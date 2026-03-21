@@ -79,7 +79,10 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(0, 3)).unwrap();
     sched.add(ScheduleEntry::new(1, 2)).unwrap();
 
-    let entries: [PartitionSpec; TestConfig::N] = [(partition_idle, 0), (partition_idle, 0)];
+    let entries: [PartitionSpec; TestConfig::N] = [
+        PartitionSpec::new(partition_idle, 0),
+        PartitionSpec::new(partition_idle, 0),
+    ];
     init_kernel(sched, &entries).expect("kernel creation");
 
     match boot(p).expect("scheduler_tick: boot") {}

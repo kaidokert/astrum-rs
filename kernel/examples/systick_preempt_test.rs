@@ -15,7 +15,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(Config<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
@@ -95,7 +95,7 @@ fn main() -> ! {
 
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(1, 3).expect("round_robin");
 
-    let parts: [(extern "C" fn() -> !, u32); Config::N] = [(p0_main, 0)];
+    let parts: [PartitionSpec; Config::N] = [PartitionSpec::new(p0_main, 0)];
     init_kernel(sched, &parts).expect("systick_preempt_test: init_kernel");
 
     // Enable IRQ 0 at MIN_APP_IRQ_PRIORITY — the tightest allowed app

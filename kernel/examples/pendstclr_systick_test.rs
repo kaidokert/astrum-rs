@@ -134,7 +134,10 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 2)
         .expect("pendstclr_systick: sched");
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [
+        PartitionSpec::new(p0_main, 0),
+        PartitionSpec::new(p1_main, 0),
+    ];
     init_kernel(sched, &parts).expect("pendstclr_systick: Kernel::create");
     match boot(p).expect("pendstclr_systick: boot") {}
 }

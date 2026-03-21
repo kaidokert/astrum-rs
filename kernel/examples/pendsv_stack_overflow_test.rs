@@ -33,7 +33,10 @@ fn main() -> ! {
     hprintln!("pendsv_stack_overflow_test: start");
     let sched =
         kernel::scheduler::ScheduleTable::<{ Config::SCHED }>::round_robin(2, 1).expect("sched");
-    let parts: [PartitionSpec; 2] = [(p0_overflow, 0), (p1_healthy, 0)];
+    let parts: [PartitionSpec; 2] = [
+        PartitionSpec::new(p0_overflow, 0),
+        PartitionSpec::new(p1_healthy, 0),
+    ];
     init_kernel(sched, &parts).expect("kernel");
     match boot(p).expect("boot") {}
 }

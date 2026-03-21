@@ -21,7 +21,7 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, Partitions1, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal};
 
 // Ultra-fast SysTick: 12 MHz * 1 µs / 1e6 = 12 cycles per tick.
 // At only 12 cycles the SysTick handler body (dropped-tick detection,
@@ -79,7 +79,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3)
         .expect("dropped_tick_test: round_robin");
 
-    let parts: [(extern "C" fn() -> !, u32); TestConfig::N] = [(partition_main, 0)];
+    let parts: [PartitionSpec; TestConfig::N] = [PartitionSpec::new(partition_main, 0)];
     init_kernel(sched, &parts).expect("dropped_tick_test: init_kernel");
 
     match boot(p).expect("dropped_tick_test: boot") {}

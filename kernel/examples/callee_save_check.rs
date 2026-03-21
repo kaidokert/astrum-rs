@@ -113,7 +113,10 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("callee_save_check: start");
     let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(2, 2).expect("sched");
-    let parts: [PartitionSpec; Cfg::N] = [(partition_0_entry, 0), (partition_1_entry, 0)];
+    let parts: [PartitionSpec; Cfg::N] = [
+        PartitionSpec::new(partition_0_entry, 0),
+        PartitionSpec::new(partition_1_entry, 0),
+    ];
     init_kernel(sched, &parts).expect("kernel");
     match boot(p).expect("boot") {}
 }

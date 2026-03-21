@@ -100,7 +100,10 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 1)).expect("sched p1");
     sched.add_system_window(1).expect("syswin 1");
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [
+        PartitionSpec::new(p0_main, 0),
+        PartitionSpec::new(p1_main, 0),
+    ];
     init_kernel(sched, &parts).expect("pendsv_primask_dynamic_test: Kernel::create");
 
     match boot(p).expect("pendsv_primask_dynamic_test: boot") {}

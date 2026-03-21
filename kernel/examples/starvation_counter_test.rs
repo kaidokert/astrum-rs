@@ -19,7 +19,7 @@ use kernel::kpanic as _;
 use kernel::partition::STARVATION_THRESHOLD;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
-use kernel::{DebugEnabled, MsgMinimal, Partitions3, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions3, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
     Config<Partitions3, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -105,8 +105,11 @@ fn main() -> ! {
     // runs, so increment_starvation_for_ready_partitions() (which iterates
     // ALL partitions regardless of schedule membership) will count P2.
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(2, 1).expect("round_robin");
-    let parts: [(extern "C" fn() -> !, u32); NUM_PARTITIONS] =
-        [(p0_main, 0), (p1_main, 0), (p2_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [
+        PartitionSpec::new(p0_main, 0),
+        PartitionSpec::new(p1_main, 0),
+        PartitionSpec::new(p2_main, 0),
+    ];
     init_kernel(sched, &parts).expect("Kernel::create");
     with_kernel_mut(|k| {
         k.semaphores_mut()

@@ -94,7 +94,10 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ MultiIrqConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_multi_test: round_robin");
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [
+        PartitionSpec::new(p0_main, 0),
+        PartitionSpec::new(p1_main, 0),
+    ];
     init_kernel(sched, &parts).expect("irq_multi_test: init_kernel");
 
     // Unmask bound IRQs so software-triggered pends fire.

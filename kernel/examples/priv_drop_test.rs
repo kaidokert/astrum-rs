@@ -83,7 +83,7 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 2))
         .expect("static schedule entry must fit");
 
-    let parts: [PartitionSpec; TestConfig::N] = [(partition_main, 0)];
+    let parts: [PartitionSpec; TestConfig::N] = [PartitionSpec::new(partition_main, 0)];
     init_kernel(sched, &parts).expect("kernel creation");
 
     match boot(p).expect("priv_drop_test: boot failed") {}

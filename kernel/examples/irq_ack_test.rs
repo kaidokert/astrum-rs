@@ -89,7 +89,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ AckTestConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_ack_test: round_robin");
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(p0_main, 0)];
     init_kernel(sched, &parts).expect("irq_ack_test: init_kernel");
 
     // Unmask IRQ 0 so the software-triggered pend fires.

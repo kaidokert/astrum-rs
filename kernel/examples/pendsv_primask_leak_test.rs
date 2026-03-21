@@ -133,7 +133,10 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("primask_leak: sched");
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [(p0_main, 0), (p1_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [
+        PartitionSpec::new(p0_main, 0),
+        PartitionSpec::new(p1_main, 0),
+    ];
     init_kernel(sched, &parts).expect("primask_leak: Kernel::create");
 
     match boot(p).expect("primask_leak: boot") {}
