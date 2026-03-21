@@ -30,7 +30,7 @@ use cortex_m_semihosting::{debug, hprintln};
 #[cfg(target_arch = "arm")]
 use kernel::syscall::{SYS_BUF_ALLOC, SYS_BUF_RELEASE, SYS_BUF_WRITE};
 use kernel::{
-    mpu,
+    entry_point_addr, mpu,
     mpu_strategy::{DynamicStrategy, MpuStrategy},
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
@@ -308,18 +308,17 @@ fn main() -> ! {
     let ptr = &raw mut STACKS;
     let stacks: &mut [AlignedStack; NP] = unsafe { &mut *ptr };
     let [s0, s1] = stacks;
-    // TODO: pass PartitionEntry instead of raw 0 once partitions have real entry functions
     let memories = [
         ExternalPartitionMemory::new(
             &mut s0.0,
-            0,
+            entry_point_addr(partition_p1_entry),
             MpuRegion::new(DATA_BASES[0], DATA_SIZES[0], 0),
             0,
         )
         .expect("partition memory 0"),
         ExternalPartitionMemory::new(
             &mut s1.0,
-            0,
+            entry_point_addr(partition_p2_entry),
             MpuRegion::new(DATA_BASES[1], DATA_SIZES[1], 0),
             1,
         )
