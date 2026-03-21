@@ -985,6 +985,18 @@ pub fn entry_point_addr(f: PartitionEntry) -> u32 {
     f as *const () as usize as u32
 }
 
+/// Coerce a [`PartitionBody`] fn-item to a raw `u32` address.
+///
+/// This is the [`PartitionBody`] analogue of [`entry_point_addr`].
+/// Rust fn-items do not automatically coerce to fn-pointers in
+/// `impl Trait` position, so this helper forces the fn-item →
+/// fn-pointer coercion and returns the address as a `u32` that
+/// satisfies [`IntoEntryAddr`].
+#[inline]
+pub fn body_point_addr(f: PartitionBody) -> u32 {
+    f as *const () as usize as u32
+}
+
 /// Validate stack base alignment and address-space overflow.
 /// Assumes `size_bytes` has already been checked as a valid power-of-two >= 32.
 fn validate_stack_geometry(
@@ -3542,6 +3554,29 @@ mod tests {
         let mpu = MpuRegion::new(0, 0, 0);
         let body: PartitionBody = test_body;
         let pmem = ExternalPartitionMemory::new(&mut buf.0, body, mpu, 0).unwrap();
+        assert_eq!(pmem.entry_point(), test_body as *const () as usize as u32);
+    }
+
+    #[test]
+    fn body_point_addr_round_trip() {
+        #[allow(clippy::empty_loop)]
+        extern "C" fn test_body(_r0: u32) -> ! {
+            loop {}
+        }
+        let addr = body_point_addr(test_body);
+        assert_eq!(addr, test_body as *const () as usize as u32);
+    }
+
+    #[test]
+    fn ext_pmem_new_accepts_body_point_addr() {
+        #[allow(clippy::empty_loop)]
+        extern "C" fn test_body(_r0: u32) -> ! {
+            loop {}
+        }
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0, 0, 0);
+        let addr = body_point_addr(test_body);
+        let pmem = ExternalPartitionMemory::new(&mut buf.0, addr, mpu, 0).unwrap();
         assert_eq!(pmem.entry_point(), test_body as *const () as usize as u32);
     }
 

@@ -63,8 +63,8 @@ pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
 pub use partition::{
-    entry_point_addr, ExternalPartitionMemory, IntoEntryAddr, IsrHandler, PartitionBody,
-    PartitionEntry, PartitionMemory, PartitionSpec,
+    body_point_addr, entry_point_addr, ExternalPartitionMemory, IntoEntryAddr, IsrHandler,
+    PartitionBody, PartitionEntry, PartitionMemory, PartitionSpec,
 };
 pub mod partition_core;
 pub use partition_core::{
@@ -247,6 +247,16 @@ mod reexport_tests {
         }
         let addr = entry_point_addr(_ep);
         assert_eq!(addr, _ep as *const () as u32);
+    }
+
+    #[test]
+    fn body_point_addr_via_root() {
+        #[allow(clippy::empty_loop)]
+        extern "C" fn _bp(_r0: u32) -> ! {
+            loop {}
+        }
+        let addr = body_point_addr(_bp);
+        assert_eq!(addr, _bp as *const () as u32);
     }
 
     #[test]
