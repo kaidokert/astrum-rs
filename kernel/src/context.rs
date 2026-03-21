@@ -61,7 +61,7 @@ pub fn init_stack_frame(
     entry_point: impl IntoEntryAddr,
     r0_arg: Option<u32>,
 ) -> Option<usize> {
-    let addr = entry_point.into_entry_addr();
+    let addr = entry_point.into_entry_addr().raw();
     let len = stack.len();
     if len < CONTEXT_FRAME_WORDS {
         return None;

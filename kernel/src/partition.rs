@@ -543,7 +543,7 @@ impl PartitionConfig {
     pub fn new(id: u8, entry_point: impl IntoEntryAddr, mpu_region: MpuRegion) -> Self {
         Self {
             id,
-            entry_point: EntryAddr::from(entry_point.into_entry_addr()),
+            entry_point: entry_point.into_entry_addr(),
             mpu_region,
             peripheral_regions: Vec::new(),
             r0_hint: 0,
@@ -1031,35 +1031,35 @@ mod sealed {
 ///
 /// This trait is sealed — external crates cannot implement it for new types.
 pub trait IntoEntryAddr: sealed::Sealed {
-    /// Convert to the raw `u32` address used internally.
-    fn into_entry_addr(self) -> u32;
+    /// Convert to a type-safe [`EntryAddr`].
+    fn into_entry_addr(self) -> EntryAddr;
 }
 
 impl IntoEntryAddr for u32 {
     #[inline]
-    fn into_entry_addr(self) -> u32 {
-        self
+    fn into_entry_addr(self) -> EntryAddr {
+        EntryAddr(self)
     }
 }
 
 impl IntoEntryAddr for PartitionEntry {
     #[inline]
-    fn into_entry_addr(self) -> u32 {
-        self as *const () as usize as u32
+    fn into_entry_addr(self) -> EntryAddr {
+        EntryAddr(self as *const () as usize as u32)
     }
 }
 
 impl IntoEntryAddr for PartitionBody {
     #[inline]
-    fn into_entry_addr(self) -> u32 {
-        self as *const () as usize as u32
+    fn into_entry_addr(self) -> EntryAddr {
+        EntryAddr(self as *const () as usize as u32)
     }
 }
 
 impl IntoEntryAddr for EntryAddr {
     #[inline]
-    fn into_entry_addr(self) -> u32 {
-        self.0
+    fn into_entry_addr(self) -> EntryAddr {
+        self
     }
 }
 
@@ -1132,7 +1132,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         mpu_region: MpuRegion,
         partition_id: u8,
     ) -> Result<Self, ConfigError> {
-        let entry_point = EntryAddr::from(entry_point.into_entry_addr());
+        let entry_point = entry_point.into_entry_addr();
         let size_bytes: u32 = stack
             .len()
             .checked_mul(core::mem::size_of::<u32>())
@@ -3611,7 +3611,10 @@ mod tests {
 
     #[test]
     fn into_entry_addr_u32_is_identity() {
-        assert_eq!(0x0800_0100u32.into_entry_addr(), 0x0800_0100);
+        assert_eq!(
+            0x0800_0100u32.into_entry_addr(),
+            EntryAddr::from(0x0800_0100u32)
+        );
     }
 
     #[test]
@@ -3622,7 +3625,7 @@ mod tests {
         }
         let ep: PartitionEntry = test_entry;
         let addr = ep.into_entry_addr();
-        assert_eq!(addr, test_entry as *const () as usize as u32);
+        assert_eq!(addr.raw(), test_entry as *const () as usize as u32);
     }
 
     #[test]
@@ -3646,7 +3649,7 @@ mod tests {
         }
         let body: PartitionBody = test_body;
         let addr = body.into_entry_addr();
-        assert_eq!(addr, test_body as *const () as usize as u32);
+        assert_eq!(addr.raw(), test_body as *const () as usize as u32);
     }
 
     #[test]
@@ -3748,7 +3751,7 @@ mod tests {
     #[test]
     fn entry_addr_into_entry_addr_impl() {
         let addr = EntryAddr::from(0x0800_0100u32);
-        assert_eq!(addr.into_entry_addr(), 0x0800_0100);
+        assert_eq!(addr.into_entry_addr(), EntryAddr::from(0x0800_0100u32));
     }
 
     #[test]
