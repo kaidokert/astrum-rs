@@ -203,8 +203,8 @@ macro_rules! svc_r01 {
     }};
 }
 
-/// Generate a `#[naked] extern "C" fn() -> !` trampoline that tail-calls a
-/// partition body function of type `extern "C" fn(u32) -> !`.
+/// Generate a `#[naked]` [`PartitionEntry`] trampoline that tail-calls a
+/// partition body function of type [`PartitionBody`].
 ///
 /// On ARM targets the trampoline is a single `b` (branch) instruction.
 /// Because the function is `#[naked]`, the compiler emits no prologue and
@@ -219,15 +219,17 @@ macro_rules! svc_r01 {
 /// ```ignore
 /// // (`ignore` — no_std crate cannot compile doc tests without a std harness;
 /// //  see mod tests::partition_trampoline_has_correct_fn_type for host test.)
+/// use kernel::PartitionEntry;
+///
 /// extern "C" fn my_partition_body(r0: u32) -> ! {
 ///     let _port_id = r0;
 ///     loop {}
 /// }
 /// kernel::partition_trampoline!(my_partition_entry => my_partition_body);
 ///
-/// // The generated `my_partition_entry` is `extern "C" fn() -> !`
+/// // The generated `my_partition_entry` has type `PartitionEntry`
 /// // and can be passed directly to boot():
-/// let _: extern "C" fn() -> ! = my_partition_entry;
+/// let _: PartitionEntry = my_partition_entry;
 /// ```
 #[macro_export]
 macro_rules! partition_trampoline {
@@ -585,6 +587,8 @@ macro_rules! define_systick {
 
 #[cfg(test)]
 mod tests {
+    use crate::PartitionEntry;
+
     // On non-ARM test hosts the svc! macro must compile and return 0.
 
     #[test]
@@ -609,9 +613,9 @@ mod tests {
 
     #[test]
     fn partition_trampoline_has_correct_fn_type() {
-        // The trampoline must be `extern "C" fn() -> !`, compatible with
+        // The trampoline must have PartitionEntry type, compatible with
         // boot() which expects that signature for partition entry points.
-        let _: extern "C" fn() -> ! = test_trampoline;
+        let _: PartitionEntry = test_trampoline;
     }
 
     #[test]
