@@ -14,8 +14,8 @@ use kernel::partition::{EntryAddr, ExternalPartitionMemory, MpuRegion};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{
-    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, StackStorage as _,
-    SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny,
+    StackStorage as _, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(
@@ -127,9 +127,11 @@ fn partition_task(id: usize) -> ! {
     }
 }
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     partition_task(0)
 }
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     partition_task(1)
 }

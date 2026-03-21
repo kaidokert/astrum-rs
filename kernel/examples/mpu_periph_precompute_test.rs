@@ -39,9 +39,11 @@ fn partition_loop() -> ! {
     }
 }
 
+const _: PartitionEntry = p0_entry;
 extern "C" fn p0_entry() -> ! {
     partition_loop()
 }
+const _: PartitionEntry = p1_entry;
 extern "C" fn p1_entry() -> ! {
     partition_loop()
 }

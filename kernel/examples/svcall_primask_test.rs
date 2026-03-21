@@ -17,7 +17,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::partition::{EntryAddr, PartitionConfig};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
-use kernel::{DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
 
 kernel::compose_kernel_config!(
     Config < Partitions2,
@@ -119,9 +119,11 @@ fn partition_task(id: usize) -> ! {
     }
 }
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     partition_task(0)
 }
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     partition_task(1)
 }

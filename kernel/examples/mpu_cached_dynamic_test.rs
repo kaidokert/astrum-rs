@@ -36,11 +36,13 @@ kernel::compose_kernel_config!(
 );
 
 // Nop-loop partitions: no memory access beyond the stack, safe under MPU.
+const _: PartitionEntry = p0_entry;
 extern "C" fn p0_entry() -> ! {
     loop {
         cortex_m::asm::nop();
     }
 }
+const _: PartitionEntry = p1_entry;
 extern "C" fn p1_entry() -> ! {
     loop {
         cortex_m::asm::nop();

@@ -10,7 +10,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 
 // Fast SysTick: 12 MHz * 83 µs / 1e6 ≈ 996 cycles per tick.
 kernel::compose_kernel_config!(
@@ -117,10 +119,12 @@ fn partition_task(id: usize) -> ! {
     }
 }
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     partition_task(0)
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     partition_task(1)
 }

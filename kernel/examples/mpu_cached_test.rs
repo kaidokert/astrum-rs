@@ -93,7 +93,9 @@ macro_rules! partition_entry {
 }
 
 partition_entry!(p0_entry, P0_COUNTER, 0xCAFE_0000u32);
+const _: PartitionEntry = p0_entry;
 partition_entry!(p1_entry, P1_COUNTER, 0xBEEF_0000u32);
+const _: PartitionEntry = p1_entry;
 
 const REGION_SZ: u32 = 1024;
 

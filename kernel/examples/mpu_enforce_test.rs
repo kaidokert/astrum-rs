@@ -42,11 +42,13 @@ kernel::compose_kernel_config!(
 
 // Partition entries: yield in a loop. No memory access beyond the
 // stack (covered by the MPU data region) and registers (SVC ABI).
+const _: PartitionEntry = p0_entry;
 extern "C" fn p0_entry() -> ! {
     loop {
         plib::sys_yield().expect("yield failed");
     }
 }
+const _: PartitionEntry = p1_entry;
 extern "C" fn p1_entry() -> ! {
     loop {
         plib::sys_yield().expect("yield failed");

@@ -4,7 +4,9 @@
 #![feature(generic_const_exprs)]
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 kernel::compose_kernel_config!(Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 kernel::define_unified_harness!(Config, |tick, k| {
     if tick >= 10 && k.partition_sp().first() == Some(&0xDEAD0001) {
@@ -16,12 +18,14 @@ kernel::define_unified_harness!(Config, |tick, k| {
         debug::exit(debug::EXIT_FAILURE);
     }
 });
+const _: PartitionEntry = p0_overflow;
 extern "C" fn p0_overflow() -> ! {
     unsafe { core::arch::asm!("sub sp, sp, #996") };
     loop {
         cortex_m::asm::nop();
     }
 }
+const _: PartitionEntry = p1_healthy;
 extern "C" fn p1_healthy() -> ! {
     loop {
         cortex_m::asm::nop();

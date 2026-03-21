@@ -63,7 +63,9 @@ macro_rules! partition_entry {
 }
 
 partition_entry!(p0_entry, P0_COUNTER, P0_READBACK, P0_MAGIC);
+const _: PartitionEntry = p0_entry;
 partition_entry!(p1_entry, P1_COUNTER, P1_READBACK, P1_MAGIC);
+const _: PartitionEntry = p1_entry;
 
 kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
     if tick > 2 {
