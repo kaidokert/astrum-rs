@@ -63,8 +63,8 @@ pub mod msg_pools;
 pub mod mutex;
 pub mod partition;
 pub use partition::{
-    entry_point_addr, ExternalPartitionMemory, IntoEntryAddr, PartitionBody, PartitionEntry,
-    PartitionMemory, PartitionSpec,
+    entry_point_addr, ExternalPartitionMemory, IntoEntryAddr, IsrHandler, PartitionBody,
+    PartitionEntry, PartitionMemory, PartitionSpec,
 };
 pub mod partition_core;
 pub use partition_core::{
@@ -217,6 +217,25 @@ mod reexport_tests {
         let _: PartitionEntry = _entry;
         let spec = PartitionSpec::new(_entry, 99);
         assert_eq!(spec.r0, 99);
+    }
+
+    #[test]
+    fn isr_handler_type_compatibility() {
+        // A bare `unsafe extern "C" fn()` must be assignable to IsrHandler.
+        unsafe extern "C" fn my_isr() {}
+        let handler: IsrHandler = my_isr;
+        // Verify the function pointer round-trips to the correct address.
+        assert_eq!(handler as *const () as usize, my_isr as *const () as usize);
+    }
+
+    #[test]
+    fn isr_handler_reexport_via_root() {
+        // IsrHandler must be accessible as kernel::IsrHandler (root re-export).
+        unsafe extern "C" fn another_isr() {}
+        let _h: IsrHandler = another_isr;
+        // Confirm it is the same type from the partition module.
+        let _h2: crate::partition::IsrHandler = another_isr;
+        assert_eq!(_h as *const () as usize, _h2 as *const () as usize);
     }
 
     #[test]

@@ -898,6 +898,9 @@ pub type PartitionBody = extern "C" fn(u32) -> !;
 /// Signature for a partition entry point (no arguments, diverging).
 pub type PartitionEntry = extern "C" fn() -> !;
 
+/// Signature for an interrupt service routine handler (bare, no arguments, no return value).
+pub type IsrHandler = unsafe extern "C" fn();
+
 /// A partition descriptor: entry point paired with its `r0` argument.
 #[derive(Clone, Copy, Debug)]
 pub struct PartitionSpec {
