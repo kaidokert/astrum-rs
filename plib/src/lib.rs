@@ -16,7 +16,7 @@ pub use rtos_traits::api::SvcError;
 // ── Re-exported partition types (from rtos-traits) ────────────────────
 pub use rtos_traits::check_entry_sig;
 pub use rtos_traits::partition::{
-    EntryAddr, IsrHandler, PartitionBody, PartitionEntry, PartitionSpec,
+    EntryAddr, EntryPointFn, IsrHandler, PartitionBody, PartitionEntry, PartitionSpec,
 };
 
 /// Status information for a queuing port, returned by [`sys_queuing_status`].
