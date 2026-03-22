@@ -219,7 +219,7 @@ mod reexport_tests {
         }
         let _: PartitionBody = _body;
         let _: PartitionEntry = _entry;
-        // On 64-bit hosts the debug_assert in EntryAddr::from_fn would fire,
+        // On 64-bit hosts the debug_assert in EntryAddr::from_entry would fire,
         // so only exercise the full constructor on 32-bit targets.
         #[cfg(target_pointer_width = "32")]
         {

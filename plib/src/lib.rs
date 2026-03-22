@@ -1759,7 +1759,7 @@ mod tests {
         let _: crate::PartitionEntry = ep;
         let _: crate::PartitionBody = bp;
         let _: crate::IsrHandler = ih;
-        // On 64-bit hosts the debug_assert in EntryAddr::from_fn would fire,
+        // On 64-bit hosts the debug_assert in EntryAddr::from_entry would fire,
         // so only exercise function-pointer constructors on 32-bit targets.
         #[cfg(target_pointer_width = "32")]
         {

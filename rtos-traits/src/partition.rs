@@ -204,17 +204,15 @@ mod tests {
 
     #[cfg(target_pointer_width = "32")]
     #[test]
-    #[allow(deprecated)]
     fn entry_addr_from_fn() {
-        let addr = EntryAddr::from_fn(_dummy_entry);
+        let addr = EntryAddr::from_entry(_dummy_entry);
         assert_eq!(addr.raw(), _dummy_entry as *const () as usize as u32);
     }
 
     #[cfg(target_pointer_width = "32")]
     #[test]
-    #[allow(deprecated)]
     fn entry_addr_from_body() {
-        let addr = EntryAddr::from_body(_dummy_body);
+        let addr = EntryAddr::from_entry(_dummy_body);
         assert_eq!(addr.raw(), _dummy_body as *const () as usize as u32);
     }
 
@@ -299,23 +297,21 @@ mod tests {
     }
 
     /// On 64-bit hosts, function addresses exceed `u32::MAX`, so the
-    /// `debug_assert!` in `from_fn` must fire to catch truncation.
+    /// `debug_assert!` in `from_entry` must fire to catch truncation.
     #[cfg(target_pointer_width = "64")]
     #[test]
     #[should_panic(expected = "exceeds u32::MAX")]
-    #[allow(deprecated)]
     fn entry_addr_from_fn_catches_truncation_on_64bit() {
-        let _ = EntryAddr::from_fn(_dummy_entry);
+        let _ = EntryAddr::from_entry(_dummy_entry as PartitionEntry);
     }
 
     /// On 64-bit hosts, function addresses exceed `u32::MAX`, so the
-    /// `debug_assert!` in `from_body` must fire to catch truncation.
+    /// `debug_assert!` in `from_entry` must fire to catch truncation.
     #[cfg(target_pointer_width = "64")]
     #[test]
     #[should_panic(expected = "exceeds u32::MAX")]
-    #[allow(deprecated)]
     fn entry_addr_from_body_catches_truncation_on_64bit() {
-        let _ = EntryAddr::from_body(_dummy_body);
+        let _ = EntryAddr::from_entry(_dummy_body as PartitionBody);
     }
 
     #[cfg(target_pointer_width = "32")]
@@ -391,14 +387,13 @@ mod tests {
         let _ = PartitionSpec::new(_dummy_entry, 0);
     }
 
-    /// On 64-bit hosts, `PartitionSpec::from_body()` must trigger the
+    /// On 64-bit hosts, `PartitionSpec::from_entry()` must trigger the
     /// truncation guard via `EntryAddr::from_entry`.
     #[cfg(target_pointer_width = "64")]
     #[test]
     #[should_panic(expected = "exceeds u32::MAX")]
-    #[allow(deprecated)]
-    fn partition_spec_from_body_catches_truncation_on_64bit() {
-        let _ = PartitionSpec::from_body(_dummy_body, 42);
+    fn partition_spec_from_entry_catches_truncation_on_64bit() {
+        let _ = PartitionSpec::from_entry(_dummy_body as PartitionBody, 42);
     }
 
     #[cfg(target_pointer_width = "32")]
