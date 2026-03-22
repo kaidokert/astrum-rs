@@ -1981,9 +1981,11 @@ mod tests {
                 entry_point: 0x0800_0002,
             }
         );
-        assert!(msg.contains("3"), "should contain partition_id");
-        assert!(msg.contains("0x08000002"), "should contain entry_point");
-        assert!(msg.contains("Thumb bit"), "should mention Thumb bit");
+        assert_eq!(
+            msg,
+            "partition 3: entry point 0x08000002 \
+             is missing the Thumb bit (bit[0] must be set)"
+        );
     }
 
     #[test]
@@ -2016,10 +2018,9 @@ mod tests {
         assert_ne!(outside, ConfigError::PartitionTableFull);
         assert_ne!(
             outside,
-            ConfigError::EntryPointMisaligned {
+            ConfigError::EntryPointNotThumb {
                 partition_id: 1,
                 entry_point: 0x0900_0000,
-                required_alignment: 4,
             }
         );
     }
@@ -2374,7 +2375,7 @@ mod tests {
     #[test]
     fn config_new_valid_inputs_pass_validate() {
         let mpu = MpuRegion::new(0x2000_0000, 4096, 0x0306_0000);
-        let cfg = PartitionConfig::new(0, 0x0800_0000, mpu);
+        let cfg = PartitionConfig::new(0, 0x0800_0001, mpu);
         assert_eq!(cfg.validate(), Ok(()));
     }
 
@@ -2948,8 +2949,8 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let expected_base = buf.0.as_ptr() as u32;
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1000, mpu, 3).unwrap();
-        assert_eq!(epm.entry_point(), 0x0800_1000);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1001, mpu, 3).unwrap();
+        assert_eq!(epm.entry_point(), 0x0800_1001);
         assert_eq!(epm.stack_size_bytes(), 256);
         assert_eq!(epm.stack_base(), expected_base);
         assert_eq!(*epm.mpu_region(), mpu);
@@ -2991,7 +2992,7 @@ mod tests {
     #[test]
     fn ext_pmem_sentinel_mpu_accepted() {
         let mut buf = Align256([0u32; 64]);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0, MpuRegion::new(0, 0, 0), 1).unwrap();
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, MpuRegion::new(0, 0, 0), 1).unwrap();
         assert_eq!(epm.mpu_region().size(), 0);
     }
 
@@ -3001,9 +3002,9 @@ mod tests {
         let mut storage = AlignedStack256B::default();
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let epm =
-            ExternalPartitionMemory::from_aligned_stack(&mut storage, 0x0800_0000, mpu, 0).unwrap();
+            ExternalPartitionMemory::from_aligned_stack(&mut storage, 0x0800_0001, mpu, 0).unwrap();
         assert_eq!(epm.stack_size_bytes(), 256);
-        assert_eq!(epm.entry_point(), 0x0800_0000);
+        assert_eq!(epm.entry_point(), 0x0800_0001);
     }
 
     // ------------------------------------------------------------------
@@ -3015,8 +3016,8 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let expected_base = buf.0.as_ptr() as u32;
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
-        let pm = PartitionMemory::new(&mut buf.0, 0x0800_2000, mpu, 0).unwrap();
-        assert_eq!(pm.entry_point(), 0x0800_2000);
+        let pm = PartitionMemory::new(&mut buf.0, 0x0800_2001, mpu, 0).unwrap();
+        assert_eq!(pm.entry_point(), 0x0800_2001);
         assert_eq!(pm.stack_size_bytes(), 256);
         assert_eq!(pm.stack_base(), expected_base);
         assert_eq!(*pm.mpu_region(), mpu);
@@ -3029,7 +3030,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // A 32-byte (8-word) sub-slice starting at offset 1 word is misaligned
         let sub = &mut buf.0[1..9];
-        let result = PartitionMemory::new(sub, 0x0800_0000, mpu, 0);
+        let result = PartitionMemory::new(sub, 0x0800_0001, mpu, 0);
         assert!(result.is_err());
     }
 
@@ -3038,7 +3039,7 @@ mod tests {
         let valid_mpu = MpuRegion::new(0, 32, 0);
         // 3 words = 12 bytes, not a power of two
         let mut tiny = [0u32; 3];
-        let result = PartitionMemory::new(&mut tiny, 0x0800_0000, valid_mpu, 0);
+        let result = PartitionMemory::new(&mut tiny, 0x0800_0001, valid_mpu, 0);
         assert!(result.is_err());
     }
 
@@ -3047,7 +3048,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let periph = MpuRegion::new(0x4000_0000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1000, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1001, mpu, 0)
             .unwrap()
             .with_peripheral_regions(&[periph])
             .unwrap();
@@ -3059,7 +3060,7 @@ mod tests {
     fn ext_pmem_code_mpu_region_default_none() {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0).unwrap();
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 0).unwrap();
         assert!(epm.code_mpu_region().is_none());
     }
 
@@ -3068,7 +3069,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let code = MpuRegion::new(0x0800_0000, 1024, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 0)
             .unwrap()
             .with_code_mpu_region(code)
             .unwrap();
@@ -3082,7 +3083,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let code = MpuRegion::new(0x0800_0000, 512, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 0)
             .unwrap()
             .with_code_mpu_region(code)
             .unwrap();
@@ -3097,7 +3098,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // Base 0x0800_0100 is not aligned to size 1024 (0x400).
         let code = MpuRegion::new(0x0800_0100, 1024, 0);
-        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0100, mpu, 0)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0101, mpu, 0)
             .unwrap()
             .with_code_mpu_region(code)
             .unwrap_err();
@@ -3115,7 +3116,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // Size 48 is not a power of two.
         let code = MpuRegion::new(0x0800_0000, 48, 0);
-        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 0)
             .unwrap()
             .with_code_mpu_region(code)
             .unwrap_err();
@@ -3132,7 +3133,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let code = MpuRegion::new(0x0800_0000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 0)
             .unwrap()
             .with_code_mpu_region(code)
             .unwrap();
@@ -3161,7 +3162,7 @@ mod tests {
     fn ext_pmem_minimum_valid_stack_size_32_bytes() {
         let mut buf = TestBuf32([0u32; 8]); // 8 words = 32 bytes
         let mpu = MpuRegion::new(0, 0, 0); // sentinel
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 1).unwrap();
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 1).unwrap();
         assert_eq!(epm.stack_size_bytes(), 32);
     }
 
@@ -3230,10 +3231,10 @@ mod tests {
                 let mut storage = $stack_ty::default();
                 let mpu = MpuRegion::new(0x2000_0000, $size, 0);
                 let epm =
-                    ExternalPartitionMemory::from_aligned_stack(&mut storage, 0x0800_4000, mpu, 2)
+                    ExternalPartitionMemory::from_aligned_stack(&mut storage, 0x0800_4001, mpu, 2)
                         .unwrap();
                 assert_eq!(epm.stack_size_bytes(), $size);
-                assert_eq!(epm.entry_point(), 0x0800_4000);
+                assert_eq!(epm.entry_point(), 0x0800_4001);
                 assert_eq!(*epm.mpu_region(), mpu);
             }
         };
@@ -3252,7 +3253,7 @@ mod tests {
         let r1 = MpuRegion::new(0x4000_0000, 256, 0);
         let r2 = MpuRegion::new(0x4000_1000, 256, 0);
         let r3 = MpuRegion::new(0x4000_2000, 256, 0);
-        let result = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 0)
+        let result = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 0)
             .unwrap()
             .with_peripheral_regions(&[r1, r2, r3]);
         assert!(matches!(
@@ -3267,7 +3268,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // Base 0x4000_0080 not aligned to size 256.
         let bad = MpuRegion::new(0x4000_0080, 256, 0);
-        let err = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 3)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 3)
             .unwrap()
             .with_peripheral_regions(&[bad])
             .unwrap_err();
@@ -3287,7 +3288,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // Size 48 is not a power of two.
         let bad = MpuRegion::new(0x4000_0000, 48, 0);
-        let err = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 1)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 1)
             .unwrap()
             .with_peripheral_regions(&[bad])
             .unwrap_err();
@@ -3306,7 +3307,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let good = MpuRegion::new(0x4000_0000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 0)
             .unwrap()
             .with_peripheral_regions(&[good])
             .unwrap();
@@ -3322,7 +3323,7 @@ mod tests {
         let good = MpuRegion::new(0x4000_0000, 256, 0);
         // Second region: misaligned base.
         let bad = MpuRegion::new(0x4000_0080, 256, 0);
-        let err = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 2)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 2)
             .unwrap()
             .with_peripheral_regions(&[good, bad])
             .unwrap_err();
@@ -3342,7 +3343,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // Zero-size region with misaligned base should be silently skipped.
         let zero = MpuRegion::new(0xDEAD_BEEF, 0, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 0)
             .unwrap()
             .with_peripheral_regions(&[zero])
             .unwrap();
@@ -3374,21 +3375,20 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn ext_pmem_rejects_misaligned_entry_point_bit1_set() {
+    fn ext_pmem_rejects_entry_point_without_thumb_bit() {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0, 0, 0);
         assert_eq!(
             ExternalPartitionMemory::new(&mut buf.0, 0x0800_0002, mpu, 3).unwrap_err(),
-            ConfigError::EntryPointMisaligned {
+            ConfigError::EntryPointNotThumb {
                 partition_id: 3,
                 entry_point: 0x0800_0002,
-                required_alignment: 4,
             }
         );
     }
 
     #[test]
-    fn ext_pmem_accepts_aligned_entry_point_with_thumb_bit() {
+    fn ext_pmem_accepts_entry_point_with_thumb_bit() {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0, 0, 0);
         let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 1).unwrap();
@@ -3396,25 +3396,34 @@ mod tests {
     }
 
     #[test]
-    fn ext_pmem_accepts_naturally_aligned_entry_point() {
-        let mut buf = Align256([0u32; 64]);
-        let mpu = MpuRegion::new(0, 0, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0).unwrap();
-        assert_eq!(epm.entry_point(), 0x0800_0000);
-    }
-
-    #[test]
-    fn ext_pmem_rejects_misaligned_entry_point_both_low_bits_set() {
+    fn ext_pmem_rejects_even_entry_point() {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0, 0, 0);
         assert_eq!(
-            ExternalPartitionMemory::new(&mut buf.0, 0x0800_0003, mpu, 7).unwrap_err(),
-            ConfigError::EntryPointMisaligned {
-                partition_id: 7,
-                entry_point: 0x0800_0003,
-                required_alignment: 4,
+            ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0).unwrap_err(),
+            ConfigError::EntryPointNotThumb {
+                partition_id: 0,
+                entry_point: 0x0800_0000,
             }
         );
+    }
+
+    #[test]
+    fn ext_pmem_accepts_2byte_aligned_entry_point_with_thumb_bit() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0, 0, 0);
+        // 0x0800_0003: real address 0x0800_0002 (2-byte aligned) with Thumb bit set
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0003, mpu, 7).unwrap();
+        assert_eq!(epm.entry_point(), 0x0800_0003);
+    }
+
+    #[test]
+    fn ext_pmem_accepts_halfword_aligned_entry_point() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0, 0, 0);
+        // 0x0800_0803: real address 0x0800_0802 (halfword-aligned) with Thumb bit set
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0803, mpu, 5).unwrap();
+        assert_eq!(epm.entry_point(), 0x0800_0803);
     }
 
     // ---- Into<EntryAddr> tests ----
