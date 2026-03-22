@@ -3595,7 +3595,7 @@ mod tests {
         let mut stacks: [AlignedStack256B; 5] = [AlignedStack256B::default(); 5];
         let mut mems: heapless::Vec<ExternalPartitionMemory<'_>, 5> = heapless::Vec::new();
         for (i, s) in stacks.iter_mut().enumerate() {
-            let m = ExternalPartitionMemory::from_aligned_stack(s, 0, mpu, i as u8).unwrap();
+            let m = ExternalPartitionMemory::from_aligned_stack(s, 1, mpu, i as u8).unwrap();
             mems.push(m).unwrap();
         }
         // Schedule only needs to reference partition 0 — the failure is in
@@ -3691,7 +3691,7 @@ mod tests {
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_1000, 4096, 0);
         let mut stack = AlignedStack256B::default();
-        let err = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0000, data_mpu, 0)
+        let err = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, 0)
             .unwrap()
             .with_code_mpu_region(code_mpu)
             .expect_err("should reject entry below code region");
@@ -3699,7 +3699,7 @@ mod tests {
             err,
             ConfigError::EntryPointOutsideCodeRegion {
                 partition_id: 0,
-                entry_point: 0x0800_0000,
+                entry_point: 0x0800_0001,
                 region_base: 0x0800_1000,
                 region_size: 4096,
             }
@@ -3712,7 +3712,7 @@ mod tests {
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_0000, 4096, 0);
         let mut stack = AlignedStack256B::default();
-        let err = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_1000, data_mpu, 0)
+        let err = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_1001, data_mpu, 0)
             .unwrap()
             .with_code_mpu_region(code_mpu)
             .expect_err("should reject entry at code region end");
@@ -3720,7 +3720,7 @@ mod tests {
             err,
             ConfigError::EntryPointOutsideCodeRegion {
                 partition_id: 0,
-                entry_point: 0x0800_1000,
+                entry_point: 0x0800_1001,
                 region_base: 0x0800_0000,
                 region_size: 4096,
             }
@@ -3737,13 +3737,13 @@ mod tests {
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0100, data_mpu, 0)
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0101, data_mpu, 0)
             .unwrap()
             .with_code_mpu_region(code_mpu)
             .unwrap();
         let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
             .expect("entry within code region should be accepted");
-        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0100);
+        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0101);
     }
 
     #[test]
@@ -3775,7 +3775,7 @@ mod tests {
         sched.add_system_window(1).unwrap();
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0FFF_0000, data_mpu, 0)
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0FFF_0001, data_mpu, 0)
             .unwrap();
         Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
             .expect("no code region means no entry point bounds check");
@@ -7822,7 +7822,7 @@ mod tests {
         let mut stk = AlignedStack1K::default();
         let mem = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
-            0x0800_0000,
+            0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
             0,
         )
@@ -7851,7 +7851,7 @@ mod tests {
         s.add_system_window(1).unwrap();
         let mut stk = AlignedStack1K::default();
         let mem =
-            ExternalPartitionMemory::from_aligned_stack(&mut stk, 0, MpuRegion::new(0, 0, 0), 0)
+            ExternalPartitionMemory::from_aligned_stack(&mut stk, 1, MpuRegion::new(0, 0, 0), 0)
                 .unwrap();
         let k = Kernel::<TestConfig>::new(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().len(), 1);
@@ -7869,14 +7869,14 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_0000,
+                0x0800_0001,
                 MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_1000,
+                0x0800_1001,
                 MpuRegion::new(0x2000_1000, 1024, 0x0306_0000),
                 1,
             )
@@ -7907,14 +7907,14 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_0000,
+                0x0800_0001,
                 MpuRegion::new(0x2000_0000, 16384, 0),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_2000,
+                0x0800_2001,
                 MpuRegion::new(0x2000_2000, 4096, 0),
                 1,
             )
@@ -7933,14 +7933,14 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_0000,
+                0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_1000,
+                0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
                 1,
             )
@@ -7989,14 +7989,14 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_0000,
+                0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_1000,
+                0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
                 1,
             )
@@ -8007,8 +8007,8 @@ mod tests {
         assert_eq!(k.partitions().get(0).unwrap().id(), 0);
         assert_eq!(k.partitions().get(1).unwrap().id(), 1);
         // Verify data-carrying fields were mapped correctly from ExternalPartitionMemory.
-        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
-        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1000);
+        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0001);
+        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1001);
     }
 
     #[test]
@@ -8061,7 +8061,7 @@ mod tests {
         let mut stk = AlignedStack1K::default();
         let mem = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
-            0x0800_0000,
+            0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
             0,
         )
@@ -8095,21 +8095,21 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_0000,
+                0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_1000,
+                0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
                 1,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk2,
-                0x0800_2000,
+                0x0800_2001,
                 MpuRegion::new(0x2000_2000, 4096, 0),
                 2,
             )
@@ -8143,7 +8143,7 @@ mod tests {
         let mut stk = AlignedStack1K::default();
         let mem = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
-            0x0800_0000,
+            0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
             0,
         )
@@ -8168,7 +8168,7 @@ mod tests {
         let mut stk = AlignedStack1K::default();
         let mem = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
-            0x0800_0000,
+            0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
             0,
         )
@@ -8198,7 +8198,7 @@ mod tests {
         let mut stk = AlignedStack1K::default();
         let mem = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
-            0x0800_0000,
+            0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
             0,
         )
@@ -8219,7 +8219,7 @@ mod tests {
         let mut stk = AlignedStack1K::default();
         let result = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
-            0x0800_0000,
+            0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
             0,
         )
@@ -8240,7 +8240,7 @@ mod tests {
         let mut stk = AlignedStack1K::default();
         let result = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
-            0x0800_0000,
+            0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
             0,
         )
@@ -8262,7 +8262,7 @@ mod tests {
         // base 0x4000_0100 is not aligned to size 4096 (0x1000)
         let result = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
-            0x0800_0000,
+            0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
             0,
         )
@@ -8285,7 +8285,7 @@ mod tests {
         let mut stk = AlignedStack1K::default();
         let mem = ExternalPartitionMemory::from_aligned_stack(
             &mut stk,
-            0x0800_0000,
+            0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
             0,
         )
@@ -8333,14 +8333,14 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_0000,
+                0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_1000,
+                0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
                 1,
             )
@@ -8671,21 +8671,21 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_0000,
+                0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_1000,
+                0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
                 1,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk2,
-                0x0800_2000,
+                0x0800_2001,
                 MpuRegion::new(0x2000_2000, 4096, 0),
                 2,
             )
@@ -9276,28 +9276,28 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_0000,
+                0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_1000,
+                0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
                 1,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk2,
-                0x0800_2000,
+                0x0800_2001,
                 MpuRegion::new(0x2000_2000, 4096, 0),
                 2,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk3,
-                0x0800_3000,
+                0x0800_3001,
                 MpuRegion::new(0x2000_3000, 4096, 0),
                 3,
             )
@@ -11548,7 +11548,7 @@ mod tests {
         let mut stk0 = AlignedStack1K::default();
         let mems = [ExternalPartitionMemory::from_aligned_stack(
             &mut stk0,
-            0x0800_0000,
+            0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
             0,
         )
@@ -11752,14 +11752,14 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_0000,
+                0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_1000,
+                0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
                 1,
             )
@@ -12493,14 +12493,14 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_0000,
+                0x0800_0001,
                 MpuRegion::new(0, 0, 0),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_1000,
+                0x0800_1001,
                 MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
                 1,
             )
@@ -12621,9 +12621,9 @@ mod tests {
         let mut stack0 = AlignedStack256B::default();
         let mut stack1 = AlignedStack256B::default();
         let m0 =
-            ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0000, mpu, 0).unwrap();
+            ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0001, mpu, 0).unwrap();
         let m1 =
-            ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1000, mpu, 1).unwrap();
+            ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1001, mpu, 1).unwrap();
         let mut k =
             Kernel::<TestConfig>::new(sched, &[m0, m1]).expect("two partitions should succeed");
         k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
@@ -12646,9 +12646,9 @@ mod tests {
         let mut stack0 = AlignedStack256B::default();
         let mut stack1 = AlignedStack256B::default();
         let m0 =
-            ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0000, mpu, 0).unwrap();
+            ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0001, mpu, 0).unwrap();
         let m1 =
-            ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1000, mpu, 1).unwrap();
+            ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1001, mpu, 1).unwrap();
         let mut k =
             Kernel::<TestConfig>::new(sched, &[m0, m1]).expect("two partitions should succeed");
         k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);

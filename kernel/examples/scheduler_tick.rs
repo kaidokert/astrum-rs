@@ -83,8 +83,8 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 2)).unwrap();
 
     let entries: [PartitionSpec; TestConfig::N] = [
-        PartitionSpec::new(partition_idle, 0),
-        PartitionSpec::new(partition_idle, 0),
+        PartitionSpec::new(partition_idle as PartitionEntry, 0),
+        PartitionSpec::new(partition_idle as PartitionEntry, 0),
     ];
     init_kernel(sched, &entries).expect("kernel creation");
 

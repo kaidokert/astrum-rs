@@ -139,8 +139,8 @@ fn main() -> ! {
         .expect("pendstclr_systick: sched");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
-        PartitionSpec::new(p0_main, 0),
-        PartitionSpec::new(p1_main, 0),
+        PartitionSpec::new(p0_main as PartitionEntry, 0),
+        PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
     init_kernel(sched, &parts).expect("pendstclr_systick: Kernel::create");
     match boot(p).expect("pendstclr_systick: boot") {}

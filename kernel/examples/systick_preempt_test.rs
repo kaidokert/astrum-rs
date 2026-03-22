@@ -98,7 +98,7 @@ fn main() -> ! {
 
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(1, 3).expect("round_robin");
 
-    let parts: [PartitionSpec; Config::N] = [PartitionSpec::new(p0_main, 0)];
+    let parts: [PartitionSpec; Config::N] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
     init_kernel(sched, &parts).expect("systick_preempt_test: init_kernel");
 
     // Enable IRQ 0 at MIN_APP_IRQ_PRIORITY — the tightest allowed app

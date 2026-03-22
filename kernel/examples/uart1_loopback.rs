@@ -436,8 +436,8 @@ fn main() -> ! {
     });
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
-        PartitionSpec::new(p1_main, 0),
-        PartitionSpec::new(p2_main, 0),
+        PartitionSpec::new(p1_main as PartitionEntry, 0),
+        PartitionSpec::new(p2_main as PartitionEntry, 0),
     ];
     #[allow(clippy::diverging_sub_expression, unreachable_code)]
     {

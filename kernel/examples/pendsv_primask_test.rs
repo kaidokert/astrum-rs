@@ -125,8 +125,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("round-robin schedule for 2 partitions must fit");
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
-        PartitionSpec::new(p0_main, 0),
-        PartitionSpec::new(p1_main, 0),
+        PartitionSpec::new(p0_main as PartitionEntry, 0),
+        PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
     init_kernel(sched, &parts).expect("kernel create with 2 partitions must succeed");
 

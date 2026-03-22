@@ -80,7 +80,8 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ PassthroughConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched");
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(partition_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] =
+        [PartitionSpec::new(partition_main as PartitionEntry, 0)];
     init_kernel(sched, &parts).expect("kernel");
     with_kernel_mut(|k| {
         k.partitions_mut()

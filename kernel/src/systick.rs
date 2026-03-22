@@ -340,14 +340,14 @@ mod tests {
         let mems = [
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk0,
-                0x0800_1000,
+                0x0800_1001,
                 MpuRegion::new(0, 0, 0),
                 0,
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
-                0x0800_2000,
+                0x0800_2001,
                 MpuRegion::new(0, 0, 0),
                 1,
             )

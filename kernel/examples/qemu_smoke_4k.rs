@@ -101,8 +101,8 @@ fn main() -> ! {
         .expect("qemu_smoke_4k: round_robin");
 
     let parts: [PartitionSpec; Smoke4KConfig::N] = [
-        PartitionSpec::new(p0_main, 0),
-        PartitionSpec::new(p1_main, 0),
+        PartitionSpec::new(p0_main as PartitionEntry, 0),
+        PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
     init_kernel(sched, &parts).expect("qemu_smoke_4k: init_kernel");
 
