@@ -107,8 +107,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ ErrTestConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_ack_error_test: round_robin");
     let parts: [PartitionSpec; ErrTestConfig::N] = [
-        PartitionSpec::new(p0_main, 0),
-        PartitionSpec::new(p1_main, 0),
+        PartitionSpec::new(p0_main as PartitionEntry, 0),
+        PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
     init_kernel(sched, &parts).expect("irq_ack_error_test: init_kernel");
     enable_bound_irqs(&mut p.NVIC, ErrTestConfig::IRQ_DEFAULT_PRIORITY).unwrap();

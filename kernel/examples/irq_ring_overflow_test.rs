@@ -15,8 +15,8 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
 use kernel::split_isr::StaticIsrRing;
 use kernel::{
-    DebugEnabled, IsrHandler, MsgMinimal, PartitionBody, PartitionSpec, Partitions1, PortsTiny,
-    SyncMinimal,
+    DebugEnabled, IsrHandler, MsgMinimal, PartitionBody, PartitionEntry, PartitionSpec,
+    Partitions1, PortsTiny, SyncMinimal,
 };
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -229,7 +229,7 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("ovf_test: take");
     hprintln!("ovf_test: start");
     let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("sched");
-    let parts: [PartitionSpec; 1] = [PartitionSpec::new(p0_main, 0)];
+    let parts: [PartitionSpec; 1] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
     init_kernel(sched, &parts).expect("irq_ring_overflow_test: init_kernel");
     enable_bound_irqs(&mut p.NVIC, Cfg::IRQ_DEFAULT_PRIORITY).unwrap();
     match boot(p).expect("boot") {}

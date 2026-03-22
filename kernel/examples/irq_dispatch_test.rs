@@ -21,7 +21,8 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
 use kernel::{
-    DebugEnabled, MsgMinimal, PartitionBody, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionBody, PartitionEntry, PartitionSpec, Partitions1, PortsTiny,
+    SyncMinimal,
 };
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -93,7 +94,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ IrqTestConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_dispatch_test: round_robin");
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(p0_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
     init_kernel(sched, &parts).expect("irq_dispatch_test: init_kernel");
 
     // Unmask IRQ 0 so the software-triggered pend fires.

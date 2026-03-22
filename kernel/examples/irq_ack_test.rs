@@ -22,7 +22,8 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
 use kernel::{
-    DebugEnabled, MsgMinimal, PartitionBody, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionBody, PartitionEntry, PartitionSpec, Partitions1, PortsTiny,
+    SyncMinimal,
 };
 
 kernel::compose_kernel_config!(AckTestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
@@ -92,7 +93,7 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ AckTestConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_ack_test: round_robin");
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(p0_main, 0)];
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
     init_kernel(sched, &parts).expect("irq_ack_test: init_kernel");
 
     // Unmask IRQ 0 so the software-triggered pend fires.
