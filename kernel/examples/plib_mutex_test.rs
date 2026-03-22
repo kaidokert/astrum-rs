@@ -15,7 +15,9 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -75,6 +77,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // Lock the mutex — P0 runs first so this should be immediate (Ok(1)).
     match plib::sys_mtx_lock(plib::MutexId::new(0)) {
@@ -93,6 +96,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     // Attempt to lock the mutex while P0 holds it — P1 blocks until P0 unlocks.
     // Expected: Ok(0) indicating blocked-then-acquired.

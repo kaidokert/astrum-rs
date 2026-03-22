@@ -18,7 +18,9 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -78,6 +80,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // Set bits 0-2 on P1 (partition index 1).
     match plib::sys_event_set(plib::PartitionId::new(1), plib::EventMask::new(0x07)) {
@@ -89,6 +92,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     // Wait for bit 2 only — event_wait clears matched bits, so bits 0-1
     // (0x03) remain in P1's pending flags after this call.

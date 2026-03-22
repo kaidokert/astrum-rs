@@ -16,7 +16,9 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::scheduler::ScheduleTable;
 use kernel::semaphore::Semaphore;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -62,6 +64,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // Yield so P1 runs first and blocks on sem_wait(0).
     let _ = plib::sys_yield();
@@ -75,6 +78,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     // Wait on the semaphore — blocks until P0 signals.
     match plib::sys_sem_wait(plib::SemaphoreId::new(0)) {

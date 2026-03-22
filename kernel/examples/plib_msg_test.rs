@@ -22,7 +22,9 @@ use kernel::message::MessageQueue;
 use kernel::scheduler::ScheduleTable;
 // TODO: subtask requests MsgStandard, but MsgSmall (MAX_MSG_SIZE=4, QUEUES=2)
 // is sufficient for this 4-byte payload test and is the minimal config.
-use kernel::{DebugEnabled, MsgSmall, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgSmall, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>
@@ -83,6 +85,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
     }
 });
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     let payload = PAYLOAD;
     // TODO: PartitionId(0) is actually queue_id 0 here, not a partition target;
@@ -96,6 +99,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     let mut buf = [0u8; 4];
     // TODO: validate received length matches expected 4 bytes once plib
