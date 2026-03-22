@@ -109,7 +109,11 @@ fn main() -> ! {
         .add(ScheduleEntry::new(0, 3))
         .expect("plib_dev_test: add P0");
     sched.add_system_window(1).expect("plib_dev_test: sys0");
-    init_kernel(sched, &[PartitionSpec::new(partition_main, 0)]).expect("plib_dev_test: kernel");
+    init_kernel(
+        sched,
+        &[PartitionSpec::new(partition_main as PartitionEntry, 0)],
+    )
+    .expect("plib_dev_test: kernel");
 
     // Register UART-A (device 0) so SYS_DEV_* syscalls can reach it.
     // TODO: the 'static lifetime cast is architecturally suspect; replace with

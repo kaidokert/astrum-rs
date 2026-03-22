@@ -101,8 +101,8 @@ fn main() -> ! {
     init_kernel(
         sched,
         &[
-            PartitionSpec::new(p0_main, 0),
-            PartitionSpec::new(p1_main, 0),
+            PartitionSpec::new(p0_main as PartitionEntry, 0),
+            PartitionSpec::new(p1_main as PartitionEntry, 0),
         ],
     )
     .expect("plib_sem_test: kernel");

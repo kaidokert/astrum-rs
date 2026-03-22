@@ -116,8 +116,8 @@ fn main() -> ! {
         .expect("plib_bb_test: round_robin");
 
     let parts: [PartitionSpec; 2] = [
-        PartitionSpec::new(p0_main, 0),
-        PartitionSpec::new(p1_main, 0),
+        PartitionSpec::new(p0_main as PartitionEntry, 0),
+        PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
     init_kernel(sched, &parts).expect("plib_bb_test: kernel");
     with_kernel_mut(|k| {

@@ -123,8 +123,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
         .expect("plib_sleep_test: round_robin");
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
-        PartitionSpec::new(p0_main, 0),
-        PartitionSpec::new(p1_main, 0),
+        PartitionSpec::new(p0_main as PartitionEntry, 0),
+        PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
     init_kernel(sched, &parts).expect("plib_sleep_test: kernel");
 
