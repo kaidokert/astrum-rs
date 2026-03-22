@@ -151,11 +151,8 @@ where
 /// 2. Casts `handler_ptr` back to `fn(&mut Kernel<'mem, C>, u64)`
 /// 3. Dereferences the kernel and calls the handler
 struct ErasedHandler {
-    /// Monomorphized trampoline: `fn(*mut (), *const (), u64)` that internally
-    /// knows the concrete type C and performs the type-safe cast and call.
-    trampoline: fn(*mut (), *const (), u64),
-    /// Raw pointer to the Kernel instance, stored as `*mut ()` for type erasure.
-    kernel_ptr: *mut (),
+    /// Monomorphized trampoline that loads the kernel via AtomicPtr and calls the handler.
+    trampoline: fn(*const (), u64),
     /// Raw pointer to the user's handler function, stored as `*const ()` for type erasure.
     /// This is actually a `fn(&mut Kernel<'mem, C>, u64)` cast to a raw pointer.
     handler_ptr: *const (),
@@ -180,7 +177,7 @@ static SYSTICK_HANDLER: Mutex<RefCell<Option<ErasedHandler>>> = Mutex::new(RefCe
 /// - `kernel_ptr` must be a valid pointer to a `Kernel<'mem, C>` that was cast to `*mut ()`
 /// - `handler_ptr` must be a valid `fn(&mut Kernel<'mem, C>, u64)` cast to `*const ()`
 /// - The caller must ensure no other mutable references to the kernel exist
-fn trampoline<C: KernelConfig>(kernel_ptr: *mut (), handler_ptr: *const (), tick: u64)
+fn trampoline<C: KernelConfig>(handler_ptr: *const (), tick: u64)
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -191,10 +188,15 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    // SAFETY: The kernel_ptr was created from a valid &mut Kernel<'mem, C> in register_handler.
-    // The caller of invoke_handler guarantees the pointer is still valid and the type matches.
+    // SAFETY: store_kernel_ptr was called during boot with a valid Kernel<C>.
     // We're in a critical section (interrupt-disabled) when this runs.
-    let kernel = unsafe { &mut *(kernel_ptr as *mut Kernel<'static, C>) };
+    let Some(nn) = (unsafe { crate::kernel_ptr::load_kernel_ptr::<C>() }) else {
+        return;
+    };
+    // SAFETY: load_kernel_ptr returned Some, so the pointer is non-null and was
+    // stored via store_kernel_ptr with a valid Kernel<C>. We're in a critical section
+    // so no aliasing &mut exists.
+    let kernel = unsafe { &mut *nn.as_ptr() };
     // SAFETY: The handler_ptr was created from a valid fn(&mut Kernel<'mem, C>, u64) in register_handler.
     // Function pointers have the same size/alignment as *const (), and the type is preserved.
     let handler: TickHandlerFn<C> =
@@ -221,10 +223,8 @@ where
 /// 2. `invoke_handler` must be called with matching type parameter `C`
 /// 3. Handler invocation must occur in a context where `&mut Kernel<'mem, C>` is valid
 ///    (typically within a critical section in the SysTick exception)
-pub fn register_handler<'mem, C: KernelConfig>(
-    kernel: &mut Kernel<'mem, C>,
-    handler: TickHandlerFn<C>,
-) where
+pub fn register_handler<C: KernelConfig>(handler: TickHandlerFn<C>)
+where
     [(); C::N]:,
     [(); C::SCHED]:,
     #[cfg(feature = "dynamic-mpu")]
@@ -234,13 +234,11 @@ pub fn register_handler<'mem, C: KernelConfig>(
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    let kernel_ptr = kernel as *mut Kernel<'mem, C> as *mut ();
     // Cast the fn pointer to a raw pointer for type-erased storage
     let handler_ptr = handler as *const ();
 
     let erased = ErasedHandler {
         trampoline: trampoline::<C>,
-        kernel_ptr,
         handler_ptr,
     };
 
@@ -283,7 +281,7 @@ pub fn invoke_handler(tick: u64) {
             // SAFETY: See the safety requirements documented on this function.
             // The trampoline will cast kernel_ptr and handler_ptr back to the
             // correct types and invoke the user's handler.
-            (handler.trampoline)(handler.kernel_ptr, handler.handler_ptr, tick);
+            (handler.trampoline)(handler.handler_ptr, tick);
         }
     });
 }
@@ -371,6 +369,7 @@ mod tests {
         COUNTER.store(0, Ordering::SeqCst);
         TICK.store(0, Ordering::SeqCst);
         clear_handler();
+        crate::kernel_ptr::clear_kernel_ptr();
     }
 
     fn handler(_kernel: &mut Kernel<'_, TestConfig>, t: u64) {
@@ -384,8 +383,7 @@ mod tests {
         reset();
         assert!(!has_handler());
 
-        let mut kernel = make_test_kernel();
-        register_handler(&mut kernel, handler);
+        register_handler::<TestConfig>(handler);
         assert!(has_handler());
         clear_handler();
         assert!(!has_handler());
@@ -401,7 +399,9 @@ mod tests {
         assert_eq!(COUNTER.load(Ordering::SeqCst), 0);
 
         let mut kernel = make_test_kernel();
-        register_handler(&mut kernel, handler);
+        // SAFETY: kernel lives for the duration of this test; type matches TestConfig.
+        unsafe { crate::kernel_ptr::store_kernel_ptr(&mut kernel) };
+        register_handler::<TestConfig>(handler);
         invoke_handler(42);
         assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
         assert_eq!(TICK.load(Ordering::SeqCst), 42);
@@ -420,9 +420,11 @@ mod tests {
         N.store(0, Ordering::SeqCst);
 
         let mut kernel = make_test_kernel();
-        register_handler(&mut kernel, handler);
+        // SAFETY: kernel lives for the duration of this test; type matches TestConfig.
+        unsafe { crate::kernel_ptr::store_kernel_ptr(&mut kernel) };
+        register_handler::<TestConfig>(handler);
         invoke_handler(1);
-        register_handler(&mut kernel, h2);
+        register_handler::<TestConfig>(h2);
         invoke_handler(2);
         assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
         assert_eq!(N.load(Ordering::SeqCst), 1);
@@ -447,7 +449,9 @@ mod tests {
         // Set a known tick value
         kernel.tick.sync(12345);
 
-        register_handler(&mut kernel, kernel_reader);
+        // SAFETY: kernel lives for the duration of this test; type matches TestConfig.
+        unsafe { crate::kernel_ptr::store_kernel_ptr(&mut kernel) };
+        register_handler::<TestConfig>(kernel_reader);
         invoke_handler(0);
 
         assert_eq!(TICK_FROM_KERNEL.load(Ordering::SeqCst), 12345);
@@ -479,7 +483,9 @@ mod tests {
         let mut kernel = make_test_kernel();
         kernel.tick.sync(100);
 
-        register_handler(&mut kernel, kernel_modifier);
+        // SAFETY: kernel lives for the duration of this test; type matches TestConfig.
+        unsafe { crate::kernel_ptr::store_kernel_ptr(&mut kernel) };
+        register_handler::<TestConfig>(kernel_modifier);
         invoke_handler(50);
 
         // Verify the kernel was modified
