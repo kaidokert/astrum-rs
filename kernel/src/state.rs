@@ -510,17 +510,17 @@ where
 
 /// Access the unified kernel state immutably within a critical section.
 ///
-/// Wraps access to `UNIFIED_KERNEL_STORAGE` in `cortex_m::interrupt::free()`,
-/// ensuring exclusive access by masking interrupts on single-core Cortex-M.
+/// Obtains the kernel pointer via [`load_kernel_ptr`](crate::kernel_ptr::load_kernel_ptr)
+/// (AtomicPtr with Acquire ordering), then wraps the closure call in
+/// `cortex_m::interrupt::free()` for exclusive access on single-core Cortex-M.
 ///
 /// # Safety Invariants
 ///
 /// This function is safe to call provided the following invariants hold:
 ///
-/// 1. **Initialization before use**: `init_kernel_state()` must be called
-///    exactly once by `boot()` before interrupts are enabled. The kernel
-///    is initialized during the boot sequence before any exception handlers
-///    can run.
+/// 1. **Initialization before use**: `store_kernel_ptr()` must be called
+///    during the boot sequence before interrupts are enabled. This is done
+///    by `boot_preconfigured()` after `init_kernel_state()` completes.
 ///
 /// 2. **Single-core execution**: Cortex-M is single-core; the critical section
 ///    via `interrupt::free()` masks all configurable interrupts, preventing
@@ -538,8 +538,8 @@ where
 ///
 /// # Safety
 ///
-/// Calling this function before `init_kernel_state()` has been called results
-/// in **Undefined Behavior** (dereferencing an uninitialized pointer).
+/// Calling this function before `store_kernel_ptr()` has been called results
+/// in an `Err` return (not UB), because `load_kernel_ptr` returns `None`.
 #[cfg(not(test))]
 pub fn with_kernel<C, F, R>(f: F) -> Result<R, &'static str>
 where
@@ -554,32 +554,37 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    if !KERNEL_INITIALIZED.load(Ordering::Acquire) {
-        return Err("kernel not initialized");
-    }
+    // SAFETY: We only cast the NonNull to a shared reference inside a
+    // critical section, ensuring no aliasing &mut exists. The Acquire
+    // ordering in load_kernel_ptr guarantees visibility of the kernel
+    // initialization performed before the matching Release store.
+    let nn = unsafe { crate::kernel_ptr::load_kernel_ptr::<C>() };
+    let ptr = match nn {
+        Some(p) => p.as_ptr(),
+        None => return Err("kernel not initialized"),
+    };
     Ok(cortex_m::interrupt::free(|_cs| {
-        // SAFETY: KERNEL_INITIALIZED (Acquire) guarantees init_kernel_state()
-        // completed (Release). Critical section prevents concurrent access.
-        let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *const MaybeUninit<Kernel<'static, C>>;
-        // SAFETY: KERNEL_INITIALIZED guarantees the MaybeUninit was written.
-        let kernel = unsafe { (*mu_ptr).assume_init_ref() };
+        // SAFETY: load_kernel_ptr returned Some, so the pointer is non-null
+        // and was stored via store_kernel_ptr after a valid Kernel was
+        // initialized. The critical section prevents concurrent access.
+        let kernel = unsafe { &*ptr };
         f(kernel)
     }))
 }
 
 /// Access the unified kernel state mutably within a critical section.
 ///
-/// Wraps access to `UNIFIED_KERNEL_STORAGE` in `cortex_m::interrupt::free()`,
-/// ensuring exclusive access by masking interrupts on single-core Cortex-M.
+/// Obtains the kernel pointer via [`load_kernel_ptr`](crate::kernel_ptr::load_kernel_ptr)
+/// (AtomicPtr with Acquire ordering), then wraps the closure call in
+/// `cortex_m::interrupt::free()` for exclusive access on single-core Cortex-M.
 ///
 /// # Safety Invariants
 ///
 /// This function is safe to call provided the following invariants hold:
 ///
-/// 1. **Initialization before use**: `init_kernel_state()` must be called
-///    exactly once by `boot()` before interrupts are enabled. The kernel
-///    is initialized during the boot sequence before any exception handlers
-///    can run.
+/// 1. **Initialization before use**: `store_kernel_ptr()` must be called
+///    during the boot sequence before interrupts are enabled. This is done
+///    by `boot_preconfigured()` after `init_kernel_state()` completes.
 ///
 /// 2. **Single-core execution**: Cortex-M is single-core; the critical section
 ///    via `interrupt::free()` masks all configurable interrupts, preventing
@@ -597,8 +602,8 @@ where
 ///
 /// # Safety
 ///
-/// Calling this function before `init_kernel_state()` has been called results
-/// in **Undefined Behavior** (dereferencing an uninitialized pointer).
+/// Calling this function before `store_kernel_ptr()` has been called results
+/// in an `Err` return (not UB), because `load_kernel_ptr` returns `None`.
 #[cfg(not(test))]
 pub fn with_kernel_mut<C, F, R>(f: F) -> Result<R, &'static str>
 where
@@ -613,15 +618,20 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    if !KERNEL_INITIALIZED.load(Ordering::Acquire) {
-        return Err("kernel not initialized");
-    }
+    // SAFETY: We only cast the NonNull to a mutable reference inside a
+    // critical section, ensuring no other references exist. The Acquire
+    // ordering in load_kernel_ptr guarantees visibility of the kernel
+    // initialization performed before the matching Release store.
+    let nn = unsafe { crate::kernel_ptr::load_kernel_ptr::<C>() };
+    let ptr = match nn {
+        Some(p) => p.as_ptr(),
+        None => return Err("kernel not initialized"),
+    };
     Ok(cortex_m::interrupt::free(|_cs| {
-        // SAFETY: KERNEL_INITIALIZED (Acquire) guarantees init_kernel_state()
-        // completed (Release). Critical section prevents concurrent access.
-        let mu_ptr = addr_of_mut!(UNIFIED_KERNEL_STORAGE) as *mut MaybeUninit<Kernel<'static, C>>;
-        // SAFETY: KERNEL_INITIALIZED guarantees the MaybeUninit was written.
-        let kernel = unsafe { (*mu_ptr).assume_init_mut() };
+        // SAFETY: load_kernel_ptr returned Some, so the pointer is non-null
+        // and was stored via store_kernel_ptr after a valid Kernel was
+        // initialized. The critical section ensures exclusive access.
+        let kernel = unsafe { &mut *ptr };
         f(kernel)
     }))
 }
