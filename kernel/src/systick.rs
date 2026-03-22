@@ -27,8 +27,8 @@
 //! Because `Kernel<'mem, C>` is generic over `KernelConfig`, but static storage must be
 //! non-generic, this module uses type erasure:
 //! - The user's `fn(&mut Kernel<'mem, C>, u64)` is stored as a raw pointer
-//! - A raw `*mut ()` pointer to the kernel is stored alongside
-//! - A monomorphized trampoline function handles the typed invocation
+//! - A monomorphized trampoline function loads the kernel via `load_kernel_ptr()` and
+//!   handles the typed invocation
 //!
 //! # Safety
 //!
@@ -147,7 +147,7 @@ where
 /// Type-erased handler that stores all pointers needed for invocation.
 ///
 /// The `trampoline` field is a monomorphized function that:
-/// 1. Casts `kernel_ptr` back to `*mut Kernel<'mem, C>`
+/// 1. Loads the kernel pointer via `load_kernel_ptr()`
 /// 2. Casts `handler_ptr` back to `fn(&mut Kernel<'mem, C>, u64)`
 /// 3. Dereferences the kernel and calls the handler
 struct ErasedHandler {
