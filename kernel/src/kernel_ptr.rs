@@ -37,6 +37,10 @@ use crate::config::KernelConfig;
 use crate::svc::Kernel;
 
 /// Type-erased global kernel pointer for ISR access.
+///
+/// `#[no_mangle]` so PendSV assembly can load the kernel address at runtime
+/// via `ldr r1, =KERNEL_PTR; ldr r1, [r1]`.
+#[no_mangle]
 static KERNEL_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
 /// Store a kernel pointer for ISR access (Release ordering).

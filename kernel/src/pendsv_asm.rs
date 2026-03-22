@@ -8,7 +8,7 @@
 //! # Architecture
 //!
 //! These routines access the `partition_sp` array directly using struct field offsets
-//! rather than calling Rust shim functions. The linker symbol `__kernel_state_start`
+//! rather than calling Rust shim functions. The `KERNEL_PTR` AtomicPtr global
 //! provides the kernel base address, and compile-time offset constants
 //! (`KERNEL_CORE_OFFSET`, `CORE_PARTITION_SP_OFFSET`) allow direct array access.
 //!
@@ -49,8 +49,8 @@
 //      0xFF lowest). They are NOT safe to call from Thread mode or other exceptions.
 //    - The caller must ensure `r0` contains a valid partition index before calling
 //      `pendsv_context_save` or `pendsv_context_restore`.
-//    - Direct memory access to partition_sp[idx] uses __kernel_state_start +
-//      KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET + (idx * 4). Bounds checking
+//    - Direct memory access to partition_sp[idx] uses KERNEL_PTR (loaded via
+//      AtomicPtr) + KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET + (idx * 4). Bounds checking
 //      is the caller's responsibility.
 //    - The null-pointer check in `pendsv_context_restore` (cmp r3, #0; beq fault)
 //      prevents dereferencing an invalid SP for an uninitialized partition.
@@ -89,16 +89,22 @@ pendsv_context_save:
     mrs     r3, psp
     stmdb   r3!, {{r4-r11}}     /* r3 now points to saved context */
 
-    /* Compute &partition_sp[idx] once, used by both normal and overflow paths.
-     * SAFETY: idx (r0) was validated by the PendSV caller against partition_count.
-     * __kernel_state_start + KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET gives
-     * the base of the partition_sp array; adding idx*4 gives the element address.
-     * The stack overflow check compares the post-push PSP (r3) against the
-     * partition's stack_limit. If PSP < stack_limit, the stack has overflowed
-     * and we enter a fatal fault loop (skipping context restore) rather than
-     * storing a corrupted SP that would crash on the next restore. */
+    @ SAFETY: KERNEL_PTR is guaranteed non-null because store_kernel_ptr() must
+    @ be called before enabling interrupts, and PendSV (priority 0xFF) cannot
+    @ fire until interrupts are enabled. A defensive null check is included below
+    @ to trap misconfiguration with a debuggable fault loop instead of HardFault.
+    @ idx (r0) was validated by the PendSV caller against partition_count.
+    @ KERNEL_PTR (AtomicPtr) + KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET gives
+    @ the base of the partition_sp array; adding idx*4 gives the element address.
+    @ The stack overflow check compares the post-push PSP (r3) against the
+    @ partition's stack_limit. If PSP < stack_limit, the stack has overflowed
+    @ and we enter a fatal fault loop (skipping context restore) rather than
+    @ storing a corrupted SP that would crash on the next restore.
     lsl     r0, r0, #2          /* r0 = idx * 4 (used for both arrays) */
-    ldr     r1, =__kernel_state_start
+    ldr     r1, =KERNEL_PTR
+    ldr     r1, [r1]            /* r1 = kernel pointer (from AtomicPtr) */
+    cmp     r1, #0
+    beq     .Lnull_kernel_fault
     ldr     r2, =KERNEL_CORE_OFFSET
     ldr     r2, [r2]
     add     r1, r1, r2          /* r1 = &kernel.core (preserved) */
@@ -160,10 +166,17 @@ __pendsv_stack_overflow:
     .type pendsv_context_restore, %function
     .thumb_func
 pendsv_context_restore:
-    /* Compute address of partition_sp[idx]:
-     * addr = __kernel_state_start + KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET + (idx * 4)
-     */
-    ldr     r1, =__kernel_state_start
+    @ SAFETY: KERNEL_PTR is guaranteed non-null because store_kernel_ptr() must
+    @ be called before enabling interrupts, and PendSV (priority 0xFF) cannot
+    @ fire until interrupts are enabled. A defensive null check is included below.
+    @ idx (r0) was validated by the PendSV caller against partition_count.
+    @ The subsequent null check on partition_sp[idx] (cmp r3, #0; beq fault)
+    @ guards against uninitialized partition entries.
+    @ addr = KERNEL_PTR + KERNEL_CORE_OFFSET + CORE_PARTITION_SP_OFFSET + (idx * 4)
+    ldr     r1, =KERNEL_PTR
+    ldr     r1, [r1]            /* r1 = kernel pointer (from AtomicPtr) */
+    cmp     r1, #0
+    beq     .Lnull_kernel_fault
     ldr     r2, =KERNEL_CORE_OFFSET
     ldr     r2, [r2]            /* r2 = core offset */
     add     r1, r1, r2          /* r1 = &kernel.core */
@@ -219,5 +232,11 @@ pendsv_return_unprivileged:
     ldr     lr, =0xFFFFFFFD
     bx      lr
     .size pendsv_return_unprivileged, . - pendsv_return_unprivileged
+
+    /* Null KERNEL_PTR fault: KERNEL_PTR was null when PendSV fired.
+     * This means store_kernel_ptr() was not called before enabling interrupts.
+     * Loop forever to keep the system debuggable rather than HardFaulting. */
+.Lnull_kernel_fault:
+    b       .Lnull_kernel_fault
 "#
 );
