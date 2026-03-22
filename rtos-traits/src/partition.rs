@@ -26,6 +26,20 @@ impl PartitionSpec {
             r0,
         }
     }
+    /// Create a spec from a [`PartitionEntry`] fn pointer with `r0 = 0`.
+    ///
+    /// Accepts a bare function item directly — no `as` cast required.
+    // TODO(panic-free): inherits debug_assert! panic from EntryAddr::from_entry;
+    // in handler mode (SVC) this is unrecoverable. Align with Panic-Free Policy.
+    pub fn entry(f: PartitionEntry) -> Self {
+        Self::new(f, 0)
+    }
+    /// Create a spec from a [`PartitionBody`] fn pointer with an explicit `r0`.
+    // TODO(panic-free): inherits debug_assert! panic from EntryAddr::from_entry;
+    // in handler mode (SVC) this is unrecoverable. Align with Panic-Free Policy.
+    pub fn body(f: PartitionBody, r0: u32) -> Self {
+        Self::new(f, r0)
+    }
     pub const fn entry_point(&self) -> EntryAddr {
         self.entry_point
     }
@@ -398,5 +412,67 @@ mod tests {
     #[test]
     fn check_entry_sig_body_compiles() {
         let _: PartitionBody = _dummy_body;
+    }
+
+    // --- PartitionSpec::entry() / body() tests ---
+
+    /// Proves `entry()` accepts a bare function item without an `as` cast.
+    /// The coercion from function item → PartitionEntry is validated at
+    /// compile time; calling entry() at runtime is tested separately.
+    const _ENTRY_COERCE: PartitionEntry = _dummy_entry;
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn spec_entry_accepts_bare_fn_item() {
+        // If this compiles, `entry()` accepts a bare fn item with no cast.
+        let _ = PartitionSpec::entry(_dummy_entry);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn spec_entry_round_trips_address() {
+        let spec = PartitionSpec::entry(_dummy_entry);
+        assert_eq!(spec.entry_point().raw(), _dummy_entry as *const () as u32);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn spec_entry_sets_r0_zero() {
+        let spec = PartitionSpec::entry(_dummy_entry);
+        assert_eq!(spec.r0(), 0);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn spec_body_preserves_r0() {
+        let spec = PartitionSpec::body(_dummy_body, 0xCAFE);
+        assert_eq!(spec.r0(), 0xCAFE);
+        assert_eq!(spec.entry_point().raw(), _dummy_body as *const () as u32);
+    }
+
+    /// Verify that `PartitionSpec::entry()` detects truncation when the
+    /// address exceeds `u32::MAX`. Uses a transmuted large address so the
+    /// test is deterministic (not dependent on linker address assignment).
+    #[cfg(target_pointer_width = "64")]
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn spec_entry_catches_truncation() {
+        // SAFETY: we only need an address value that exceeds u32::MAX to
+        // trigger the debug_assert!; the function is never actually called.
+        let fake: PartitionEntry = unsafe { core::mem::transmute(0x1_0000_0001_usize) };
+        let _ = PartitionSpec::entry(fake);
+    }
+
+    /// Same as above but for `PartitionSpec::body()`.
+    #[cfg(target_pointer_width = "64")]
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn spec_body_catches_truncation() {
+        // SAFETY: we only need an address value that exceeds u32::MAX to
+        // trigger the debug_assert!; the function is never actually called.
+        let fake: PartitionBody = unsafe { core::mem::transmute(0x1_0000_0001_usize) };
+        let _ = PartitionSpec::body(fake, 0);
     }
 }
