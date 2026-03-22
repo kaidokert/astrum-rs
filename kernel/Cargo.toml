@@ -499,6 +499,9 @@ log-defmt = ["dep:defmt"]
 multi-core = []
 single-core = []
 
+# FPU context: save/restore FPU registers on context switch (Cortex-M4F+).
+fpu-context = []
+
 # Kernel storage size ladder — selects static buffer sizes at compile time.
 # Mutually exclusive: enabling more than one is a compile error.
 kernel-4k = []
