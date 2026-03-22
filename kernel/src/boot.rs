@@ -1209,18 +1209,16 @@ mod tests {
         // Verify load returns the same address.
         // SAFETY: pointer just stored, kernel alive, no aliasing &mut.
         let loaded = unsafe { kernel_ptr::load_kernel_ptr::<BootTestConfig>() };
-        assert!(
-            !loaded.is_null(),
-            "load_kernel_ptr must return non-null after store"
-        );
+        let ptr = loaded.expect("load_kernel_ptr must return Some after store");
         assert_eq!(
-            loaded as usize, expected_addr,
+            ptr.as_ptr() as usize,
+            expected_addr,
             "AtomicPtr must point to the same kernel instance"
         );
 
         // Verify data integrity through the loaded pointer.
         // SAFETY: loaded pointer is valid and we hold no other &mut.
-        let k = unsafe { &*loaded };
+        let k = unsafe { ptr.as_ref() };
         assert_eq!(
             k.current_partition, 255,
             "sentinel value must survive round-trip"

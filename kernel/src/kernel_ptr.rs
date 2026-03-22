@@ -21,12 +21,16 @@
 //!     // SAFETY: C matches the KernelConfig used in main(); kernel is alive.
 //!     // Caller must ensure no higher-priority ISR creates an aliasing &mut
 //!     // (e.g., by masking interrupts while the reference is held).
-//!     let p = unsafe { load_kernel_ptr::<MyConfig>() };
-//!     if !p.is_null() { let k = unsafe { &mut *p }; k.handle_uart_irq(); }
+//!     if let Some(ptr) = unsafe { load_kernel_ptr::<MyConfig>() } {
+//!         // SAFETY: We are the only active ISR at this priority; no aliasing
+//!         // &mut exists. The kernel is alive because main() never returns.
+//!         let k = unsafe { ptr.as_ptr().as_mut().unwrap_unchecked() };
+//!         k.handle_uart_irq();
+//!     }
 //! }
 //! ```
 
-use core::ptr;
+use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::config::KernelConfig;
@@ -57,15 +61,15 @@ where
     KERNEL_PTR.store(k as *mut Kernel<'_, C> as *mut (), Ordering::Release);
 }
 
-/// Load the kernel pointer (Acquire ordering). Returns null if no
+/// Load the kernel pointer (Acquire ordering). Returns `None` if no
 /// kernel has been stored (or after [`clear_kernel_ptr`]).
 ///
-/// Returns a raw pointer rather than a reference because the true lifetime
-/// is *not* `'static` (the kernel may live on the stack of `main()`), and
-/// on Cortex-M with priority-based nesting, multiple ISRs could call this
-/// concurrently — returning `&mut` would instantly create aliasing UB.
-/// The caller must convert to a reference only when they can guarantee
-/// exclusive access for the duration of that borrow.
+/// Returns `Option<NonNull<...>>` rather than `Option<&mut Kernel>` because
+/// the true lifetime is *not* `'static` (the kernel may live on the stack
+/// of `main()`), and on Cortex-M with priority-based nesting, multiple ISRs
+/// could call this concurrently — returning `&mut` would instantly create
+/// aliasing UB. The caller must convert to a reference only when they can
+/// guarantee exclusive access for the duration of that borrow.
 ///
 /// # Safety
 ///
@@ -76,7 +80,7 @@ where
 ///   exists at the same time (e.g., between `main` and an ISR, or in
 ///   nested ISRs). Dereferencing the returned pointer while another
 ///   mutable reference is live is undefined behaviour.
-pub unsafe fn load_kernel_ptr<C: KernelConfig>() -> *mut Kernel<'static, C>
+pub unsafe fn load_kernel_ptr<C: KernelConfig>() -> Option<NonNull<Kernel<'static, C>>>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -88,7 +92,7 @@ where
     [(); C::DR]:,
 {
     let ptr = KERNEL_PTR.load(Ordering::Acquire);
-    ptr as *mut Kernel<'static, C>
+    NonNull::new(ptr as *mut Kernel<'static, C>)
 }
 
 /// Clear the stored kernel pointer (Release ordering).
@@ -123,12 +127,12 @@ mod tests {
     }
 
     #[test]
-    fn load_returns_null_before_store() {
+    fn load_returns_none_before_store() {
         let _guard = TEST_LOCK.lock().unwrap();
         clear_kernel_ptr();
-        // SAFETY: No pointer stored; returns null without dereferencing.
+        // SAFETY: No pointer stored; returns None without dereferencing.
         let result = unsafe { load_kernel_ptr::<TestConfig>() };
-        assert!(result.is_null(), "expected null before any store");
+        assert!(result.is_none(), "expected None before any store");
     }
 
     #[test]
@@ -141,12 +145,9 @@ mod tests {
 
         // SAFETY: Pointer just stored, kernel alive, no aliasing &mut.
         let loaded = unsafe { load_kernel_ptr::<TestConfig>() };
-        assert!(
-            !loaded.is_null(),
-            "load_kernel_ptr must return non-null after store"
-        );
+        let ptr = loaded.expect("load_kernel_ptr must return Some after store");
         // SAFETY: loaded pointer is valid and we hold no other &mut.
-        let k = unsafe { &*loaded };
+        let k = unsafe { ptr.as_ref() };
         assert_eq!(k.current_partition, 255, "sentinel must survive round-trip");
         assert!(
             k.active_partition.is_none(),
@@ -158,15 +159,15 @@ mod tests {
     }
 
     #[test]
-    fn clear_resets_to_null() {
+    fn clear_resets_to_none() {
         let _guard = TEST_LOCK.lock().unwrap();
         let mut kernel = create_test_kernel();
         // SAFETY: kernel lives for the duration of this test.
         unsafe { store_kernel_ptr(&mut kernel) };
         clear_kernel_ptr();
 
-        // SAFETY: Pointer cleared; returns null.
+        // SAFETY: Pointer cleared; returns None.
         let result = unsafe { load_kernel_ptr::<TestConfig>() };
-        assert!(result.is_null(), "expected null after clear");
+        assert!(result.is_none(), "expected None after clear");
     }
 }
