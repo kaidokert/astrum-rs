@@ -86,7 +86,7 @@ impl KernelTestHarness {
             let o = (i as u32) * PARTITION_OFFSET;
             let mem = ExternalPartitionMemory::new(
                 stack.as_u32_slice_mut(),
-                FLASH_BASE + o,
+                (FLASH_BASE + o) | 1,
                 MpuRegion::new(RAM_BASE + o, STACK_SIZE_BYTES, 0),
                 i as u8,
             )
@@ -216,14 +216,14 @@ impl KernelTestHarness {
         let (head, tail) = stacks.split_at_mut(1);
         let mem0 = ExternalPartitionMemory::new(
             head[0].as_u32_slice_mut(),
-            FLASH_BASE,
+            FLASH_BASE | 1,
             MpuRegion::new(0, 0, 0),
             0,
         )
         .map_err(HarnessError::KernelInit)?;
         let mem1 = ExternalPartitionMemory::new(
             tail[0].as_u32_slice_mut(),
-            FLASH_BASE + PARTITION_OFFSET,
+            (FLASH_BASE + PARTITION_OFFSET) | 1,
             MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
             1,
         )
@@ -2684,14 +2684,14 @@ mod tests {
         let (head, tail) = stacks.split_at_mut(1);
         let mem0 = ExternalPartitionMemory::new(
             head[0].as_u32_slice_mut(),
-            FLASH_BASE,
+            FLASH_BASE | 1,
             MpuRegion::new(0, 0, 0),
             0,
         )
         .expect("mem0");
         let mem1 = ExternalPartitionMemory::new(
             tail[0].as_u32_slice_mut(),
-            FLASH_BASE + PARTITION_OFFSET,
+            (FLASH_BASE + PARTITION_OFFSET) | 1,
             MpuRegion::new(
                 original_config_base,
                 original_config_size,
@@ -3109,5 +3109,40 @@ mod tests {
         // SAFETY: rd is valid; dispatch wrote 4 bytes.
         let received = unsafe { core::slice::from_raw_parts(rd, 4) };
         assert_eq!(received, &payload, "blackboard read payload mismatch");
+    }
+
+    #[test]
+    fn kernel_init_construction_and_equality() {
+        // TODO: reviewer false positive — ConfigError is in scope via `use super::*` (line 500)
+        use crate::boot::BootError;
+        let err = BootError::KernelInit(ConfigError::ScheduleEmpty);
+        assert_eq!(err, BootError::KernelInit(ConfigError::ScheduleEmpty));
+        // Different inner ConfigError produces inequality.
+        assert_ne!(err, BootError::KernelInit(ConfigError::PartitionTableFull));
+        // Distinct from other BootError variants.
+        assert_ne!(err, BootError::NoReadyPartition);
+        assert_ne!(err, BootError::KernelNotInitialized);
+    }
+
+    #[test]
+    fn kernel_init_display_formats_inner_error() {
+        use crate::boot::BootError;
+        let err = BootError::KernelInit(ConfigError::ScheduleEmpty);
+        let msg = format!("{err}");
+        assert!(
+            msg.starts_with("kernel init failed:"),
+            "expected 'kernel init failed:' prefix, got: {msg}"
+        );
+
+        let err2 = BootError::KernelInit(ConfigError::StackSizeInvalid { partition_id: 3 });
+        let msg2 = format!("{err2}");
+        assert!(
+            msg2.starts_with("kernel init failed:"),
+            "unexpected prefix: {msg2}"
+        );
+        assert!(
+            msg2.contains("partition 3"),
+            "must contain partition id: {msg2}"
+        );
     }
 }

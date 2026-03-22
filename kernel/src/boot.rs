@@ -6,7 +6,7 @@ use crate::{
     config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps},
     message::MessagePool,
     mutex::MutexPool,
-    partition::PartitionTable,
+    partition::{ConfigError, PartitionTable},
     queuing::QueuingPortPool,
     sampling::SamplingPortPool,
     scheduler::ScheduleTable,
@@ -79,6 +79,8 @@ pub enum BootError {
     KernelNotInitialized,
     /// Too many partitions for the kernel configuration.
     TooManyPartitions { given: usize, max: usize },
+    /// Kernel initialization failed due to a configuration error.
+    KernelInit(ConfigError),
 }
 
 impl core::fmt::Display for BootError {
@@ -161,6 +163,9 @@ impl core::fmt::Display for BootError {
             }
             Self::TooManyPartitions { given, max } => {
                 write!(f, "too many partitions: {given} given, max {max}")
+            }
+            Self::KernelInit(e) => {
+                write!(f, "kernel init failed: {e}")
             }
         }
     }
