@@ -111,6 +111,20 @@ impl EntryPointFn for PartitionBody {
     }
 }
 
+/// Compile-time check that a function has the correct entry-point signature.
+///
+/// - `check_entry_sig!(my_fn)` — asserts `my_fn` is a [`PartitionEntry`] (`extern "C" fn() -> !`).
+/// - `check_entry_sig!(my_fn, body)` — asserts `my_fn` is a [`PartitionBody`] (`extern "C" fn(u32) -> !`).
+#[macro_export]
+macro_rules! check_entry_sig {
+    ($fn:path) => {
+        const _: $crate::partition::PartitionEntry = $fn;
+    };
+    ($fn:path, body) => {
+        const _: $crate::partition::PartitionBody = $fn;
+    };
+}
+
 /// Type-safe wrapper for a partition entry-point address.
 ///
 /// Internally stores a `u32`, which is the native pointer width on Cortex-M.
@@ -451,5 +465,22 @@ mod tests {
     fn from_partition_body_for_spec_catches_truncation_on_64bit() {
         let body: PartitionBody = _dummy_body;
         let _ = PartitionSpec::from(body);
+    }
+
+    // --- check_entry_sig! tests ---
+
+    check_entry_sig!(_dummy_entry);
+    check_entry_sig!(_dummy_body, body);
+
+    #[test]
+    fn check_entry_sig_entry_compiles() {
+        // The const assertion above already validates at compile time.
+        // This test ensures the macro is usable from within the test module.
+        let _: PartitionEntry = _dummy_entry;
+    }
+
+    #[test]
+    fn check_entry_sig_body_compiles() {
+        let _: PartitionBody = _dummy_body;
     }
 }
