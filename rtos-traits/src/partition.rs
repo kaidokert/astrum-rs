@@ -68,20 +68,32 @@ mod sealed {
 ///
 /// Sealed: external crates cannot implement this trait.
 pub trait EntryPointFn: sealed::Sealed {
+    /// Return the raw function pointer address.
+    #[doc(hidden)]
+    fn into_usize(self) -> usize;
+
     fn into_entry_addr(self) -> EntryAddr;
 }
 
 impl EntryPointFn for PartitionEntry {
     #[inline]
+    fn into_usize(self) -> usize {
+        self as *const () as usize
+    }
+    #[inline]
     fn into_entry_addr(self) -> EntryAddr {
-        EntryAddr::from_fn(self)
+        EntryAddr::from_entry(self)
     }
 }
 
 impl EntryPointFn for PartitionBody {
     #[inline]
+    fn into_usize(self) -> usize {
+        self as *const () as usize
+    }
+    #[inline]
     fn into_entry_addr(self) -> EntryAddr {
-        EntryAddr::from_body(self)
+        EntryAddr::from_entry(self)
     }
 }
 
@@ -96,25 +108,25 @@ impl EntryPointFn for PartitionBody {
 pub struct EntryAddr(u32);
 
 impl EntryAddr {
+    /// Unified constructor accepting any [`EntryPointFn`] implementer
+    /// (`PartitionEntry` or `PartitionBody`).
     #[inline]
-    pub fn from_fn(f: PartitionEntry) -> Self {
-        let addr = f as *const () as usize;
+    pub fn from_entry(f: impl EntryPointFn) -> Self {
+        let addr = f.into_usize();
         debug_assert!(
             addr <= u32::MAX as usize,
-            "EntryAddr::from_fn: address {:#x} exceeds u32::MAX, truncation would occur",
+            "EntryAddr::from_entry: address {:#x} exceeds u32::MAX, truncation would occur",
             addr
         );
         Self(addr as u32)
     }
     #[inline]
+    pub fn from_fn(f: PartitionEntry) -> Self {
+        Self::from_entry(f)
+    }
+    #[inline]
     pub fn from_body(f: PartitionBody) -> Self {
-        let addr = f as *const () as usize;
-        debug_assert!(
-            addr <= u32::MAX as usize,
-            "EntryAddr::from_body: address {:#x} exceeds u32::MAX, truncation would occur",
-            addr
-        );
-        Self(addr as u32)
+        Self::from_entry(f)
     }
     #[inline]
     pub fn raw(self) -> u32 {
@@ -316,6 +328,38 @@ mod tests {
     fn entry_point_fn_body_catches_truncation_on_64bit() {
         let body: PartitionBody = _dummy_body;
         let _ = body.into_entry_addr();
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn from_entry_with_partition_entry() {
+        let ep: PartitionEntry = _dummy_entry;
+        let addr = EntryAddr::from_entry(ep);
+        assert_eq!(addr.raw(), _dummy_entry as *const () as usize as u32);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn from_entry_with_partition_body() {
+        let body: PartitionBody = _dummy_body;
+        let addr = EntryAddr::from_entry(body);
+        assert_eq!(addr.raw(), _dummy_body as *const () as usize as u32);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn from_entry_entry_catches_truncation_on_64bit() {
+        let ep: PartitionEntry = _dummy_entry;
+        let _ = EntryAddr::from_entry(ep);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn from_entry_body_catches_truncation_on_64bit() {
+        let body: PartitionBody = _dummy_body;
+        let _ = EntryAddr::from_entry(body);
     }
 
     /// On 64-bit hosts, `PartitionSpec::new()` must trigger the truncation
