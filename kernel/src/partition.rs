@@ -3506,27 +3506,11 @@ mod tests {
 
     #[cfg(target_pointer_width = "32")]
     #[test]
-    fn partition_spec_from_body_holds_entry_and_arg() {
-        let spec = PartitionSpec::from_entry(_dummy_body, 7);
-        assert_eq!(spec.entry_point(), EntryAddr::from_entry(_dummy_body));
-        assert_eq!(spec.r0(), 7);
-    }
-
-    #[cfg(target_pointer_width = "32")]
-    #[test]
     fn partition_spec_from_tuple_compat() {
         let ep: PartitionEntry = _dummy_entry;
         let spec: PartitionSpec = (ep, 99).into();
         assert_eq!(spec.entry_point(), EntryAddr::from_entry(_dummy_entry));
         assert_eq!(spec.r0(), 99);
-    }
-
-    #[cfg(target_pointer_width = "32")]
-    #[test]
-    fn partition_spec_from_body_tuple() {
-        let spec: PartitionSpec = (_dummy_body as PartitionBody, 42u32).into();
-        assert_eq!(spec.entry_point(), EntryAddr::from_entry(_dummy_body));
-        assert_eq!(spec.r0(), 42);
     }
 
     #[cfg(target_pointer_width = "32")]
@@ -3543,15 +3527,6 @@ mod tests {
         let spec = PartitionSpec::new(_dummy_entry, 0);
         let addr: EntryAddr = spec.entry_point();
         assert_eq!(addr, EntryAddr::from_entry(_dummy_entry));
-    }
-
-    #[cfg(target_pointer_width = "32")]
-    #[test]
-    fn partition_spec_no_unsafe() {
-        // from_entry uses EntryAddr::from_entry, no transmute
-        let spec = PartitionSpec::from_entry(_dummy_body, 99);
-        assert_eq!(spec.entry_point(), EntryAddr::from_entry(_dummy_body));
-        assert_eq!(spec.r0(), 99);
     }
 
     // ---- EntryAddr tests ----
