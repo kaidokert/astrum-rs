@@ -1,9 +1,7 @@
-// Compile-fail test: PartitionSpec::new() rejects a PartitionBody-typed
-// function (extern "C" fn(u32) -> !) where it expects PartitionEntry
-// (extern "C" fn() -> !).
-//
-// This ensures the type aliases provide compile-time safety at the API
-// boundary.
+// Compile-fail test: PartitionSpec::new() rejects a bare fn item whose
+// type has not been explicitly cast to PartitionEntry or PartitionBody.
+// The `impl EntryPointFn` bound requires a concrete fn-pointer type, so
+// passing the un-coerced fn item `body_fn` is a type error.
 //
 // TODO: replace `extern crate std` + `fn main()` with a proper no_std
 // harness (#![no_main] + #[panic_handler]) once trybuild supports

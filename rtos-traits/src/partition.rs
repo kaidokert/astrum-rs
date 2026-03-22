@@ -20,7 +20,7 @@ pub struct PartitionSpec {
 }
 
 impl PartitionSpec {
-    pub fn new(entry_point: PartitionEntry, r0: u32) -> Self {
+    pub fn new(entry_point: impl EntryPointFn, r0: u32) -> Self {
         Self {
             entry_point: EntryAddr::from_entry(entry_point),
             r0,
@@ -365,7 +365,29 @@ mod tests {
     #[test]
     #[should_panic(expected = "exceeds u32::MAX")]
     fn partition_spec_new_catches_truncation_on_64bit() {
-        let _ = PartitionSpec::new(_dummy_entry, 0);
+        let _ = PartitionSpec::new(_dummy_entry as PartitionEntry, 0);
+    }
+
+    /// `PartitionSpec::new()` now accepts `PartitionBody` directly via
+    /// `impl EntryPointFn`.
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn spec_new_with_partition_body() {
+        let body: PartitionBody = _dummy_body;
+        let expected_addr = body as *const () as usize as u32;
+        let spec = PartitionSpec::new(body, 42);
+        assert_eq!(spec.entry_point().raw(), expected_addr);
+        assert_eq!(spec.r0(), 42);
+    }
+
+    /// On 64-bit hosts, `PartitionSpec::new()` with a `PartitionBody` must
+    /// trigger the truncation guard.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn spec_new_body_catches_truncation_on_64bit() {
+        let body: PartitionBody = _dummy_body;
+        let _ = PartitionSpec::new(body, 0);
     }
 
     /// On 64-bit hosts, `PartitionSpec::from_entry()` must trigger the
