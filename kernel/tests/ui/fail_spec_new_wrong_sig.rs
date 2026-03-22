@@ -16,4 +16,7 @@ extern "C" fn body_fn(_arg: u32) -> ! {
 
 fn main() {
     let _spec = kernel::partition::PartitionSpec::new(body_fn, 0);
+
+    // entry() must reject a PartitionBody-shaped fn (wrong arity)
+    let _bad = kernel::PartitionSpec::entry(body_fn);
 }
