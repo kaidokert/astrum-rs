@@ -91,6 +91,9 @@ pub mod syscall;
 pub mod systick;
 pub mod tick;
 
+// Re-export check_entry_sig! macro so users can write kernel::check_entry_sig!()
+pub use rtos_traits::check_entry_sig;
+
 // Re-export handle_systick at crate root for convenience
 pub use svc::SvcDispatchFn;
 #[cfg(not(test))]
@@ -223,7 +226,7 @@ mod reexport_tests {
         // so only exercise the full constructor on 32-bit targets.
         #[cfg(target_pointer_width = "32")]
         {
-            let spec = PartitionSpec::new(_entry, 99);
+            let spec = PartitionSpec::new(_entry as PartitionEntry, 99);
             assert_eq!(spec.r0(), 99);
         }
     }
@@ -276,6 +279,33 @@ mod reexport_tests {
             _assert_same_type(e);
         }
         let _ = _accept_external;
+    }
+
+    // --- check_entry_sig! re-export tests ---
+
+    #[allow(clippy::empty_loop)]
+    extern "C" fn _sig_entry() -> ! {
+        loop {}
+    }
+    #[allow(clippy::empty_loop)]
+    extern "C" fn _sig_body(_: u32) -> ! {
+        loop {}
+    }
+
+    // Compile-time: invoke through kernel re-export
+    crate::check_entry_sig!(_sig_entry);
+    crate::check_entry_sig!(_sig_body, body);
+
+    #[test]
+    fn check_entry_sig_reexport_entry() {
+        // The const assertion above validates at compile time.
+        // Confirm the function is a valid PartitionEntry.
+        let _: PartitionEntry = _sig_entry;
+    }
+
+    #[test]
+    fn check_entry_sig_reexport_body() {
+        let _: PartitionBody = _sig_body;
     }
 
     #[test]

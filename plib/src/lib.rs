@@ -14,6 +14,7 @@ pub use rtos_traits::api::decode_rc;
 pub use rtos_traits::api::SvcError;
 
 // ── Re-exported partition types (from rtos-traits) ────────────────────
+pub use rtos_traits::check_entry_sig;
 pub use rtos_traits::partition::{
     EntryAddr, IsrHandler, PartitionBody, PartitionEntry, PartitionSpec,
 };
@@ -1763,7 +1764,7 @@ mod tests {
         // so only exercise function-pointer constructors on 32-bit targets.
         #[cfg(target_pointer_width = "32")]
         {
-            let spec = crate::PartitionSpec::new(ep, 42);
+            let spec = crate::PartitionSpec::new(ep as PartitionEntry, 42);
             assert_eq!(spec.r0(), 42);
             let pe: crate::PartitionEntry = ep;
             assert_eq!(crate::PartitionSpec::from((pe, 7)).r0(), 7);
