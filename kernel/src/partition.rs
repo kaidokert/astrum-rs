@@ -591,19 +591,18 @@ impl PartitionConfig {
     /// Validate all fields of this partition configuration.
     ///
     /// Checks performed (in order):
-    /// 1. The entry point must be 4-byte aligned (after stripping the Thumb bit).
+    /// 1. The entry point must have the Thumb bit (bit\[0\]) set.
     /// 2. The MPU region `(base, size)` must pass [`validate_mpu_region`].
     /// 3. Each peripheral region `(base, size)` must pass [`validate_mpu_region`].
     /// 4. If present, the code MPU region `(base, size)` must pass [`validate_mpu_region`].
     /// 5. If a code MPU region is present, the entry point must fall within it.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        // Entry-point alignment: bit[0] is the Thumb bit (allowed),
-        // but bit[1] must be zero for 4-byte alignment.
-        if (self.entry_point.raw() & 0b10) != 0 {
-            return Err(ConfigError::EntryPointMisaligned {
+        // All valid Cortex-M function pointers must have the Thumb bit
+        // (bit[0]) set, since the processor only supports Thumb state.
+        if (self.entry_point.raw() & 1) == 0 {
+            return Err(ConfigError::EntryPointNotThumb {
                 partition_id: self.id,
                 entry_point: self.entry_point.raw(),
-                required_alignment: 4,
             });
         }
 
@@ -693,12 +692,8 @@ pub enum ConfigError {
     PeripheralRegionCapacityExceeded { partition_id: u8 },
     /// A partition's code region failed MPU validation.
     CodeRegionInvalid { partition_id: u8, detail: MpuError },
-    /// A partition's entry point is not aligned to the required boundary.
-    EntryPointMisaligned {
-        partition_id: u8,
-        entry_point: u32,
-        required_alignment: u32,
-    },
+    /// A partition's entry point does not have the Thumb bit (bit\[0\]) set.
+    EntryPointNotThumb { partition_id: u8, entry_point: u32 },
     /// A partition's entry point (Thumb bit stripped) falls outside its code
     /// MPU region.
     EntryPointOutsideCodeRegion {
@@ -797,14 +792,13 @@ impl core::fmt::Display for ConfigError {
                 f,
                 "partition {partition_id}: code MPU region invalid: {detail}"
             ),
-            Self::EntryPointMisaligned {
+            Self::EntryPointNotThumb {
                 partition_id,
                 entry_point,
-                required_alignment,
             } => write!(
                 f,
                 "partition {partition_id}: entry point {entry_point:#010x} \
-                 not aligned to {required_alignment} bytes"
+                 is missing the Thumb bit (bit[0] must be set)"
             ),
             Self::EntryPointOutsideCodeRegion {
                 partition_id,
@@ -957,12 +951,12 @@ impl<'mem> ExternalPartitionMemory<'mem> {
                 }
             })?;
         }
-        // Strip Thumb bit (bit[0]) and check 4-byte alignment (bit[1] must be 0).
-        if (entry_point.raw() & 0b10) != 0 {
-            return Err(ConfigError::EntryPointMisaligned {
+        // All valid Cortex-M function pointers must have the Thumb bit
+        // (bit[0]) set, since the processor only supports Thumb state.
+        if (entry_point.raw() & 1) == 0 {
+            return Err(ConfigError::EntryPointNotThumb {
                 partition_id,
                 entry_point: entry_point.raw(),
-                required_alignment: 4,
             });
         }
         Ok(Self {
@@ -1979,18 +1973,17 @@ mod tests {
     }
 
     #[test]
-    fn config_error_display_entry_point_misaligned() {
+    fn config_error_display_entry_point_not_thumb() {
         let msg = format!(
             "{}",
-            ConfigError::EntryPointMisaligned {
+            ConfigError::EntryPointNotThumb {
                 partition_id: 3,
                 entry_point: 0x0800_0002,
-                required_alignment: 4,
             }
         );
         assert!(msg.contains("3"), "should contain partition_id");
         assert!(msg.contains("0x08000002"), "should contain entry_point");
-        assert!(msg.contains("4"), "should contain required_alignment");
+        assert!(msg.contains("Thumb bit"), "should mention Thumb bit");
     }
 
     #[test]
@@ -2137,7 +2130,7 @@ mod tests {
     fn valid_config() -> PartitionConfig {
         PartitionConfig {
             id: 0,
-            entry_point: EntryAddr::from(0x0800_0000u32),
+            entry_point: EntryAddr::from(0x0800_0001u32),
             mpu_region: MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
             peripheral_regions: Vec::new(),
             r0_hint: 0,
@@ -2294,16 +2287,28 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn validate_rejects_misaligned_entry_point() {
+    fn validate_rejects_entry_point_without_thumb_bit() {
         let mut cfg = valid_config();
-        cfg.entry_point = EntryAddr::from(0x0800_0002u32); // bit[1] set → misaligned
+        cfg.entry_point = EntryAddr::from(0x0800_0002u32); // bit[0] not set → not Thumb
         assert_eq!(
             cfg.validate(),
-            Err(ConfigError::EntryPointMisaligned {
+            Err(ConfigError::EntryPointNotThumb {
                 partition_id: 0,
                 entry_point: 0x0800_0002,
-                required_alignment: 4,
             })
+        );
+    }
+
+    #[test]
+    fn validate_accepts_thumb_entry_point_2byte_aligned() {
+        let mut cfg = valid_config();
+        // Thumb bit set, 2-byte aligned — should not fail on entry point check
+        // (may fail on other checks).
+        cfg.entry_point = EntryAddr::from(0x0800_0003u32);
+        let result = cfg.validate();
+        assert!(
+            !matches!(result, Err(ConfigError::EntryPointNotThumb { .. })),
+            "2-byte-aligned entry point with Thumb bit should be accepted"
         );
     }
 
