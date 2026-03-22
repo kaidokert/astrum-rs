@@ -96,8 +96,9 @@ impl TickCounterOps for TickCounter {
 // tick which may add overhead in timing-critical scenarios.
 #[cfg(all(feature = "partition-debug", not(feature = "dynamic-mpu")))]
 #[inline]
-fn drain_debug_at_tick<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<'_, C>)
-where
+fn drain_debug_at_tick<'mem, C: crate::config::KernelConfig>(
+    kernel: &mut crate::svc::Kernel<'mem, C>,
+) where
     [(); C::N]:,
     [(); C::SCHED]:,
     C::Core: crate::config::CoreOps<
@@ -127,8 +128,9 @@ where
 // tick which may add overhead in timing-critical scenarios.
 #[cfg(all(feature = "partition-debug", feature = "dynamic-mpu"))]
 #[inline]
-fn drain_debug_at_tick<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<'_, C>)
-where
+fn drain_debug_at_tick<'mem, C: crate::config::KernelConfig>(
+    kernel: &mut crate::svc::Kernel<'mem, C>,
+) where
     [(); C::N]:,
     [(); C::SCHED]:,
     [(); C::BP]:,
@@ -166,7 +168,7 @@ pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
     syst.enable_interrupt();
 }
 
-// Note: Both systick_handler variants now have the same signature (just `&mut Kernel<'_, C>`).
+// Note: Both systick_handler variants now have the same signature (just `&mut Kernel<'mem, C>`).
 // The dynamic-mpu version uses kernel.dynamic_strategy internally, so callers don't need
 // to pass a separate strategy reference.
 
@@ -176,11 +178,12 @@ pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
 /// exception handler. It advances the schedule, triggers PendSV on partition
 /// switches, and expires timed waits for blocking syscalls.
 ///
-/// Takes `&mut Kernel<'_, C>` to allow callers to compose this with other operations
+/// Takes `&mut Kernel<'mem, C>` to allow callers to compose this with other operations
 /// (e.g., user hooks) within a single critical section, preserving atomicity.
 #[cfg(not(feature = "dynamic-mpu"))]
-pub fn systick_handler<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<'_, C>)
-where
+pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
+    kernel: &mut crate::svc::Kernel<'mem, C>,
+) where
     [(); C::N]:,
     [(); C::SCHED]:,
     C::Core: crate::config::CoreOps<
@@ -236,11 +239,12 @@ where
 /// With `dynamic-mpu`, also handles system window processing (bottom-half for
 /// UART transfers, buffer expiry, etc.).
 ///
-/// Takes `&mut Kernel<'_, C>` to allow callers to compose this with other operations
+/// Takes `&mut Kernel<'mem, C>` to allow callers to compose this with other operations
 /// (e.g., user hooks) within a single critical section, preserving atomicity.
 #[cfg(feature = "dynamic-mpu")]
-pub fn systick_handler<C: crate::config::KernelConfig>(kernel: &mut crate::svc::Kernel<'_, C>)
-where
+pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
+    kernel: &mut crate::svc::Kernel<'mem, C>,
+) where
     [(); C::N]:,
     [(); C::SCHED]:,
     [(); C::BP]:,
@@ -675,7 +679,7 @@ mod tests {
         /// Mock kernel structure for testing recursion detection.
         ///
         /// Simulates the minimal kernel state needed to test the `run_bottom_half!`
-        /// macro's guard behavior without requiring the full `Kernel<'_, C>` type.
+        /// macro's guard behavior without requiring the full `Kernel<'mem, C>` type.
         struct MockKernelForRecursion {
             in_bottom_half: bool,
             uart_pair: crate::virtual_uart::VirtualUartPair,

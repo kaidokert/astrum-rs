@@ -20,7 +20,7 @@ use crate::svc::{try_transition, Kernel};
 ///
 /// If `active_partition` is `Some` and that partition is currently
 /// `Running`, it is moved to `Ready`. Otherwise this is a no-op.
-pub(crate) fn transition_outgoing_ready<C: KernelConfig>(kernel: &mut Kernel<'_, C>)
+pub(crate) fn transition_outgoing_ready<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>)
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -68,7 +68,7 @@ where
 /// Calls `kernel.schedule_mut().start()` to initialize the schedule table's
 /// internal state (resetting to the first slot). Returns the partition
 /// ID of the first schedule entry, or `None` if the schedule is empty.
-pub fn start_schedule<C: KernelConfig>(kernel: &mut Kernel<'_, C>) -> Option<u8>
+pub fn start_schedule<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>) -> Option<u8>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -101,7 +101,7 @@ where
     first_pid
 }
 
-pub fn advance_schedule_tick<C: KernelConfig>(kernel: &mut Kernel<'_, C>) -> ScheduleEvent
+pub fn advance_schedule_tick<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>) -> ScheduleEvent
 where
     [(); C::N]:,
     [(); C::SCHED]:,

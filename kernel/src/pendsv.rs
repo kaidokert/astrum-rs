@@ -128,6 +128,8 @@ macro_rules! define_pendsv {
         $crate::assert_kernel_layout!($Config);
         // PendSV-specific: Core metadata region guard.
         const _: () = {
+            // TODO: 'mem lifetime propagation — compile-time const assertions require
+            // a concrete lifetime; 'static is the only option in const context.
             type K = $crate::svc::Kernel<'static, $Config>;
             type C = <$Config as $crate::config::KernelConfig>::Core;
             // TODO: size_of::<C> is conservative — alignment padding may

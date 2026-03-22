@@ -310,6 +310,9 @@ pub fn is_stack_aapcs_aligned(sp: u32) -> bool {
 ///
 /// The stack memory regions referenced by each PCB must be valid, writable,
 /// and not aliased. The kernel must be initialized before calling this function.
+// TODO: 'mem lifetime propagation — boot_preconfigured does not take Kernel<C>
+// directly; it accesses kernel state via with_kernel_mut() which handles lifetimes
+// internally. No lifetime parameter change needed in this function's signature.
 #[cfg(not(test))]
 pub unsafe fn boot_preconfigured<C: KernelConfig>(
     mut peripherals: cortex_m::Peripherals,
@@ -1358,13 +1361,17 @@ mod tests {
         #[repr(C, align(4096))]
         struct Aligned(MaybeUninit<[u8; MAX_KERNEL_SIZE]>);
         let mut storage = Aligned(MaybeUninit::uninit());
-        let ptr = storage.0.as_mut_ptr() as *mut crate::svc::Kernel<'_, R0Config>;
+        // TODO: 'mem lifetime propagation — test uses 'static because raw pointer
+        // casts in non-generic function bodies require a concrete lifetime; 'mem cannot
+        // be introduced without making the test function generic over a lifetime parameter.
+        let ptr = storage.0.as_mut_ptr() as *mut crate::svc::Kernel<'static, R0Config>;
         // SAFETY: ptr is 4096-aligned and storage is MAX_KERNEL_SIZE bytes.
         let result = unsafe { init_kernel_state_at(ptr, k) };
         assert!(result.is_ok(), "init_kernel_state_at must succeed");
 
         // Simulate with_kernel: read back via assume_init_ref.
-        let mu_ptr = storage.0.as_ptr() as *const MaybeUninit<crate::svc::Kernel<'_, R0Config>>;
+        let mu_ptr =
+            storage.0.as_ptr() as *const MaybeUninit<crate::svc::Kernel<'static, R0Config>>;
         // SAFETY: init_kernel_state_at wrote a valid Kernel above.
         let recovered = unsafe { (*mu_ptr).assume_init_ref() };
 

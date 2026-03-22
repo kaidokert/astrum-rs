@@ -29,6 +29,10 @@
 //! exception priorities, SysTick configuration, and first PendSV
 //! trigger). Returns `Result<Never, BootError>` for panic-free init.
 
+// TODO: 'mem lifetime propagation — harness macros reference Kernel<'mem, C> indirectly
+// via $crate::svc::Kernel::<$Config>::new() and $crate::state::with_kernel_mut(), which
+// handle lifetimes internally. No macro-level lifetime changes needed.
+
 // Re-export BootError, Never, and init_rtt from boot module for macro access.
 // The canonical definitions live in boot.rs.
 pub use crate::boot::{init_rtt, BootError, Never};

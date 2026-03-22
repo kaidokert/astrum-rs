@@ -3,6 +3,8 @@
 #[doc(hidden)]
 macro_rules! assert_kernel_layout {
     ($Config:ty) => { const _: () = {
+        // TODO: 'mem lifetime propagation — compile-time const assertions require
+        // a concrete lifetime; 'static is the only option in const context.
         type K = $crate::svc::Kernel<'static, $Config>;
         type C = <$Config as $crate::config::KernelConfig>::Core;
         const LIM: usize = $crate::pendsv::LITERAL_POOL_OFFSET_LIMIT;

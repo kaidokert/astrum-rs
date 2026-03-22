@@ -47,7 +47,7 @@ static KERNEL_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 /// subsequent calls to [`load_kernel_ptr`]. Because the pointer escapes
 /// to a global static, a non-`'static` reference can dangle if the
 /// kernel is dropped or moved before [`clear_kernel_ptr`] is called.
-pub unsafe fn store_kernel_ptr<C: KernelConfig>(k: &mut Kernel<'_, C>)
+pub unsafe fn store_kernel_ptr<'mem, C: KernelConfig>(k: &mut Kernel<'mem, C>)
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -58,7 +58,7 @@ where
     #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
-    KERNEL_PTR.store(k as *mut Kernel<'_, C> as *mut (), Ordering::Release);
+    KERNEL_PTR.store(k as *mut Kernel<'mem, C> as *mut (), Ordering::Release);
 }
 
 /// Load the kernel pointer (Acquire ordering). Returns `None` if no

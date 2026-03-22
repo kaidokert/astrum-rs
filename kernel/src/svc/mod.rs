@@ -1032,7 +1032,7 @@ where
 }
 
 #[cfg(test)]
-impl<C: KernelConfig> Default for Kernel<'_, C>
+impl<'mem, C: KernelConfig> Default for Kernel<'mem, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -2780,8 +2780,8 @@ fn apply_send_outcome<const N: usize>(
 }
 
 #[cfg(test)]
-fn apply_recv_outcome<C: KernelConfig>(
-    kernel: &mut Kernel<'_, C>,
+fn apply_recv_outcome<'mem, C: KernelConfig>(
+    kernel: &mut Kernel<'mem, C>,
     outcome: RecvOutcome,
 ) -> Result<Option<u32>, SvcError>
 where
@@ -12008,7 +12008,7 @@ mod tests {
         }
 
         static BUF: DebugRingBuffer<64> = DebugRingBuffer::new();
-        let mut k: Kernel<'_, NoDrainConfig> = Kernel::default();
+        let mut k: Kernel<'static, NoDrainConfig> = Kernel::default();
         k.partitions_mut().add(pcb(0)).unwrap();
 
         k.partitions_mut()
