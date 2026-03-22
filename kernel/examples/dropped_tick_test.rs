@@ -82,7 +82,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3)
         .expect("dropped_tick_test: round_robin");
 
-    let parts: [PartitionSpec; TestConfig::N] = [PartitionSpec::new(partition_main, 0)];
+    let parts: [PartitionSpec; TestConfig::N] =
+        [PartitionSpec::new(partition_main as PartitionEntry, 0)];
     init_kernel(sched, &parts).expect("dropped_tick_test: init_kernel");
 
     match boot(p).expect("dropped_tick_test: boot") {}

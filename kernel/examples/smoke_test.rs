@@ -78,7 +78,8 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ SmokeConfig::SCHED }>::round_robin(1, 3)
         .expect("smoke_test: round_robin");
 
-    let parts: [PartitionSpec; SmokeConfig::N] = [PartitionSpec::new(partition_main, 0)];
+    let parts: [PartitionSpec; SmokeConfig::N] =
+        [PartitionSpec::new(partition_main as PartitionEntry, 0)];
     init_kernel(sched, &parts).expect("smoke_test: init_kernel");
 
     match boot(p).expect("smoke_test: boot") {}

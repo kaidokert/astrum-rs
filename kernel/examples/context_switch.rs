@@ -69,8 +69,8 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 2)).expect("sched entry 1");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
-        PartitionSpec::new(partition_0_entry, 0),
-        PartitionSpec::new(partition_1_entry, 0),
+        PartitionSpec::new(partition_0_entry as PartitionEntry, 0),
+        PartitionSpec::new(partition_1_entry as PartitionEntry, 0),
     ];
     init_kernel(sched, &parts).expect("kernel creation");
     hprintln!("context_switch: triggering first PendSV");

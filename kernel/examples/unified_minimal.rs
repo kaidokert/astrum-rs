@@ -35,7 +35,7 @@ fn make_schedule() -> ScheduleTable<{ TestConfig::SCHED }> {
 kernel::define_unified_harness!(
     TestConfig,
     make_schedule(),
-    &[PartitionSpec::new(partition_main, 0)]
+    &[PartitionSpec::new(partition_main as PartitionEntry, 0)]
 );
 
 #[entry]

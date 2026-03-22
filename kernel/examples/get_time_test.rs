@@ -85,7 +85,8 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched entry");
 
-    let parts: [PartitionSpec; TestConfig::N] = [PartitionSpec::new(partition_main, 0)];
+    let parts: [PartitionSpec; TestConfig::N] =
+        [PartitionSpec::new(partition_main as PartitionEntry, 0)];
     init_kernel(sched, &parts).expect("kernel creation");
 
     // Boot with partition entry and hint (0 for no packed data).
