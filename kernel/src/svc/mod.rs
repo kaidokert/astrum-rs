@@ -2931,12 +2931,12 @@ mod tests {
         let mut stk1 = AlignedStack1K::default();
         let mpu0 = MpuRegion::new(0x2000_0000, 4096, 0);
         let mpu1 = MpuRegion::new(0x2000_1000, 4096, 0);
-        let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0000, mpu0, 0).unwrap();
-        let m1 = ExternalPartitionMemory::new(&mut stk1.0, 0x0800_1000, mpu1, 1).unwrap();
+        let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0001, mpu0, 0).unwrap();
+        let m1 = ExternalPartitionMemory::new(&mut stk1.0, 0x0800_1001, mpu1, 1).unwrap();
         let k = Kernel::<TestConfig>::new(schedule, &[m0, m1]).unwrap();
         assert_eq!(k.partitions().len(), 2);
-        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
-        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1000);
+        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0001);
+        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1001);
     }
 
     #[test]
@@ -2948,7 +2948,7 @@ mod tests {
         let mut stk0 = AlignedStack1K::default();
         let data_region = MpuRegion::new(0x2000_0000, 4096, 0);
         let code_region = MpuRegion::new(0x0800_0000, 8192, 0);
-        let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0000, data_region, 0)
+        let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0001, data_region, 0)
             .unwrap()
             .with_code_mpu_region(code_region)
             .unwrap();
@@ -3410,7 +3410,7 @@ mod tests {
         #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
         let mut stk = AlignedStack1K::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stk, 0x0800_0000, region, 0)?;
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stk, 0x0800_0001, region, 0)?;
         Kernel::<TestConfig>::new(schedule, core::slice::from_ref(&mem))
     }
 
@@ -3489,23 +3489,23 @@ mod tests {
     #[test]
     fn mem_kernel_pcb_fields_and_sentinels() {
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
-        let k = mem_kernel(0x0800_1000, mpu).expect("should succeed");
+        let k = mem_kernel(0x0800_1001, mpu).expect("should succeed");
         let pcb = k.partitions().get(0).expect("partition 0 must exist");
         assert_eq!(pcb.id(), 0);
-        assert_eq!(pcb.entry_point(), 0x0800_1000);
+        assert_eq!(pcb.entry_point(), 0x0800_1001);
         assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
         assert_eq!(pcb.mpu_region().size(), 1024);
         assert_ne!(pcb.stack_base(), 0, "stack_base populated by Kernel::new");
         assert_ne!(pcb.stack_size(), 0, "stack_size populated by Kernel::new");
         // Sentinel mpu_region (size==0) also accepted
-        let k2 = mem_kernel(0, MpuRegion::new(0, 0, 0)).unwrap();
+        let k2 = mem_kernel(1, MpuRegion::new(0, 0, 0)).unwrap();
         assert_eq!(k2.partitions().get(0).unwrap().mpu_region().size(), 0);
     }
 
     #[test]
     fn mem_kernel_validates_mpu_and_schedule() {
         // Invalid MPU region rejected
-        let err = mem_kernel(0, MpuRegion::new(0, 17, 0))
+        let err = mem_kernel(1, MpuRegion::new(0, 17, 0))
             .err()
             .expect("should fail");
         assert!(matches!(
@@ -3518,7 +3518,7 @@ mod tests {
         // Empty schedule rejected
         let mut stk = AlignedStack1K::default();
         let m =
-            ExternalPartitionMemory::from_aligned_stack(&mut stk, 0, MpuRegion::new(0, 0, 0), 0)
+            ExternalPartitionMemory::from_aligned_stack(&mut stk, 1, MpuRegion::new(0, 0, 0), 0)
                 .unwrap();
         let err = Kernel::<TestConfig>::new(ScheduleTable::<4>::new(), &[m]);
         assert!(matches!(err, Err(ConfigError::ScheduleEmpty)));
@@ -3541,10 +3541,10 @@ mod tests {
     #[test]
     fn kernel_new_pcb_fields_and_sentinels() {
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
-        let k = ext_kernel(0x0800_1000, mpu).expect("should succeed");
+        let k = ext_kernel(0x0800_1001, mpu).expect("should succeed");
         let pcb = k.partitions().get(0).expect("partition 0 must exist");
         assert_eq!(pcb.id(), 0);
-        assert_eq!(pcb.entry_point(), 0x0800_1000);
+        assert_eq!(pcb.entry_point(), 0x0800_1001);
         assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
         assert_eq!(pcb.mpu_region().size(), 1024);
         assert_ne!(pcb.stack_base(), 0, "stack_base populated by Kernel::new");
@@ -3560,7 +3560,7 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mut stack = AlignedStack256B::default();
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0, mpu, 0).unwrap();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 1, mpu, 0).unwrap();
         let err = Kernel::<TestConfig>::new(ScheduleTable::<4>::new(), core::slice::from_ref(&mem));
         assert!(matches!(err, Err(ConfigError::ScheduleEmpty)));
     }
@@ -3577,14 +3577,14 @@ mod tests {
         let mut stack0 = AlignedStack256B::default();
         let mut stack1 = AlignedStack256B::default();
         let m0 =
-            ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0000, mpu, 0).unwrap();
+            ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0001, mpu, 0).unwrap();
         let m1 =
-            ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1000, mpu, 1).unwrap();
+            ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1001, mpu, 1).unwrap();
         let k = Kernel::<TestConfig>::new(sched, &[m0, m1]).expect("two partitions should succeed");
         assert_eq!(k.partitions().get(0).unwrap().id(), 0);
-        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0000);
+        assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0001);
         assert_eq!(k.partitions().get(1).unwrap().id(), 1);
-        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1000);
+        assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1001);
     }
 
     #[test]
@@ -3618,7 +3618,7 @@ mod tests {
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let bad_code = MpuRegion::new(0x0800_0000, 100, 0); // 100 is not power-of-two
         let mut stack = AlignedStack256B::default();
-        let err = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0000, data_mpu, 0)
+        let err = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, 0)
             .unwrap()
             .with_code_mpu_region(bad_code)
             .unwrap_err();
@@ -3646,7 +3646,7 @@ mod tests {
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0000, data_mpu, 0)
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, 0)
             .unwrap()
             .with_code_mpu_region(code_mpu)
             .unwrap();
@@ -3668,7 +3668,7 @@ mod tests {
         sched.add_system_window(1).unwrap();
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0000, data_mpu, 0)
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, 0)
             .unwrap();
         let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
             .expect("no code_mpu_region should be accepted");
