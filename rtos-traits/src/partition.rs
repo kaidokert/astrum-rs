@@ -33,6 +33,14 @@ impl PartitionSpec {
             r0,
         }
     }
+    /// Unified constructor accepting any [`EntryPointFn`] implementer
+    /// (`PartitionEntry` or `PartitionBody`) plus an `r0` argument.
+    pub fn from_entry(f: impl EntryPointFn, r0: u32) -> Self {
+        Self {
+            entry_point: EntryAddr::from_entry(f),
+            r0,
+        }
+    }
     pub const fn entry_point(&self) -> EntryAddr {
         self.entry_point
     }
@@ -54,6 +62,11 @@ impl From<(PartitionBody, u32)> for PartitionSpec {
 impl From<PartitionEntry> for PartitionSpec {
     fn from(entry_point: PartitionEntry) -> Self {
         Self::new(entry_point, 0)
+    }
+}
+impl From<PartitionBody> for PartitionSpec {
+    fn from(body: PartitionBody) -> Self {
+        Self::from_body(body, 0)
     }
 }
 
@@ -378,5 +391,59 @@ mod tests {
     #[should_panic(expected = "exceeds u32::MAX")]
     fn partition_spec_from_body_catches_truncation_on_64bit() {
         let _ = PartitionSpec::from_body(_dummy_body, 42);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn spec_from_entry_with_partition_entry() {
+        let ep: PartitionEntry = _dummy_entry;
+        let expected_addr = ep as *const () as usize as u32;
+        let spec = PartitionSpec::from_entry(ep, 7);
+        assert_eq!(spec.entry_point().raw(), expected_addr);
+        assert_eq!(spec.r0(), 7);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn spec_from_entry_with_partition_body() {
+        let body: PartitionBody = _dummy_body;
+        let expected_addr = body as *const () as usize as u32;
+        let spec = PartitionSpec::from_entry(body, 99);
+        assert_eq!(spec.entry_point().raw(), expected_addr);
+        assert_eq!(spec.r0(), 99);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn spec_from_entry_entry_catches_truncation_on_64bit() {
+        let ep: PartitionEntry = _dummy_entry;
+        let _ = PartitionSpec::from_entry(ep, 0);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn spec_from_entry_body_catches_truncation_on_64bit() {
+        let body: PartitionBody = _dummy_body;
+        let _ = PartitionSpec::from_entry(body, 0);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn from_partition_body_for_spec() {
+        let body: PartitionBody = _dummy_body;
+        let expected_addr = body as *const () as usize as u32;
+        let spec = PartitionSpec::from(body);
+        assert_eq!(spec.entry_point().raw(), expected_addr);
+        assert_eq!(spec.r0(), 0);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "exceeds u32::MAX")]
+    fn from_partition_body_for_spec_catches_truncation_on_64bit() {
+        let body: PartitionBody = _dummy_body;
+        let _ = PartitionSpec::from(body);
     }
 }
