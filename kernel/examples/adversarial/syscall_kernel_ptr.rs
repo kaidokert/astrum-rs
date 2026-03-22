@@ -24,8 +24,8 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::SYS_SAMPLING_WRITE,
-    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions2, PortsSmall, StackStorage as _,
-    SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, PartitionBody, Partitions2, PortsSmall,
+    StackStorage as _, SyncMinimal,
 };
 
 // ---------------------------------------------------------------------------
@@ -87,6 +87,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 });
 
 /// Partition entry: invoke SYS_SAMPLING_WRITE with kernel address as data ptr.
+const _: PartitionBody = test_partition_main_body;
 extern "C" fn test_partition_main_body(r0: u32) -> ! {
     let port_id = r0;
     let result = kernel::svc!(SYS_SAMPLING_WRITE, port_id, 4u32, KERNEL_ADDR);

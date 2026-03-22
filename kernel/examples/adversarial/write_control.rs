@@ -26,8 +26,8 @@ use kernel::{
     partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, StackStorage as _,
-    SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, PartitionEntry, Partitions1, PortsMinimal,
+    StackStorage as _, SyncMinimal,
 };
 
 /// Test name for reporting.
@@ -59,6 +59,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 });
 
 /// Partition entry: attempts privilege escalation, stores result in atomic.
+const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
     let control_before: u32;
     #[cfg(target_arch = "arm")]

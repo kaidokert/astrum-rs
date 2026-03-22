@@ -24,8 +24,8 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::SYS_SAMPLING_WRITE,
-    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions2, PortsSmall, StackStorage as _,
-    SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, PartitionBody, PartitionEntry, Partitions2,
+    PortsSmall, StackStorage as _, SyncMinimal,
 };
 
 // ---------------------------------------------------------------------------
@@ -78,6 +78,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 });
 
 /// Partition 0 entry: invoke SYS_SAMPLING_WRITE with pointer into P1's region.
+const _: PartitionBody = p0_main_body;
 extern "C" fn p0_main_body(_r0: u32) -> ! {
     let packed = P0_ARG.load(Ordering::Acquire);
     let port_id = packed >> 16;
@@ -94,6 +95,7 @@ kernel::partition_trampoline!(p0_main => p0_main_body);
 
 /// Partition 1 entry: idle loop (never scheduled in this test, exists for
 /// separate MPU region).
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     // This partition is never scheduled; it exists solely to have a separate
     // MPU region that partition 0 cannot access.

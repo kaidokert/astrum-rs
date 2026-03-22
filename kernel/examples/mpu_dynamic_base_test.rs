@@ -49,6 +49,7 @@ macro_rules! partition_entry {
                 plib::sys_yield().expect("yield failed");
             }
         }
+        const _: PartitionEntry = $name;
     };
 }
 partition_entry!(p0_entry, P0_COUNTER);

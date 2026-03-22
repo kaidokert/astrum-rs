@@ -12,7 +12,9 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::partition::PartitionState;
 use kernel::scheduler::ScheduleTable;
-use kernel::{DebugEnabled, MsgMinimal, PartitionSpec, Partitions2, PortsTiny, SyncMinimal};
+use kernel::{
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+};
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -88,6 +90,7 @@ fn bail(e: plib::SvcError) -> ! {
     }
 }
 
+const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     let pre = plib::sys_get_time().unwrap_or_else(|e| bail(e));
     PRE_TIME.store(pre, Ordering::Release);
@@ -105,6 +108,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
+const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
         cortex_m::asm::nop();

@@ -19,8 +19,8 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::SYS_SAMPLING_WRITE,
-    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions2, PortsSmall, StackStorage as _,
-    SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, PartitionBody, Partitions2, PortsSmall,
+    StackStorage as _, SyncMinimal,
 };
 
 // ---------------------------------------------------------------------------
@@ -70,6 +70,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 });
 
 /// Partition 0 entry: test null pointer and wrapping pointer syscalls.
+const _: PartitionBody = test_partition_main_body;
 extern "C" fn test_partition_main_body(r0: u32) -> ! {
     let port_id = r0;
     let r1 = kernel::svc!(SYS_SAMPLING_WRITE, port_id, 4u32, NULL_PTR);

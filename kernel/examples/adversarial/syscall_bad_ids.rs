@@ -24,8 +24,8 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::{SYS_EVT_SET, SYS_QUEUING_SEND},
-    AlignedStack1K, DebugEnabled, MsgMinimal, Partitions1, PortsMinimal, StackStorage as _,
-    SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, PartitionEntry, Partitions1, PortsMinimal,
+    StackStorage as _, SyncMinimal,
 };
 
 // ---------------------------------------------------------------------------
@@ -73,6 +73,7 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
 });
 
 /// Partition 0 entry: test invalid resource ID syscalls.
+const _: PartitionEntry = test_partition_main;
 extern "C" fn test_partition_main() -> ! {
     let r1 = kernel::svc!(SYS_EVT_SET, INVALID_PARTITION_ID, 1u32, 0u32);
     if r1 != EXPECTED_INVALID_PARTITION {
