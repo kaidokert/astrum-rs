@@ -15,7 +15,8 @@ use cortex_m_semihosting::{debug, hprintln};
 use kernel::scheduler::ScheduleTable;
 use kernel::split_isr::StaticIsrRing;
 use kernel::{
-    DebugEnabled, IsrHandler, MsgMinimal, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
+    DebugEnabled, IsrHandler, MsgMinimal, PartitionBody, PartitionSpec, Partitions1, PortsTiny,
+    SyncMinimal,
 };
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -104,6 +105,7 @@ kernel::define_unified_harness!(Cfg, |tick, _k| {
     }
 });
 
+const _: PartitionBody = p0_body;
 extern "C" fn p0_body(_r0: u32) -> ! {
     loop {
         if let Err(e) = plib::sys_event_wait(plib::EventMask::new(0x01)) {

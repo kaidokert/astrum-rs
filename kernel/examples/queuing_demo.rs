@@ -22,7 +22,7 @@ use kernel::{
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    PartitionEntry,
+    PartitionBody, PartitionEntry,
 };
 use plib::SvcError;
 
@@ -150,6 +150,7 @@ kernel::define_unified_harness!(DemoConfig, |tick, _k| {
 // ---------------------------------------------------------------------------
 // Commander partition: sends commands, detects queue-full, receives responses
 // ---------------------------------------------------------------------------
+const _: PartitionBody = commander_main_body;
 extern "C" fn commander_main_body(r0: u32) -> ! {
     // Unpack port IDs: upper 16 bits = command Source port, lower 16 = response Destination port.
     let packed = r0;
@@ -256,6 +257,7 @@ kernel::partition_trampoline!(commander_main => commander_main_body);
 // ---------------------------------------------------------------------------
 // Worker partition: receives commands, maps to responses, sends back
 // ---------------------------------------------------------------------------
+const _: PartitionBody = worker_main_body;
 extern "C" fn worker_main_body(r0: u32) -> ! {
     // Unpack port IDs: upper 16 bits = response Source port, lower 16 = command Destination port.
     let packed = r0;

@@ -26,7 +26,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     semaphore::Semaphore,
     svc::Kernel,
-    PartitionEntry,
+    PartitionBody, PartitionEntry,
 };
 
 // ---------------------------------------------------------------------------
@@ -124,6 +124,7 @@ kernel::define_unified_harness!(DemoConfig, |tick, _k| {
 // ---------------------------------------------------------------------------
 // Config partition: displays config on blackboard, waits for worker acks
 // ---------------------------------------------------------------------------
+const _: PartitionBody = config_main_body;
 extern "C" fn config_main_body(r0: u32) -> ! {
     let packed = r0;
     let bb = plib::BlackboardId::new(packed & 0xFFFF);
@@ -191,6 +192,7 @@ fn worker(
     }
 }
 
+const _: PartitionBody = worker_a_body;
 extern "C" fn worker_a_body(r0: u32) -> ! {
     let p = r0;
     worker(
@@ -203,6 +205,7 @@ extern "C" fn worker_a_body(r0: u32) -> ! {
 }
 kernel::partition_trampoline!(worker_a => worker_a_body);
 
+const _: PartitionBody = worker_b_body;
 extern "C" fn worker_b_body(r0: u32) -> ! {
     let p = r0;
     worker(
