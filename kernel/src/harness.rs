@@ -547,13 +547,20 @@ macro_rules! define_unified_harness {
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
                 let mem = ExternalPartitionMemory::from_aligned_stack(
                     stk, spec.entry_point(), sentinel_mpu, i as u8)
-                    .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?
+                    .map_err(|e| {
+                        $crate::klog!("init_kernel failed: {:?}", e);
+                        $crate::harness::BootError::KernelInit(e)
+                    })?
                     .with_r0_hint(spec.r0());
                 memories.push(mem)
-                    .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?;
+                    .map_err(|_| $crate::harness::BootError::KernelInit(
+                        $crate::partition::ConfigError::PartitionTableFull))?;
             }
             let k = $crate::svc::Kernel::<$Config>::new(sched, &memories)
-                .map_err(|_| $crate::harness::BootError::KernelNotInitialized)?;
+                .map_err(|e| {
+                    $crate::klog!("init_kernel failed: {:?}", e);
+                    $crate::harness::BootError::KernelInit(e)
+                })?;
             store_kernel(k);
             Ok(())
         }
@@ -615,13 +622,20 @@ macro_rules! define_unified_harness {
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
                 let mem = ExternalPartitionMemory::from_aligned_stack(
                     stk, spec.entry_point(), sentinel_mpu, i as u8)
-                    .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?
+                    .map_err(|e| {
+                        $crate::klog!("init_kernel failed: {:?}", e);
+                        $crate::harness::BootError::KernelInit(e)
+                    })?
                     .with_r0_hint(spec.r0());
                 memories.push(mem)
-                    .map_err(|_| $crate::harness::BootError::StackInitFailed { partition_index: i })?;
+                    .map_err(|_| $crate::harness::BootError::KernelInit(
+                        $crate::partition::ConfigError::PartitionTableFull))?;
             }
             let k = $crate::svc::Kernel::<$Config>::new(sched, &memories)
-                .map_err(|_| $crate::harness::BootError::KernelNotInitialized)?;
+                .map_err(|e| {
+                    $crate::klog!("init_kernel failed: {:?}", e);
+                    $crate::harness::BootError::KernelInit(e)
+                })?;
             store_kernel(k);
             Ok(())
         }
@@ -697,6 +711,39 @@ mod tests {
         let mut buf = FmtBuf::new();
         write!(&mut buf, "{}", err).unwrap();
         assert!(buf.as_str().contains("2"));
+    }
+
+    #[test]
+    fn boot_error_kernel_init_wraps_config_error() {
+        use crate::partition::ConfigError;
+
+        // Verify KernelInit wraps various ConfigError variants
+        let ce = ConfigError::PartitionTableFull;
+        let err = BootError::KernelInit(ce);
+        assert_eq!(err, BootError::KernelInit(ConfigError::PartitionTableFull));
+        assert_ne!(err, BootError::KernelNotInitialized);
+
+        // Verify Display includes the inner error
+        let mut buf = FmtBuf::new();
+        write!(&mut buf, "{}", err).unwrap();
+        assert!(
+            buf.as_str().contains("kernel init failed"),
+            "Display should contain 'kernel init failed', got: {}",
+            buf.as_str()
+        );
+
+        // Verify with StackInitFailed variant
+        let ce2 = ConfigError::StackInitFailed { partition_id: 3 };
+        let err2 = BootError::KernelInit(ce2);
+        let mut buf2 = FmtBuf::new();
+        write!(&mut buf2, "{}", err2).unwrap();
+        assert!(
+            buf2.as_str().contains("kernel init failed"),
+            "Display should contain 'kernel init failed', got: {}",
+            buf2.as_str()
+        );
+        // The inner ConfigError should be distinguishable
+        assert_ne!(err, err2);
     }
 
     // ============ MPU_ENFORCE gating tests ============
