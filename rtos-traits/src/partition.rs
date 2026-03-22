@@ -134,16 +134,6 @@ impl EntryAddr {
         );
         Self(addr as u32)
     }
-    #[deprecated(note = "use from_entry() instead")]
-    #[inline]
-    pub fn from_fn(f: PartitionEntry) -> Self {
-        Self::from_entry(f)
-    }
-    #[deprecated(note = "use from_entry() instead")]
-    #[inline]
-    pub fn from_body(f: PartitionBody) -> Self {
-        Self::from_entry(f)
-    }
     #[inline]
     pub fn raw(self) -> u32 {
         self.0
@@ -301,17 +291,8 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     #[test]
     #[should_panic(expected = "exceeds u32::MAX")]
-    fn entry_addr_from_fn_catches_truncation_on_64bit() {
+    fn entry_addr_from_entry_catches_truncation_on_64bit() {
         let _ = EntryAddr::from_entry(_dummy_entry as PartitionEntry);
-    }
-
-    /// On 64-bit hosts, function addresses exceed `u32::MAX`, so the
-    /// `debug_assert!` in `from_entry` must fire to catch truncation.
-    #[cfg(target_pointer_width = "64")]
-    #[test]
-    #[should_panic(expected = "exceeds u32::MAX")]
-    fn entry_addr_from_body_catches_truncation_on_64bit() {
-        let _ = EntryAddr::from_entry(_dummy_body as PartitionBody);
     }
 
     #[cfg(target_pointer_width = "32")]
