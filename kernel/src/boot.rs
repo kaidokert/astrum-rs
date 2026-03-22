@@ -14,14 +14,18 @@ use crate::{
 };
 
 /// Initialize the RTT logging channel (RTT backend).
+///
+/// Public so the harness macro can call it before `init_kernel()`.
 #[cfg(klog_backend = "rtt")]
-fn init_rtt() {
+pub fn init_rtt() {
     rtt_target::rtt_init_print!();
 }
 
 /// No-op RTT init for non-RTT backends.
+///
+/// Public so the harness macro can call it before `init_kernel()`.
 #[cfg(not(klog_backend = "rtt"))]
-fn init_rtt() {}
+pub fn init_rtt() {}
 
 /// Minimum MPU region size (32 bytes for ARMv7-M and ARMv8-M).
 pub const MPU_MIN_REGION_SIZE: u32 = 32;

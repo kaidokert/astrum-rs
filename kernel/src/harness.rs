@@ -29,9 +29,9 @@
 //! exception priorities, SysTick configuration, and first PendSV
 //! trigger). Returns `Result<Never, BootError>` for panic-free init.
 
-// Re-export BootError and Never from boot module for backwards compatibility.
+// Re-export BootError, Never, and init_rtt from boot module for macro access.
 // The canonical definitions live in boot.rs.
-pub use crate::boot::{BootError, Never};
+pub use crate::boot::{init_rtt, BootError, Never};
 
 /// Shared helper: detect dropped SysTick interrupts by reading the ICSR
 /// PENDSTSET bit before the current tick is processed.  Factored out of
@@ -887,5 +887,14 @@ mod tests {
         // Verify the combined count covers R0-R6 (7 register pairs).
         let total = pcb.cached_base_regions().len() + pcb.cached_periph_regions().len();
         assert_eq!(total, 7, "dynamic boot programs R0-R6 (7 pairs)");
+    }
+
+    /// Verify that `init_rtt` is publicly accessible via `harness::init_rtt`
+    /// (re-exported from `boot::init_rtt`).  Under non-RTT backends this is
+    /// a no-op; the test confirms the symbol is reachable from macro context.
+    #[test]
+    fn init_rtt_callable_via_harness_reexport() {
+        // Call through the harness re-export path that the macro would use.
+        crate::harness::init_rtt();
     }
 }
