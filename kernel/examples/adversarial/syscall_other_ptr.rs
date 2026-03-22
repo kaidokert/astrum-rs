@@ -122,12 +122,20 @@ fn main() -> ! {
     let mut stack0 = AlignedStack1K::ZERO;
     let mut stack1 = AlignedStack1K::ZERO;
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
-    let mem0 =
-        ExternalPartitionMemory::new(&mut stack0.0, EntryAddr::from_fn(p0_main), sentinel_mpu, 0)
-            .expect("ext mem 0");
-    let mem1 =
-        ExternalPartitionMemory::new(&mut stack1.0, EntryAddr::from_fn(p1_main), sentinel_mpu, 1)
-            .expect("ext mem 1");
+    let mem0 = ExternalPartitionMemory::new(
+        &mut stack0.0,
+        EntryAddr::from_entry(p0_main as PartitionEntry),
+        sentinel_mpu,
+        0,
+    )
+    .expect("ext mem 0");
+    let mem1 = ExternalPartitionMemory::new(
+        &mut stack1.0,
+        EntryAddr::from_entry(p1_main as PartitionEntry),
+        sentinel_mpu,
+        1,
+    )
+    .expect("ext mem 1");
     let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0, mem1];
 
     let mut k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");

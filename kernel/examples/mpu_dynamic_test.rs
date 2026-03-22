@@ -214,14 +214,14 @@ fn main() -> ! {
         let memories = [
             ExternalPartitionMemory::new(
                 &mut s0.0,
-                EntryAddr::from_fn(partition_main),
+                EntryAddr::from_entry(partition_main as PartitionEntry),
                 MpuRegion::new(DATA_BASES[0], DATA_SIZES[0], 0),
                 0,
             )
             .expect("ext mem"),
             ExternalPartitionMemory::new(
                 &mut s1.0,
-                EntryAddr::from_fn(partition_main),
+                EntryAddr::from_entry(partition_main as PartitionEntry),
                 MpuRegion::new(DATA_BASES[1], DATA_SIZES[1], 0),
                 1,
             )
@@ -247,7 +247,7 @@ fn main() -> ! {
             let stk = &mut STACKS[i].0;
             let ix = kernel::context::init_stack_frame(
                 stk,
-                EntryAddr::from_fn(partition_main),
+                EntryAddr::from_entry(partition_main as PartitionEntry),
                 Some(i as u32),
             )
             .expect("init_stack_frame");

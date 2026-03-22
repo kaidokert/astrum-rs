@@ -19,8 +19,8 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{Kernel, SvcError},
     syscall::SYS_SAMPLING_WRITE,
-    AlignedStack1K, DebugEnabled, MsgMinimal, PartitionBody, Partitions2, PortsSmall,
-    StackStorage as _, SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgMinimal, PartitionBody, PartitionEntry, Partitions2,
+    PortsSmall, StackStorage as _, SyncMinimal,
 };
 
 // ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ fn main() -> ! {
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
     let mem0 = ExternalPartitionMemory::new(
         &mut stack0.0,
-        EntryAddr::from_fn(test_partition_main),
+        EntryAddr::from_entry(test_partition_main as PartitionEntry),
         sentinel_mpu,
         0,
     )

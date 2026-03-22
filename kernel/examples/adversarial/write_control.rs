@@ -115,7 +115,7 @@ fn main() -> ! {
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
     let mem0 = ExternalPartitionMemory::new(
         &mut stack0.0,
-        EntryAddr::from_fn(partition_main),
+        EntryAddr::from_entry(partition_main as PartitionEntry),
         sentinel_mpu,
         0,
     )

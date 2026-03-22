@@ -114,8 +114,20 @@ fn main() -> ! {
         let [ref mut s0, ref mut s1] = *stacks;
         let mpu = MpuRegion::new(0, 0, 0);
         let memories = [
-            ExternalPartitionMemory::new(s0, EntryAddr::from_fn(p0_main), mpu, 0).expect("mem 0"),
-            ExternalPartitionMemory::new(s1, EntryAddr::from_fn(p1_main), mpu, 1).expect("mem 1"),
+            ExternalPartitionMemory::new(
+                s0,
+                EntryAddr::from_entry(p0_main as PartitionEntry),
+                mpu,
+                0,
+            )
+            .expect("mem 0"),
+            ExternalPartitionMemory::new(
+                s1,
+                EntryAddr::from_entry(p1_main as PartitionEntry),
+                mpu,
+                1,
+            )
+            .expect("mem 1"),
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
