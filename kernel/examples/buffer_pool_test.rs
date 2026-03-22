@@ -313,14 +313,14 @@ fn main() -> ! {
     let memories = [
         ExternalPartitionMemory::new(
             &mut s0.0,
-            EntryAddr::from_fn(partition_p1_entry),
+            EntryAddr::from_entry(partition_p1_entry as PartitionEntry),
             MpuRegion::new(DATA_BASES[0], DATA_SIZES[0], 0),
             0,
         )
         .expect("partition memory 0"),
         ExternalPartitionMemory::new(
             &mut s1.0,
-            EntryAddr::from_fn(partition_p2_entry),
+            EntryAddr::from_entry(partition_p2_entry as PartitionEntry),
             MpuRegion::new(DATA_BASES[1], DATA_SIZES[1], 0),
             1,
         )

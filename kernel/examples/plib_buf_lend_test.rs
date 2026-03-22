@@ -123,8 +123,8 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 3)).expect("add P1");
     sched.add_system_window(1).expect("sys1");
     let mut cfgs = PartitionConfig::sentinel_array::<2>();
-    cfgs[0].entry_point = EntryAddr::from_fn(p0_main);
-    cfgs[1].entry_point = EntryAddr::from_fn(p1_main);
+    cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
+    cfgs[1].entry_point = EntryAddr::from_entry(p1_main as PartitionEntry);
     #[cfg(not(feature = "dynamic-mpu"))]
     let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
     #[cfg(feature = "dynamic-mpu")]

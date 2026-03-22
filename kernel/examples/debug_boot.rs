@@ -139,7 +139,7 @@ fn main() -> ! {
         let [s0, s1] = stacks;
         let m0 = ExternalPartitionMemory::new(
             &mut s0.0,
-            EntryAddr::from_fn(partition_main),
+            EntryAddr::from_entry(partition_main as PartitionEntry),
             sentinel_mpu,
             0,
         )
@@ -176,7 +176,7 @@ fn main() -> ! {
         let ptr = &raw mut STACKS;
         let stacks = &mut *ptr;
 
-        let ep_addr = EntryAddr::from_fn(partition_main);
+        let ep_addr = EntryAddr::from_entry(partition_main as PartitionEntry);
         hprintln!("debug_boot: entry point = {:#010x}", ep_addr.raw());
 
         let stk = &mut stacks[0].0;

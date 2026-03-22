@@ -171,10 +171,20 @@ fn main() -> ! {
         let stacks: &mut [AlignedStack1K; NUM_PARTITIONS] = unsafe { &mut *ptr };
         let [ref mut s0, ref mut s1] = *stacks;
         [
-            ExternalPartitionMemory::new(&mut s0.0, EntryAddr::from_fn(p1_main), sentinel_mpu, 0)
-                .expect("ext mem"),
-            ExternalPartitionMemory::new(&mut s1.0, EntryAddr::from_fn(p2_main), sentinel_mpu, 1)
-                .expect("ext mem"),
+            ExternalPartitionMemory::new(
+                &mut s0.0,
+                EntryAddr::from_entry(p1_main as PartitionEntry),
+                sentinel_mpu,
+                0,
+            )
+            .expect("ext mem"),
+            ExternalPartitionMemory::new(
+                &mut s1.0,
+                EntryAddr::from_entry(p2_main as PartitionEntry),
+                sentinel_mpu,
+                1,
+            )
+            .expect("ext mem"),
         ]
     };
 

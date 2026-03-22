@@ -105,7 +105,7 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(0, 3)).expect("add P0");
     sched.add_system_window(1).expect("sys0");
     let mut cfgs = PartitionConfig::sentinel_array::<1>();
-    cfgs[0].entry_point = EntryAddr::from_fn(partition_main);
+    cfgs[0].entry_point = EntryAddr::from_entry(partition_main as PartitionEntry);
     #[cfg(not(feature = "dynamic-mpu"))]
     let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
     #[cfg(feature = "dynamic-mpu")]

@@ -194,7 +194,7 @@ fn main() -> ! {
         let stk = &mut STACKS[0].0;
         let ix = kernel::context::init_stack_frame(
             stk,
-            EntryAddr::from_fn(partition_main),
+            EntryAddr::from_entry(partition_main as PartitionEntry),
             Some(dst as u32),
         )
         .unwrap();

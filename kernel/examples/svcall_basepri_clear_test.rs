@@ -148,12 +148,20 @@ fn main() -> ! {
     let mut stk0 = AlignedStack1K::ZERO;
     let mut stk1 = AlignedStack1K::ZERO;
     let sentinel_mpu = MpuRegion::new(0, 0, 0);
-    let mem0 =
-        ExternalPartitionMemory::new(&mut stk0.0, EntryAddr::from_fn(p0_main), sentinel_mpu, 0)
-            .expect("ext mem");
-    let mem1 =
-        ExternalPartitionMemory::new(&mut stk1.0, EntryAddr::from_fn(p1_main), sentinel_mpu, 1)
-            .expect("ext mem");
+    let mem0 = ExternalPartitionMemory::new(
+        &mut stk0.0,
+        EntryAddr::from_entry(p0_main as PartitionEntry),
+        sentinel_mpu,
+        0,
+    )
+    .expect("ext mem");
+    let mem1 = ExternalPartitionMemory::new(
+        &mut stk1.0,
+        EntryAddr::from_entry(p1_main as PartitionEntry),
+        sentinel_mpu,
+        1,
+    )
+    .expect("ext mem");
     let k = Kernel::<Config>::new(sched, &[mem0, mem1]).expect("basepri: kernel");
     store_kernel(k);
     // Override dispatch with our verifying wrapper that reads BASEPRI
