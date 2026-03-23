@@ -773,6 +773,14 @@ macro_rules! define_unified_kernel {
                 $crate::klog!("store_kernel failed: {:?}", e);
                 panic!("{}", e);
             }
+            // SAFETY: init_kernel_state succeeded so UNIFIED_KERNEL_STORAGE
+            // contains a valid Kernel<'static, $Config>. Called exactly once
+            // before interrupts are enabled, satisfying store_kernel_ptr's
+            // requirement that the kernel outlives all load_kernel_ptr callers.
+            unsafe {
+                let kp = $crate::state::get_kernel_ptr::<$Config>();
+                $crate::kernel_ptr::store_kernel_ptr(&mut *kp);
+            }
             $crate::svc::set_dispatch_hook(dispatch_hook);
         }
 
