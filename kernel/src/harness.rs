@@ -576,6 +576,8 @@ macro_rules! define_unified_harness {
         fn boot(
             peripherals: cortex_m::Peripherals,
         ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
+            // Init RTT early so klog! output from init_kernel() is visible.
+            $crate::harness::init_rtt();
             init_kernel($sched, $entries)?;
             // SAFETY: `init_kernel` above stored a fully-initialised kernel
             // into the global state.  `boot_preconfigured` requires exactly
@@ -613,6 +615,8 @@ macro_rules! define_unified_harness {
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
             entries: &[$crate::partition::PartitionSpec],
         ) -> Result<(), $crate::harness::BootError> {
+            // Init RTT early so klog! output from init_kernel() is visible.
+            $crate::harness::init_rtt();
             use $crate::partition::{ExternalPartitionMemory, MpuRegion};
             // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
             // by this macro arm, which is invoked at most once per binary (enforced
@@ -946,6 +950,16 @@ mod tests {
     #[test]
     fn init_rtt_callable_via_harness_reexport() {
         // Call through the harness re-export path that the macro would use.
+        crate::harness::init_rtt();
+    }
+
+    /// Verify that calling `init_rtt` twice does not panic, exercising the
+    /// AtomicBool double-call guard added to support early RTT init in the
+    /// harness macro (init_rtt is called before init_kernel, then again
+    /// inside boot_preconfigured).
+    #[test]
+    fn init_rtt_double_call_is_safe() {
+        crate::harness::init_rtt();
         crate::harness::init_rtt();
     }
 }
