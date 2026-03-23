@@ -26,6 +26,7 @@ const P1: u8 = 1;
 const MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 const UART0_BASE: u32 = 0x4000_C000;
 const UART0_SIZE: u32 = 4096;
+const STACK_WORDS: usize = 256;
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -122,7 +123,7 @@ fn main() -> ! {
     // Build partition descriptors with P0 having a UART0 peripheral region.
     let k = {
         // SAFETY: called once from main before any interrupt handler runs.
-        let ptr = (&raw mut __PARTITION_STACKS).cast::<[[u32; TestConfig::STACK_WORDS]; NP]>();
+        let ptr = (&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NP]>();
         let stacks = unsafe { &mut *ptr };
         let [ref mut s0, ref mut s1] = *stacks;
         let memories = [

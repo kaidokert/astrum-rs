@@ -45,10 +45,14 @@ kernel::define_unified_kernel!(Cfg, |k| {
 static _SVC: kernel::SvcDispatchFn = kernel::svc::SVC_HANDLER;
 kernel::define_pendsv!();
 
+// TODO: reviewer asked to use Cfg::STACK_WORDS, but STACK_WORDS was removed
+// from KernelConfig in c5432d9. Local const matches the pattern used by all
+// other examples (e.g. debug_boot, uart1_loopback, adversarial tests).
+const STACK_WORDS: usize = 256;
 #[repr(C, align(1024))]
-struct Stack([u32; Cfg::STACK_WORDS]);
+struct Stack([u32; STACK_WORDS]);
 static mut STACKS: [Stack; Cfg::N] = {
-    const Z: Stack = Stack([0; Cfg::STACK_WORDS]);
+    const Z: Stack = Stack([0; STACK_WORDS]);
     [Z; Cfg::N]
 };
 
@@ -154,7 +158,7 @@ fn main() -> ! {
     let cfgs: [PartitionConfig; Cfg::N] = unsafe {
         [{
             let b = STACKS[0].0.as_ptr() as u32;
-            PartitionConfig::new(0, 0, MpuRegion::new(b, (Cfg::STACK_WORDS * 4) as u32, 0))
+            PartitionConfig::new(0, 0, MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0))
         }]
     };
 

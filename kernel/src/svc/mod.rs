@@ -3183,6 +3183,9 @@ mod tests {
     }
 
     /// Dispatch a 3-register SVC and return `(r0, r1)`.
+    // TODO: consider whether dynamic-mpu feature-gating on these helpers is
+    // too aggressive — callers outside dynamic-mpu tests may need them.
+    #[cfg(feature = "dynamic-mpu")]
     fn dispatch_r01(k: &mut Kernel<'static, TestConfig>, r0: u32, r1: u32, r2: u32) -> (u32, u32) {
         let mut ef = frame(r0, r1, r2);
         dispatch_checked(k, &mut ef);
@@ -3192,6 +3195,7 @@ mod tests {
     /// Dispatch a 4-register SVC and return `r0`.
     ///
     /// Like [`dispatch_r0`] but passes all four argument registers.
+    #[cfg(feature = "dynamic-mpu")]
     fn dispatch_r04(
         k: &mut Kernel<'static, TestConfig>,
         r0: u32,
@@ -3208,6 +3212,7 @@ mod tests {
     ///
     /// Useful for tests that need additional partitions beyond the default P0/P1
     /// created by [`kernel()`].
+    #[cfg(feature = "dynamic-mpu")]
     fn add_running_partition(k: &mut Kernel<'static, TestConfig>, id: u8) {
         k.partitions_mut().add(pcb(id)).unwrap();
         k.partitions_mut()
