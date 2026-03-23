@@ -16,6 +16,22 @@
 //!
 //! These functions must only be called from PendSV handlers in Handler mode.
 
+// EXC_RETURN string constants for assembly injection (must stay in sync with context.rs).
+// Macros (not `const`) because `concat!` requires literal tokens.
+// 0xFFFFFFED = 0xFFFFFFFD with bit 4 cleared (FPU frame present).
+#[allow(unused_macros)]
+macro_rules! exc_return_no_fpu {
+    () => {
+        "0xFFFFFFFD"
+    };
+}
+#[allow(unused_macros)]
+macro_rules! exc_return_fpu {
+    () => {
+        "0xFFFFFFED"
+    };
+}
+
 // SAFETY: This assembly block defines PendSV context switch routines that are sound
 // because:
 //
@@ -40,7 +56,7 @@
 //      partition returns to Thread mode as unprivileged code.
 //    - The ISB after MSR CONTROL ensures the privilege drop takes effect before any
 //      subsequent instructions execute.
-//    - EXC_RETURN=0xFFFFFFFD specifies: return to Thread mode, use PSP, no FPU context.
+//    - EXC_RETURN value specifies: return to Thread mode, use PSP, with or without FPU.
 //    - Combined with PRIVDEFENA in MPU_CTRL, unprivileged code cannot access kernel
 //      memory or privileged peripherals.
 //
@@ -60,35 +76,52 @@
 //    - No other code can preempt PendSV mid-context-switch, ensuring atomicity.
 //    - The fault loop in restore path keeps the system debuggable rather than causing
 //      an unpredictable HardFault.
-#[cfg(target_arch = "arm")]
-core::arch::global_asm!(
-    r#"
+//
+// 6. **FPU Register Operations (s16-s31)** [fpu-context only]:
+//    Hardware lazy-stacks s0-s15/FPSCR; we manually save/restore s16-s31
+//    (callee-saved per AAPCS) via vstmdb/vldmia with `.fpu fpv4-sp-d16`.
+//
+// 7. **EXC_RETURN with FPU Frame** [fpu-context only]:
+//    Bit 4 = 0 signals an extended FPU frame on the stack.
+
+/// Generates the PendSV `global_asm!` block, parameterized by FPU directive,
+/// save/restore instructions, and EXC_RETURN value.
+#[allow(unused_macros)]
+macro_rules! pendsv_global_asm {
+    ($fpu_directive:expr, $fpu_save:expr, $fpu_restore:expr, $exc_return:expr) => {
+        core::arch::global_asm!(concat!(
+            r#"
     .syntax unified
     .thumb
-
+"#,
+            // FPU assembler directive (empty for non-FPU builds)
+            "    ",
+            $fpu_directive,
+            "\n",
+            r#"
     /* ================================================================
      * pendsv_context_save
      * ================================================================
-     * Saves the current partition's context (r4-r11 and PSP).
+     * Saves the current partition's context (r4-r11, optional s16-s31, and PSP).
      *
      * Input:  r0 = current partition index (must be valid, not 0xFF)
      * Output: none
      * Clobbers: r0, r1, r2, r3 (follows AAPCS)
-     *
-     * The save path:
-     *   1. mrs r3, psp — get current process stack pointer
-     *   2. stmdb r3!, {{r4-r11}} — push callee-saved regs onto process stack
-     *   3. Store r3 to partition_sp[idx] using direct offset access
      */
     .global pendsv_context_save
     .type pendsv_context_save, %function
     .thumb_func
 pendsv_context_save:
-    /* Get PSP and push r4-r11 onto process stack BEFORE modifying any of them.
+    /* Get PSP and push callee-saved regs onto process stack BEFORE modifying any.
      * r0 (partition index) is not affected by mrs or stmdb. */
     mrs     r3, psp
-    stmdb   r3!, {{r4-r11}}     /* r3 now points to saved context */
-
+    stmdb   r3!, {{r4-r11}}     /* push integer callee-saved regs */
+"#,
+            // FPU save (empty for non-FPU builds)
+            // TODO: Stack overflow check is post-facto — with FPU context the overrun window
+            // is 64 bytes larger. Pre-check would require knowing the save size before pushing.
+            $fpu_save,
+            r#"
     @ SAFETY: KERNEL_PTR is guaranteed non-null because store_kernel_ptr() must
     @ be called before enabling interrupts, and PendSV (priority 0xFF) cannot
     @ fire until interrupts are enabled. A defensive null check is included below
@@ -115,14 +148,14 @@ pendsv_context_save:
     add     r2, r1, r2          /* r2 = &partition_sp[0] */
 
     /* Stack overflow pre-check: PSP vs partition_stack_limits[idx] */
-    push    {{r2}}              /* save &partition_sp[0] across check */
+    push    {{r2}}                /* save &partition_sp[0] across check */
     ldr     r2, =CORE_PARTITION_STACK_LIMIT_OFFSET
     ldr     r2, [r2]
     add     r2, r1, r2          /* r2 = &partition_stack_limits[0] */
     ldr     r2, [r2, r0]        /* r2 = partition_stack_limits[idx] */
     cmp     r3, r2
     blo     .Lstack_overflow
-    pop     {{r2}}              /* r2 = &partition_sp[0] */
+    pop     {{r2}}                /* r2 = &partition_sp[0] */
     str     r3, [r2, r0]        /* partition_sp[idx] = new SP */
     bx      lr
 
@@ -136,7 +169,7 @@ pendsv_context_save:
     .thumb_func
 __pendsv_stack_overflow:
 .Lstack_overflow:
-    pop     {{r2}}              /* r2 = &partition_sp[0] */
+    pop     {{r2}}                /* r2 = &partition_sp[0] */
     ldr     r3, =0xDEAD0001
     str     r3, [r2, r0]        /* partition_sp[idx] = sentinel */
     bx      lr                  /* return to PendSV */
@@ -146,21 +179,15 @@ __pendsv_stack_overflow:
     /* ================================================================
      * pendsv_context_restore
      * ================================================================
-     * Restores an incoming partition's context (r4-r11 and PSP).
+     * Restores an incoming partition's context (optional s16-s31, r4-r11, and PSP).
      *
      * Input:  r0 = next partition index
-     * Output: none (PSP and r4-r11 restored)
+     * Output: none (PSP and callee-saved registers restored)
      * Clobbers: r0, r1, r2, r3 (follows AAPCS)
      *
      * SAFETY: If partition_sp[idx] is 0 (uninitialized partition),
      * this function branches to a fault loop rather than dereferencing
      * a null pointer.
-     *
-     * The restore path:
-     *   1. Load partition_sp[idx] using direct offset access
-     *   2. Validate SP is non-zero (fault if zero)
-     *   3. ldmia r3!, {{r4-r11}} — pop callee-saved regs from process stack
-     *   4. msr psp, r3 — update PSP
      */
     .global pendsv_context_restore
     .type pendsv_context_restore, %function
@@ -193,8 +220,11 @@ pendsv_context_restore:
     cmp     r3, #0
     beq     .Lrestore_fault
 
-    /* Restore r4-r11 and update PSP */
-    ldmia   r3!, {{r4-r11}}
+    /* Restore callee-saved regs and update PSP */
+"#,
+            // FPU restore (empty for non-FPU builds)
+            $fpu_restore,
+            r#"    ldmia   r3!, {{r4-r11}}
     msr     psp, r3
 
     bx      lr
@@ -218,7 +248,7 @@ pendsv_context_restore:
      * The return path:
      *   1. Sets CONTROL.nPRIV = 1 to drop to unprivileged mode
      *   2. Issues ISB to ensure CONTROL write takes effect
-     *   3. Loads EXC_RETURN = 0xFFFFFFFD (Thread mode, PSP)
+     *   3. Loads EXC_RETURN (Thread mode, PSP, +/- FPU frame)
      *   4. bx lr to complete exception return
      */
     .global pendsv_return_unprivileged
@@ -229,7 +259,9 @@ pendsv_return_unprivileged:
     orr     r0, r0, #1
     msr     CONTROL, r0
     isb
-    ldr     lr, =0xFFFFFFFD
+    ldr     lr, ="#,
+            $exc_return,
+            r#"
     bx      lr
     .size pendsv_return_unprivileged, . - pendsv_return_unprivileged
 
@@ -239,4 +271,108 @@ pendsv_return_unprivileged:
 .Lnull_kernel_fault:
     b       .Lnull_kernel_fault
 "#
+        ));
+    };
+}
+
+#[cfg(all(target_arch = "arm", not(feature = "fpu-context")))]
+pendsv_global_asm!(
+    "", // no FPU directive
+    "", // no FPU save
+    "", // no FPU restore
+    exc_return_no_fpu!()
 );
+
+#[cfg(all(target_arch = "arm", feature = "fpu-context"))]
+pendsv_global_asm!(
+    ".fpu fpv4-sp-d16",
+    "    vstmdb  r3!, {{s16-s31}}    /* push FPU callee-saved regs (64 bytes) */\n",
+    "    vldmia  r3!, {{s16-s31}}    /* pop FPU callee-saved regs (64 bytes) */\n",
+    exc_return_fpu!()
+);
+
+#[cfg(test)]
+mod tests {
+    //! Tests for PendSV assembly cfg-gating and constant consistency.
+    //!
+    //! The actual assembly instructions cannot be executed on the host, but we
+    //! verify that the FPU context constants used by the assembly are consistent
+    //! with the definitions in `context.rs`.
+
+    /// The non-FPU EXC_RETURN value used in the assembly (Thread mode, PSP, no FPU).
+    const EXC_RETURN_NO_FPU: u32 = 0xFFFF_FFFD;
+    /// The FPU EXC_RETURN value used in the assembly (Thread mode, PSP, FPU frame).
+    const EXC_RETURN_FPU: u32 = 0xFFFF_FFED;
+
+    #[test]
+    fn exc_return_str_constants_match() {
+        // Verify the string macro constants injected into assembly match the numeric values.
+        assert_eq!(
+            u32::from_str_radix(&exc_return_no_fpu!()[2..], 16).unwrap(),
+            EXC_RETURN_NO_FPU,
+            "exc_return_no_fpu!() must match numeric constant"
+        );
+        assert_eq!(
+            u32::from_str_radix(&exc_return_fpu!()[2..], 16).unwrap(),
+            EXC_RETURN_FPU,
+            "exc_return_fpu!() must match numeric constant"
+        );
+    }
+
+    #[test]
+    fn exc_return_fpu_clears_bit4() {
+        // Bit 4 = 0 indicates extended FPU frame is present on the stack.
+        assert_eq!(
+            EXC_RETURN_FPU & (1 << 4),
+            0,
+            "FPU EXC_RETURN bit 4 must be 0"
+        );
+        assert_ne!(
+            EXC_RETURN_NO_FPU & (1 << 4),
+            0,
+            "non-FPU EXC_RETURN bit 4 must be 1"
+        );
+    }
+
+    #[test]
+    fn exc_return_only_bit4_differs() {
+        // The FPU and non-FPU EXC_RETURN values differ only in bit 4.
+        assert_eq!(EXC_RETURN_NO_FPU ^ EXC_RETURN_FPU, 1 << 4);
+    }
+
+    #[test]
+    fn exc_return_thread_mode_psp_bits() {
+        // Both variants must specify Thread mode (bit 3) and PSP (bit 2).
+        for &val in &[EXC_RETURN_NO_FPU, EXC_RETURN_FPU] {
+            assert_ne!(val & (1 << 2), 0, "bit 2 (PSP) must be set");
+            assert_ne!(val & (1 << 3), 0, "bit 3 (Thread mode) must be set");
+        }
+    }
+
+    #[cfg(feature = "fpu-context")]
+    #[test]
+    fn exc_return_matches_context_constant() {
+        use crate::context::EXC_RETURN_THREAD_PSP_FPU;
+        assert_eq!(
+            EXC_RETURN_FPU, EXC_RETURN_THREAD_PSP_FPU,
+            "assembly FPU EXC_RETURN must match context.rs constant"
+        );
+    }
+
+    #[cfg(feature = "fpu-context")]
+    #[test]
+    fn fpu_save_restore_word_count() {
+        use crate::context::FPU_SAVED_CONTEXT_WORDS;
+        // s16-s31 = 16 single-precision registers = 16 words = 64 bytes.
+        assert_eq!(FPU_SAVED_CONTEXT_WORDS, 16);
+        assert_eq!(FPU_SAVED_CONTEXT_WORDS * 4, 64);
+    }
+
+    #[test]
+    fn exc_return_upper_bits_set() {
+        // All upper bits [31:5] must be 1 for a valid EXC_RETURN.
+        let upper_mask: u32 = !0x1F;
+        assert_eq!(EXC_RETURN_NO_FPU & upper_mask, upper_mask);
+        assert_eq!(EXC_RETURN_FPU & upper_mask, upper_mask);
+    }
+}
