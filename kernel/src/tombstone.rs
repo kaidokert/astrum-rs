@@ -293,11 +293,16 @@ mod tests {
         assert_eq!(&t.message as *const _ as usize - base, 56);
     }
 
+    /// Serialize tests that mutate the global panic hook.
+    static HOOK_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Helper: install a panic hook that serializes into a shared tombstone,
     /// using `fmt::Write` to capture the message (matching `write_panic_info`).
     fn with_panic_tombstone(f: impl FnOnce() + std::panic::UnwindSafe) -> PanicTombstone {
         use std::panic;
         use std::sync::{Arc, Mutex};
+
+        let _guard = HOOK_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
         let tombstone = Arc::new(Mutex::new(PanicTombstone::EMPTY));
         let ts_clone = tombstone.clone();
