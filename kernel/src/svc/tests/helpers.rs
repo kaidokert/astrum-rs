@@ -1,7 +1,17 @@
 use super::*;
 
+/// Build a `Kernel` from `ExternalPartitionMemory` slices via `new`.
+/// No system-window is added — callers must include one for `dynamic-mpu` builds.
+pub fn kernel_from_ext(
+    schedule: ScheduleTable<4>,
+    mems: &[ExternalPartitionMemory<'_>],
+) -> Kernel<'static, TestConfig> {
+    // TODO(panic-free): replace .unwrap() with Result return type for consistency
+    Kernel::<TestConfig>::new(schedule, mems).unwrap()
+}
+
 /// Test kernel configuration with small, fixed pool sizes.
-pub(super) struct TestConfig;
+pub struct TestConfig;
 impl KernelConfig for TestConfig {
     const N: usize = 4;
     const S: usize = 4;
@@ -21,7 +31,7 @@ impl KernelConfig for TestConfig {
     kernel_config_types!(AlignedStack4K);
 }
 
-pub(super) fn frame(r0: u32, r1: u32, r2: u32) -> ExceptionFrame {
+pub fn frame(r0: u32, r1: u32, r2: u32) -> ExceptionFrame {
     ExceptionFrame {
         r0,
         r1,
@@ -34,7 +44,7 @@ pub(super) fn frame(r0: u32, r1: u32, r2: u32) -> ExceptionFrame {
     }
 }
 
-pub(super) fn pcb(id: u8) -> PartitionControlBlock {
+pub fn pcb(id: u8) -> PartitionControlBlock {
     let o = (id as u32) * 0x1000;
     PartitionControlBlock::new(
         id,

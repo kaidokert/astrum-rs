@@ -2903,31 +2903,22 @@ mod tests {
     //! the kernel's bounds checks succeed.
 
     mod helpers;
-    use helpers::*;
+    pub use helpers::*;
 
-    use super::*;
-    use crate::config::KernelConfig;
-    use crate::kernel_config_types;
-    use crate::message::MessageQueue;
-    use crate::mpu::MpuError;
+    pub use super::*;
+    pub use crate::config::KernelConfig;
+    pub use crate::kernel_config_types;
+    pub use crate::message::MessageQueue;
+    pub use crate::mpu::MpuError;
     #[cfg(feature = "dynamic-mpu")]
-    use crate::mpu_strategy::MpuStrategy;
-    use crate::partition::{ExternalPartitionMemory, MpuRegion, PartitionControlBlock};
-    use crate::partition_core::AlignedStack1K;
-    use crate::scheduler::ScheduleEntry;
-    use crate::scheduler::ScheduleEvent;
-    use crate::semaphore::Semaphore;
-    use crate::syscall::SYS_GET_PARTITION_ID;
-    use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_IRQ_ACK, SYS_YIELD};
-
-    /// Build a `Kernel` from `ExternalPartitionMemory` slices via `new`.
-    /// No system-window is added — callers must include one for `dynamic-mpu` builds.
-    fn kernel_from_ext(
-        schedule: ScheduleTable<4>,
-        mems: &[ExternalPartitionMemory<'_>],
-    ) -> Kernel<'static, TestConfig> {
-        Kernel::<TestConfig>::new(schedule, mems).unwrap()
-    }
+    pub use crate::mpu_strategy::MpuStrategy;
+    pub use crate::partition::{ExternalPartitionMemory, MpuRegion, PartitionControlBlock};
+    pub use crate::partition_core::AlignedStack1K;
+    pub use crate::scheduler::ScheduleEntry;
+    pub use crate::scheduler::ScheduleEvent;
+    pub use crate::semaphore::Semaphore;
+    pub use crate::syscall::SYS_GET_PARTITION_ID;
+    pub use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_IRQ_ACK, SYS_YIELD};
 
     // ---- Kernel::new() is the canonical constructor ----
 
