@@ -636,6 +636,70 @@ where
     }))
 }
 
+/// Test-only version of [`with_kernel`] that skips `cortex_m::interrupt::free`
+/// (unavailable on host). Interrupt-based exclusion is unnecessary in host tests;
+/// callers must serialize access themselves (e.g., via a `std::sync::Mutex`).
+#[cfg(test)]
+pub fn with_kernel<C, F, R>(f: F) -> Result<R, &'static str>
+where
+    C: KernelConfig,
+    F: FnOnce(&Kernel<'static, C>) -> R,
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+{
+    // SAFETY: Same invariants as the production version. In tests there are
+    // no interrupts, so the critical section is replaced by caller-managed
+    // serialization (e.g., TEST_LOCK mutex).
+    let nn = unsafe { crate::kernel_ptr::load_kernel_ptr::<C>() };
+    let ptr = match nn {
+        Some(p) => p.as_ptr(),
+        None => return Err("kernel not initialized"),
+    };
+    // SAFETY: load_kernel_ptr returned Some, so the pointer is non-null and
+    // was stored via store_kernel_ptr after a valid Kernel was initialized.
+    // No interrupts exist in the test environment; caller serializes access.
+    let kernel = unsafe { &*ptr };
+    Ok(f(kernel))
+}
+
+/// Test-only version of [`with_kernel_mut`] that skips `cortex_m::interrupt::free`
+/// (unavailable on host). Interrupt-based exclusion is unnecessary in host tests;
+/// callers must serialize access themselves (e.g., via a `std::sync::Mutex`).
+#[cfg(test)]
+pub fn with_kernel_mut<C, F, R>(f: F) -> Result<R, &'static str>
+where
+    C: KernelConfig,
+    F: FnOnce(&mut Kernel<'static, C>) -> R,
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BP]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::BZ]:,
+    #[cfg(feature = "dynamic-mpu")]
+    [(); C::DR]:,
+{
+    // SAFETY: Same invariants as the production version. In tests there are
+    // no interrupts, so the critical section is replaced by caller-managed
+    // serialization (e.g., TEST_LOCK mutex).
+    let nn = unsafe { crate::kernel_ptr::load_kernel_ptr::<C>() };
+    let ptr = match nn {
+        Some(p) => p.as_ptr(),
+        None => return Err("kernel not initialized"),
+    };
+    // SAFETY: load_kernel_ptr returned Some, so the pointer is non-null and
+    // was stored via store_kernel_ptr after a valid Kernel was initialized.
+    // No interrupts exist in the test environment; caller serializes access.
+    let kernel = unsafe { &mut *ptr };
+    Ok(f(kernel))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -900,6 +964,52 @@ mod tests {
         assert_eq!(
             result.unwrap_err(),
             "nested bottom-half invocation detected"
+        );
+    }
+
+    /// Mutex to serialize tests that share the global `KERNEL_PTR`.
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Verifies the full store_kernel_ptr → with_kernel_mut path.
+    ///
+    /// This test confirms the chicken-and-egg fix: after store_kernel_ptr populates
+    /// the AtomicPtr, `with_kernel_mut` can successfully access the kernel and
+    /// returns `Ok`.
+    #[test]
+    fn store_kernel_ptr_enables_with_kernel_mut() {
+        let _guard = TEST_LOCK.lock().unwrap();
+
+        let mut kernel = create_test_kernel();
+
+        // Store the kernel pointer in the AtomicPtr global.
+        // SAFETY: kernel lives for the duration of this test and we
+        // clear the pointer before it is dropped.
+        unsafe { crate::kernel_ptr::store_kernel_ptr(&mut kernel) };
+
+        // Exercise the real with_kernel_mut API and verify it returns Ok.
+        let result = with_kernel_mut::<TestConfig, _, _>(|k| {
+            assert_eq!(
+                k.current_partition, 255,
+                "current_partition sentinel must be accessible via with_kernel_mut"
+            );
+            assert!(
+                k.active_partition.is_none(),
+                "active_partition must be None"
+            );
+        });
+        assert!(
+            result.is_ok(),
+            "with_kernel_mut must return Ok after store_kernel_ptr"
+        );
+
+        // Clean up global state.
+        crate::kernel_ptr::clear_kernel_ptr();
+
+        // Verify cleanup: with_kernel_mut should now return Err.
+        let after_clear = with_kernel_mut::<TestConfig, _, ()>(|_| {});
+        assert!(
+            after_clear.is_err(),
+            "with_kernel_mut must return Err after clear_kernel_ptr"
         );
     }
 
