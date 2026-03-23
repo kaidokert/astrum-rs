@@ -44,6 +44,19 @@ pub fn frame(r0: u32, r1: u32, r2: u32) -> ExceptionFrame {
     }
 }
 
+pub fn frame4(r0: u32, r1: u32, r2: u32, r3: u32) -> ExceptionFrame {
+    ExceptionFrame {
+        r0,
+        r1,
+        r2,
+        r3,
+        r12: 0,
+        lr: 0,
+        pc: 0,
+        xpsr: 0,
+    }
+}
+
 pub fn pcb(id: u8) -> PartitionControlBlock {
     let o = (id as u32) * 0x1000;
     PartitionControlBlock::new(
