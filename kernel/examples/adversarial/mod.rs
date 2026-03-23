@@ -259,7 +259,7 @@ unsafe fn drop_to_unprivileged(stack_top: u32) {
 #[cfg(feature = "qemu")]
 pub unsafe fn run_other_stack_test<F>(
     test_name: &str,
-    p: &mut cortex_m::Peripherals,
+    mut p: cortex_m::Peripherals,
     p0_stack: *const AlignedStack,
     p1_stack: *const AlignedStack,
     access_fn: F,
@@ -330,7 +330,7 @@ where
 pub unsafe fn run_kernel_access_test<F>(
     test_name: &str,
     target_addr: u32,
-    p: &mut cortex_m::Peripherals,
+    mut p: cortex_m::Peripherals,
     stack: *const AlignedStack,
     access_fn: F,
 ) -> !

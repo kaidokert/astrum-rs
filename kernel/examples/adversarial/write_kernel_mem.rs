@@ -48,7 +48,7 @@ define_memmanage_handler!(FAULT, TEST_NAME);
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
 
     // SAFETY: PARTITION_STACK is only accessed here before dropping to
     // unprivileged mode, and by the partition code during the test.
@@ -57,7 +57,7 @@ fn main() -> ! {
         adversarial::run_kernel_access_test(
             TEST_NAME,
             KERNEL_ADDR,
-            &mut p,
+            p,
             &raw const PARTITION_STACK,
             || {
                 // Attempt to write to kernel memory — must fault (DACCVIOL).

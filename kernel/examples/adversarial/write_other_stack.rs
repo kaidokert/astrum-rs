@@ -48,7 +48,7 @@ define_memmanage_handler!(FAULT, TEST_NAME);
 
 #[entry]
 fn main() -> ! {
-    let mut p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
+    let p = cortex_m::Peripherals::take().expect("cortex-m peripherals");
 
     // SAFETY: P0_STACK and P1_STACK are only accessed here before dropping to
     // unprivileged mode, and by the partition code during the test.
@@ -56,7 +56,7 @@ fn main() -> ! {
     unsafe {
         adversarial::run_other_stack_test(
             TEST_NAME,
-            &mut p,
+            p,
             &raw const P0_STACK,
             &raw const P1_STACK,
             |target_addr| {
