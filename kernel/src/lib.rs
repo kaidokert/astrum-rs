@@ -90,6 +90,7 @@ pub mod sync_pools;
 pub mod syscall;
 pub mod systick;
 pub mod tick;
+pub mod tombstone;
 
 // Re-export check_entry_sig! macro so users can write kernel::check_entry_sig!()
 pub use rtos_traits::check_entry_sig;
