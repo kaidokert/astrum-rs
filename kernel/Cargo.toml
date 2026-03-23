@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7", features = ["device"] }
+critical-section = { version = "1.2", optional = true }
 cortex-m-semihosting = { version = "0.5", optional = true }
 defmt = { version = "0.3", optional = true }
 heapless = "0.8"
@@ -498,7 +499,7 @@ dynamic-mpu = ["rtos-traits/dynamic-mpu", "plib/dynamic-mpu"]
 partition-debug = ["rtos-traits/partition-debug"]
 panic-halt = ["dep:panic-halt"]
 log-semihosting = ["dep:cortex-m-semihosting", "dep:panic-semihosting"]
-log-rtt = ["dep:rtt-target", "dep:panic-rtt-target"]
+log-rtt = ["dep:rtt-target", "dep:panic-rtt-target", "dep:critical-section"]
 log-swo = []
 log-defmt = ["dep:defmt"]
 
@@ -509,6 +510,9 @@ single-core = []
 
 # FPU context: save/restore FPU registers on context switch (Cortex-M4F+).
 fpu-context = []
+
+# Write panic diagnostics into a .noinit tombstone before the panic backend runs.
+panic-tombstone = []
 
 # Kernel storage size ladder — selects static buffer sizes at compile time.
 # Mutually exclusive: enabling more than one is a compile error.
