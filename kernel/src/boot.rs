@@ -13,16 +13,31 @@ use crate::{
     semaphore::SemaphorePool,
 };
 
+/// Tracks whether RTT has already been initialized.
+///
+/// `Relaxed` ordering is sufficient because RTT init runs single-threaded
+/// at boot before the scheduler starts.
+// TODO: RTT_INITIALIZED is global state; unit tests calling init_rtt are not
+// isolated from each other when run in the same process.  Consider resetting
+// the flag in a test helper if order-dependent failures appear.
+#[cfg(klog_backend = "rtt")]
+static RTT_INITIALIZED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// Initialize the RTT logging channel (RTT backend).
 ///
+/// Safe to call more than once: the second call is a no-op.
 /// Public so the harness macro can call it before `init_kernel()`.
 #[cfg(klog_backend = "rtt")]
 pub fn init_rtt() {
+    if RTT_INITIALIZED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     rtt_target::rtt_init_print!();
 }
 
 /// No-op RTT init for non-RTT backends.
 ///
+/// Safe to call more than once (always a no-op).
 /// Public so the harness macro can call it before `init_kernel()`.
 #[cfg(not(klog_backend = "rtt"))]
 pub fn init_rtt() {}
@@ -1396,11 +1411,28 @@ mod tests {
     }
 
     #[test]
+    #[cfg(klog_backend = "none")]
+    fn init_rtt_none_backend_double_call_safe() {
+        // Calling init_rtt() twice must not panic on non-RTT backends.
+        init_rtt();
+        init_rtt();
+    }
+
+    #[test]
     #[cfg(klog_backend = "rtt")]
     fn init_rtt_rtt_backend_calls_rtt_init_print() {
         // When log-rtt is enabled, init_rtt() must compile with the
         // rtt_init_print!() expansion.  This catches duplicate
         // _SEGGER_RTT symbol regressions.
+        init_rtt();
+    }
+
+    #[test]
+    #[cfg(klog_backend = "rtt")]
+    fn init_rtt_rtt_backend_double_call_safe() {
+        // The AtomicBool guard must make the second call a no-op
+        // instead of panicking from a duplicate rtt_init_print!().
+        init_rtt();
         init_rtt();
     }
 
