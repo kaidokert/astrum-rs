@@ -4,7 +4,6 @@ use super::*;
 pub(super) struct TestConfig;
 impl KernelConfig for TestConfig {
     const N: usize = 4;
-    const STACK_WORDS: usize = 1024;
     const S: usize = 4;
     const SW: usize = 4;
     const MS: usize = 4;

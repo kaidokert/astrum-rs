@@ -302,7 +302,6 @@ mod tests {
     impl KernelConfig for TestConfig {
         const N: usize = 2;
         const SCHED: usize = 4;
-        const STACK_WORDS: usize = 256;
         const S: usize = 2;
         const SW: usize = 2;
         const MS: usize = 2;

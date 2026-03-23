@@ -477,8 +477,6 @@ pub trait KernelConfig {
     const N: usize;
     /// Schedule table capacity (number of schedule entries).
     const SCHED: usize = 4;
-    /// Stack word count per partition (256 = 1024 bytes for MPU alignment).
-    const STACK_WORDS: usize = 256;
     /// Semaphore pool capacity.
     const S: usize = 1;
     /// Semaphore wait-queue depth.
@@ -832,7 +830,6 @@ macro_rules! _kernel_config_inherent_consts {
         impl $name {
             $vis const N: usize = <$name as $crate::config::KernelConfig>::N;
             $vis const SCHED: usize = <$name as $crate::config::KernelConfig>::SCHED;
-            $vis const STACK_WORDS: usize = <$name as $crate::config::KernelConfig>::STACK_WORDS;
             $vis const S: usize = <$name as $crate::config::KernelConfig>::S;
             $vis const SW: usize = <$name as $crate::config::KernelConfig>::SW;
             $vis const MS: usize = <$name as $crate::config::KernelConfig>::MS;
@@ -888,9 +885,6 @@ macro_rules! _kernel_config_field {
     };
     (schedule_capacity = $v:expr) => {
         const SCHED: usize = $v;
-    };
-    (stack_words = $v:expr) => {
-        const STACK_WORDS: usize = $v;
     };
     (semaphores = $v:expr) => {
         const S: usize = $v;
@@ -2031,7 +2025,6 @@ mod tests {
     fn kernel_config_macro_defaults_only() {
         assert_eq!(MacroDefaultsOnly::N, 2);
         assert_eq!(MacroDefaultsOnly::SCHED, 4);
-        assert_eq!(MacroDefaultsOnly::STACK_WORDS, 256);
         assert_eq!(MacroDefaultsOnly::S, 1);
         assert_eq!(MacroDefaultsOnly::SW, 1);
         assert_eq!(MacroDefaultsOnly::MS, 1);
@@ -2060,7 +2053,6 @@ mod tests {
         assert_eq!(MacroWithOverrides::SW, 2);
         assert_eq!(MacroWithOverrides::CORE_CLOCK_HZ, 64_000_000);
         // Non-overridden constants retain defaults.
-        assert_eq!(MacroWithOverrides::STACK_WORDS, 256);
         assert_eq!(MacroWithOverrides::MS, 1);
         assert_eq!(MacroWithOverrides::MW, 1);
         assert_eq!(MacroWithOverrides::TICK_PERIOD_US, 1000);
@@ -2068,13 +2060,11 @@ mod tests {
 
     kernel_config!(MacroCustomStack [crate::partition_core::AlignedStack4K] {
         const N: usize = 2;
-        const STACK_WORDS: usize = 1024;
     });
 
     #[test]
     fn kernel_config_macro_custom_stack() {
         assert_eq!(MacroCustomStack::N, 2);
-        assert_eq!(MacroCustomStack::STACK_WORDS, 1024);
         // Defaults still apply for non-overridden constants.
         assert_eq!(MacroCustomStack::SCHED, 4);
         assert_eq!(MacroCustomStack::S, 1);
@@ -2100,13 +2090,11 @@ mod tests {
         // `pub` config with custom stack type.
         kernel_config!(pub PubStackConfig [crate::partition_core::AlignedStack4K] {
             const N: usize = 2;
-            const STACK_WORDS: usize = 1024;
         });
 
         // `pub(crate)` config with custom stack type.
         kernel_config!(pub(crate) PubCrateStackConfig [crate::partition_core::AlignedStack4K] {
             const N: usize = 4;
-            const STACK_WORDS: usize = 1024;
         });
 
         // Private (default) config — should only be accessible within this module.
@@ -2139,14 +2127,12 @@ mod tests {
     #[test]
     fn pub_stack_config_accessible_from_parent() {
         assert_eq!(vis_test::PubStackConfig::N, 2);
-        assert_eq!(vis_test::PubStackConfig::STACK_WORDS, 1024);
         assert_eq!(vis_test::PubStackConfig::SCHED, 4);
     }
 
     #[test]
     fn pub_crate_stack_config_accessible_from_parent() {
         assert_eq!(vis_test::PubCrateStackConfig::N, 4);
-        assert_eq!(vis_test::PubCrateStackConfig::STACK_WORDS, 1024);
         assert_eq!(vis_test::PubCrateStackConfig::SCHED, 4);
     }
 
@@ -2159,7 +2145,6 @@ mod tests {
     impl KernelConfig for FieldMacroConfig {
         _kernel_config_field!(partitions = 3);
         _kernel_config_field!(schedule_capacity = 6);
-        _kernel_config_field!(stack_words = 128);
         _kernel_config_field!(semaphores = 2);
         _kernel_config_field!(semaphore_waitq = 2);
         _kernel_config_field!(mutexes = 2);
@@ -2189,7 +2174,6 @@ mod tests {
     fn kernel_config_field_macro_expands_correctly() {
         assert_eq!(FieldMacroConfig::N, 3);
         assert_eq!(FieldMacroConfig::SCHED, 6);
-        assert_eq!(FieldMacroConfig::STACK_WORDS, 128);
         assert_eq!(FieldMacroConfig::S, 2);
         assert_eq!(FieldMacroConfig::SW, 2);
         assert_eq!(FieldMacroConfig::MS, 2);
@@ -2222,7 +2206,6 @@ mod tests {
     kernel_config!(FieldSyntaxConfig {
         partitions = 3;
         schedule_capacity = 6;
-        stack_words = 128;
         semaphores = 2;
         semaphore_waitq = 2;
         mutexes = 3;
@@ -2235,7 +2218,6 @@ mod tests {
     fn field_syntax_config_values() {
         assert_eq!(FieldSyntaxConfig::N, 3);
         assert_eq!(FieldSyntaxConfig::SCHED, 6);
-        assert_eq!(FieldSyntaxConfig::STACK_WORDS, 128);
         assert_eq!(FieldSyntaxConfig::S, 2);
         assert_eq!(FieldSyntaxConfig::SW, 2);
         assert_eq!(FieldSyntaxConfig::MS, 3);
@@ -2261,7 +2243,6 @@ mod tests {
         assert_eq!(MixedSyntaxConfig::S, 8);
         assert_eq!(MixedSyntaxConfig::CORE_CLOCK_HZ, 64_000_000);
         // Non-overridden fields retain defaults.
-        assert_eq!(MixedSyntaxConfig::STACK_WORDS, 256);
         assert_eq!(MixedSyntaxConfig::MS, 1);
         assert_eq!(MixedSyntaxConfig::TICK_PERIOD_US, 1000);
     }
@@ -2327,7 +2308,6 @@ mod tests {
         assert_eq!(FeatureGatedE2EConfig::CORE_CLOCK_HZ, 48_000_000);
         // Non-overridden fields retain defaults.
         assert_eq!(FeatureGatedE2EConfig::SCHED, 4);
-        assert_eq!(FeatureGatedE2EConfig::STACK_WORDS, 256);
         #[cfg(feature = "dynamic-mpu")]
         {
             assert_eq!(FeatureGatedE2EConfig::BP, 8);
@@ -2390,7 +2370,6 @@ mod tests {
     fn composed_with_partitions1() {
         assert_eq!(ComposedP1::N, 1);
         assert_eq!(ComposedP1::SCHED, 4);
-        assert_eq!(ComposedP1::STACK_WORDS, 256);
         assert_eq!(ComposedP1::S, SyncMinimal::SEMAPHORES);
         assert_eq!(ComposedP1::SP, PortsTiny::SAMPLING_PORTS);
         assert_eq!(ComposedP1::BS, PortsTiny::BLACKBOARDS);
@@ -2407,7 +2386,6 @@ mod tests {
     fn composed_with_partitions3_and_msg_small() {
         assert_eq!(ComposedP3MsgSmall::N, 3);
         assert_eq!(ComposedP3MsgSmall::SCHED, 8);
-        assert_eq!(ComposedP3MsgSmall::STACK_WORDS, 256);
         assert_eq!(ComposedP3MsgSmall::QS, 2);
         assert_eq!(ComposedP3MsgSmall::QD, 4);
         assert_eq!(ComposedP3MsgSmall::QM, 4);
@@ -2421,7 +2399,6 @@ mod tests {
         // PartitionConfig
         assert_eq!(ComposedP4::N, 4);
         assert_eq!(ComposedP4::SCHED, 8);
-        assert_eq!(ComposedP4::STACK_WORDS, 256);
         // SyncConfig
         assert_eq!(ComposedP4::S, SyncStandard::SEMAPHORES);
         assert_eq!(ComposedP4::SW, SyncStandard::SEMAPHORE_WAITQ);
@@ -2486,7 +2463,6 @@ mod tests {
         // Preset-derived values preserved
         assert_eq!(ComposedMpuOverride::N, Partitions2::COUNT);
         assert_eq!(ComposedMpuOverride::SCHED, Partitions2::SCHEDULE_CAPACITY);
-        assert_eq!(ComposedMpuOverride::STACK_WORDS, 256);
         assert_eq!(ComposedMpuOverride::S, SyncMinimal::SEMAPHORES);
         assert_eq!(ComposedMpuOverride::QS, MsgMinimal::QUEUES);
         assert_eq!(ComposedMpuOverride::SP, PortsTiny::SAMPLING_PORTS);
@@ -2569,26 +2545,6 @@ mod tests {
         assert_eq!(ComposedClockOverride::TICK_PERIOD_US, 500);
         // 64_000_000 * 500 / 1_000_000 = 32_000
         assert_eq!(ComposedClockOverride::SYSTICK_CYCLES, 32_000);
-    }
-
-    compose_kernel_config!(
-        ComposedStackOverride < Partitions2,
-        SyncMinimal,
-        MsgMinimal,
-        PortsTiny,
-        DebugDisabled > {
-            stack_words = 512;
-        }
-    );
-
-    #[test]
-    fn compose_with_stack_words_override() {
-        // Override takes effect
-        assert_eq!(ComposedStackOverride::STACK_WORDS, 512);
-        assert_ne!(ComposedStackOverride::STACK_WORDS, 256);
-        // N and SCHED still come from the preset
-        assert_eq!(ComposedStackOverride::N, Partitions2::COUNT);
-        assert_eq!(ComposedStackOverride::SCHED, Partitions2::SCHEDULE_CAPACITY);
     }
 
     compose_kernel_config!(
@@ -2724,9 +2680,7 @@ mod tests {
         CustomSync,
         MsgStandard,
         PortsSmall,
-        DebugEnabled > {
-            stack_words = 512;
-        }
+        DebugEnabled >
     );
 
     #[test]
@@ -2734,7 +2688,6 @@ mod tests {
         // CustomPartitions bridges
         assert_eq!(CustomPresetConfig::N, 6);
         assert_eq!(CustomPresetConfig::SCHED, 16);
-        assert_eq!(CustomPresetConfig::STACK_WORDS, 512);
         // CustomSync bridges
         assert_eq!(CustomPresetConfig::S, 16);
         assert_eq!(CustomPresetConfig::SW, 8);
@@ -2779,15 +2732,13 @@ mod tests {
 
     // ============ compose_kernel_config! custom stack type tests ============
 
-    // With override block — set STACK_WORDS to match AlignedStack4K capacity.
+    // With override block — uses AlignedStack4K custom stack type.
     compose_kernel_config!(
         Composed4KStack[crate::partition_core::AlignedStack4K] < Partitions2,
         SyncMinimal,
         MsgMinimal,
         PortsTiny,
-        DebugDisabled > {
-            stack_words = 1024;
-        }
+        DebugDisabled >
     );
 
     // No-override form — uses AlignedStack4K with preset defaults.
@@ -2799,7 +2750,6 @@ mod tests {
         // Preset values bridged correctly.
         assert_eq!(Composed4KStack::N, Partitions2::COUNT);
         assert_eq!(Composed4KStack::SCHED, Partitions2::SCHEDULE_CAPACITY);
-        assert_eq!(Composed4KStack::STACK_WORDS, 1024);
         assert_eq!(Composed4KStack::S, SyncMinimal::SEMAPHORES);
         assert_eq!(Composed4KStack::QS, MsgMinimal::QUEUES);
         assert_eq!(Composed4KStack::SP, PortsTiny::SAMPLING_PORTS);
@@ -2842,7 +2792,6 @@ mod tests {
         MsgSmall,
         PortsSmall,
         DebugEnabled > {
-            stack_words = 512;
             semaphores = 16;
             queues = 8;
             sampling_ports = 12;
@@ -2855,8 +2804,6 @@ mod tests {
     #[test]
     fn compose_combined_multi_domain_overrides() {
         // --- Overridden fields take effect ---
-        // Partition domain
-        assert_eq!(ComposedMultiDomain::STACK_WORDS, 512);
         // Sync domain
         assert_eq!(ComposedMultiDomain::S, 16);
         // Msg domain
@@ -2996,7 +2943,6 @@ mod tests {
     fn default_config_partition_values() {
         assert_eq!(DefaultConfig::N, 2);
         assert_eq!(DefaultConfig::SCHED, 4);
-        assert_eq!(DefaultConfig::STACK_WORDS, 256);
     }
 
     #[test]
