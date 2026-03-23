@@ -42,6 +42,88 @@ pub fn init_rtt() {
 #[cfg(not(klog_backend = "rtt"))]
 pub fn init_rtt() {}
 
+// ---------------------------------------------------------------------------
+// FPU initialization (Cortex-M4F+)
+// ---------------------------------------------------------------------------
+
+/// Coprocessor Access Control Register address (ARMv7-M).
+pub const CPACR_ADDR: u32 = 0xE000_ED88;
+
+/// Floating-Point Context Control Register address (ARMv7-M).
+pub const FPCCR_ADDR: u32 = 0xE000_EF34;
+
+/// Bit mask for CP10 full access (bits [21:20] = 0b11).
+pub const CPACR_CP10_FULL: u32 = 0b11 << 20;
+
+/// Bit mask for CP11 full access (bits [23:22] = 0b11).
+pub const CPACR_CP11_FULL: u32 = 0b11 << 22;
+
+/// Combined mask: CP10 + CP11 full access (bits [23:20] = 0xF).
+pub const CPACR_CP10_CP11_FULL: u32 = CPACR_CP10_FULL | CPACR_CP11_FULL;
+
+/// FPCCR LSPEN bit (bit 30): automatic lazy state preservation.
+pub const FPCCR_LSPEN: u32 = 1 << 30;
+
+/// FPCCR ASPEN bit (bit 31): automatic state preservation enable.
+pub const FPCCR_ASPEN: u32 = 1 << 31;
+
+/// Tracks whether FPU has already been initialized.
+///
+/// `Relaxed` ordering is sufficient because FPU init runs single-threaded
+/// at boot before the scheduler starts.
+#[cfg(feature = "fpu-context")]
+static FPU_INITIALIZED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Enable the FPU by granting full access to CP10 and CP11 via CPACR,
+/// then verify that FPCCR lazy stacking (LSPEN + ASPEN) is active.
+///
+/// Safe to call more than once: the second call is a no-op.
+/// Public so the harness macro can call it before `init_kernel()`.
+///
+/// # Errors
+///
+/// Returns `BootError::FpuLazyStackingNotActive` if FPCCR lazy stacking
+/// bits (LSPEN | ASPEN) are not set after enabling the FPU.  On conforming
+/// Cortex-M4F+ hardware these bits default to 1, so an error indicates
+/// non-standard silicon or an earlier boot stage cleared them.
+#[cfg(feature = "fpu-context")]
+pub fn init_fpu() -> Result<(), BootError> {
+    if FPU_INITIALIZED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        return Ok(());
+    }
+
+    let cpacr = CPACR_ADDR as *mut u32;
+    // SAFETY: CPACR is a standard ARMv7-M system register at a fixed
+    // memory-mapped address.  We are running in privileged Thread mode
+    // at boot with interrupts disabled, so the read-modify-write is
+    // race-free.
+    unsafe {
+        let old = core::ptr::read_volatile(cpacr);
+        core::ptr::write_volatile(cpacr, old | CPACR_CP10_CP11_FULL);
+    }
+
+    // ISB ensures the FPU is accessible before any subsequent FP instruction.
+    cortex_m::asm::isb();
+
+    // Verify lazy stacking is active (hardware default on Cortex-M4F+).
+    // SAFETY: FPCCR is a read-only check of a standard ARMv7-M register.
+    let fpccr = unsafe { core::ptr::read_volatile(FPCCR_ADDR as *const u32) };
+    if fpccr & (FPCCR_LSPEN | FPCCR_ASPEN) != (FPCCR_LSPEN | FPCCR_ASPEN) {
+        return Err(BootError::FpuLazyStackingNotActive);
+    }
+
+    Ok(())
+}
+
+/// No-op FPU init when `fpu-context` feature is not enabled.
+///
+/// Safe to call more than once (always a no-op).
+/// Public so the harness macro can call it before `init_kernel()`.
+#[cfg(not(feature = "fpu-context"))]
+pub fn init_fpu() -> Result<(), BootError> {
+    Ok(())
+}
+
 /// Minimum MPU region size (32 bytes for ARMv7-M and ARMv8-M).
 pub const MPU_MIN_REGION_SIZE: u32 = 32;
 
@@ -100,6 +182,8 @@ pub enum BootError {
     TooManyPartitions { given: usize, max: usize },
     /// Kernel initialization failed due to a configuration error.
     KernelInit(ConfigError),
+    /// FPU lazy stacking (LSPEN | ASPEN) not active after enabling FPU.
+    FpuLazyStackingNotActive,
 }
 
 impl core::fmt::Display for BootError {
@@ -185,6 +269,12 @@ impl core::fmt::Display for BootError {
             }
             Self::KernelInit(e) => {
                 write!(f, "kernel init failed: {e}")
+            }
+            Self::FpuLazyStackingNotActive => {
+                write!(
+                    f,
+                    "FPCCR lazy stacking (LSPEN|ASPEN) not active after FPU enable"
+                )
             }
         }
     }
@@ -360,6 +450,7 @@ where
     use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
 
     init_rtt();
+    init_fpu()?;
 
     let storage_addr = addr_of!(crate::state::UNIFIED_KERNEL_STORAGE) as u32;
     check_storage_alignment(storage_addr, crate::state::KERNEL_ALIGNMENT as u32)?;
@@ -1455,5 +1546,82 @@ mod tests {
     fn init_rtt_defmt_backend_is_noop() {
         // defmt backend does not require RTT init.
         init_rtt();
+    }
+
+    // -----------------------------------------------------------------------
+    // FPU constant and init_fpu tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cpacr_addr_matches_arm_spec() {
+        assert_eq!(CPACR_ADDR, 0xE000_ED88);
+    }
+
+    #[test]
+    fn fpccr_addr_matches_arm_spec() {
+        assert_eq!(FPCCR_ADDR, 0xE000_EF34);
+    }
+
+    #[test]
+    fn cpacr_cp10_full_sets_bits_21_20() {
+        // CP10 full access occupies bits [21:20].
+        assert_eq!(CPACR_CP10_FULL, 0x00_30_00_00);
+        assert_eq!(CPACR_CP10_FULL, 0b11 << 20);
+        // Only bits 20 and 21 should be set.
+        assert_ne!(CPACR_CP10_FULL & (1 << 19), 1 << 19);
+        assert_ne!(CPACR_CP10_FULL & (1 << 22), 1 << 22);
+    }
+
+    #[test]
+    fn cpacr_cp11_full_sets_bits_23_22() {
+        // CP11 full access occupies bits [23:22].
+        assert_eq!(CPACR_CP11_FULL, 0x00_C0_00_00);
+        assert_eq!(CPACR_CP11_FULL, 0b11 << 22);
+        // Only bits 22 and 23 should be set.
+        assert_ne!(CPACR_CP11_FULL & (1 << 21), 1 << 21);
+        assert_ne!(CPACR_CP11_FULL & (1 << 24), 1 << 24);
+    }
+
+    #[test]
+    fn cpacr_combined_mask_covers_bits_20_through_23() {
+        // Combined mask should set bits [23:20] = 0xF.
+        assert_eq!(CPACR_CP10_CP11_FULL, 0x00_F0_00_00);
+        assert_eq!(CPACR_CP10_CP11_FULL, CPACR_CP10_FULL | CPACR_CP11_FULL);
+        // Exactly four bits set.
+        assert_eq!(CPACR_CP10_CP11_FULL.count_ones(), 4);
+    }
+
+    #[test]
+    fn fpccr_lspen_is_bit_30() {
+        assert_eq!(FPCCR_LSPEN, 1 << 30);
+        assert_eq!(FPCCR_LSPEN, 0x4000_0000);
+    }
+
+    #[test]
+    fn fpccr_aspen_is_bit_31() {
+        assert_eq!(FPCCR_ASPEN, 1 << 31);
+        assert_eq!(FPCCR_ASPEN, 0x8000_0000);
+    }
+
+    #[test]
+    fn fpccr_lazy_stacking_mask_covers_bits_30_31() {
+        let mask = FPCCR_LSPEN | FPCCR_ASPEN;
+        assert_eq!(mask, 0xC000_0000);
+        assert_eq!(mask.count_ones(), 2);
+    }
+
+    /// On host builds, fpu-context is not enabled, so init_fpu() is a no-op.
+    #[test]
+    #[cfg(not(feature = "fpu-context"))]
+    fn init_fpu_noop_without_feature() {
+        init_fpu().unwrap();
+    }
+
+    /// Calling init_fpu() twice must not panic when fpu-context is off.
+    #[test]
+    #[cfg(not(feature = "fpu-context"))]
+    fn init_fpu_double_call_safe_without_feature() {
+        init_fpu().unwrap();
+        init_fpu().unwrap();
     }
 }

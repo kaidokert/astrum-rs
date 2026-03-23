@@ -35,7 +35,7 @@
 
 // Re-export BootError, Never, and init_rtt from boot module for macro access.
 // The canonical definitions live in boot.rs.
-pub use crate::boot::{init_rtt, BootError, Never};
+pub use crate::boot::{init_fpu, init_rtt, BootError, Never};
 
 /// Shared helper: detect dropped SysTick interrupts by reading the ICSR
 /// PENDSTSET bit before the current tick is processed.  Factored out of
@@ -578,6 +578,8 @@ macro_rules! define_unified_harness {
         ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
             // Init RTT early so klog! output from init_kernel() is visible.
             $crate::harness::init_rtt();
+            // Enable FPU before kernel init (no-op when fpu-context is off).
+            $crate::harness::init_fpu()?;
             init_kernel($sched, $entries)?;
             // SAFETY: `init_kernel` above stored a fully-initialised kernel
             // into the global state.  `boot_preconfigured` requires exactly
@@ -617,6 +619,8 @@ macro_rules! define_unified_harness {
         ) -> Result<(), $crate::harness::BootError> {
             // Init RTT early so klog! output from init_kernel() is visible.
             $crate::harness::init_rtt();
+            // Enable FPU before kernel init (no-op when fpu-context is off).
+            $crate::harness::init_fpu()?;
             use $crate::partition::{ExternalPartitionMemory, MpuRegion};
             // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
             // by this macro arm, which is invoked at most once per binary (enforced
@@ -963,6 +967,23 @@ mod tests {
     fn init_rtt_double_call_is_safe() {
         crate::harness::init_rtt();
         crate::harness::init_rtt();
+    }
+
+    /// Verify that `init_fpu` is publicly accessible via `harness::init_fpu`
+    /// (re-exported from `boot::init_fpu`).
+    #[test]
+    #[cfg(not(feature = "fpu-context"))]
+    fn init_fpu_callable_via_harness_reexport() {
+        crate::harness::init_fpu().unwrap();
+    }
+
+    /// Verify that calling `init_fpu` twice does not panic via the harness
+    /// re-export path.
+    #[test]
+    #[cfg(not(feature = "fpu-context"))]
+    fn init_fpu_double_call_is_safe() {
+        crate::harness::init_fpu().unwrap();
+        crate::harness::init_fpu().unwrap();
     }
 
     // ============ Config error propagation tests ============
