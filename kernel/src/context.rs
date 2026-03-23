@@ -387,4 +387,61 @@ mod tests {
         let mut small = [0u32; FPU_CONTEXT_FRAME_WORDS - 1];
         assert!(init_stack_frame(&mut small, 0x100, None).is_none());
     }
+
+    /// Validates IEEE 754 bit patterns used by hw_fpu_isolation example.
+    #[cfg(feature = "fpu-context")]
+    #[test]
+    fn fpu_isolation_ieee754_patterns() {
+        // Pattern A: s16-s31 = 1.0, 2.0, ..., 16.0
+        let pattern_a: [(f32, u32); 16] = [
+            (1.0, 0x3F80_0000),
+            (2.0, 0x4000_0000),
+            (3.0, 0x4040_0000),
+            (4.0, 0x4080_0000),
+            (5.0, 0x40A0_0000),
+            (6.0, 0x40C0_0000),
+            (7.0, 0x40E0_0000),
+            (8.0, 0x4100_0000),
+            (9.0, 0x4110_0000),
+            (10.0, 0x4120_0000),
+            (11.0, 0x4130_0000),
+            (12.0, 0x4140_0000),
+            (13.0, 0x4150_0000),
+            (14.0, 0x4160_0000),
+            (15.0, 0x4170_0000),
+            (16.0, 0x4180_0000),
+        ];
+        // Pattern B: s16-s31 = 100.0, 200.0, ..., 1600.0
+        let pattern_b: [(f32, u32); 16] = [
+            (100.0, 0x42C8_0000),
+            (200.0, 0x4348_0000),
+            (300.0, 0x4396_0000),
+            (400.0, 0x43C8_0000),
+            (500.0, 0x43FA_0000),
+            (600.0, 0x4416_0000),
+            (700.0, 0x442F_0000),
+            (800.0, 0x4448_0000),
+            (900.0, 0x4461_0000),
+            (1000.0, 0x447A_0000),
+            (1100.0, 0x4489_8000),
+            (1200.0, 0x4496_0000),
+            (1300.0, 0x44A2_8000),
+            (1400.0, 0x44AF_0000),
+            (1500.0, 0x44BB_8000),
+            (1600.0, 0x44C8_0000),
+        ];
+        for (label, pattern) in [("A", &pattern_a[..]), ("B", &pattern_b[..])] {
+            for (i, &(float_val, bits)) in pattern.iter().enumerate() {
+                assert_eq!(
+                    float_val.to_bits(),
+                    bits,
+                    "pattern {} s{}: {} should be {:#010X}",
+                    label,
+                    i + 16,
+                    float_val,
+                    bits
+                );
+            }
+        }
+    }
 }
