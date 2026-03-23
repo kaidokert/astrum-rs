@@ -113,3 +113,58 @@ fn main() -> ! {
 
 The guard uses `Ordering::Relaxed` because boot runs single-threaded
 before the scheduler starts.
+
+## FPU Context Switching (`fpu-context` Feature)
+
+When the `fpu-context` Cargo feature is enabled, the kernel saves and
+restores FPU callee-saved registers (s16–s31) on every context switch.
+This adds significant stack overhead to each partition.
+
+### Stack Overhead Breakdown
+
+| Component | Size | Who saves | When |
+|---|---|---|---|
+| s16–s31 (callee-saved) | 64 bytes (16 × 4) | PendSV software (`vstmdb`/`vldmia`) | Every context switch |
+| s0–s15 + FPSCR + reserved (caller-saved) | 72 bytes (18 × 4) | Hardware (lazy stacking) | On exception entry when FPU was used |
+| **Total FPU overhead** | **~136 bytes** | | |
+
+The 64-byte callee-saved area is always present on the stack when a
+partition is preempted. The 72-byte hardware frame is pushed lazily by
+the processor when the FPU was active before the exception — on
+Cortex-M4F this is controlled by FPCCR LSPEN/ASPEN (verified at boot by
+`init_fpu()`).
+
+Combined with the base 32-byte integer exception frame (r0–r3, r12, LR,
+PC, xPSR) and 32-byte software-saved context (r4–r11), the worst-case
+context frame is **200 bytes** per preemption level.
+
+### Minimum Stack Sizing
+
+Without `fpu-context`, the default 1 KB partition stack is sufficient for
+most workloads. With `fpu-context` enabled:
+
+- **Minimum recommended stack: 2 KB** per partition.
+- Partitions performing deep call chains or using large local arrays
+  should increase further.
+- The kernel verifies stack pointer alignment at context switch time and
+  stores a sentinel for overflow detection, but undersized stacks will
+  cause silent corruption before the sentinel is reached.
+
+### EXC_RETURN Values
+
+The kernel uses different EXC_RETURN values depending on FPU state:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `EXC_RETURN_THREAD_PSP` | `0xFFFF_FFFD` | Return to Thread mode, PSP, no FPU frame |
+| `EXC_RETURN_THREAD_PSP_FPU` | `0xFFFF_FFED` | Return to Thread mode, PSP, extended (FPU) frame |
+
+When `fpu-context` is enabled, the PendSV handler preserves the
+`EXC_RETURN` value from `LR` at exception entry and restores it on
+return. The hardware sets bit 4 of `EXC_RETURN` to indicate whether
+the interrupted context used a standard (bit 4 = 1) or extended/FPU
+(bit 4 = 0) frame. The handler must **not** force
+`EXC_RETURN_THREAD_PSP_FPU` unconditionally — doing so on a task
+whose exception frame is standard (no FPU usage) would cause the
+hardware to pop 72 bytes of non-existent FPU state, corrupting the
+stack.

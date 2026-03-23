@@ -363,6 +363,10 @@ name = "hw_fpu_isolation"
 required-features = ["qemu", "log-semihosting", "fpu-context"]
 
 [[example]]
+name = "bench_context_switch"
+required-features = ["qemu", "log-semihosting", "fpu-context"]
+
+[[example]]
 name = "callee_save_check"
 required-features = ["qemu", "log-semihosting"]
 
