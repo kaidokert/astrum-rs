@@ -5,6 +5,7 @@
 //! | File             | When                        | Purpose                                 |
 //! |------------------|-----------------------------|-----------------------------------------|
 //! | `kernel_state.x` | Always (thumb targets)      | `.kernel_state` SECTIONS / INSERT AFTER  |
+//! | `tombstone.x`    | Always (thumb targets)      | `.noinit` NOLOAD section for tombstone   |
 //! | `device.x`       | Always (thumb targets)      | Minimal device.x for cortex-m-rt        |
 //! | `memory.x`       | `qemu` feature only         | MEMORY{} block for QEMU LM3S6965EVB     |
 //! | `link.x`         | `qemu` feature only         | cortex-m-rt full link (needs MEMORY{})   |
@@ -46,6 +47,31 @@ SECTIONS
     KEEP(*(.kernel_state .kernel_state.*))
     . = ALIGN(4);
     __kernel_state_end = .;
+  }{output_region}
+} INSERT AFTER .bss;
+";
+
+/// Linker fragment for .noinit section (PanicTombstone).
+///
+/// NOLOAD: not loaded from flash — survives soft resets so the panic
+/// handler can stash diagnostic data that the next boot reads back.
+///
+/// Symbols defined:
+///   __noinit_start — start address of .noinit region
+///   __noinit_end   — end address of .noinit region
+///
+/// The `{output_region}` placeholder is replaced at emit time (same
+/// logic as `kernel_state.x`).
+const TOMBSTONE_X_TEMPLATE: &str = "\
+/* .noinit section — survives soft reset for post-mortem diagnostics. */
+SECTIONS
+{
+  .noinit (NOLOAD) : ALIGN(4)
+  {
+    __noinit_start = .;
+    KEEP(*(.noinit .noinit.*))
+    . = ALIGN(4);
+    __noinit_end = .;
   }{output_region}
 } INSERT AFTER .bss;
 ";
@@ -122,13 +148,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out = PathBuf::from(env::var("OUT_DIR")?);
     let is_qemu = env::var("CARGO_FEATURE_QEMU").is_ok();
 
-    // Emit kernel_state.x for the .kernel_state SECTIONS block.
-    // When targeting QEMU we explicitly place it in `> RAM` (matching our MEMORY block);
-    // for other targets we omit the output region so it inherits from INSERT AFTER .bss,
-    // avoiding a hard dependency on a region named "RAM".
+    // When targeting QEMU we explicitly place sections in `> RAM` (matching our MEMORY
+    // block); for other targets we omit the output region so it inherits from
+    // INSERT AFTER .bss, avoiding a hard dependency on a region named "RAM".
     let output_region = if is_qemu { " > RAM" } else { "" };
+
+    // Emit kernel_state.x for the .kernel_state SECTIONS block.
     let kernel_state_x = KERNEL_STATE_X_TEMPLATE.replace("{output_region}", output_region);
     File::create(out.join("kernel_state.x"))?.write_all(kernel_state_x.as_bytes())?;
+
+    // Emit tombstone.x for the .noinit SECTIONS block (PanicTombstone).
+    let tombstone_x = TOMBSTONE_X_TEMPLATE.replace("{output_region}", output_region);
+    File::create(out.join("tombstone.x"))?.write_all(tombstone_x.as_bytes())?;
 
     // cortex-m-rt 0.7 requires __INTERRUPTS to be defined. Without a device PAC,
     // provide a minimal device.x that defines the symbol.
@@ -138,6 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rustc-link-arg=-Tdevice.x");
     println!("cargo:rustc-link-arg=-Tkernel_state.x");
+    println!("cargo:rustc-link-arg=-Ttombstone.x");
 
     // Only emit memory.x (QEMU memory map) and -Tlink.x when the qemu feature is active.
     // Without MEMORY{}, link.x from cortex-m-rt would fail, so both are gated together.
@@ -182,6 +214,40 @@ mod tests {
         assert_eq!(
             select_backend(&["defmt", "swo", "rtt", "semihosting"]),
             "semihosting"
+        );
+    }
+
+    #[test]
+    fn tombstone_x_fragment_contains_noinit_section() {
+        let fragment = TOMBSTONE_X_TEMPLATE.replace("{output_region}", "");
+        assert!(
+            fragment.contains(".noinit (NOLOAD)"),
+            "must define a .noinit NOLOAD section"
+        );
+        assert!(
+            fragment.contains("KEEP(*(.noinit .noinit.*))"),
+            "must KEEP .noinit input sections"
+        );
+        assert!(
+            fragment.contains("INSERT AFTER .bss"),
+            "must INSERT AFTER .bss"
+        );
+        assert!(
+            fragment.contains("__noinit_start"),
+            "must define __noinit_start symbol"
+        );
+        assert!(
+            fragment.contains("__noinit_end"),
+            "must define __noinit_end symbol"
+        );
+    }
+
+    #[test]
+    fn tombstone_x_qemu_gets_ram_region() {
+        let fragment = TOMBSTONE_X_TEMPLATE.replace("{output_region}", " > RAM");
+        assert!(
+            fragment.contains("> RAM"),
+            "QEMU variant must place section in RAM"
         );
     }
 

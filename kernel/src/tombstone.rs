@@ -2,6 +2,51 @@
 
 use core::fmt::{self, Write as _};
 
+/// A `Sync` wrapper around `UnsafeCell<PanicTombstone>` that allows a
+/// single-writer (the panic handler) to access the tombstone through a
+/// shared static.
+///
+/// # Safety
+///
+/// This is safe to place in a `static` because the only mutation occurs
+/// inside the panic handler, which runs at most once (the handler
+/// diverges via `loop {}`).  No concurrent access is possible: once a
+/// panic fires on a single-core Cortex-M, interrupts are typically
+/// masked and the handler never returns.
+#[repr(transparent)]
+pub(crate) struct TombstoneCell(core::cell::UnsafeCell<PanicTombstone>);
+
+// SAFETY: On a single-core Cortex-M, the panic handler is the sole writer
+// and it never returns, so no data race can occur.
+unsafe impl Sync for TombstoneCell {}
+
+impl TombstoneCell {
+    #[allow(dead_code)]
+    const fn new(val: PanicTombstone) -> Self {
+        Self(core::cell::UnsafeCell::new(val))
+    }
+
+    /// Obtain a mutable pointer to the inner tombstone.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure exclusive access (e.g., inside a panic handler
+    /// on a single-core system with interrupts masked).
+    #[allow(dead_code)]
+    pub(crate) unsafe fn as_mut_ptr(&self) -> *mut PanicTombstone {
+        self.0.get()
+    }
+}
+
+/// Global tombstone placed in `.noinit` RAM — survives soft resets.
+///
+/// Only defined on ARM targets so that host-mode tests (which lack a
+/// `.noinit` linker section) are unaffected.
+#[cfg(target_arch = "arm")]
+#[link_section = ".noinit"]
+#[used]
+pub(crate) static PANIC_TOMBSTONE: TombstoneCell = TombstoneCell::new(PanicTombstone::EMPTY);
+
 /// Magic value distinguishing a valid tombstone from uninitialized SRAM.
 pub const TOMBSTONE_MAGIC: u32 = 0xDEAD_C0DE;
 
