@@ -208,7 +208,9 @@ fn main() -> ! {
     CONTROL_DST.store(d0 as u32, Ordering::Release);
     DISPLAY_DST.store(d1 as u32, Ordering::Release);
 
-    store_kernel(k);
+    unsafe {
+        store_kernel(&mut k);
+    }
     // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
     match unsafe { boot::boot_preconfigured::<DemoConfig>(p) }.expect("boot") {}
 }

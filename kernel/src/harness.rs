@@ -15,7 +15,7 @@
 //!
 //! | Item | Description |
 //! |------|-------------|
-//! | Kernel state | Via `state::init_kernel_state()` in linker-controlled storage |
+//! | Kernel state | Stack-local kernel published via `store_kernel_ptr()` |
 //! | `static _SVC` | Forces linker to include the SVC assembly trampoline |
 //! | `SysTick` exception handler | Drives the round-robin scheduler |
 //! | `PendSV` handler | Via [`define_pendsv!`] |
@@ -64,18 +64,6 @@ macro_rules! _detect_dropped_ticks {
 #[doc(hidden)]
 macro_rules! _unified_handle_tick {
     ($kernel:expr) => {{
-        // Defense-in-depth: verify kernel storage alignment at every tick
-        // (debug builds only). On misalignment, skip the tick gracefully
-        // instead of panicking in handler mode.
-        #[cfg(debug_assertions)]
-        {
-            let addr = $kernel as *const _ as usize;
-            if $crate::invariants::check_storage_alignment(addr, $crate::state::KERNEL_ALIGNMENT)
-                .is_err()
-            {
-                return;
-            }
-        }
         $crate::_detect_dropped_ticks!($kernel);
         let event = $crate::svc::scheduler::advance_schedule_tick(&mut $kernel);
         if let Some(pid) = event {
@@ -90,18 +78,6 @@ macro_rules! _unified_handle_tick {
 #[doc(hidden)]
 macro_rules! _unified_handle_tick {
     ($kernel:expr, $tick:expr, $strategy:expr) => {{
-        // Defense-in-depth: verify kernel storage alignment at every tick
-        // (debug builds only). On misalignment, skip the tick gracefully
-        // instead of panicking in handler mode.
-        #[cfg(debug_assertions)]
-        {
-            let addr = $kernel as *const _ as usize;
-            if $crate::invariants::check_storage_alignment(addr, $crate::state::KERNEL_ALIGNMENT)
-                .is_err()
-            {
-                return;
-            }
-        }
         $crate::_detect_dropped_ticks!($kernel);
         let event = $crate::svc::scheduler::advance_schedule_tick(&mut $kernel);
         $crate::_unified_handle_tick_event!($kernel, event, $tick, $strategy);
@@ -537,7 +513,7 @@ macro_rules! define_unified_harness {
             sched: $crate::scheduler::ScheduleTable<
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
             entries: &[$crate::partition::PartitionSpec],
-        ) -> Result<(), $crate::harness::BootError> {
+        ) -> Result<$crate::svc::Kernel<'static, $Config>, $crate::harness::BootError> {
             use $crate::partition::{ExternalPartitionMemory, MpuRegion};
             // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
             // by this macro arm, which is invoked at most once per binary (enforced
@@ -560,19 +536,22 @@ macro_rules! define_unified_harness {
                     .map_err(|_| $crate::harness::BootError::KernelInit(
                         $crate::partition::ConfigError::PartitionTableFull))?;
             }
-            let k = $crate::svc::Kernel::<$Config>::new(sched, &memories)
+            $crate::svc::Kernel::<$Config>::new(sched, &memories)
                 .map_err(|e| {
                     $crate::klog!("init_kernel failed: {:?}", e);
                     $crate::harness::BootError::KernelInit(e)
-                })?;
-            store_kernel(k);
-            Ok(())
+                })
         }
 
         /// Boot the kernel: creates the kernel via [`init_kernel`] using the
         /// schedule and entry points provided as macro arguments, then
         /// configures exceptions and enters the idle loop via
         /// [`boot::boot_preconfigured`].
+        ///
+        /// The kernel lives as a local variable on this function's stack.
+        /// Since `boot() -> !` never returns, the stack frame persists
+        /// indefinitely and [`store_kernel_ptr`] publishes its address
+        /// for ISR access.
         fn boot(
             peripherals: cortex_m::Peripherals,
         ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
@@ -580,11 +559,11 @@ macro_rules! define_unified_harness {
             $crate::harness::init_rtt();
             // Enable FPU before kernel init (no-op when fpu-context is off).
             $crate::harness::init_fpu()?;
-            init_kernel($sched, $entries)?;
-            // SAFETY: `init_kernel` above stored a fully-initialised kernel
-            // into the global state.  `boot_preconfigured` requires exactly
-            // this: a stored kernel, valid peripherals, and a single call
-            // site before interrupts are enabled — all satisfied here.
+            let mut k = init_kernel($sched, $entries)?;
+            // SAFETY: boot() -> ! never returns, so `k` lives forever on
+            // this stack frame. store_kernel publishes its address for
+            // ISR handlers and installs the SVC dispatch hook.
+            unsafe { store_kernel(&mut k); }
             unsafe {
                 $crate::boot::boot_preconfigured::<$Config>(peripherals)
             }
@@ -607,16 +586,16 @@ macro_rules! define_unified_harness {
              <$Config as $crate::config::KernelConfig>::N];
 
         /// Build a kernel from `__PARTITION_STACKS` with the given
-        /// [`PartitionSpec`]($crate::partition::PartitionSpec) entries and
-        /// store it into global kernel state.
+        /// [`PartitionSpec`]($crate::partition::PartitionSpec) entries.
         ///
+        /// Returns the kernel so the caller can keep it on the stack.
         /// See the `@impl` arm's `init_kernel` for full documentation.
         #[allow(dead_code)]
         fn init_kernel(
             sched: $crate::scheduler::ScheduleTable<
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
             entries: &[$crate::partition::PartitionSpec],
-        ) -> Result<(), $crate::harness::BootError> {
+        ) -> Result<$crate::svc::Kernel<'static, $Config>, $crate::harness::BootError> {
             // Init RTT early so klog! output from init_kernel() is visible.
             $crate::harness::init_rtt();
             // Enable FPU before kernel init (no-op when fpu-context is off).
@@ -643,26 +622,25 @@ macro_rules! define_unified_harness {
                     .map_err(|_| $crate::harness::BootError::KernelInit(
                         $crate::partition::ConfigError::PartitionTableFull))?;
             }
-            let k = $crate::svc::Kernel::<$Config>::new(sched, &memories)
+            $crate::svc::Kernel::<$Config>::new(sched, &memories)
                 .map_err(|e| {
                     $crate::klog!("init_kernel failed: {:?}", e);
                     $crate::harness::BootError::KernelInit(e)
-                })?;
-            store_kernel(k);
-            Ok(())
+                })
         }
 
         /// Boot the kernel from pre-configured PCBs.
         ///
-        /// Call [`init_kernel`] first to create and store the kernel,
-        /// then call this to configure exceptions and enter the idle loop.
-        /// Delegates to [`boot::boot_preconfigured`].
+        /// The caller must have already called [`init_kernel`] and
+        /// [`store_kernel`] to place the kernel on their stack and
+        /// publish its pointer.  This function configures exceptions
+        /// and enters the idle loop via [`boot::boot_preconfigured`].
         fn boot(
             peripherals: cortex_m::Peripherals,
         ) -> Result<$crate::harness::Never, $crate::harness::BootError> {
-            // SAFETY: `init_kernel()` has been called, so the kernel is
-            // fully configured with entry points and stack pointers.
-            // `boot()` is called exactly once from `main()`.
+            // SAFETY: caller has called init_kernel + store_kernel,
+            // so the kernel is fully configured.  boot() is called
+            // exactly once from main().
             unsafe {
                 $crate::boot::boot_preconfigured::<$Config>(peripherals)
             }

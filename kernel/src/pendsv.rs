@@ -97,12 +97,17 @@ macro_rules! define_pendsv {
             // MPU peripheral at this priority level.
             let p = unsafe { cortex_m::Peripherals::steal() };
             // SAFETY: same exclusive-access argument as steal() above.
-            // get_kernel_ptr returns the address of the static kernel storage;
-            // it is non-null after init_kernel_state() which completes before
+            // load_kernel_ptr returns the address published by store_kernel_ptr();
+            // it is non-null after store_kernel() which completes before
             // SysTick (and thus PendSV) is enabled.
-            let kptr = unsafe { $crate::state::get_kernel_ptr::<$Config>() };
-            debug_assert!(!kptr.is_null(), "kernel pointer is null in PendSV");
-            let k = unsafe { &*kptr };
+            let nn = unsafe { $crate::kernel_ptr::load_kernel_ptr::<$Config>() };
+            let k = match nn {
+                Some(p) => unsafe { &*p.as_ptr() },
+                None => {
+                    debug_assert!(false, "kernel pointer is null in PendSV");
+                    return;
+                }
+            };
             let pid = k.next_partition();
             // Pre-compute dynamic region values before disabling MPU to
             // minimise the window where the MPU is off.
@@ -220,7 +225,8 @@ macro_rules! define_pendsv {
              * and must NOT be modified before pendsv_context_save. */
 
             /* Load current_partition using only r0-r3 (hardware-saved) */
-            ldr     r0, =__kernel_state_start
+            ldr     r0, =KERNEL_PTR
+            ldr     r0, [r0]            /* r0 = *KERNEL_PTR (kernel base) */
             ldr     r1, =KERNEL_CURRENT_PARTITION_OFFSET
             ldr     r1, [r1]            /* r1 = offset value */
             ldrb    r1, [r0, r1]        /* r1 = current_partition */
@@ -235,7 +241,8 @@ macro_rules! define_pendsv {
 
         .Lpendsv_skip_save:
             /* Load kernel base into r5 (safe now: context is saved) */
-            ldr     r5, =__kernel_state_start
+            ldr     r5, =KERNEL_PTR
+            ldr     r5, [r5]            /* r5 = *KERNEL_PTR (kernel base) */
 
             /* --- Begin PRIMASK critical section: mask all configurable exceptions ---
              * CPSID I sets PRIMASK, preventing SysTick from preempting

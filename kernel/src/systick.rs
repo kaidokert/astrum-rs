@@ -85,8 +85,8 @@ pub type TickHandlerFn<C> = fn(&mut Kernel<'_, C>, u64);
 ///
 /// # Requirements
 ///
-/// - The kernel must be initialized via `state::init_kernel_state()` before
-///   this function is called (typically done in `boot()`).
+/// - The kernel pointer must be published via `store_kernel_ptr()` before
+///   this function is called (typically done in `store_kernel()`).
 /// - This function must only be called from handler mode (exception context).
 ///
 /// # Note
