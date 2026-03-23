@@ -502,15 +502,6 @@ where
     })
     .map_err(|_| BootError::KernelNotInitialized)??;
 
-    // Store the kernel pointer for ISR access (AtomicPtr parallel path).
-    // Must happen before interrupts are enabled (step 8).
-    crate::state::with_kernel_mut::<C, _, _>(|k| {
-        // SAFETY: k points into UNIFIED_KERNEL_STORAGE which is 'static.
-        // Called before PendSV triggers the first context switch.
-        unsafe { crate::kernel_ptr::store_kernel_ptr(k) };
-    })
-    .map_err(|_| BootError::KernelNotInitialized)?;
-
     // Step 4: Configure AIRCR priority grouping and handler priorities.
     const { crate::config::assert_priority_order::<C>() }
     const { crate::config::assert_systick_reload::<C>() }
@@ -1282,7 +1273,7 @@ mod tests {
     }
 
     /// Verify that `store_kernel_ptr` + `load_kernel_ptr` round-trips
-    /// correctly, mirroring the call added to `boot_preconfigured`.
+    /// correctly, mirroring the call in `store_kernel` (before boot).
     #[test]
     fn store_kernel_ptr_sets_valid_pointer_for_isr_access() {
         use crate::{
@@ -1311,7 +1302,7 @@ mod tests {
         let mut kernel = create_test_kernel();
         let expected_addr = &mut kernel as *mut _ as usize;
 
-        // Simulate boot_preconfigured: store pointer before interrupts.
+        // Simulate store_kernel (subtask 44): store pointer before boot.
         // SAFETY: kernel lives for the duration of this test; cleared before drop.
         unsafe { kernel_ptr::store_kernel_ptr(&mut kernel) };
 
