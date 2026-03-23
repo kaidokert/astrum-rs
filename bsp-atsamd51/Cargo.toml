@@ -9,3 +9,6 @@ rtos-traits = { path = "../rtos-traits" }
 atsamd51p = { version = "0.14", features = ["rt"] }
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
+
+[features]
+fpu-context = ["kernel/fpu-context"]
