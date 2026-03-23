@@ -493,7 +493,7 @@ pub fn set_dispatch_hook(hook: SvcDispatchFn) {
 ///
 /// This macro generates:
 /// - `unsafe extern "C" fn dispatch_hook(f: &mut ExceptionFrame)` — the SVC dispatch hook
-/// - `fn store_kernel(k: Kernel<$Config>)` — stores the kernel and installs the hook
+/// - `fn store_kernel(k: Kernel<$Config>)` — stores the kernel and installs the hook (logs via `klog!` on failure)
 /// - PendSV accessors: `get_partition_sp_ptr`, `get_partition_sp`, `set_partition_sp`
 ///
 /// # Where Bounds
@@ -763,11 +763,14 @@ macro_rules! define_unified_kernel {
         /// 1. Stores the provided `Kernel` instance in the global unified kernel storage
         /// 2. Installs `dispatch_hook` as the SVC exception handler
         ///
+        /// On failure, logs the error via `klog!` before panicking.
+        ///
         /// Must be called exactly once during initialization, before enabling
         /// interrupts or starting the scheduler.
         fn store_kernel(k: $crate::svc::Kernel<'static, $Config>) {
             // SAFETY: Called once during init before interrupts enabled.
             if let Err(e) = unsafe { $crate::state::init_kernel_state(k) } {
+                $crate::klog!("store_kernel failed: {:?}", e);
                 panic!("{}", e);
             }
             $crate::svc::set_dispatch_hook(dispatch_hook);
