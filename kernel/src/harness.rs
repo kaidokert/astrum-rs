@@ -680,14 +680,14 @@ mod tests {
 
     /// Fixed-size buffer for formatting in no_std tests.
     struct FmtBuf {
-        buf: [u8; 64],
+        buf: [u8; 128],
         len: usize,
     }
 
     impl FmtBuf {
         const fn new() -> Self {
             Self {
-                buf: [0u8; 64],
+                buf: [0u8; 128],
                 len: 0,
             }
         }
@@ -701,9 +701,11 @@ mod tests {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
             let bytes = s.as_bytes();
             let remaining = self.buf.len() - self.len;
-            let to_copy = bytes.len().min(remaining);
-            self.buf[self.len..self.len + to_copy].copy_from_slice(&bytes[..to_copy]);
-            self.len += to_copy;
+            if bytes.len() > remaining {
+                return Err(core::fmt::Error);
+            }
+            self.buf[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+            self.len += bytes.len();
             Ok(())
         }
     }
@@ -961,5 +963,73 @@ mod tests {
     fn init_rtt_double_call_is_safe() {
         crate::harness::init_rtt();
         crate::harness::init_rtt();
+    }
+
+    // ============ Config error propagation tests ============
+
+    /// Verify end-to-end propagation of `EntryPointNotThumb` through the
+    /// harness boot path.  Mirrors `init_kernel()`'s logic (lines 552-557):
+    /// `ExternalPartitionMemory::from_aligned_stack(...).map_err(|e| BootError::KernelInit(e))`
+    ///
+    /// An even entry-point address (missing Thumb bit[0]) must:
+    /// 1. Be rejected by `ExternalPartitionMemory::new()` with `EntryPointNotThumb`.
+    /// 2. Be wrapped into `BootError::KernelInit` via `.map_err` (as the harness does).
+    /// 3. Produce actionable Display output that names the partition and address.
+    #[test]
+    fn entry_point_not_thumb_propagates_through_boot_path() {
+        use crate::partition::{ConfigError, ExternalPartitionMemory, MpuRegion};
+        use crate::partition_core::{AlignedStack1K, StackStorage};
+
+        let mut stack = AlignedStack1K::default();
+        let sentinel_mpu = MpuRegion::new(0, 0, 0);
+
+        // Even address — missing Thumb bit[0].
+        let even_entry = 0x0800_1234u32;
+
+        // Replicate the harness init_kernel() pattern:
+        //   ExternalPartitionMemory::from_aligned_stack(stk, spec.entry_point(), sentinel_mpu, i as u8)
+        //       .map_err(|e| BootError::KernelInit(e))?
+        let boot_err = ExternalPartitionMemory::new(
+            stack.as_u32_slice_mut(),
+            even_entry,
+            sentinel_mpu,
+            3u8, // partition_id
+        )
+        .map_err(BootError::KernelInit)
+        .expect_err("even entry point must be rejected");
+
+        // Verify the inner ConfigError is EntryPointNotThumb.
+        match &boot_err {
+            BootError::KernelInit(ConfigError::EntryPointNotThumb {
+                partition_id,
+                entry_point,
+            }) => {
+                assert_eq!(*partition_id, 3);
+                assert_eq!(*entry_point, even_entry);
+            }
+            other => panic!("expected BootError::KernelInit(EntryPointNotThumb), got: {other:?}"),
+        }
+
+        // Verify Display output is actionable.
+        let mut buf = FmtBuf::new();
+        write!(&mut buf, "{}", boot_err).unwrap();
+        let msg = buf.as_str();
+
+        assert!(
+            msg.contains("kernel init failed"),
+            "outer BootError must indicate kernel init failure, got: {msg}"
+        );
+        assert!(
+            msg.contains("partition 3"),
+            "must identify the partition, got: {msg}"
+        );
+        assert!(
+            msg.contains("0x08001234"),
+            "must include the entry point address, got: {msg}"
+        );
+        assert!(
+            msg.contains("bit[0]"),
+            "must explain which bit to set, got: {msg}"
+        );
     }
 }
