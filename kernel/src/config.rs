@@ -195,35 +195,30 @@ pub trait PortsOps {
 /// |---|---|---|
 /// | `COUNT` | `N` | Number of partitions |
 /// | `SCHEDULE_CAPACITY` | `SCHED` | Schedule table entries |
-/// | `STACK_WORDS` | `STACK_WORDS` | Stack size per partition (in 32-bit words) |
 pub trait PartitionConfig {
     /// Number of partitions (maps to [`KernelConfig::N`]).
     const COUNT: usize;
     /// Schedule table capacity (maps to [`KernelConfig::SCHED`]).
     const SCHEDULE_CAPACITY: usize;
-    /// Stack size per partition in 32-bit words (maps to [`KernelConfig::STACK_WORDS`]).
-    const STACK_WORDS: usize;
 }
 
-/// Preset: 1 partition, 4 schedule entries, 256-word (1 KiB) stacks.
+/// Preset: 1 partition, 4 schedule entries.
 pub struct Partitions1;
 
 impl PartitionConfig for Partitions1 {
     const COUNT: usize = 1;
     const SCHEDULE_CAPACITY: usize = 4;
-    const STACK_WORDS: usize = 256;
 }
 
-/// Preset: 2 partitions, 4 schedule entries, 256-word (1 KiB) stacks.
+/// Preset: 2 partitions, 4 schedule entries.
 pub struct Partitions2;
 
 impl PartitionConfig for Partitions2 {
     const COUNT: usize = 2;
     const SCHEDULE_CAPACITY: usize = 4;
-    const STACK_WORDS: usize = 256;
 }
 
-/// Preset: 3 partitions, 8 schedule entries, 256-word (1 KiB) stacks.
+/// Preset: 3 partitions, 8 schedule entries.
 ///
 /// Fills the gap between [`Partitions2`] and [`Partitions4`] for demos
 /// and applications that use exactly three partitions (e.g. blackboard_demo).
@@ -232,16 +227,14 @@ pub struct Partitions3;
 impl PartitionConfig for Partitions3 {
     const COUNT: usize = 3;
     const SCHEDULE_CAPACITY: usize = 8;
-    const STACK_WORDS: usize = 256;
 }
 
-/// Preset: 4 partitions, 8 schedule entries, 256-word (1 KiB) stacks.
+/// Preset: 4 partitions, 8 schedule entries.
 pub struct Partitions4;
 
 impl PartitionConfig for Partitions4 {
     const COUNT: usize = 4;
     const SCHEDULE_CAPACITY: usize = 8;
-    const STACK_WORDS: usize = 256;
 }
 
 /// Sub-trait providing readable constant names for synchronization-related
@@ -645,7 +638,7 @@ pub trait KernelConfig {
     /// for sampling port and blackboard syscall dispatch.
     type Ports: Default + PortsOps;
 
-    /// Partition sub-config preset used to derive N, SCHED, STACK_WORDS.
+    /// Partition sub-config preset used to derive N, SCHED.
     type PartitionCfg: PartitionConfig;
     /// Sync sub-config preset used to derive S, SW, MS, MW.
     type SyncCfg: SyncConfig;
@@ -1114,27 +1107,6 @@ macro_rules! _compose_partition_sched_default {
     };
 }
 
-/// Conditionally bridges `STACK_WORDS` from a partition preset unless
-/// overridden by `stack_words = …` or `const STACK_WORDS : … = …`.
-#[macro_export]
-#[doc(hidden)]
-macro_rules! _compose_partition_stack_default {
-    ($p:ty; stack_words = $v:expr; $($r:tt)*) => {};
-    ($p:ty; const STACK_WORDS : $ty:ty = $v:expr; $($r:tt)*) => {};
-    ($p:ty; $f:ident = $v:expr; $($r:tt)*) => {
-        $crate::_compose_partition_stack_default!($p; $($r)*);
-    };
-    ($p:ty; const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
-        $crate::_compose_partition_stack_default!($p; $($r)*);
-    };
-    ($p:ty; #[$a:meta] const $n:ident : $ty:ty = $v:expr; $($r:tt)*) => {
-        $crate::_compose_partition_stack_default!($p; $($r)*);
-    };
-    ($p:ty;) => {
-        const STACK_WORDS: usize = <$p as $crate::config::PartitionConfig>::STACK_WORDS;
-    };
-}
-
 /// Conditionally bridges a single `SyncConfig` field from a preset unless
 /// the override token stream contains a matching override.
 ///
@@ -1430,7 +1402,6 @@ macro_rules! compose_kernel_config {
         impl $crate::config::KernelConfig for $name {
             $crate::_compose_partition_n_default!($parts; $($overrides)*);
             $crate::_compose_partition_sched_default!($parts; $($overrides)*);
-            $crate::_compose_partition_stack_default!($parts; $($overrides)*);
             $crate::_compose_sync_default!(@S, $sync; $($overrides)*);
             $crate::_compose_sync_default!(@SW, $sync; $($overrides)*);
             $crate::_compose_sync_default!(@MS, $sync; $($overrides)*);
@@ -1466,7 +1437,6 @@ macro_rules! compose_kernel_config {
             // PartitionConfig — conditionally bridged so overrides can replace them.
             $crate::_compose_partition_n_default!($parts; $($overrides)*);
             $crate::_compose_partition_sched_default!($parts; $($overrides)*);
-            $crate::_compose_partition_stack_default!($parts; $($overrides)*);
             // SyncConfig — conditionally bridged so overrides can replace them.
             $crate::_compose_sync_default!(@S, $sync; $($overrides)*);
             $crate::_compose_sync_default!(@SW, $sync; $($overrides)*);
@@ -1823,10 +1793,6 @@ mod tests {
             <D as KernelConfig>::PartitionCfg::SCHEDULE_CAPACITY,
             D::SCHED
         );
-        assert_eq!(
-            <D as KernelConfig>::PartitionCfg::STACK_WORDS,
-            D::STACK_WORDS
-        );
         // SyncCfg
         assert_eq!(<D as KernelConfig>::SyncCfg::SEMAPHORES, D::S);
         assert_eq!(<D as KernelConfig>::SyncCfg::MUTEXES, D::MS);
@@ -1855,38 +1821,28 @@ mod tests {
         assert_eq!(Partitions2::SCHEDULE_CAPACITY, 4);
     }
 
-    #[test]
-    fn partitions2_stack_words_is_256() {
-        assert_eq!(Partitions2::STACK_WORDS, 256);
-    }
-
     // Compile-time assertions for Partitions2 preset values.
     const _: () = assert!(Partitions2::COUNT == 2);
     const _: () = assert!(Partitions2::SCHEDULE_CAPACITY == 4);
-    const _: () = assert!(Partitions2::STACK_WORDS == 256);
 
     // Compile-time assertions for Partitions3 preset values.
     const _: () = assert!(Partitions3::COUNT == 3);
     const _: () = assert!(Partitions3::SCHEDULE_CAPACITY == 8);
-    const _: () = assert!(Partitions3::STACK_WORDS == 256);
 
     #[test]
     fn partitions3_field_values() {
         assert_eq!(Partitions3::COUNT, 3);
         assert_eq!(Partitions3::SCHEDULE_CAPACITY, 8);
-        assert_eq!(Partitions3::STACK_WORDS, 256);
     }
 
     // Compile-time assertions for Partitions4 preset values.
     const _: () = assert!(Partitions4::COUNT == 4);
     const _: () = assert!(Partitions4::SCHEDULE_CAPACITY == 8);
-    const _: () = assert!(Partitions4::STACK_WORDS == 256);
 
     #[test]
     fn partitions4_field_values() {
         assert_eq!(Partitions4::COUNT, 4);
         assert_eq!(Partitions4::SCHEDULE_CAPACITY, 8);
-        assert_eq!(Partitions4::STACK_WORDS, 256);
     }
 
     // ============ SyncConfig tests ============
@@ -2391,7 +2347,6 @@ mod tests {
     fn partitions1_preset_values() {
         assert_eq!(Partitions1::COUNT, 1);
         assert_eq!(Partitions1::SCHEDULE_CAPACITY, 4);
-        assert_eq!(Partitions1::STACK_WORDS, 256);
     }
 
     // ============ compose_kernel_config! tests ============
@@ -2531,7 +2486,7 @@ mod tests {
         // Preset-derived values preserved
         assert_eq!(ComposedMpuOverride::N, Partitions2::COUNT);
         assert_eq!(ComposedMpuOverride::SCHED, Partitions2::SCHEDULE_CAPACITY);
-        assert_eq!(ComposedMpuOverride::STACK_WORDS, Partitions2::STACK_WORDS);
+        assert_eq!(ComposedMpuOverride::STACK_WORDS, 256);
         assert_eq!(ComposedMpuOverride::S, SyncMinimal::SEMAPHORES);
         assert_eq!(ComposedMpuOverride::QS, MsgMinimal::QUEUES);
         assert_eq!(ComposedMpuOverride::SP, PortsTiny::SAMPLING_PORTS);
@@ -2630,7 +2585,7 @@ mod tests {
     fn compose_with_stack_words_override() {
         // Override takes effect
         assert_eq!(ComposedStackOverride::STACK_WORDS, 512);
-        assert_ne!(ComposedStackOverride::STACK_WORDS, Partitions2::STACK_WORDS);
+        assert_ne!(ComposedStackOverride::STACK_WORDS, 256);
         // N and SCHED still come from the preset
         assert_eq!(ComposedStackOverride::N, Partitions2::COUNT);
         assert_eq!(ComposedStackOverride::SCHED, Partitions2::SCHEDULE_CAPACITY);
@@ -2753,7 +2708,6 @@ mod tests {
     impl PartitionConfig for CustomPartitions {
         const COUNT: usize = 6;
         const SCHEDULE_CAPACITY: usize = 16;
-        const STACK_WORDS: usize = 512;
     }
 
     struct CustomSync;
@@ -2765,7 +2719,15 @@ mod tests {
         const MUTEX_WAITQ: usize = 8;
     }
 
-    compose_kernel_config!(CustomPresetConfig<CustomPartitions, CustomSync, MsgStandard, PortsSmall, DebugEnabled>);
+    compose_kernel_config!(
+        CustomPresetConfig < CustomPartitions,
+        CustomSync,
+        MsgStandard,
+        PortsSmall,
+        DebugEnabled > {
+            stack_words = 512;
+        }
+    );
 
     #[test]
     fn custom_presets_bridge_correctly() {
@@ -2908,7 +2870,7 @@ mod tests {
         const { assert!(ComposedMultiDomain::MPU_ENFORCE) };
 
         // --- Non-overridden preset fields are bridged correctly ---
-        // Partitions3: COUNT=3, SCHEDULE_CAPACITY=8 (STACK_WORDS overridden above)
+        // Partitions3: COUNT=3, SCHEDULE_CAPACITY=8
         assert_eq!(ComposedMultiDomain::N, Partitions3::COUNT);
         assert_eq!(ComposedMultiDomain::SCHED, Partitions3::SCHEDULE_CAPACITY);
         // SyncStandard: SEMAPHORE_WAITQ=4, MUTEXES=4, MUTEX_WAITQ=4
