@@ -62,6 +62,7 @@ pub enum PartitionState {
     Ready,
     Running,
     Waiting,
+    Faulted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,6 +436,11 @@ impl PartitionControlBlock {
         self.starvation_count >= STARVATION_THRESHOLD
     }
 
+    /// Returns `true` when the partition is in the `Faulted` terminal state.
+    pub fn is_faulted(&self) -> bool {
+        self.state == PartitionState::Faulted
+    }
+
     /// Returns the pre-computed (RBAR, RASR) pairs for base MPU regions R0–R3.
     pub fn cached_base_regions(&self) -> &[(u32, u32); 4] {
         &self.cached_base_regions
@@ -506,6 +512,8 @@ impl PartitionControlBlock {
                 | (PartitionState::Running, PartitionState::Ready)
                 | (PartitionState::Running, PartitionState::Waiting)
                 | (PartitionState::Waiting, PartitionState::Ready)
+                | (PartitionState::Running, PartitionState::Faulted)
+                | (PartitionState::Ready, PartitionState::Faulted)
         );
         if ok {
             if to == PartitionState::Waiting {
@@ -1783,6 +1791,53 @@ mod tests {
         assert!(pcb.transition(PartitionState::Running).is_err());
         assert!(pcb.transition(PartitionState::Waiting).is_err());
         assert_eq!(pcb.state(), PartitionState::Waiting);
+    }
+
+    #[test]
+    fn transition_running_to_faulted() {
+        let mut pcb = make_pcb();
+        pcb.transition(PartitionState::Running).unwrap();
+        pcb.transition(PartitionState::Faulted).unwrap();
+        assert_eq!(pcb.state(), PartitionState::Faulted);
+    }
+
+    #[test]
+    fn transition_ready_to_faulted() {
+        let mut pcb = make_pcb();
+        assert_eq!(pcb.state(), PartitionState::Ready);
+        pcb.transition(PartitionState::Faulted).unwrap();
+        assert_eq!(pcb.state(), PartitionState::Faulted);
+    }
+
+    #[test]
+    fn faulted_is_terminal() {
+        let mut pcb = make_pcb();
+        pcb.transition(PartitionState::Running).unwrap();
+        pcb.transition(PartitionState::Faulted).unwrap();
+        assert!(pcb.transition(PartitionState::Ready).is_err());
+        assert!(pcb.transition(PartitionState::Running).is_err());
+        assert!(pcb.transition(PartitionState::Waiting).is_err());
+        assert!(pcb.transition(PartitionState::Faulted).is_err());
+        assert_eq!(pcb.state(), PartitionState::Faulted);
+    }
+
+    #[test]
+    fn waiting_to_faulted_rejected() {
+        let mut pcb = make_pcb();
+        pcb.transition(PartitionState::Running).unwrap();
+        pcb.transition(PartitionState::Waiting).unwrap();
+        assert!(pcb.transition(PartitionState::Faulted).is_err());
+        assert_eq!(pcb.state(), PartitionState::Waiting);
+    }
+
+    #[test]
+    fn is_faulted_helper() {
+        let mut pcb = make_pcb();
+        assert!(!pcb.is_faulted());
+        pcb.transition(PartitionState::Running).unwrap();
+        assert!(!pcb.is_faulted());
+        pcb.transition(PartitionState::Faulted).unwrap();
+        assert!(pcb.is_faulted());
     }
 
     #[test]
