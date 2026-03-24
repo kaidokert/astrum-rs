@@ -5,6 +5,12 @@
 //! - `pendsv_context_restore` — restores r4-r11 and PSP for the incoming partition
 //! - `pendsv_return_unprivileged` — sets CONTROL.nPRIV=1 and returns to Thread mode
 //!
+//! # Breakpoint immediate mapping (shared across exception handlers)
+//!
+//! - `bkpt #1` — bad EXC_RETURN detected in SVCall handler (see `svc/mod.rs`)
+//! - `bkpt #2` — null partition SP during PendSV context restore
+//! - `bkpt #3` — null KERNEL_PTR at PendSV entry
+//!
 //! # Architecture
 //!
 //! These routines access the `partition_sp` array directly using struct field offsets
@@ -232,14 +238,8 @@ pendsv_context_restore:
 .Lrestore_fault:
     /* Invalid partition SP — fatal error that should never occur in a
      * correctly configured system.  bkpt #2 halts the core so a debugger
-     * can inspect the faulting context.  The infinite loop keeps the
-     * system in a debuggable state (safer than HardFaulting) and
-     * prevents fall-through if no debugger is attached.
-     * Immediate values: #1 = bad EXC_RETURN (SVCall),
-     * #2 = null partition SP (PendSV restore),
-     * #3 = null KERNEL_PTR (PendSV entry). */
+     * can inspect the faulting context. */
     bkpt    #2
-    b       .Lrestore_fault
     .size pendsv_context_restore, . - pendsv_context_restore
 
     /* ================================================================
@@ -272,11 +272,9 @@ pendsv_return_unprivileged:
 
     /* Null KERNEL_PTR fault: KERNEL_PTR was null when PendSV fired.
      * This means store_kernel_ptr() was not called before enabling interrupts.
-     * bkpt #3 halts the core for debugger inspection.  The infinite loop
-     * keeps the system debuggable and prevents fall-through. */
+     * bkpt #3 halts the core for debugger inspection. */
 .Lnull_kernel_fault:
     bkpt    #3
-    b       .Lnull_kernel_fault
 "#
         ));
     };
