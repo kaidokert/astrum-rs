@@ -1,0 +1,4 @@
+# mode: contains
+pendsv_stack_overflow_test: start
+[MemManage]
+pendsv_stack_overflow_test: PASS

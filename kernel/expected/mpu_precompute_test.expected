@@ -1,0 +1,3 @@
+# mode: contains
+mpu_precompute_test: start
+mpu_precompute_test: PASS R0-R5

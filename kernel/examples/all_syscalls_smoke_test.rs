@@ -90,7 +90,8 @@ extern "C" fn partition_main() -> ! {
         br.is_ok_and(|sz| sz >= 2 && bb_buf[0] == 0xDE && bb_buf[1] == 0xAD),
     );
     chk(10, plib::sys_bb_clear(plib::BlackboardId::new(0)).is_ok());
-    chk(11, plib::sys_debug_print(b"syscall smoke ok").is_ok());
+    let dbg_buf: [u8; 4] = *b"smok";
+    chk(11, plib::sys_debug_print(&dbg_buf).is_ok());
     // MsgMinimal: MAX_MSG_SIZE=1, so send exactly 1 byte to queue 0.
     let msg = [0xABu8];
     chk(
@@ -108,7 +109,7 @@ fn main() -> ! {
     hprintln!("all_syscalls_smoke_test: start");
     let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("round_robin");
     let parts: [PartitionSpec; Cfg::N] = [PartitionSpec::new(partition_main as PartitionEntry, 0)];
-    init_kernel(sched, &parts).expect("Kernel::create");
+    store_kernel(init_kernel(sched, &parts).expect("Kernel::create"));
     with_kernel_mut(|k| {
         k.semaphores_mut().add(Semaphore::new(0, 1)).expect("sem");
         let s = k

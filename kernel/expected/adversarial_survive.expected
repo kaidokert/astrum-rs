@@ -1,0 +1,4 @@
+# mode: contains
+adversarial_survive: start
+[MemManage]
+adversarial_survive: PASS

@@ -18,7 +18,7 @@ capture_example_output() {
     local features="$1"
     local ex="$2"
     local outfile="$OUTDIR/${ex}.out"
-    timeout 30 cargo run --target "$TARGET" --features "$features" --example "$ex" \
+    timeout 30 cargo run -p kernel --target "$TARGET" --features "$features" --example "$ex" \
         > "$outfile" 2>&1
 }
 

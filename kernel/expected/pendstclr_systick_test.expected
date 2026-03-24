@@ -1,0 +1,3 @@
+# mode: contains
+pendstclr_systick_test: start
+pendstclr_systick_test: PASS

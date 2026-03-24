@@ -1,0 +1,3 @@
+# mode: contains
+all_syscalls_smoke_test: start
+all_syscalls_smoke_test: PASS (13 syscalls ok)

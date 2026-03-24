@@ -1,0 +1,3 @@
+# mode: contains
+starvation_detect_test: start
+starvation_detect_test: PASS
