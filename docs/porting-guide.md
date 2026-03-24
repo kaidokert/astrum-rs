@@ -169,6 +169,47 @@ whose exception frame is standard (no FPU usage) would cause the
 hardware to pop 72 bytes of non-existent FPU state, corrupting the
 stack.
 
+## Interrupt Latency Constraints
+
+The Split-ISR model routes device interrupts through the cyclic
+scheduler: the top-half runs immediately in Handler mode, but the
+bottom-half executes only when the owning partition's next slot arrives.
+This means **bottom-half latency is bounded by the major frame period
+`T = N × S`** (number of slots × slot duration). In the worst case a
+partition waits a full major frame before it can service the event.
+
+### Checking Device Frequency Against Your Schedule
+
+Before assigning a device to a Split-ISR partition, verify that the
+device's interrupt frequency does not exceed the schedule's fundamental
+frequency ceiling of `1/T` Hz. For example, a 5-slot × 2 ms schedule
+gives `T = 10 ms` and a ceiling of 100 Hz — any source firing faster
+than 100 Hz will lose events (Model B) or accumulate unbounded pending
+bits (Model A).
+
+Compare your device's expected interrupt rate against your configured
+`T`. If the rate approaches or exceeds `1/T`, the Split-ISR bottom-half
+path is not appropriate for that device.
+
+### Devices That May Not Suit Split-ISR
+
+High-frequency or hard-deadline devices — motor control (FOC at
+10–50 kHz), power converter switching (> 50 kHz), or continuous ADC
+streaming (1–10 kHz) — typically cannot tolerate millisecond-scale
+scheduling delay. These devices require one of:
+
+- **Kernel top-half handling**: the entire interrupt is serviced in
+  Handler mode with no bottom-half. Suitable for moderate rates
+  (up to ~10 kHz) where processing time is short.
+- **A dedicated ISR outside the Split-ISR model**: the device's handler
+  runs directly via the NVIC with no kernel involvement. Required when
+  sub-microsecond response is needed.
+
+For a detailed breakdown of latency bounds (best/worst/average case),
+the Model A vs Model B trade-offs, and a use-case selection table
+mapping common peripherals to recommended approaches, see
+[notes/interrupt-latency-analysis.md](../notes/interrupt-latency-analysis.md).
+
 ## Post-mortem Panic Diagnostics (`panic-tombstone` Feature)
 
 When a partition panics, the kernel writes a 128-byte diagnostic record
