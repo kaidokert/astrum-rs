@@ -31,3 +31,9 @@ repos:
         entry: codespell --skip="*.lock,./target"
         language: system
         types_or: [python, rust, markdown, yaml, toml]
+      - id: qemu-smoke-test
+        name: QEMU smoke test
+        entry: bash -c "if [ \"$(whoami)\" = vagrant ] && [ \"$(hostname)\" = ubuntu ]; then bash scripts/qemu-smoke-test.sh; fi"
+        language: system
+        files: \.rs$
+        pass_filenames: false

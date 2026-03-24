@@ -80,7 +80,8 @@ fn main() -> ! {
 
     let parts: [PartitionSpec; SmokeConfig::N] =
         [PartitionSpec::new(partition_main as PartitionEntry, 0)];
-    init_kernel(sched, &parts).expect("smoke_test: init_kernel");
+    let k = init_kernel(sched, &parts).expect("smoke_test: init_kernel");
+    store_kernel(k);
 
     match boot(p).expect("smoke_test: boot") {}
 }
