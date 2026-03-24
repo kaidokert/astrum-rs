@@ -210,6 +210,94 @@ the Model A vs Model B trade-offs, and a use-case selection table
 mapping common peripherals to recommended approaches, see
 [notes/interrupt-latency-analysis.md](../notes/interrupt-latency-analysis.md).
 
+## PAC Singleton in Partitioned Code
+
+The `cortex_m` crate exposes core peripherals through a singleton
+(`cortex_m::Peripherals`) guarded by an internal `AtomicBool`. Two
+methods exist to obtain an instance: `take()` and `steal()`. In a
+partitioned RTOS context, choosing the wrong one causes subtle failures.
+
+### Why `take()` Must Not Be Used in Partition Code
+
+`Peripherals::take()` sets a global `AtomicBool` to `true` on the first
+call and returns `None` on every subsequent call. The boot path
+(`main()` / `define_unified_harness!`) calls `take()` once in privileged
+mode to configure the MPU, SCB priorities, and SysTick. After that, the
+`AtomicBool` is permanently set — any later `take()` from partition
+code, PendSV, or SysTick will return `None`.
+
+```rust
+// Boot (privileged, runs once) — take() is correct here:
+let p = cortex_m::Peripherals::take().unwrap();
+boot::boot_preconfigured(p, kernel);
+
+// Partition or exception handler — take() ALWAYS returns None:
+let p = cortex_m::Peripherals::take(); // → None, panics on unwrap
+```
+
+`main()` and boot code **can and should** use `take()`, since they run
+once in privileged mode before the scheduler starts.
+
+### Why `steal()` Is Safe Under MPU Enforcement
+
+`Peripherals::steal()` bypasses the `AtomicBool` and returns a new
+instance unconditionally. In a bare-metal single-threaded program this
+would be unsound — two call sites could hold aliasing `&mut` references
+to the same MMIO registers. In this RTOS, the MPU is the real ownership
+mechanism:
+
+- Each partition declares its accessible peripherals via
+  `peripheral_regions` (mapped to MPU regions R4–R6).
+- The kernel programs these regions into the MPU on every context switch
+  (PendSV).
+- A partition can only access the MMIO addresses the MPU grants it.
+  Accessing anything else triggers a MemManage fault.
+
+Because the MPU enforces non-overlapping peripheral grants at the
+hardware level, `steal()` inside a partition does not create true
+aliasing — only the partition currently scheduled can reach its granted
+registers.
+
+### Canonical SAFETY Comment
+
+Every `steal()` call in partition or exception-handler code must carry
+this justification pattern:
+
+```rust
+// SAFETY: The MPU restricts this partition to the peripheral regions
+// granted via `peripheral_regions`. No other partition or exception
+// handler at this priority level can access the same MMIO range
+// concurrently. The AtomicBool singleton is consumed by boot; steal()
+// is the only way to obtain a handle post-boot.
+let p = unsafe { cortex_m::Peripherals::steal() };
+```
+
+Adapt the comment when the exclusivity argument differs (e.g., in
+PendSV where the guarantee is priority-based rather than MPU-based):
+
+```rust
+// SAFETY: PendSV is the lowest-priority exception. No other context
+// at this priority can preempt us, so we have exclusive access to
+// the MPU registers. steal() is required because take() was consumed
+// by boot.
+let p = unsafe { cortex_m::Peripherals::steal() };
+```
+
+### When MPU Enforcement Is Off
+
+If the MPU is disabled or the build does not configure
+`peripheral_regions` for a partition, `steal()` is still required
+(since `take()` returns `None` post-boot), but the safety argument is
+weaker: **the developer is responsible** for ensuring no two execution
+contexts access the same peripheral concurrently. This is the same
+contract as any bare-metal `steal()` usage — the RTOS provides no
+additional protection without MPU enforcement.
+
+In this configuration, review every `steal()` call site and verify
+that only one partition (or exception handler) accesses each peripheral
+register block. Treat every such `steal()` as a potential aliasing
+hazard until you have confirmed exclusivity by inspection.
+
 ## Post-mortem Panic Diagnostics (`panic-tombstone` Feature)
 
 When a partition panics, the kernel writes a 128-byte diagnostic record
