@@ -230,10 +230,15 @@ pendsv_context_restore:
     bx      lr
 
 .Lrestore_fault:
-    /* Invalid partition SP - loop forever to trigger watchdog or debug.
-     * This is a fatal error that should never occur in a correctly
-     * configured system. Looping is safer than HardFaulting because
-     * it keeps the system in a debuggable state. */
+    /* Invalid partition SP — fatal error that should never occur in a
+     * correctly configured system.  bkpt #2 halts the core so a debugger
+     * can inspect the faulting context.  The infinite loop keeps the
+     * system in a debuggable state (safer than HardFaulting) and
+     * prevents fall-through if no debugger is attached.
+     * Immediate values: #1 = bad EXC_RETURN (SVCall),
+     * #2 = null partition SP (PendSV restore),
+     * #3 = null KERNEL_PTR (PendSV entry). */
+    bkpt    #2
     b       .Lrestore_fault
     .size pendsv_context_restore, . - pendsv_context_restore
 
@@ -267,8 +272,10 @@ pendsv_return_unprivileged:
 
     /* Null KERNEL_PTR fault: KERNEL_PTR was null when PendSV fired.
      * This means store_kernel_ptr() was not called before enabling interrupts.
-     * Loop forever to keep the system debuggable rather than HardFaulting. */
+     * bkpt #3 halts the core for debugger inspection.  The infinite loop
+     * keeps the system debuggable and prevents fall-through. */
 .Lnull_kernel_fault:
+    bkpt    #3
     b       .Lnull_kernel_fault
 "#
         ));
