@@ -1,0 +1,13 @@
+/* STM32F429ZI memory map.
+ *
+ * Flash: 2 MB at 0x0800_0000
+ * SRAM1: 112 KB at 0x2000_0000
+ * SRAM2: 16 KB at 0x2001_C000
+ * SRAM3: 64 KB at 0x2002_0000
+ * Total contiguous SRAM: 192 KB
+ */
+MEMORY
+{
+  FLASH : ORIGIN = 0x08000000, LENGTH = 2048K
+  RAM   : ORIGIN = 0x20000000, LENGTH = 192K
+}
