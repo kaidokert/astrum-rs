@@ -109,3 +109,38 @@ means a second UART byte arriving during that window is lost unless the
 device has its own FIFO. Model A avoids this by clearing immediately,
 but requires the kernel to know the device's clear protocol at build time
 via `ClearStrategy`.
+
+## 6. Use-Case Selection Guide
+
+The table below maps common embedded use cases to their typical interrupt
+frequencies and the recommended interrupt handling approach within this
+RTOS. "Split-ISR" refers to the four-step flow described in §1, using
+either Model A or Model B from §5. "Kernel top-half only" means the
+kernel handles the entire interrupt in Handler mode with no bottom-half.
+"Dedicated ISR" means the device is handled outside the Split-ISR
+framework entirely, in a hard-real-time ISR with no kernel involvement.
+
+| Use Case | Typical Frequency | Recommended Approach | Rationale |
+|---|---|---|---|
+| UART RX | < 1 kHz | Model B (PartitionAcks) | Partition reads FIFO and clears status; deaf period acceptable given UART FIFO depth and low rate. |
+| GPIO debounce | 10–100 Hz | Model A (KernelClears) | Simple flag-clear in top-half; low rate means scheduling latency ≤ T is always adequate. |
+| ADC sampling | 1–10 kHz | Kernel top-half only | DMA descriptor kick or buffer-swap must happen within microseconds; bottom-half latency up to T is too slow for continuous streaming. |
+| Motor control (FOC) | 10–50 kHz | Dedicated ISR | Control loop deadline is 20–100 µs; any scheduling delay through PendSV would exceed the electrical time constant. |
+| Power converter | > 50 kHz | Dedicated ISR | Sub-microsecond response required; the NVIC-to-handler path must be the only latency. No kernel involvement is viable. |
+
+### When Split-ISR Is Inappropriate
+
+The Split-ISR model routes interrupt processing through the cyclic
+scheduler, which means the bottom-half cannot run more often than once
+per major frame. This imposes a **fundamental frequency ceiling of
+1/T Hz** — any interrupt source that fires faster than once per major
+frame period `T` will experience event loss (Model B) or unbounded
+event-bit accumulation (Model A) because the partition cannot drain
+events as fast as they arrive.
+
+For the 5×2 ms example schedule (T = 10 ms), this ceiling is 100 Hz.
+Any source that must be serviced at or above 100 Hz should not use the
+Split-ISR bottom-half path. Instead, use a kernel top-half-only handler
+(for moderate rates up to ~10 kHz where Handler-mode processing time is
+short) or a dedicated ISR outside the kernel's interrupt framework
+(for rates above ~10 kHz where even top-half overhead is unacceptable).
