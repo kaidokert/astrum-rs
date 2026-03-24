@@ -149,6 +149,37 @@ pub unsafe fn faulting_pc_from_psp(exc_return: u32, psp: u32) -> Option<u32> {
     Some(core::ptr::read_volatile(pc_ptr))
 }
 
+/// Overwrite the stacked PC in the PSP exception frame to prevent re-execution.
+///
+/// # Safety
+/// Must be called from privileged mode. `psp` must point to a valid exception frame.
+pub unsafe fn write_stacked_pc(psp: u32, new_pc: u32) {
+    // TODO: consider adding a debug_assert for word-alignment of psp
+    // SAFETY: Caller guarantees PSP points to a valid, word-aligned exception frame.
+    let pc_ptr = (psp + STACKED_PC_OFFSET) as *mut u32;
+    core::ptr::write_volatile(pc_ptr, new_pc);
+}
+
+/// Infinite WFI loop landing pad for faulted partitions. Never returns.
+///
+/// # Safety
+/// Only safe to branch here from a partition already set to `Faulted`.
+#[cfg(target_arch = "arm")]
+// TODO: reviewer false positive — #[unsafe(naked)] is correct for edition 2021 (see macros.rs)
+#[unsafe(naked)]
+pub unsafe extern "C" fn fault_trampoline() -> ! {
+    // SAFETY: naked function with a trivial infinite-WFI loop.
+    core::arch::naked_asm!("0: wfi", "   b 0b")
+}
+
+/// Host stub for non-ARM testing — never actually called at runtime.
+#[cfg(not(target_arch = "arm"))]
+pub extern "C" fn fault_trampoline() -> ! {
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -56,6 +56,7 @@ pub mod irq_ack;
 pub mod irq_dispatch;
 pub mod kernel_ptr;
 pub(crate) mod layout_checks;
+pub mod memmanage;
 pub mod message;
 pub mod mpu;
 #[cfg(feature = "dynamic-mpu")]

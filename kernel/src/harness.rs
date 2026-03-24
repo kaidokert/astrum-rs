@@ -478,6 +478,8 @@ macro_rules! define_unified_harness {
                 $hook
             });
         }
+
+        $crate::define_memmanage_handler!($Config);
     };
     // Internal: full implementation with boot() calling init_kernel() internally.
     // $sched and $entries are macro-level expressions pasted into boot()'s body.
