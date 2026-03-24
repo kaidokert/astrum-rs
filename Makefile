@@ -6,7 +6,7 @@
 TARGET   ?= thumbv7m-none-eabi
 FEATURES ?= qemu,log-semihosting
 
-.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test check-rtt check-rtt-combos check-rtt-lint
+.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test check-rtt check-rtt-combos check-rtt-lint check-pac-singleton
 
 # Minimal single-partition smoke test (SYS_YIELD)
 smoke-test:
@@ -50,6 +50,20 @@ check-rtt-lint:
 		exit 1; \
 	fi
 	@echo "  ok — rtt_init_print! confined to boot.rs"
+
+# Lint: Peripherals::take() must not appear in files containing partition _entry functions
+check-pac-singleton:
+	@offenders=$$(grep -rlF 'Peripherals::take()' kernel/examples/ kernel/src/ --include='*.rs' \
+		| xargs -r grep -lE 'extern\s+"C"\s+fn\s+\w+_entry' \
+		| xargs -r grep -nF 'Peripherals::take()' || true); \
+	if [ -n "$$offenders" ]; then \
+		echo "FAIL: Peripherals::take() must not be used in partition code."; \
+		echo "      Partitions run after take() has already been called by boot()."; \
+		echo "      See docs/porting-guide.md § PAC Singleton in Partitioned Code."; \
+		echo "$$offenders"; \
+		exit 1; \
+	fi
+	@echo "  ok — no Peripherals::take() in partition entry files"
 
 # Run all QEMU integration examples
 test-qemu:
