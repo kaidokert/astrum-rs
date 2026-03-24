@@ -306,7 +306,16 @@ macro_rules! define_pendsv {
              * r0 clobber above is safe: pendsv_return_unprivileged takes
              * no inputs (starts with `mrs r0, CONTROL`), and
              * pendsv_context_restore has no return value in r0 (outputs
-             * via PSP/r4-r11 side effects per AAPCS). */
+             * via PSP/r4-r11 side effects per AAPCS).
+             *
+             * EXC_RETURN strategy: pendsv_return_unprivileged loads a
+             * known-good EXC_RETURN constant into LR before `bx lr`.
+             * The value is selected at compile time via the fpu-context
+             * feature gate (0xFFFFFFFD without FPU, 0xFFFFFFED with FPU)
+             * rather than validated at run time. No incoming EXC_RETURN
+             * guard is needed because LR is unconditionally overwritten —
+             * the hardware value on PendSV entry is never propagated to
+             * the return path. See pendsv_asm.rs for details. */
             bl      pendsv_return_unprivileged
 
             .size PendSV, . - PendSV

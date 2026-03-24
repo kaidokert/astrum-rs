@@ -24,7 +24,19 @@
 
 // EXC_RETURN string constants for assembly injection (must stay in sync with context.rs).
 // Macros (not `const`) because `concat!` requires literal tokens.
-// 0xFFFFFFED = 0xFFFFFFFD with bit 4 cleared (FPU frame present).
+//
+// These macros produce hex-string literals that are spliced into the `ldr lr, =`
+// instruction in `pendsv_return_unprivileged`.  The active value is selected at
+// compile time by `cfg(feature = "fpu-context")` in the `pendsv_global_asm!`
+// invocations at the bottom of this file — no run-time validation is performed.
+//
+// Values (ARMv7-M B1.5.8):
+//   0xFFFFFFFD — Thread mode, PSP, basic frame (bit 4 = 1, no FPU)
+//   0xFFFFFFED — Thread mode, PSP, extended FPU frame (bit 4 = 0)
+//
+// The two values differ only in bit 4.  All other bits are identical:
+//   bits [31:5] = all-ones (magic prefix), bit 3 = 1 (Thread mode),
+//   bit 2 = 1 (return to PSP), bit 1 = 0 (reserved), bit 0 = 1 (Thumb).
 #[allow(unused_macros)]
 macro_rules! exc_return_no_fpu {
     () => {
@@ -253,8 +265,23 @@ pendsv_context_restore:
      * The return path:
      *   1. Sets CONTROL.nPRIV = 1 to drop to unprivileged mode
      *   2. Issues ISB to ensure CONTROL write takes effect
-     *   3. Loads EXC_RETURN (Thread mode, PSP, +/- FPU frame)
+     *   3. Loads EXC_RETURN into LR (Thread mode, PSP, +/- FPU frame)
      *   4. bx lr to complete exception return
+     *
+     * EXC_RETURN value:
+     *   The `ldr lr, =<value>` below loads a compile-time constant
+     *   selected by the `fpu-context` feature gate:
+     *     - no FPU:  0xFFFFFFFD  (basic frame, bit 4 = 1)
+     *     - FPU:     0xFFFFFFED  (extended frame, bit 4 = 0)
+     *   See `exc_return_no_fpu!` / `exc_return_fpu!` macros.
+     *
+     * Why no incoming EXC_RETURN validation:
+     *   Unlike SVCall (which must validate the incoming LR from the
+     *   caller's exception frame), PendSV always overwrites LR with a
+     *   known-good EXC_RETURN constant before `bx lr`.  The hardware LR
+     *   value present on handler entry is never used for the return path,
+     *   so there is nothing to validate — the correct value is established
+     *   unconditionally by this function.
      */
     .global pendsv_return_unprivileged
     .type pendsv_return_unprivileged, %function
@@ -280,6 +307,18 @@ pendsv_return_unprivileged:
     };
 }
 
+// Feature-gated assembly instantiation.
+//
+// Exactly one of these two blocks is compiled, selected by the `fpu-context`
+// Cargo feature.  Each passes the appropriate FPU save/restore instructions
+// and EXC_RETURN value to `pendsv_global_asm!`:
+//   - Without FPU: basic frame, EXC_RETURN = 0xFFFFFFFD (exc_return_no_fpu!)
+//   - With FPU:    extended frame with s16-s31 save/restore,
+//                  EXC_RETURN = 0xFFFFFFED (exc_return_fpu!)
+//
+// The EXC_RETURN value is set unconditionally — not validated against the
+// incoming LR — because pendsv_return_unprivileged always overwrites LR
+// with the feature-selected constant before `bx lr`.
 #[cfg(all(target_arch = "arm", not(feature = "fpu-context")))]
 pendsv_global_asm!(
     "", // no FPU directive
