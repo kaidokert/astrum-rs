@@ -7,13 +7,15 @@ macro_rules! define_memmanage_handler {
         #[cfg(target_arch = "arm")]
         #[cortex_m_rt::exception]
         fn MemoryManagement() {
+            // Capture EXC_RETURN first: the bl instructions in read_cfsr/read_mmfar/psp::read clobber LR.
+            let exc_return: u32;
+            // SAFETY: Reading LR in handler mode yields EXC_RETURN.
+            unsafe { core::arch::asm!("mov {}, lr", out(reg) exc_return, options(nomem, nostack)); }
+
             // SAFETY: Privileged exception handler context for all unsafe calls below.
             let cfsr = unsafe { $crate::fault::read_cfsr() };
             let mmfar = unsafe { $crate::fault::read_mmfar() };
             let psp = cortex_m::register::psp::read() as u32;
-            let exc_return: u32;
-            // SAFETY: Reading LR in handler mode yields EXC_RETURN.
-            unsafe { core::arch::asm!("mov {}, lr", out(reg) exc_return, options(nomem, nostack)); }
 
             // Kernel-mode MPU violation is fatal — halt rather than attempting recovery.
             if !$crate::fault::exc_return_uses_psp(exc_return) {
