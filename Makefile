@@ -6,7 +6,7 @@
 TARGET   ?= thumbv7m-none-eabi
 FEATURES ?= qemu,log-semihosting
 
-.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test check-rtt check-rtt-combos check-rtt-lint check-pac-singleton
+.PHONY: smoke-test qemu-smoke build-smoke test-qemu custom-ivt-test irq-dispatch-test check-rtt check-rtt-combos check-rtt-lint check-pac-singleton test-output record-output record-single
 
 # Minimal single-partition smoke test (SYS_YIELD)
 smoke-test:
@@ -68,3 +68,16 @@ check-pac-singleton:
 # Run all QEMU integration examples
 test-qemu:
 	./scripts/run-qemu-examples.sh
+
+# Run all QEMU examples and compare against expected output files
+test-output:
+	./scripts/run-qemu-examples.sh --strict
+
+# Record expected output for all QEMU examples
+record-output:
+	./scripts/run-qemu-examples.sh --record
+
+# Record expected output for a single example: make record-single EX=qemu_smoke
+record-single:
+	@test -n "$(EX)" || { echo "Usage: make record-single EX=<example_name>"; exit 1; }
+	./scripts/run-qemu-examples.sh --record --only $(EX)

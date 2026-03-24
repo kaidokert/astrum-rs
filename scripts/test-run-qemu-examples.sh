@@ -103,6 +103,47 @@ echo -e "output line\nSuccess!" > "$OUTDIR/t11.out"
 check_example "t11" && result=0 || result=1
 check "fallback-grep-success" "0" "$result"
 
+# --- Test 12: record_example creates expected file from output ---
+STRICT=0
+echo "recorded output" > "$OUTDIR/t12.out"
+rm -f "$EXPECTED_DIR/kernel/expected/t12.expected"
+record_example "t12"
+if [[ -f "$EXPECTED_DIR/kernel/expected/t12.expected" ]]; then
+    recorded=$(cat "$EXPECTED_DIR/kernel/expected/t12.expected")
+    if [[ "$recorded" == "recorded output" ]]; then
+        check "record-creates-file" "0" "0"
+    else
+        check "record-creates-file" "recorded output" "$recorded"
+    fi
+else
+    check "record-creates-file" "file-exists" "file-missing"
+fi
+
+# --- Test 13: record_example overwrites existing expected file with warning ---
+STRICT=0
+echo "old content" > "$EXPECTED_DIR/kernel/expected/t13.expected"
+echo "new content" > "$OUTDIR/t13.out"
+warn_output=$(record_example "t13" 2>&1)
+recorded=$(cat "$EXPECTED_DIR/kernel/expected/t13.expected")
+check "record-overwrites-content" "new content" "$recorded"
+# Check that a warning was emitted
+if echo "$warn_output" | grep -q "WARNING"; then
+    check "record-overwrite-warns" "0" "0"
+else
+    check "record-overwrite-warns" "WARNING" "no-warning"
+fi
+
+# --- Test 14: record_example creates kernel/expected directory if missing ---
+STRICT=0
+rm -rf "$EXPECTED_DIR/kernel/expected"
+echo "dir test output" > "$OUTDIR/t14.out"
+record_example "t14"
+if [[ -f "$EXPECTED_DIR/kernel/expected/t14.expected" ]]; then
+    check "record-creates-dir" "0" "0"
+else
+    check "record-creates-dir" "file-exists" "file-missing"
+fi
+
 # --- Run compare-output.py self-tests too ---
 echo ""
 echo "=== compare-output.py self-tests ==="
