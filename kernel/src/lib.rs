@@ -93,6 +93,8 @@ pub mod syscall;
 pub mod systick;
 pub mod tick;
 pub mod tombstone;
+#[cfg(feature = "trace")]
+pub mod trace;
 
 /// Enter a safe idle loop when all partitions are faulted.
 ///
