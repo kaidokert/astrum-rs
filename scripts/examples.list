@@ -33,6 +33,8 @@ EXAMPLES=(
     starvation_detect_test
     starvation_counter_test
     pendsv_stack_overflow_test
+    # Fault-recovery / survival tests
+    adversarial_survive
 )
 
 CUSTOM_IVT_EXAMPLES=(
