@@ -72,6 +72,12 @@ pub type TickHandlerFn<C> = fn(&mut Kernel<'_, C>, u64);
 /// It wraps access to the kernel state in a critical section, calls the internal
 /// `systick_handler`, and triggers PendSV when a partition switch is needed.
 ///
+/// # EXC_RETURN
+///
+/// SysTick is a pure-Rust handler and does not inspect or manipulate EXC_RETURN.
+/// Context switches are deferred to PendSV by setting the PendSV pending bit;
+/// PendSV then handles the actual register save/restore and EXC_RETURN selection.
+///
 /// # Usage
 ///
 /// ```ignore
