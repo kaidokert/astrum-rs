@@ -406,12 +406,14 @@ core::arch::global_asm!(
     ".global SVCall",
     ".type SVCall, %function",
     "SVCall:",
-    // Defense-in-depth: validate lr == EXC_RETURN_THREAD_PSP (0xFFFFFFFD).
-    // If SVC is entered from Handler mode, lr would be a different EXC_RETURN
-    // value and PSP would not point to the caller's exception frame.
-    "movw r0, #0xFFFD",
-    "movt r0, #0xFFFF",
-    "cmp lr, r0",
+    // Defense-in-depth: mask out bit 4 (FPU context indicator) and compare
+    // against EXC_RETURN_THREAD_PSP with FPU frame (0xFFFFFFED). This accepts
+    // both 0xFFFFFFFD (no FPU) and 0xFFFFFFED (FPU frame) while rejecting
+    // non-Thread-PSP EXC_RETURN values.
+    "bic r0, lr, #0x10",
+    "movw r1, #0xFFED",
+    "movt r1, #0xFFFF",
+    "cmp r0, r1",
     "bne .Lsvc_bad_exc_return",
     // Defense-in-depth: clear both PRIMASK and BASEPRI so Thread mode
     // runs with all configurable interrupts unblocked. PendSV now uses
@@ -3181,37 +3183,22 @@ mod tests {
     fn svc_exc_return_guard_matches_context_constant() {
         use crate::context::EXC_RETURN_THREAD_PSP;
 
-        // The assembly trampoline hardcodes 0xFFFFFFFD via movw/movt.
-        // Verify the context module constant matches the expected value.
         assert_eq!(EXC_RETURN_THREAD_PSP, 0xFFFF_FFFD);
 
-        // Bit 0 set: return to Thread mode (not Handler mode).
-        assert_ne!(
-            EXC_RETURN_THREAD_PSP & (1 << 0),
-            0,
-            "bit 0 (Thread mode) must be set"
-        );
+        // The assembly guard masks out bit 4 (bic r0, lr, #0x10) then
+        // compares against 0xFFFFFFED. Verify both EXC_RETURN variants pass.
+        let mask = !0x10u32; // clear bit 4
+        let expected: u32 = 0xFFFF_FFED;
 
-        // Bit 2 set: restore context from PSP (not MSP).
-        assert_ne!(
-            EXC_RETURN_THREAD_PSP & (1 << 2),
-            0,
-            "bit 2 (PSP) must be set"
-        );
+        // No-FPU frame (bit 4 set): 0xFFFFFFFD
+        assert_eq!(0xFFFF_FFFDu32 & mask, expected, "no-FPU frame must pass");
+        // FPU frame (bit 4 clear): 0xFFFFFFED
+        assert_eq!(0xFFFF_FFEDu32 & mask, expected, "FPU frame must pass");
 
-        // Bit 1 clear: no FPU context (basic frame).
-        assert_eq!(
-            EXC_RETURN_THREAD_PSP & (1 << 4),
-            1 << 4,
-            "bit 4 (no FPU stacking) must be set for basic frame"
-        );
-
-        // Bits [31:4] must all be ones (EXC_RETURN magic prefix).
-        assert_eq!(
-            EXC_RETURN_THREAD_PSP & 0xFFFF_FFF0,
-            0xFFFF_FFF0,
-            "bits [31:4] must all be ones"
-        );
+        // Handler-mode EXC_RETURN (0xFFFFFFF1) must be rejected.
+        assert_ne!(0xFFFF_FFF1u32 & mask, expected, "handler-mode must fail");
+        // Thread-MSP (0xFFFFFFF9) must be rejected.
+        assert_ne!(0xFFFF_FFF9u32 & mask, expected, "thread-MSP must fail");
     }
 
     // -------------------------------------------------------------------------
