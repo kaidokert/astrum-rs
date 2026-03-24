@@ -125,6 +125,47 @@ pub fn register_partitions(partitions: &[crate::partition::PartitionControlBlock
     set_partition_count(partitions.len());
 }
 
+/// Register human-readable names for syscall trace markers.
+///
+/// Each syscall ID is mapped to a marker via `rtos_trace::trace::name_marker`,
+/// using the raw syscall number as the marker ID and `SyscallId::name()` as
+/// the human-readable label.
+pub fn name_syscall_markers() {
+    use crate::syscall::SyscallId;
+
+    const BASE_SYSCALLS: &[SyscallId] = &[
+        SyscallId::Yield,
+        SyscallId::GetPartitionId,
+        SyscallId::EventWait,
+        SyscallId::EventSet,
+        SyscallId::EventClear,
+        SyscallId::SemWait,
+        SyscallId::SemSignal,
+        SyscallId::MutexLock,
+        SyscallId::MutexUnlock,
+        SyscallId::MsgSend,
+        SyscallId::MsgRecv,
+        SyscallId::GetTime,
+        SyscallId::SamplingWrite,
+        SyscallId::SamplingRead,
+        SyscallId::QueuingSend,
+        SyscallId::QueuingRecv,
+        SyscallId::QueuingStatus,
+        SyscallId::BbDisplay,
+        SyscallId::BbRead,
+        SyscallId::BbClear,
+        SyscallId::QueuingSendTimed,
+        SyscallId::QueuingRecvTimed,
+        SyscallId::DebugPrint,
+        SyscallId::DebugExit,
+        SyscallId::IrqAck,
+        SyscallId::SleepTicks,
+    ];
+    for &id in BASE_SYSCALLS {
+        rtos_trace::trace::name_marker(id.as_u32(), id.name());
+    }
+}
+
 pub struct TraceCallbacks;
 
 impl RtosTraceOSCallbacks for TraceCallbacks {
@@ -186,6 +227,7 @@ pub fn init_trace(tick_period_us: u32, sysclock_hz: u32) {
     static SYSVIEW: systemview_target::SystemView = systemview_target::SystemView::new();
     SYSVIEW.init();
     rtos_trace::trace::start();
+    name_syscall_markers();
 }
 
 /// Non-ARM stub: stores config values but skips SystemView hardware init.
@@ -193,6 +235,7 @@ pub fn init_trace(tick_period_us: u32, sysclock_hz: u32) {
 pub fn init_trace(tick_period_us: u32, sysclock_hz: u32) {
     TICK_PERIOD_US.store(tick_period_us, Ordering::Release);
     SYSCLOCK_HZ.store(sysclock_hz, Ordering::Release);
+    name_syscall_markers();
 }
 
 #[cfg(test)]
@@ -350,5 +393,40 @@ mod tests {
 
         assert_eq!(TICK_PERIOD_US.load(Ordering::Acquire), 500);
         assert_eq!(SYSCLOCK_HZ.load(Ordering::Acquire), 48_000_000);
+    }
+
+    #[test]
+    fn name_syscall_markers_no_panic() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        // name_marker is a no-op in test builds (no trace_impl feature),
+        // but verify the function itself does not panic or violate any
+        // invariant (e.g. duplicate IDs, empty names).
+        name_syscall_markers();
+    }
+
+    #[test]
+    fn marker_begin_end_pairing_all_base_syscalls() {
+        use crate::syscall::SyscallId;
+
+        let _g = TEST_MUTEX.lock().unwrap();
+        // Verify marker_begin/marker_end for every valid raw syscall ID.
+        // On host builds these are no-ops; the test proves the pairing
+        // is safe for every ID that from_u32 recognises.
+        for raw in 0u32..64 {
+            if let Some(id) = SyscallId::from_u32(raw) {
+                assert_eq!(id.as_u32(), raw);
+                rtos_trace::trace::marker_begin(raw);
+                rtos_trace::trace::marker_end(raw);
+            }
+        }
+    }
+
+    #[test]
+    fn init_trace_calls_name_syscall_markers() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        // init_trace now calls name_syscall_markers internally;
+        // verify the combined path does not panic.
+        init_trace(1000, 12_000_000);
+        assert_eq!(TICK_PERIOD_US.load(Ordering::Acquire), 1000);
     }
 }

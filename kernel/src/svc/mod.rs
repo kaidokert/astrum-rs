@@ -876,14 +876,25 @@ macro_rules! define_unified_kernel {
 pub unsafe extern "C" fn dispatch_svc(frame: &mut ExceptionFrame) {
     let hook = with_cs(|cs| *SVC_DISPATCH_HOOK.borrow(cs).borrow());
     if let Some(hook) = hook {
+        #[cfg(feature = "trace")]
+        let syscall_id = frame.r0;
+        #[cfg(feature = "trace")]
+        rtos_trace::trace::marker_begin(syscall_id);
         hook(frame);
+        #[cfg(feature = "trace")]
+        rtos_trace::trace::marker_end(syscall_id);
         return;
     }
-    frame.r0 = match SyscallId::from_u32(frame.r0) {
+    let raw_id = frame.r0;
+    #[cfg(feature = "trace")]
+    rtos_trace::trace::marker_begin(raw_id);
+    frame.r0 = match SyscallId::from_u32(raw_id) {
         Some(SyscallId::Yield) => handle_yield(),
         Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
     };
+    #[cfg(feature = "trace")]
+    rtos_trace::trace::marker_end(raw_id);
 }
 
 /// Core syscall dispatch that routes event and IRQ syscalls to their
@@ -911,7 +922,10 @@ pub fn dispatch_syscall<const N: usize>(
     caller: usize,
 ) {
     use events as ev;
-    frame.r0 = match SyscallId::from_u32(frame.r0) {
+    let raw_id = frame.r0;
+    #[cfg(feature = "trace")]
+    rtos_trace::trace::marker_begin(raw_id);
+    frame.r0 = match SyscallId::from_u32(raw_id) {
         Some(SyscallId::Yield) => handle_yield(),
         Some(SyscallId::GetPartitionId) => caller as u32,
         // TODO: dispatch_syscall cannot trigger descheduling; blocking
@@ -924,6 +938,8 @@ pub fn dispatch_syscall<const N: usize>(
         Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
     };
+    #[cfg(feature = "trace")]
+    rtos_trace::trace::marker_end(raw_id);
 }
 
 // ---- Struct-Move Invariant ----
@@ -1683,6 +1699,8 @@ where
         let arg3 = frame.r3;
         let caller = self.current_partition as usize;
         self.assert_dispatch_invariants();
+        #[cfg(feature = "trace")]
+        rtos_trace::trace::marker_begin(syscall_id);
         #[cfg(any(debug_assertions, test))]
         let entry_states = {
             let parts = self.core.partitions().as_slice();
@@ -2327,6 +2345,8 @@ where
             Some(_) => SvcError::InvalidSyscall.to_u32(),
             None => SvcError::InvalidSyscall.to_u32(),
         };
+        #[cfg(feature = "trace")]
+        rtos_trace::trace::marker_end(syscall_id);
         #[cfg(any(debug_assertions, test))]
         {
             let (states, len) = entry_states;

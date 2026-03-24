@@ -155,6 +155,70 @@ impl SyscallId {
         }
     }
 
+    /// Return a human-readable name for this syscall.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Yield => "yield",
+            Self::GetPartitionId => "get_partition_id",
+            Self::EventWait => "event_wait",
+            Self::EventSet => "event_set",
+            Self::EventClear => "event_clear",
+            Self::SemWait => "sem_wait",
+            Self::SemSignal => "sem_signal",
+            Self::MutexLock => "mutex_lock",
+            Self::MutexUnlock => "mutex_unlock",
+            Self::MsgSend => "msg_send",
+            Self::MsgRecv => "msg_recv",
+            Self::GetTime => "get_time",
+            Self::SamplingWrite => "sampling_write",
+            Self::SamplingRead => "sampling_read",
+            Self::QueuingSend => "queuing_send",
+            Self::QueuingRecv => "queuing_recv",
+            Self::QueuingStatus => "queuing_status",
+            Self::BbDisplay => "bb_display",
+            Self::BbRead => "bb_read",
+            Self::BbClear => "bb_clear",
+            Self::QueuingSendTimed => "queuing_send_timed",
+            Self::QueuingRecvTimed => "queuing_recv_timed",
+            Self::DebugPrint => "debug_print",
+            Self::DebugExit => "debug_exit",
+            Self::IrqAck => "irq_ack",
+            Self::SleepTicks => "sleep_ticks",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::BufferAlloc => "buf_alloc",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::BufferRelease => "buf_release",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevOpen => "dev_open",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevRead => "dev_read",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevWrite => "dev_write",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevIoctl => "dev_ioctl",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::BufferWrite => "buf_write",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevClose => "dev_close",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::DevReadTimed => "dev_read_timed",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::QueryBottomHalf => "query_bottom_half",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::BufferLend => "buf_lend",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::BufferRevoke => "buf_revoke",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::BufferTransfer => "buf_transfer",
+            #[cfg(feature = "dynamic-mpu")]
+            Self::BufferRead => "buf_read",
+            #[cfg(feature = "partition-debug")]
+            Self::DebugNotify => "debug_notify",
+            #[cfg(feature = "partition-debug")]
+            Self::DebugWrite => "debug_write",
+        }
+    }
+
     /// Return the raw `u32` call number for this syscall.
     pub const fn as_u32(self) -> u32 {
         match self {
@@ -344,5 +408,33 @@ mod tests {
         assert_eq!(a, b);
         // Debug
         assert!(!format!("{:?}", SyscallId::MsgRecv).is_empty());
+    }
+
+    #[test]
+    fn name_returns_nonempty_for_all_variants() {
+        for &(_num, variant) in ALL_VARIANTS {
+            let n = variant.name();
+            assert!(!n.is_empty(), "{variant:?} has empty name");
+        }
+    }
+
+    #[test]
+    fn name_spot_check() {
+        assert_eq!(SyscallId::Yield.name(), "yield");
+        assert_eq!(SyscallId::GetTime.name(), "get_time");
+        assert_eq!(SyscallId::MsgSend.name(), "msg_send");
+        assert_eq!(SyscallId::MsgRecv.name(), "msg_recv");
+        assert_eq!(SyscallId::SleepTicks.name(), "sleep_ticks");
+        assert_eq!(SyscallId::IrqAck.name(), "irq_ack");
+    }
+
+    #[test]
+    fn name_unique_for_all_variants() {
+        let names: Vec<&str> = ALL_VARIANTS.iter().map(|(_, v)| v.name()).collect();
+        for (i, a) in names.iter().enumerate() {
+            for b in &names[i + 1..] {
+                assert_ne!(a, b, "duplicate syscall name: {a}");
+            }
+        }
     }
 }
