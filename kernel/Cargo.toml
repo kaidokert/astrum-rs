@@ -479,6 +479,10 @@ name = "syscall_kernel_ptr"
 path = "examples/adversarial/syscall_kernel_ptr.rs"
 required-features = ["qemu", "log-semihosting"]
 
+[[example]]
+name = "adversarial_survive"
+required-features = ["qemu", "log-semihosting"]
+
 [features]
 default = ["arinc-compat"]
 
