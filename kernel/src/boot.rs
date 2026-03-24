@@ -456,6 +456,9 @@ where
     init_rtt();
     init_fpu()?;
 
+    #[cfg(feature = "trace")]
+    crate::trace::init_trace(C::TICK_PERIOD_US, C::CORE_CLOCK_HZ);
+
     let storage_addr = addr_of!(crate::state::UNIFIED_KERNEL_STORAGE) as u32;
     check_storage_alignment(storage_addr, crate::state::KERNEL_ALIGNMENT as u32)?;
 
@@ -501,6 +504,11 @@ where
                 })?;
             }
         }
+
+        // Register partitions with SystemView so all tasks are known
+        // before the scheduler starts.
+        #[cfg(feature = "trace")]
+        crate::trace::register_partitions(k.partitions().as_slice());
 
         Ok::<(), BootError>(())
     })

@@ -115,7 +115,12 @@ pub fn set_partition_count(count: usize) {
 // copies requires a type-erased global pointer or a redesigned callback trait.
 pub fn register_partitions(partitions: &[crate::partition::PartitionControlBlock]) {
     for (i, pcb) in partitions.iter().take(MAX_PARTITIONS).enumerate() {
-        register_partition_meta(i, pcb.stack_base(), pcb.stack_size());
+        let id = i as u8;
+        let base = pcb.stack_base();
+        let size = pcb.stack_size();
+        register_partition_meta(i, base, size);
+        rtos_trace::trace::task_new(id as u32);
+        rtos_trace::trace::task_send_info(id as u32, build_task_info(id, base, size));
     }
     set_partition_count(partitions.len());
 }
@@ -181,6 +186,13 @@ pub fn init_trace(tick_period_us: u32, sysclock_hz: u32) {
     static SYSVIEW: systemview_target::SystemView = systemview_target::SystemView::new();
     SYSVIEW.init();
     rtos_trace::trace::start();
+}
+
+/// Non-ARM stub: stores config values but skips SystemView hardware init.
+#[cfg(not(target_arch = "arm"))]
+pub fn init_trace(tick_period_us: u32, sysclock_hz: u32) {
+    TICK_PERIOD_US.store(tick_period_us, Ordering::Release);
+    SYSCLOCK_HZ.store(sysclock_hz, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -307,5 +319,36 @@ mod tests {
         SYSCLOCK_HZ.store(48_000_000, Ordering::Release);
         assert_eq!(TraceAppCallbacks::sysclock(), 48_000_000);
         TraceAppCallbacks::system_description(); // no-op on non-ARM
+    }
+
+    #[test]
+    fn register_partitions_populates_shadow_state() {
+        use crate::partition::{MpuRegion, PartitionControlBlock};
+
+        let _g = TEST_MUTEX.lock().unwrap();
+        let region = MpuRegion::new(0x2000_0000, 1024, 0);
+        let pcb0 =
+            PartitionControlBlock::new(0, 0x0800_0000_u32, 0x2000_0000, 0x2000_0000 + 1024, region);
+        let region1 = MpuRegion::new(0x2000_1000, 512, 0);
+        let pcb1 =
+            PartitionControlBlock::new(1, 0x0800_1000_u32, 0x2000_1000, 0x2000_1000 + 512, region1);
+        let pcbs = [pcb0, pcb1];
+
+        register_partitions(&pcbs);
+
+        assert_eq!(PARTITION_COUNT.load(Ordering::Acquire), 2);
+        assert_eq!(PART_STACK_BASE[0].load(Ordering::Acquire), 0x2000_0000);
+        assert_eq!(PART_STACK_SIZE[0].load(Ordering::Acquire), 1024);
+        assert_eq!(PART_STACK_BASE[1].load(Ordering::Acquire), 0x2000_1000);
+        assert_eq!(PART_STACK_SIZE[1].load(Ordering::Acquire), 512);
+    }
+
+    #[test]
+    fn init_trace_stores_config() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        init_trace(500, 48_000_000);
+
+        assert_eq!(TICK_PERIOD_US.load(Ordering::Acquire), 500);
+        assert_eq!(SYSCLOCK_HZ.load(Ordering::Acquire), 48_000_000);
     }
 }
