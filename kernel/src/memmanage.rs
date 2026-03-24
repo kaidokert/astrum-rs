@@ -87,6 +87,9 @@ where
     let details = crate::fault::FaultDetails::new(pid, cfsr, mmfar, faulting_pc);
     kernel.fault_partition(pid as usize);
 
+    #[cfg(feature = "trace")]
+    crate::trace::emit_fault_trace(&details);
+
     Some(details)
 }
 

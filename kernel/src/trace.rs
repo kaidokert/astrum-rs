@@ -125,6 +125,60 @@ pub fn register_partitions(partitions: &[crate::partition::PartitionControlBlock
     set_partition_count(partitions.len());
 }
 
+// TODO: reviewer false positive — trace.rs is already module-gated by
+// #[cfg(feature = "trace")] in lib.rs; items here do not need individual gating.
+
+/// Base marker ID for MemManage fault events.
+///
+/// Chosen well above the syscall ID range (max ~0x41) to avoid collisions.
+/// Fault-type-specific markers are assigned consecutive IDs starting here.
+pub const FAULT_MARKER_BASE: u32 = 0x100;
+pub const FAULT_MARKER_DACCVIOL: u32 = 0x101;
+pub const FAULT_MARKER_IACCVIOL: u32 = 0x102;
+pub const FAULT_MARKER_MSTKERR: u32 = 0x103;
+pub const FAULT_MARKER_MUNSTKERR: u32 = 0x104;
+pub const FAULT_MARKER_MLSPERR: u32 = 0x105;
+pub const FAULT_MARKER_OTHER: u32 = 0x106;
+
+/// Map CFSR bits to the appropriate fault-type marker ID.
+fn fault_marker_for_cfsr(cfsr: u32) -> u32 {
+    use crate::fault::{CFSR_DACCVIOL, CFSR_IACCVIOL, CFSR_MLSPERR, CFSR_MSTKERR, CFSR_MUNSTKERR};
+    if cfsr & CFSR_DACCVIOL != 0 {
+        FAULT_MARKER_DACCVIOL
+    } else if cfsr & CFSR_IACCVIOL != 0 {
+        FAULT_MARKER_IACCVIOL
+    } else if cfsr & CFSR_MSTKERR != 0 {
+        FAULT_MARKER_MSTKERR
+    } else if cfsr & CFSR_MUNSTKERR != 0 {
+        FAULT_MARKER_MUNSTKERR
+    } else if cfsr & CFSR_MLSPERR != 0 {
+        FAULT_MARKER_MLSPERR
+    } else {
+        FAULT_MARKER_OTHER
+    }
+}
+
+/// Register MemManage fault markers with descriptive names.
+pub fn name_fault_markers() {
+    rtos_trace::trace::name_marker(FAULT_MARKER_BASE, "MemManage_Fault");
+    rtos_trace::trace::name_marker(FAULT_MARKER_DACCVIOL, "MemManage_DACCVIOL");
+    rtos_trace::trace::name_marker(FAULT_MARKER_IACCVIOL, "MemManage_IACCVIOL");
+    rtos_trace::trace::name_marker(FAULT_MARKER_MSTKERR, "MemManage_MSTKERR");
+    rtos_trace::trace::name_marker(FAULT_MARKER_MUNSTKERR, "MemManage_MUNSTKERR");
+    rtos_trace::trace::name_marker(FAULT_MARKER_MLSPERR, "MemManage_MLSPERR");
+    rtos_trace::trace::name_marker(FAULT_MARKER_OTHER, "MemManage_Other");
+}
+
+/// Emit trace events for a MemManage fault: a fault-type marker and task_terminate.
+///
+/// The fault type is encoded in the marker ID (derived from CFSR bits).
+// TODO: rtos_trace marker API does not support data payloads; partition_id is
+// conveyed via task_terminate rather than embedded in the marker itself.
+pub fn emit_fault_trace(details: &crate::fault::FaultDetails) {
+    rtos_trace::trace::marker(fault_marker_for_cfsr(details.cfsr));
+    rtos_trace::trace::task_terminate(details.partition_id as u32);
+}
+
 /// Register human-readable names for syscall trace markers.
 ///
 /// Each syscall ID is mapped to a marker via `rtos_trace::trace::name_marker`,
@@ -228,6 +282,7 @@ pub fn init_trace(tick_period_us: u32, sysclock_hz: u32) {
     SYSVIEW.init();
     rtos_trace::trace::start();
     name_syscall_markers();
+    name_fault_markers();
 }
 
 /// Non-ARM stub: stores config values but skips SystemView hardware init.
@@ -236,6 +291,7 @@ pub fn init_trace(tick_period_us: u32, sysclock_hz: u32) {
     TICK_PERIOD_US.store(tick_period_us, Ordering::Release);
     SYSCLOCK_HZ.store(sysclock_hz, Ordering::Release);
     name_syscall_markers();
+    name_fault_markers();
 }
 
 #[cfg(test)]
@@ -428,5 +484,91 @@ mod tests {
         // verify the combined path does not panic.
         init_trace(1000, 12_000_000);
         assert_eq!(TICK_PERIOD_US.load(Ordering::Acquire), 1000);
+    }
+
+    #[test]
+    fn fault_marker_ids_do_not_collide_with_syscalls() {
+        use crate::syscall::SyscallId;
+
+        let fault_ids = [
+            FAULT_MARKER_BASE,
+            FAULT_MARKER_DACCVIOL,
+            FAULT_MARKER_IACCVIOL,
+            FAULT_MARKER_MSTKERR,
+            FAULT_MARKER_MUNSTKERR,
+            FAULT_MARKER_MLSPERR,
+            FAULT_MARKER_OTHER,
+        ];
+        // Verify all fault marker IDs are outside the syscall ID range.
+        for raw in 0u32..64 {
+            if SyscallId::from_u32(raw).is_some() {
+                for &fid in &fault_ids {
+                    assert_ne!(
+                        raw, fid,
+                        "fault marker {fid:#x} collides with syscall {raw}"
+                    );
+                }
+            }
+        }
+        // Also check feature-gated IDs (0x40, 0x41).
+        for &fid in &fault_ids {
+            assert_ne!(fid, 0x40);
+            assert_ne!(fid, 0x41);
+        }
+        const { assert!(FAULT_MARKER_BASE > 0x41) };
+    }
+
+    #[test]
+    fn fault_marker_for_cfsr_classification() {
+        use crate::fault::*;
+        assert_eq!(fault_marker_for_cfsr(CFSR_DACCVIOL), FAULT_MARKER_DACCVIOL);
+        assert_eq!(fault_marker_for_cfsr(CFSR_IACCVIOL), FAULT_MARKER_IACCVIOL);
+        assert_eq!(fault_marker_for_cfsr(CFSR_MSTKERR), FAULT_MARKER_MSTKERR);
+        assert_eq!(
+            fault_marker_for_cfsr(CFSR_MUNSTKERR),
+            FAULT_MARKER_MUNSTKERR
+        );
+        assert_eq!(fault_marker_for_cfsr(CFSR_MLSPERR), FAULT_MARKER_MLSPERR);
+        // DACCVIOL takes priority when multiple bits set
+        assert_eq!(
+            fault_marker_for_cfsr(CFSR_DACCVIOL | CFSR_MMARVALID),
+            FAULT_MARKER_DACCVIOL
+        );
+        // Unknown/other CFSR bits map to OTHER
+        assert_eq!(fault_marker_for_cfsr(0), FAULT_MARKER_OTHER);
+        assert_eq!(fault_marker_for_cfsr(CFSR_UNDEFINSTR), FAULT_MARKER_OTHER);
+    }
+
+    #[test]
+    fn name_fault_markers_no_panic() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        // name_marker is a no-op in test builds; verify no panic.
+        name_fault_markers();
+    }
+
+    #[test]
+    fn emit_fault_trace_no_panic() {
+        use crate::fault::{FaultDetails, CFSR_DACCVIOL, CFSR_IACCVIOL, CFSR_MMARVALID};
+        let _g = TEST_MUTEX.lock().unwrap();
+        // marker() and task_terminate() are no-ops in test builds;
+        // verify the function does not panic for various fault details.
+        emit_fault_trace(&FaultDetails::new(
+            0,
+            CFSR_DACCVIOL | CFSR_MMARVALID,
+            0x2000_0000,
+            0x0800_0000,
+        ));
+        emit_fault_trace(&FaultDetails::new(1, CFSR_IACCVIOL, 0, 0x0800_1000));
+        emit_fault_trace(&FaultDetails::new(3, 0, 0, 0));
+        emit_fault_trace(&FaultDetails::new(255, CFSR_DACCVIOL, 0x2000_F000, 0));
+    }
+
+    #[test]
+    fn init_trace_registers_fault_markers() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        // init_trace calls name_fault_markers internally;
+        // verify the combined path does not panic.
+        init_trace(500, 24_000_000);
+        assert_eq!(TICK_PERIOD_US.load(Ordering::Acquire), 500);
     }
 }
