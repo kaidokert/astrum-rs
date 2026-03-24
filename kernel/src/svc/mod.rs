@@ -2919,6 +2919,7 @@ mod tests {
     mod device;
     mod events;
     mod message;
+    mod scheduler;
     mod sleep;
     mod sync;
 

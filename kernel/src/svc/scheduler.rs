@@ -46,13 +46,11 @@ where
     >,
 {
     if let Some(old_pid) = kernel.active_partition {
-        let is_running = kernel
-            .pcb(old_pid as usize)
-            .map(|pcb| pcb.state() == PartitionState::Running)
-            .unwrap_or(false);
-        if is_running {
+        let state = kernel.pcb(old_pid as usize).map(|pcb| pcb.state());
+        if state == Some(PartitionState::Running) {
             try_transition(kernel.partitions_mut(), old_pid, PartitionState::Ready);
         }
+        // Faulted is terminal — do not attempt any transition.
     }
     debug_assert!(
         {
@@ -132,10 +130,12 @@ where
     let event = kernel.schedule_mut().advance_tick();
     match event {
         ScheduleEvent::PartitionSwitch(pid) => {
-            let target_waiting = kernel
-                .pcb(pid as usize)
-                .is_some_and(|pcb| pcb.state() == PartitionState::Waiting);
-            if target_waiting {
+            let target_state = kernel.pcb(pid as usize).map(|pcb| pcb.state());
+            let target_skippable = matches!(
+                target_state,
+                Some(PartitionState::Waiting) | Some(PartitionState::Faulted)
+            );
+            if target_skippable {
                 kernel.increment_starvation_for_ready_partitions();
                 if let Some(ap) = kernel.active_partition {
                     if kernel
