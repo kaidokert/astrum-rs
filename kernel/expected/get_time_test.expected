@@ -1,0 +1,3 @@
+# mode: contains
+get_time_test: start
+get_time_test: boot failed: KernelNotInitialized

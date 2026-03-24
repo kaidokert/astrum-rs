@@ -1,0 +1,3 @@
+# mode: contains
+svcall_basepri_clear_test: start
+svcall_basepri_clear_test: PASS

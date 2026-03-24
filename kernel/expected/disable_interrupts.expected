@@ -1,0 +1,4 @@
+# mode: contains
+disable_interrupts: start
+CPSID i was silently ignored in unprivileged mode (expected)
+disable_interrupts: PASS

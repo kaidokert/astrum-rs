@@ -1,0 +1,3 @@
+# mode: contains
+write_mpu_regs: start
+MPU configured, dropping to unprivileged...

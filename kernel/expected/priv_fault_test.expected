@@ -1,0 +1,6 @@
+# mode: contains
+priv_fault_test: start
+priv_fault_test: MemManage fault!
+DACCVIOL = true (expect true)
+MMARVALID = true (expect true)
+priv_fault_test: PASS

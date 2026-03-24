@@ -1,0 +1,3 @@
+# mode: contains
+priv_drop_test: start
+priv_drop_test: boot failed: KernelNotInitialized

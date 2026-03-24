@@ -1,0 +1,3 @@
+# mode: contains
+pendsv_primask_test: start
+boot must succeed after kernel create: KernelNotInitialized

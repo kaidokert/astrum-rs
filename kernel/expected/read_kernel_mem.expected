@@ -1,0 +1,5 @@
+# mode: contains
+read_kernel_mem: start
+MPU configured, dropping to unprivileged...
+read_kernel_mem: fault mmfsr=0x82
+read_kernel_mem: PASS

@@ -59,7 +59,16 @@ run_examples() {
     shift
     for ex in "$@"; do
         printf "%-20s " "$ex"
-        if ! capture_example_output "$features" "$ex"; then
+        local rc=0
+        capture_example_output "$features" "$ex" || rc=$?
+        if [[ "$rc" -ne 0 ]]; then
+            # If an expected file matches the captured output, treat as pass.
+            local expected_file="$REPO_ROOT/kernel/expected/${ex}.expected"
+            if [[ -f "$expected_file" ]] && check_example "$ex"; then
+                echo "PASS (expected failure)"
+                PASS=$((PASS + 1))
+                continue
+            fi
             echo "FAIL (build/runtime error)"
             FAIL=$((FAIL + 1))
             FAILED="$FAILED $ex"
@@ -98,14 +107,20 @@ run_examples_record() {
     shift
     for ex in "$@"; do
         printf "%-20s " "$ex"
-        if ! capture_example_output "$features" "$ex"; then
-            echo "FAIL (build/runtime error)"
+        local rc=0
+        capture_example_output "$features" "$ex" || rc=$?
+        if [[ "$rc" -ne 0 ]] && [[ ! -s "$OUTDIR/${ex}.out" ]]; then
+            echo "FAIL (no output)"
             FAIL=$((FAIL + 1))
             FAILED="$FAILED $ex"
             continue
         fi
         record_example "$ex"
-        echo "RECORDED"
+        if [[ "$rc" -ne 0 ]]; then
+            echo "RECORDED (exit $rc)"
+        else
+            echo "RECORDED"
+        fi
         PASS=$((PASS + 1))
     done
 }

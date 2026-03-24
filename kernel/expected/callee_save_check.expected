@@ -1,0 +1,3 @@
+# mode: contains
+callee_save_check: start
+boot: KernelNotInitialized

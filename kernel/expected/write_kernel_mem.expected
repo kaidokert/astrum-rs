@@ -1,0 +1,5 @@
+# mode: contains
+write_kernel_mem: start
+MPU configured, dropping to unprivileged...
+write_kernel_mem: fault mmfsr=0x82
+write_kernel_mem: PASS

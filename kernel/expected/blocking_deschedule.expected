@@ -1,0 +1,3 @@
+# mode: contains
+blocking_deschedule: start
+blocking_deschedule: first_pid=0

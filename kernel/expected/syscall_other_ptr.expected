@@ -1,0 +1,3 @@
+# mode: contains
+syscall_other_ptr: start
+syscall_other_ptr: PASS

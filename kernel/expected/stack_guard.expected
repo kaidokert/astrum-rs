@@ -1,0 +1,6 @@
+# mode: contains
+stack_guard: start
+MPU configured with guard region, dropping to unprivileged...
+fault in guard region
+stack_guard: fault mmfsr=0x82
+stack_guard: PASS

@@ -1,0 +1,3 @@
+# mode: contains
+syscall_kernel_ptr: start
+syscall_kernel_ptr: PASS

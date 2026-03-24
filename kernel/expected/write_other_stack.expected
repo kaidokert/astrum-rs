@@ -1,0 +1,5 @@
+# mode: contains
+write_other_stack: start
+MPU configured for P0, dropping to unprivileged...
+write_other_stack: fault mmfsr=0x82
+write_other_stack: PASS

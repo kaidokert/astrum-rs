@@ -1,0 +1,5 @@
+# mode: contains
+mpu_enforce_test: start
+[MemManage] partition=0
+[MemManage] partition=1
+KERNEL: all partitions faulted
