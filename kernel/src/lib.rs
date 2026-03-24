@@ -94,6 +94,20 @@ pub mod systick;
 pub mod tick;
 pub mod tombstone;
 
+/// Enter a safe idle loop when all partitions are faulted.
+///
+/// Logs the all-faulted condition via `klog!` and enters an infinite `wfi` loop.
+/// This prevents undefined behavior when no partitions remain schedulable.
+pub fn enter_safe_idle() -> ! {
+    klog!("KERNEL: all partitions faulted — entering safe idle");
+    loop {
+        #[cfg(not(test))]
+        cortex_m::asm::wfi();
+        #[cfg(test)]
+        core::hint::spin_loop();
+    }
+}
+
 // Re-export check_entry_sig! macro so users can write kernel::check_entry_sig!()
 pub use rtos_traits::check_entry_sig;
 

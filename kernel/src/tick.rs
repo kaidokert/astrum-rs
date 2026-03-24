@@ -225,6 +225,11 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
             kernel.set_next_partition(prev_next);
         }
     }
+
+    if kernel.all_runnable_faulted() {
+        crate::enter_safe_idle();
+    }
+
     let current_tick = kernel.tick().get();
     kernel.expire_timed_waits::<{ C::N }>(current_tick);
 
@@ -302,6 +307,11 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
         }
         ScheduleEvent::Idle | ScheduleEvent::None => {}
     }
+
+    if kernel.all_runnable_faulted() {
+        crate::enter_safe_idle();
+    }
+
     // NOTE: already gated — this function is #[cfg(feature = "dynamic-mpu")]
     kernel.fallback_revoke_expired_buffers();
     kernel.expire_timed_waits::<{ C::N }>(current_tick);

@@ -2769,6 +2769,15 @@ where
             }
         }
     }
+
+    /// Returns `true` when every partition in the table is in the `Faulted` state.
+    ///
+    /// Returns `false` if the partition table is empty or any partition is
+    /// in a non-faulted state (`Ready`, `Running`, or `Waiting`).
+    pub fn all_runnable_faulted(&self) -> bool {
+        let table = self.partitions();
+        !table.is_empty() && table.iter().all(|pcb| pcb.is_faulted())
+    }
 }
 
 /// Try to transition partition `pid` to `state`. Returns `true` on success.

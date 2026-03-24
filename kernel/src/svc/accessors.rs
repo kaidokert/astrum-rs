@@ -133,3 +133,85 @@ where
         self.core.set_sp(index, sp)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::partition::PartitionState;
+    use crate::test_harness::KernelTestHarness;
+
+    #[test]
+    fn all_runnable_faulted_false_when_partitions_are_ready_or_running() {
+        let h = KernelTestHarness::with_partitions(2).unwrap();
+        // Partition 0 is Running, partition 1 is Ready — not all faulted.
+        assert!(!h.kernel().all_runnable_faulted());
+    }
+
+    #[test]
+    fn all_runnable_faulted_true_when_all_faulted() {
+        let mut h = KernelTestHarness::with_partitions(2).unwrap();
+        // Transition both partitions to Faulted.
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Faulted)
+            .unwrap();
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .transition(PartitionState::Faulted)
+            .unwrap();
+        assert!(h.kernel().all_runnable_faulted());
+    }
+
+    #[test]
+    fn all_runnable_faulted_false_when_one_ready_one_faulted() {
+        let mut h = KernelTestHarness::with_partitions(2).unwrap();
+        // Fault partition 0 (Running -> Faulted), leave partition 1 as Ready.
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Faulted)
+            .unwrap();
+        assert!(!h.kernel().all_runnable_faulted());
+    }
+
+    #[test]
+    fn all_runnable_faulted_true_with_single_faulted_partition() {
+        let mut h = KernelTestHarness::with_partitions(1).unwrap();
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Faulted)
+            .unwrap();
+        assert!(h.kernel().all_runnable_faulted());
+    }
+
+    #[test]
+    fn all_runnable_faulted_false_with_waiting_partition() {
+        let mut h = KernelTestHarness::with_partitions(2).unwrap();
+        // Fault partition 0, make partition 1 Waiting (Ready -> Running -> Waiting).
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Faulted)
+            .unwrap();
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        h.kernel_mut()
+            .partitions_mut()
+            .get_mut(1)
+            .unwrap()
+            .transition(PartitionState::Waiting)
+            .unwrap();
+        assert!(!h.kernel().all_runnable_faulted());
+    }
+}
