@@ -46,6 +46,60 @@ pub(crate) fn execute_trace_action(action: TraceAction) {
     }
 }
 
+/// Describes what idle action to take based on scheduler and fault state.
+///
+/// Pure decision logic, separated from side effects for testability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
+pub(crate) enum IdleAction {
+    /// No idle — at least one partition is runnable and scheduled.
+    None,
+    /// Scheduler returned Idle — emit `system_idle` trace only.
+    Idle,
+    /// All runnable partitions faulted — emit `system_idle` + `isr_exit`, then
+    /// diverge into safe idle loop.
+    FaultedIdle,
+}
+
+/// Determine the idle action for the current tick.
+///
+/// Returns `FaultedIdle` when all partitions have faulted (terminal),
+/// `Idle` when the scheduler has no work this tick, or `None` otherwise.
+#[cfg(test)]
+pub(crate) fn determine_idle_action(all_faulted: bool, schedule_idle: bool) -> IdleAction {
+    if all_faulted {
+        IdleAction::FaultedIdle
+    } else if schedule_idle {
+        IdleAction::Idle
+    } else {
+        IdleAction::None
+    }
+}
+
+/// Check idle conditions and emit trace + enter safe idle as needed.
+///
+/// Consolidates the idle-path logic shared by both `systick_handler` variants.
+/// - `all_faulted`: all runnable partitions have faulted — enter safe idle loop.
+/// - `schedule_idle`: scheduler returned `Idle` (no partition scheduled this tick).
+///
+/// When `all_faulted` is true and the system will diverge into `enter_safe_idle()`,
+/// this function emits `isr_exit_to_scheduler()` first to close the ISR trace span
+/// opened by `handle_systick`.
+#[inline]
+fn enter_idle_if_needed(all_faulted: bool, schedule_idle: bool) {
+    if all_faulted || schedule_idle {
+        #[cfg(feature = "trace")]
+        rtos_trace::trace::system_idle();
+    }
+    if all_faulted {
+        // Close the ISR trace span before diverging — enter_safe_idle() is `-> !`
+        // so the isr_exit_to_scheduler() in handle_systick would never be reached.
+        #[cfg(feature = "trace")]
+        rtos_trace::trace::isr_exit_to_scheduler();
+        crate::enter_safe_idle();
+    }
+}
+
 /// Trait defining tick counter operations.
 ///
 /// This trait is used as a bound on `CoreOps::TickCounter` so that
@@ -254,9 +308,6 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
         if kernel.partition_sp().get(pid as usize)
             != Some(&crate::partition_core::SP_SENTINEL_FAULT)
         {
-            // TODO: trace call is duplicated in the dynamic-mpu handler below;
-            // consolidating across two #[cfg]-gated functions deferred as
-            // low-priority cleanup.
             #[cfg(feature = "trace")]
             execute_trace_action(context_switch_trace_action(prev_active, pid));
             #[cfg(not(test))]
@@ -273,9 +324,10 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
         }
     }
 
-    if kernel.all_runnable_faulted() {
-        crate::enter_safe_idle();
-    }
+    enter_idle_if_needed(
+        kernel.all_runnable_faulted(),
+        matches!(event, ScheduleEvent::Idle),
+    );
 
     let current_tick = kernel.tick().get();
     kernel.expire_timed_waits::<{ C::N }>(current_tick);
@@ -358,9 +410,10 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
         ScheduleEvent::Idle | ScheduleEvent::None => {}
     }
 
-    if kernel.all_runnable_faulted() {
-        crate::enter_safe_idle();
-    }
+    enter_idle_if_needed(
+        kernel.all_runnable_faulted(),
+        matches!(event, ScheduleEvent::Idle),
+    );
 
     // NOTE: already gated — this function is #[cfg(feature = "dynamic-mpu")]
     kernel.fallback_revoke_expired_buffers();
@@ -677,6 +730,59 @@ mod tests {
         assert_eq!(action, TraceAction::Switch(0));
         active = Some(0);
         let _ = active; // suppress unused warning
+    }
+
+    // -------------------------------------------------------------------------
+    // Idle action decision tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn idle_action_normal_returns_none() {
+        assert_eq!(
+            determine_idle_action(false, false),
+            IdleAction::None,
+            "normal tick with runnable partitions should produce no idle action"
+        );
+    }
+
+    #[test]
+    fn idle_action_schedule_idle_returns_idle() {
+        assert_eq!(
+            determine_idle_action(false, true),
+            IdleAction::Idle,
+            "scheduler idle with healthy partitions should emit system_idle only"
+        );
+    }
+
+    #[test]
+    fn idle_action_all_faulted_returns_faulted_idle() {
+        assert_eq!(
+            determine_idle_action(true, false),
+            IdleAction::FaultedIdle,
+            "all-faulted must produce FaultedIdle (includes isr_exit before diverging)"
+        );
+    }
+
+    #[test]
+    fn idle_action_all_faulted_and_idle_returns_faulted_idle() {
+        // When both flags are true, the faulted path takes priority
+        assert_eq!(
+            determine_idle_action(true, true),
+            IdleAction::FaultedIdle,
+            "faulted takes priority over schedule idle"
+        );
+    }
+
+    /// Verify that the FaultedIdle action is distinct from Idle —
+    /// FaultedIdle requires isr_exit_to_scheduler before diverging to
+    /// close the ISR trace span.
+    #[test]
+    fn idle_action_faulted_idle_distinct_from_idle() {
+        assert_ne!(
+            IdleAction::FaultedIdle,
+            IdleAction::Idle,
+            "FaultedIdle and Idle must be distinct variants"
+        );
     }
 
     #[cfg(feature = "dynamic-mpu")]

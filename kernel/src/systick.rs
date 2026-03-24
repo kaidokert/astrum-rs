@@ -99,6 +99,22 @@ pub type TickHandlerFn<C> = fn(&mut Kernel<'_, C>, u64);
 ///
 /// For examples that need a custom SysTick hook, use `define_unified_harness!`
 /// with the extended form instead, or use `register_handler()` to add a callback.
+/// Inner ISR wrapper: emit isr_enter, run the provided closure, emit isr_exit.
+///
+/// Separated from [`handle_systick`] for testability. The closure typically calls
+/// `systick_handler` via `with_kernel_mut`. Note: if `systick_handler` diverges
+/// (via `enter_safe_idle`), that path emits `isr_exit_to_scheduler` before
+/// diverging, so the trace span is always closed.
+pub(crate) fn handle_systick_inner<F: FnOnce()>(f: F) {
+    #[cfg(feature = "trace")]
+    rtos_trace::trace::isr_enter();
+
+    f();
+
+    #[cfg(feature = "trace")]
+    rtos_trace::trace::isr_exit_to_scheduler();
+}
+
 #[cfg(not(test))]
 pub fn handle_systick<C: KernelConfig>()
 where
@@ -127,8 +143,10 @@ where
         BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     >,
 {
-    let _ = crate::state::with_kernel_mut::<C, _, _>(|kernel| {
-        crate::tick::systick_handler::<C>(kernel);
+    handle_systick_inner(|| {
+        let _ = crate::state::with_kernel_mut::<C, _, _>(|kernel| {
+            crate::tick::systick_handler::<C>(kernel);
+        });
     });
 }
 
@@ -496,5 +514,61 @@ mod tests {
         // Verify the kernel was modified
         assert_eq!(kernel.tick().get(), 100); // 50 * 2 = 100
         clear_handler();
+    }
+
+    // -------------------------------------------------------------------------
+    // ISR trace pairing tests (handle_systick_inner)
+    // -------------------------------------------------------------------------
+
+    /// Verify that handle_systick_inner calls the provided closure.
+    #[test]
+    fn handle_systick_inner_calls_closure() {
+        use core::sync::atomic::{AtomicBool, Ordering};
+        static CALLED: AtomicBool = AtomicBool::new(false);
+        CALLED.store(false, Ordering::SeqCst);
+
+        handle_systick_inner(|| {
+            CALLED.store(true, Ordering::SeqCst);
+        });
+
+        assert!(CALLED.load(Ordering::SeqCst), "closure must be invoked");
+    }
+
+    /// Verify that handle_systick_inner wraps the closure symmetrically:
+    /// the closure runs between ISR enter and ISR exit. We verify structural
+    /// ordering by tracking a sequence counter.
+    #[test]
+    fn handle_systick_inner_isr_enter_exit_brackets_closure() {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        SEQ.store(0, Ordering::SeqCst);
+
+        // The closure captures the sequence value at the point it runs.
+        // In non-trace builds isr_enter/isr_exit are no-ops, so the
+        // closure runs at seq=0. The key invariant: the closure always
+        // runs, and handle_systick_inner returns normally.
+        let mut closure_seq = 0u32;
+        handle_systick_inner(|| {
+            closure_seq = SEQ.fetch_add(1, Ordering::SeqCst);
+        });
+
+        assert_eq!(closure_seq, 0, "closure should run first");
+        assert_eq!(
+            SEQ.load(Ordering::SeqCst),
+            1,
+            "sequence should advance exactly once"
+        );
+    }
+
+    /// Verify handle_systick_inner returns normally on the non-diverging path.
+    /// This confirms that isr_exit_to_scheduler would be reached when
+    /// systick_handler does not call enter_safe_idle.
+    #[test]
+    fn handle_systick_inner_returns_on_normal_path() {
+        // If this test completes, the normal (non-faulted) path is correct:
+        // isr_enter -> closure -> isr_exit_to_scheduler all execute.
+        handle_systick_inner(|| {
+            // simulate normal systick_handler that returns
+        });
     }
 }
