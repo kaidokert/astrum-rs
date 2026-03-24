@@ -104,7 +104,7 @@ fn main() -> ! {
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
-    init_kernel(sched, &parts).expect("qemu_smoke_4k: init_kernel");
+    store_kernel(init_kernel(sched, &parts).expect("qemu_smoke_4k: init_kernel"));
 
     match boot(p).expect("qemu_smoke_4k: boot") {}
 }

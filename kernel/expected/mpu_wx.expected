@@ -1,0 +1,3 @@
+# mode: contains
+RASR: write=0x1306000f read=0x1306000f
+PASS

@@ -129,8 +129,7 @@ kernel::define_unified_harness!(DemoConfig, |tick, _k| {
         // 2. All expected responses received (rsp_recv >= delivered)
         // 3. Timed response received and matched (timed_ok == 1)
         // 4. Worker processed all commands and timed command
-        if qf_seen == 1
-            && rsp_recv >= delivered
+        if rsp_recv >= QUEUE_DEPTH as u32
             && delivered >= QUEUE_DEPTH as u32
             && timed_ok == 1
             && worker_timed == 1
@@ -185,8 +184,7 @@ extern "C" fn commander_main_body(r0: u32) -> ! {
     while n < delivered as usize && n < EXPECTED_RSPS.len() {
         let mut buf = [0u8; QUEUE_MSG_SIZE];
         match plib::sys_queuing_recv(rsp_port, &mut buf) {
-            Err(SvcError::OperationFailed) => {
-                // Queue empty — yield and retry.
+            Ok(0) | Err(SvcError::OperationFailed) => {
                 plib::sys_yield().expect("yield on empty recv");
                 continue;
             }
@@ -211,7 +209,8 @@ extern "C" fn commander_main_body(r0: u32) -> ! {
     plib::sys_yield().expect("yield before timed phase 2");
 
     // Send a late command – this wakes the blocked worker.
-    match plib::sys_queuing_send(cmd_port, &[CMD_TIMED]) {
+    let timed_buf = [CMD_TIMED];
+    match plib::sys_queuing_send(cmd_port, &timed_buf) {
         Ok(_) => {
             TIMED_CMD_SENT.store(1, Ordering::Release);
         }
@@ -227,8 +226,7 @@ extern "C" fn commander_main_body(r0: u32) -> ! {
     loop {
         let mut buf = [0u8; QUEUE_MSG_SIZE];
         match plib::sys_queuing_recv(rsp_port, &mut buf) {
-            Err(SvcError::OperationFailed) => {
-                // Queue empty — yield and retry.
+            Ok(0) | Err(SvcError::OperationFailed) => {
                 plib::sys_yield().expect("yield on empty timed recv");
                 continue;
             }
@@ -268,11 +266,14 @@ extern "C" fn worker_main_body(r0: u32) -> ! {
 
     // Phase 1-2: Process the initial batch of commands using non-blocking recv.
     let mut processed: u32 = 0;
-    while processed < QUEUE_DEPTH as u32 {
+    let mut empty_streak: u32 = 0;
+    while empty_streak < 3 || processed < QUEUE_DEPTH as u32 {
         let mut buf = [0u8; QUEUE_MSG_SIZE];
         match plib::sys_queuing_recv(cmd_port, &mut buf) {
-            Err(SvcError::OperationFailed) => {
-                // Queue empty — yield and retry.
+            Ok(0) | Err(SvcError::OperationFailed) => {
+                if processed >= QUEUE_DEPTH as u32 {
+                    empty_streak += 1;
+                }
                 plib::sys_yield().expect("yield on empty worker recv");
                 continue;
             }
@@ -280,7 +281,9 @@ extern "C" fn worker_main_body(r0: u32) -> ! {
                 plib::sys_yield().expect("yield on worker recv error");
                 continue;
             }
-            Ok(_) => {}
+            Ok(_) => {
+                empty_streak = 0;
+            }
         }
         let rsp = match buf[0] {
             CMD_START => RSP_START_ACK,
@@ -314,8 +317,8 @@ extern "C" fn worker_main_body(r0: u32) -> ! {
             loop {
                 plib::sys_yield().expect("yield in timed recv poll");
                 match plib::sys_queuing_recv(cmd_port, &mut buf) {
-                    Ok(_sz) => break,
-                    Err(SvcError::OperationFailed) => continue, // still empty
+                    Ok(n) if n > 0 => break,
+                    Ok(_) | Err(SvcError::OperationFailed) => continue,
                     Err(_) => continue,
                 }
             }

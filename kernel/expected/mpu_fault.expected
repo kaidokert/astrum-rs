@@ -1,0 +1,3 @@
+# mode: contains
+MemManage fault!
+PASS: fault address matches protected region

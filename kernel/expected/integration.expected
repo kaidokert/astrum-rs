@@ -1,0 +1,3 @@
+# mode: contains
+[PASS] msg_send + msg_recv
+integration: all checks passed

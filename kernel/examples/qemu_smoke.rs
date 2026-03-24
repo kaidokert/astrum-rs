@@ -120,12 +120,11 @@ fn main() -> ! {
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
-    init_kernel(sched, &parts).expect("qemu_smoke: Kernel::create");
-    with_kernel_mut(|k| {
-        k.semaphores_mut()
-            .add(Semaphore::new(0, 1))
-            .expect("qemu_smoke: add semaphore");
-    });
+    let mut k = init_kernel(sched, &parts).expect("qemu_smoke: Kernel::create");
+    k.semaphores_mut()
+        .add(Semaphore::new(0, 1))
+        .expect("qemu_smoke: add semaphore");
+    store_kernel(k);
 
     match boot(p).expect("qemu_smoke: boot") {}
 }

@@ -1,0 +1,3 @@
+# mode: contains
+smoke_test: start
+smoke_test: PASS (yield=0)

@@ -1,0 +1,3 @@
+# mode: contains
+qemu_smoke_4k: start
+qemu_smoke_4k: PASS (p0=0, p1=0)

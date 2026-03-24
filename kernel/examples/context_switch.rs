@@ -72,7 +72,7 @@ fn main() -> ! {
         PartitionSpec::new(partition_0_entry as PartitionEntry, 0),
         PartitionSpec::new(partition_1_entry as PartitionEntry, 0),
     ];
-    init_kernel(sched, &parts).expect("kernel creation");
+    store_kernel(init_kernel(sched, &parts).expect("kernel creation"));
     hprintln!("context_switch: triggering first PendSV");
 
     match boot(p).expect("context_switch: boot failed") {}
