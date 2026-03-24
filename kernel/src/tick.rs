@@ -4,6 +4,48 @@
 //! [`configure_systick`] for SysTick timer configuration. The schedule
 //! advancement is now handled directly via [`Kernel::advance_schedule_tick`](crate::svc::Kernel::advance_schedule_tick).
 
+/// Describes the trace action to take on a context switch.
+///
+/// Pure decision logic, separated from actual `rtos_trace` calls for testability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(feature = "trace", test))]
+pub(crate) enum TraceAction {
+    /// Same partition continues — no trace events needed.
+    None,
+    /// First partition starting (no outgoing) — emit `task_exec_begin` only.
+    BeginOnly(u32),
+    /// Partition switch — emit `task_exec_end` then `task_exec_begin(id)`.
+    Switch(u32),
+}
+
+/// Determine the trace action for a context switch.
+///
+/// Returns `None` when `prev_active == Some(incoming)` to suppress redundant
+/// events when the same partition is scheduled in consecutive slots.
+#[cfg(any(feature = "trace", test))]
+pub(crate) fn context_switch_trace_action(prev_active: Option<u8>, incoming: u8) -> TraceAction {
+    match prev_active {
+        Some(prev) if prev == incoming => TraceAction::None,
+        Some(_) => TraceAction::Switch(incoming as u32),
+        None => TraceAction::BeginOnly(incoming as u32),
+    }
+}
+
+/// Execute the trace action by calling `rtos_trace::trace` functions.
+#[cfg(feature = "trace")]
+pub(crate) fn execute_trace_action(action: TraceAction) {
+    match action {
+        TraceAction::None => {}
+        TraceAction::BeginOnly(id) => {
+            rtos_trace::trace::task_exec_begin(id);
+        }
+        TraceAction::Switch(id) => {
+            rtos_trace::trace::task_exec_end();
+            rtos_trace::trace::task_exec_begin(id);
+        }
+    }
+}
+
 /// Trait defining tick counter operations.
 ///
 /// This trait is used as a bound on `CoreOps::TickCounter` so that
@@ -212,6 +254,11 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
         if kernel.partition_sp().get(pid as usize)
             != Some(&crate::partition_core::SP_SENTINEL_FAULT)
         {
+            // TODO: trace call is duplicated in the dynamic-mpu handler below;
+            // consolidating across two #[cfg]-gated functions deferred as
+            // low-priority cleanup.
+            #[cfg(feature = "trace")]
+            execute_trace_action(context_switch_trace_action(prev_active, pid));
             #[cfg(not(test))]
             cortex_m::peripheral::SCB::set_pendsv();
         } else {
@@ -277,10 +324,13 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
     use crate::partition::PartitionState;
     use crate::scheduler::ScheduleEvent;
 
+    let prev_active = kernel.active_partition;
     let event = crate::svc::scheduler::advance_schedule_tick(kernel);
     let current_tick = kernel.tick().get();
     match event {
         ScheduleEvent::PartitionSwitch(pid) => {
+            #[cfg(feature = "trace")]
+            execute_trace_action(context_switch_trace_action(prev_active, pid));
             kernel.set_next_partition(pid);
             #[cfg(not(test))]
             cortex_m::peripheral::SCB::set_pendsv();
@@ -546,6 +596,87 @@ mod tests {
         assert_eq!(tc.prev_check_tick, 0);
         tc.assert_monotonic();
         assert_eq!(tc.prev_check_tick, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Context-switch trace action tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn trace_action_same_partition_returns_none() {
+        assert_eq!(
+            context_switch_trace_action(Some(0), 0),
+            TraceAction::None,
+            "same partition must suppress redundant events"
+        );
+        assert_eq!(context_switch_trace_action(Some(3), 3), TraceAction::None,);
+    }
+
+    #[test]
+    fn trace_action_different_partition_returns_switch() {
+        assert_eq!(
+            context_switch_trace_action(Some(0), 1),
+            TraceAction::Switch(1),
+        );
+        assert_eq!(
+            context_switch_trace_action(Some(2), 0),
+            TraceAction::Switch(0),
+        );
+    }
+
+    #[test]
+    fn trace_action_no_previous_returns_begin_only() {
+        assert_eq!(
+            context_switch_trace_action(None, 0),
+            TraceAction::BeginOnly(0),
+        );
+        assert_eq!(
+            context_switch_trace_action(None, 2),
+            TraceAction::BeginOnly(2),
+        );
+    }
+
+    #[test]
+    fn trace_action_id_maps_to_u32() {
+        // Verify partition u8 ID is correctly widened to u32 task ID
+        let action = context_switch_trace_action(Some(0), 255);
+        assert_eq!(action, TraceAction::Switch(255));
+
+        let action = context_switch_trace_action(None, 127);
+        assert_eq!(action, TraceAction::BeginOnly(127));
+    }
+
+    /// Simulate a round-robin schedule [P0(2), P1(2)] and verify
+    /// the sequence of trace actions matches actual partition transitions.
+    #[test]
+    fn trace_action_sequence_matches_partition_transitions() {
+        // Simulate: start with no active, then P0 gets scheduled,
+        // then P0 continues (same slot), then P1 gets scheduled.
+        let mut active: Option<u8> = None;
+
+        // First switch: None -> P0
+        let action = context_switch_trace_action(active, 0);
+        assert_eq!(action, TraceAction::BeginOnly(0));
+        active = Some(0);
+
+        // Same partition continues (e.g., interior tick re-schedules P0)
+        let action = context_switch_trace_action(active, 0);
+        assert_eq!(
+            action,
+            TraceAction::None,
+            "no redundant events for same partition"
+        );
+
+        // Switch to P1
+        let action = context_switch_trace_action(active, 1);
+        assert_eq!(action, TraceAction::Switch(1));
+        active = Some(1);
+
+        // Switch back to P0
+        let action = context_switch_trace_action(active, 0);
+        assert_eq!(action, TraceAction::Switch(0));
+        active = Some(0);
+        let _ = active; // suppress unused warning
     }
 
     #[cfg(feature = "dynamic-mpu")]
