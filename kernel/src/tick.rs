@@ -209,7 +209,9 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
     let prev_active = kernel.active_partition;
     let event = crate::svc::scheduler::advance_schedule_tick(kernel);
     if let ScheduleEvent::PartitionSwitch(pid) = event {
-        if kernel.partition_sp().get(pid as usize) != Some(&0xDEAD0001) {
+        if kernel.partition_sp().get(pid as usize)
+            != Some(&crate::partition_core::SP_SENTINEL_FAULT)
+        {
             #[cfg(not(test))]
             cortex_m::peripheral::SCB::set_pendsv();
         } else {

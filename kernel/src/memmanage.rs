@@ -85,9 +85,7 @@ where
 {
     let pid = kernel.active_partition()?;
     let details = crate::fault::FaultDetails::new(pid, cfsr, mmfar, faulting_pc);
-    if let Some(pcb) = kernel.pcb_mut(pid as usize) {
-        let _ = pcb.transition(crate::partition::PartitionState::Faulted);
-    }
+    kernel.fault_partition(pid as usize);
 
     Some(details)
 }
@@ -178,6 +176,65 @@ mod tests {
         assert_eq!(details.mmfsr(), (cfsr & CFSR_MMFSR_MASK) as u8);
         assert_eq!(kernel.pcb(0).unwrap().state(), PartitionState::Faulted);
         assert_eq!(kernel.pcb(1).unwrap().state(), PartitionState::Ready);
+    }
+
+    #[test]
+    fn handle_fault_sets_partition_sp_sentinel() {
+        let mut kernel = make_test_kernel();
+        kernel
+            .pcb_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        kernel.active_partition = Some(0);
+        // Pre-condition: partition_sp is a valid stack pointer (not sentinel).
+        let original_sp = kernel.partition_sp()[0];
+        assert_ne!(
+            original_sp,
+            crate::partition_core::SP_SENTINEL_FAULT,
+            "pre-condition: SP must not be sentinel"
+        );
+
+        handle_memmanage_fault::<TestConfig>(
+            &mut kernel,
+            CFSR_DACCVIOL | CFSR_MMARVALID,
+            0x2000_F000,
+            0x0800_1234,
+        )
+        .expect("should return fault details");
+
+        // partition_sp must be set to sentinel so PendSV skips context save.
+        assert_eq!(
+            kernel.partition_sp()[0],
+            crate::partition_core::SP_SENTINEL_FAULT,
+            "partition_sp must be sentinel after fault"
+        );
+    }
+
+    #[test]
+    fn handle_fault_on_partition_1_sets_sentinel() {
+        let mut kernel = make_test_kernel();
+        kernel
+            .pcb_mut(1)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        kernel.active_partition = Some(1);
+
+        handle_memmanage_fault::<TestConfig>(&mut kernel, CFSR_IACCVIOL, 0, 0x0800_2000)
+            .expect("should return fault details");
+
+        assert_eq!(kernel.pcb(1).unwrap().state(), PartitionState::Faulted);
+        assert_eq!(
+            kernel.partition_sp()[1],
+            crate::partition_core::SP_SENTINEL_FAULT,
+            "partition_sp[1] must be sentinel after fault"
+        );
+        // partition_sp[0] should be unaffected.
+        assert_ne!(
+            kernel.partition_sp()[0],
+            crate::partition_core::SP_SENTINEL_FAULT
+        );
     }
 
     #[test]

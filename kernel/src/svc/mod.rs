@@ -2461,6 +2461,23 @@ where
         self.core.partition_sp_mut()
     }
 
+    /// Transition a partition to [`PartitionState::Faulted`] and mark its
+    /// saved stack pointer with [`SP_SENTINEL_FAULT`] so that PendSV skips
+    /// the context save/restore for this partition.
+    ///
+    /// Both operations must always happen together — allowing the state and
+    /// the sentinel to drift is a safety risk.
+    ///
+    /// [`SP_SENTINEL_FAULT`]: crate::partition_core::SP_SENTINEL_FAULT
+    pub fn fault_partition(&mut self, pid: usize) {
+        if let Some(pcb) = self.pcb_mut(pid) {
+            let _ = pcb.transition(crate::partition::PartitionState::Faulted);
+        }
+        if let Some(sp_slot) = self.partition_sp_mut().get_mut(pid) {
+            *sp_slot = crate::partition_core::SP_SENTINEL_FAULT;
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Core state facade methods (active_partition, tick, yield_requested)
     //

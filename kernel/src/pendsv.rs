@@ -71,6 +71,8 @@ const _: () = {
     assert!(PENDSTCLR_BIT == 0x0200_0000);
     assert!(PENDSV_SYSTICK_CLEAR == 0x0A00_0000);
     assert!(PENDSTSET_BIT == 0x0400_0000);
+    // Assembly uses `ldr r3, =0xDEAD0001` — keep in sync with the Rust constant.
+    assert!(crate::partition_core::SP_SENTINEL_FAULT == 0xDEAD_0001);
 };
 
 /// Emit the PendSV context-switch handler. See module docs for modes.
@@ -235,6 +237,29 @@ macro_rules! define_pendsv {
             cmp     r1, #0xFF
             beq     .Lpendsv_skip_save
 
+            /* SAFETY: Skip register save when partition_sp[current] ==
+             * SP_SENTINEL_FAULT (0xDEAD_0001). After a MemManage fault the
+             * PSP is potentially corrupt, so saving r4-r11 via `stmdb PSP!`
+             * could write to an arbitrary address. The sentinel is sufficient
+             * to detect this because:
+             *   (a) it is odd (bit 0 set), which is never a valid aligned SP;
+             *   (b) it is written atomically by fault_partition() before
+             *       PendSV can run (PendSV has the lowest priority).
+             * The offset loads below use KERNEL_CORE_OFFSET and
+             * CORE_PARTITION_SP_OFFSET which are validated at compile time
+             * by assert_kernel_layout!(). */
+            ldr     r2, =KERNEL_CORE_OFFSET
+            ldr     r2, [r2]
+            add     r2, r0, r2          /* r2 = &kernel.core */
+            ldr     r3, =CORE_PARTITION_SP_OFFSET
+            ldr     r3, [r3]
+            add     r2, r2, r3          /* r2 = &partition_sp[0] */
+            lsl     r3, r1, #2          /* r3 = idx * 4 */
+            ldr     r2, [r2, r3]        /* r2 = partition_sp[current] */
+            ldr     r3, =0xDEAD0001     /* SP_SENTINEL_FAULT */
+            cmp     r2, r3
+            beq     .Lpendsv_skip_save
+
             /* Save outgoing partition context: r0 = partition index */
             mov     r0, r1
             bl      pendsv_context_save
@@ -263,15 +288,14 @@ macro_rules! define_pendsv {
             ldr     r0, [r0]            /* r0 = next_partition offset within core */
             ldrb    r4, [r6, r0]        /* r4 = next_partition (callee-saved) */
 
-            /* Skip restore if next partition has overflow sentinel
-             * (race: SysTick may schedule faulted partition before
-             * context_save writes the sentinel). */
+            /* Skip restore if next partition has fault sentinel
+             * (SysTick may schedule a faulted partition). */
             ldr     r0, =CORE_PARTITION_SP_OFFSET
             ldr     r0, [r0]
             add     r0, r6, r0          /* r0 = &partition_sp[0] */
             lsl     r1, r4, #2
             ldr     r1, [r0, r1]        /* r1 = partition_sp[next] */
-            ldr     r0, =0xDEAD0001
+            ldr     r0, =0xDEAD0001     /* SP_SENTINEL_FAULT */
             cmp     r1, r0
             beq     .Lpendsv_faulted_skip
 

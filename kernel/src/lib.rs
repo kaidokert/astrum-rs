@@ -72,7 +72,7 @@ pub use partition::{
 pub mod partition_core;
 pub use partition_core::{
     AlignedStack1K, AlignedStack256B, AlignedStack2K, AlignedStack4K, AlignedStack512B,
-    StackStorage,
+    StackStorage, SP_SENTINEL_FAULT,
 };
 #[cfg(feature = "partition-debug")]
 pub mod partition_debug;

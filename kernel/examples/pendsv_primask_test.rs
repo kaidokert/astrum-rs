@@ -37,7 +37,7 @@ kernel::compose_kernel_config!(
 const NUM_PARTITIONS: usize = 2;
 
 /// PendSV writes this into saved-SP on stack overflow detection.
-const STACK_SENTINEL: u32 = 0xDEAD0001;
+const STACK_SENTINEL: u32 = kernel::partition_core::SP_SENTINEL_FAULT;
 /// Hard timeout — if we reach this tick without passing, declare failure.
 const TIMEOUT_TICK: u32 = 200;
 const MIN_SWITCHES: u32 = 10;

@@ -105,6 +105,14 @@ pub trait PartitionCoreOps {
     fn set_yield_requested(&mut self, requested: bool);
 }
 
+/// Sentinel value written to `partition_sp[i]` when a partition is faulted.
+///
+/// PendSV checks for this value to skip the context save (the PSP may be
+/// corrupt after a MemManage fault) and to avoid restoring a faulted
+/// partition. The value is odd (bit 0 set) so it can never be a valid
+/// aligned stack pointer on Cortex-M.
+pub const SP_SENTINEL_FAULT: u32 = 0xDEAD_0001;
+
 /// Groups partition and schedule management state.
 ///
 /// # Type Parameters
