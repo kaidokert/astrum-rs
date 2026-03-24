@@ -393,13 +393,69 @@ mod tests {
         }
     }
 
+    #[test]
+    fn exc_return_no_fpu_matches_context_constant() {
+        use crate::context::EXC_RETURN_THREAD_PSP;
+        // Verify the absolute expected value first.
+        assert_eq!(
+            EXC_RETURN_NO_FPU, 0xFFFF_FFFD,
+            "non-FPU EXC_RETURN must be 0xFFFFFFFD"
+        );
+        assert_eq!(
+            EXC_RETURN_NO_FPU, EXC_RETURN_THREAD_PSP,
+            "assembly non-FPU EXC_RETURN must match context.rs constant"
+        );
+        // Verify the string macro parses to the expected value.
+        let macro_str = exc_return_no_fpu!();
+        let hex_digits = macro_str
+            .strip_prefix("0x")
+            .or_else(|| macro_str.strip_prefix("0X"))
+            .expect("exc_return_no_fpu!() must start with 0x prefix");
+        assert_eq!(
+            u32::from_str_radix(hex_digits, 16).unwrap(),
+            0xFFFF_FFFD,
+            "exc_return_no_fpu!() must parse to 0xFFFFFFFD"
+        );
+    }
+
     #[cfg(feature = "fpu-context")]
     #[test]
-    fn exc_return_matches_context_constant() {
+    fn exc_return_fpu_matches_context_constant() {
         use crate::context::EXC_RETURN_THREAD_PSP_FPU;
+        // Verify the absolute expected value first.
+        assert_eq!(
+            EXC_RETURN_FPU, 0xFFFF_FFED,
+            "FPU EXC_RETURN must be 0xFFFFFFED"
+        );
         assert_eq!(
             EXC_RETURN_FPU, EXC_RETURN_THREAD_PSP_FPU,
             "assembly FPU EXC_RETURN must match context.rs constant"
+        );
+        // Verify the string macro parses to the expected value.
+        let macro_str = exc_return_fpu!();
+        let hex_digits = macro_str
+            .strip_prefix("0x")
+            .or_else(|| macro_str.strip_prefix("0X"))
+            .expect("exc_return_fpu!() must start with 0x prefix");
+        assert_eq!(
+            u32::from_str_radix(hex_digits, 16).unwrap(),
+            0xFFFF_FFED,
+            "exc_return_fpu!() must parse to 0xFFFFFFED"
+        );
+        // The two macro values must differ only in bit 4.
+        let no_fpu_val = {
+            let s = exc_return_no_fpu!();
+            let h = s
+                .strip_prefix("0x")
+                .or_else(|| s.strip_prefix("0X"))
+                .expect("exc_return_no_fpu!() must start with 0x prefix");
+            u32::from_str_radix(h, 16).unwrap()
+        };
+        let fpu_val = u32::from_str_radix(hex_digits, 16).unwrap();
+        assert_eq!(
+            no_fpu_val ^ fpu_val,
+            1 << 4,
+            "macro EXC_RETURN values must differ only in bit 4"
         );
     }
 
