@@ -71,6 +71,8 @@ kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
         let pid = k.current_partition as usize;
         if let Some(pcb) = k.partitions().get(pid) {
             let base = pcb.cached_base_regions();
+            // SAFETY: SysTick hook runs inside the unified harness tick callback;
+            // steal() is the only way to obtain a peripheral handle in handler mode.
             let p = unsafe { cortex_m::Peripherals::steal() };
             for (r, &(c_rbar, c_rasr)) in base.iter().enumerate() {
                 let (hw_rbar, hw_rasr) = unsafe { read_mpu_region(&p.MPU, r as u32) };
