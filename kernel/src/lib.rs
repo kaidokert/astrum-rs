@@ -48,6 +48,7 @@ pub mod context;
 #[cfg(feature = "partition-debug")]
 pub mod debug;
 pub mod events;
+pub mod fault;
 #[cfg(feature = "dynamic-mpu")]
 pub mod hw_uart;
 pub mod invariants;
