@@ -19,6 +19,7 @@
 //! | `static _SVC` | Forces linker to include the SVC assembly trampoline |
 //! | `SysTick` exception handler | Drives the round-robin scheduler |
 //! | `PendSV` handler | Via [`define_pendsv!`] |
+//! | `MemoryManagement` handler | Via [`define_memmanage_handler!`] |
 //! | `boot()` | Safe function: inits stacks, configures exceptions, starts OS |
 //!
 //! Note: Per-partition stacks are stored in [`PartitionCore`] within the `Kernel`

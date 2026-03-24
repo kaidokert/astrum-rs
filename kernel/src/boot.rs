@@ -447,7 +447,11 @@ where
     >,
 {
     use core::ptr::addr_of;
-    use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, SCB};
+    use cortex_m::peripheral::{
+        scb::{Exception, SystemHandler},
+        syst::SystClkSource,
+        SCB,
+    };
 
     init_rtt();
     init_fpu()?;
@@ -522,6 +526,10 @@ where
             .SCB
             .set_priority(SystemHandler::SysTick, C::SYSTICK_PRIORITY);
     }
+
+    // Enable MemManage exception so MPU violations invoke the handler
+    // instead of escalating to HardFault.
+    peripherals.SCB.enable(Exception::MemoryManagement);
 
     // Step 5: Start the schedule and select the first partition.
     crate::state::with_kernel_mut::<C, _, _>(|k| {
