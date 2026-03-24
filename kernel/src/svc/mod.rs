@@ -434,7 +434,7 @@ core::arch::global_asm!(
     "bl dispatch_svc",
     "pop {{pc}}",
     ".Lsvc_bad_exc_return:",
-    "b .Lsvc_bad_exc_return",
+    "bkpt #1", // bkpt #1 = bad EXC_RETURN detected
     ".size SVCall, . - SVCall",
 );
 
