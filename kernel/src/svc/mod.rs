@@ -2014,19 +2014,31 @@ where
                 r
             }
             #[cfg(feature = "dynamic-mpu")]
-            Some(SyscallId::BufferAlloc) => buf::handle_buf_alloc(
-                &mut self.buffers,
-                self.current_partition,
-                frame.r1,
-                frame.r2,
-                self.tick.get(),
-            ),
+            Some(SyscallId::BufferAlloc) => {
+                let (r0, r1_ov) = buf::handle_buf_alloc(
+                    &mut self.buffers,
+                    self.current_partition,
+                    frame.r1,
+                    frame.r2,
+                    self.tick.get(),
+                );
+                if let Some(v) = r1_ov {
+                    frame.r1 = v;
+                }
+                r0
+            }
             #[cfg(feature = "dynamic-mpu")]
-            Some(SyscallId::BufferRelease) => buf::handle_buf_release(
-                &mut self.buffers,
-                frame.r1 as usize,
-                self.current_partition,
-            ),
+            Some(SyscallId::BufferRelease) => {
+                let (r0, r1_ov) = buf::handle_buf_release(
+                    &mut self.buffers,
+                    frame.r1 as usize,
+                    self.current_partition,
+                );
+                if let Some(v) = r1_ov {
+                    frame.r1 = v;
+                }
+                r0
+            }
             #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferLend) => {
                 let pc = self.partition_count();
@@ -2096,7 +2108,7 @@ where
                     Err(e) => e,
                     Ok(()) => {
                         // SAFETY: check_user_ptr_dynamic confirmed [r3, r3+r2) is in caller's MPU region.
-                        unsafe {
+                        let (r0, r1_ov) = unsafe {
                             buf::handle_buf_write(
                                 &mut self.buffers,
                                 frame.r1 as usize,
@@ -2104,7 +2116,11 @@ where
                                 frame.r3 as *const u8,
                                 frame.r2 as usize,
                             )
+                        };
+                        if let Some(v) = r1_ov {
+                            frame.r1 = v;
                         }
+                        r0
                     }
                 }
             }
@@ -2114,7 +2130,7 @@ where
                     Err(e) => e,
                     Ok(()) => {
                         // SAFETY: check_user_ptr_dynamic confirmed [r3, r3+r2) is in caller's MPU region.
-                        unsafe {
+                        let (r0, r1_ov) = unsafe {
                             buf::handle_buf_read(
                                 &mut self.buffers,
                                 frame.r1 as usize,
@@ -2122,7 +2138,11 @@ where
                                 frame.r3 as *mut u8,
                                 frame.r2 as usize,
                             )
+                        };
+                        if let Some(v) = r1_ov {
+                            frame.r1 = v;
                         }
+                        r0
                     }
                 }
             }
