@@ -1600,7 +1600,15 @@ where
         match self.registry.get_mut(device_id) {
             Some(d) => match f(d, pid) {
                 Ok(val) => val,
-                Err(_) => SvcError::OperationFailed.to_u32(),
+                Err(e) => {
+                    crate::klog!(
+                        "dev_dispatch: DeviceError dev={} pid={} err={:?}",
+                        device_id,
+                        pid,
+                        e
+                    );
+                    SvcError::OperationFailed.to_u32()
+                }
             },
             None => SvcError::InvalidResource.to_u32(),
         }

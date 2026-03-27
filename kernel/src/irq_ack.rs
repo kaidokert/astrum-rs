@@ -26,6 +26,7 @@ pub fn irq_ack_inner(bindings: &[IrqBinding], caller: u8, irq_num: u8) -> u32 {
         return SvcError::PermissionDenied.to_u32();
     }
     if matches!(binding.clear_model, IrqClearModel::KernelClears(_)) {
+        crate::klog!("irq_ack: KernelClears irq={} caller={}", irq_num, caller);
         return SvcError::OperationFailed.to_u32();
     }
     0

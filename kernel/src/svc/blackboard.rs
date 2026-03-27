@@ -58,10 +58,19 @@ pub fn bb_error_to_svc(e: BlackboardError) -> u32 {
     use crate::svc::SvcError;
     match e {
         BlackboardError::InvalidBoard => SvcError::InvalidResource.to_u32(),
-        BlackboardError::MessageTooLarge => SvcError::OperationFailed.to_u32(),
-        BlackboardError::BoardEmpty => SvcError::OperationFailed.to_u32(),
+        BlackboardError::MessageTooLarge => {
+            crate::klog!("bb_error_to_svc: MessageTooLarge");
+            SvcError::OperationFailed.to_u32()
+        }
+        BlackboardError::BoardEmpty => {
+            crate::klog!("bb_error_to_svc: BoardEmpty");
+            SvcError::OperationFailed.to_u32()
+        }
         BlackboardError::WaitQueueFull => SvcError::WaitQueueFull.to_u32(),
-        BlackboardError::PoolFull => SvcError::OperationFailed.to_u32(),
+        BlackboardError::PoolFull => {
+            crate::klog!("bb_error_to_svc: PoolFull");
+            SvcError::OperationFailed.to_u32()
+        }
     }
 }
 

@@ -52,7 +52,10 @@ fn sem_error_to_svc(e: SemaphoreError) -> u32 {
         SemaphoreError::InvalidSemaphore => SvcError::InvalidResource.to_u32(),
         SemaphoreError::InvalidPartition => SvcError::InvalidPartition.to_u32(),
         SemaphoreError::WaitQueueFull => SvcError::WaitQueueFull.to_u32(),
-        SemaphoreError::CountOverflow => SvcError::OperationFailed.to_u32(),
+        SemaphoreError::CountOverflow => {
+            crate::klog!("sem_error_to_svc: CountOverflow");
+            SvcError::OperationFailed.to_u32()
+        }
         SemaphoreError::Transition(_) => SvcError::TransitionFailed.to_u32(),
     }
 }
@@ -62,7 +65,14 @@ fn mtx_error_to_svc(e: MutexError) -> u32 {
         MutexError::InvalidMutex => SvcError::InvalidResource.to_u32(),
         MutexError::InvalidPartition => SvcError::InvalidPartition.to_u32(),
         MutexError::WaitQueueFull => SvcError::WaitQueueFull.to_u32(),
-        MutexError::AlreadyOwned | MutexError::NotOwner => SvcError::OperationFailed.to_u32(),
+        MutexError::AlreadyOwned => {
+            crate::klog!("mtx_error_to_svc: AlreadyOwned");
+            SvcError::OperationFailed.to_u32()
+        }
+        MutexError::NotOwner => {
+            crate::klog!("mtx_error_to_svc: NotOwner");
+            SvcError::OperationFailed.to_u32()
+        }
         MutexError::Transition(_) => SvcError::TransitionFailed.to_u32(),
     }
 }
