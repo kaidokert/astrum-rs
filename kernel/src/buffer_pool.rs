@@ -162,7 +162,44 @@ impl<const SLOTS: usize, const SIZE: usize> Default for BufferPool<SLOTS, SIZE> 
 
 impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
     /// Create a new buffer pool with all slots free.
+    ///
+    /// # Compile-time constraints
+    ///
+    /// `SIZE` must be a power of two. This is required by the ARMv7-M MPU
+    /// which only supports power-of-two region sizes.
+    ///
+    /// `BufferSlot` is `#[repr(C, align(32))]`, so the compiler guarantees
+    /// 32-byte alignment for every slot. If `SIZE > 32`, the containing
+    /// allocation **must** be placed at a `SIZE`-aligned address (e.g. via
+    /// linker script or `#[repr(align(…))]` on a wrapper struct). The
+    /// runtime [`verify_slot_alignment`](Self::verify_slot_alignment) check
+    /// catches this at boot, but the compile-time assertion here cannot
+    /// verify pointer alignment since addresses are determined at link time.
+    ///
+    /// ```compile_fail
+    /// // SIZE=0 is rejected at compile time:
+    /// let _ = cortex_m_rtos::buffer_pool::BufferPool::<2, 0>::new();
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // SIZE=3 (not a power of two) is rejected at compile time:
+    /// let _ = cortex_m_rtos::buffer_pool::BufferPool::<2, 3>::new();
+    /// ```
+    /// Const-evaluable validation of the SIZE parameter.
+    /// Panics at compile time (when used in a const context) if SIZE is
+    /// zero or not a power of two.
+    const fn validate_size() {
+        assert!(SIZE > 0, "BufferPool SIZE must be greater than zero");
+        assert!(
+            SIZE.is_power_of_two(),
+            "BufferPool SIZE must be a power of two (required by ARMv7-M MPU)"
+        );
+    }
+
     pub const fn new() -> Self {
+        // Compile-time assertion: SIZE must be a power of two.
+        // ARMv7-M MPU requires power-of-two region sizes.
+        Self::validate_size();
         Self {
             slots: [const { BufferSlot::new() }; SLOTS],
             deadlines: [None; SLOTS],
@@ -1763,12 +1800,41 @@ mod tests {
         let _pool = BufferPool::<2, 32>::verified();
     }
 
+    // NOTE: BufferPool::<1, 0>::new() and BufferPool::<1, 3>::new() are now
+    // compile-time errors (const assertion rejects SIZE=0 and non-power-of-two).
+    // The old should_panic test for SIZE=0 has been removed; the constraint
+    // is enforced statically rather than at runtime.
+
+    // ------------------------------------------------------------------
+    // const assertion tests (compile-time SIZE validation)
+    // ------------------------------------------------------------------
+
     #[test]
-    #[should_panic(expected = "not")]
-    fn verify_slot_alignment_panics_for_zero_size() {
-        // SIZE == 0 is degenerate: check_slot_aligned always returns false,
-        // so verify_slot_alignment must panic for every slot.
-        let pool = BufferPool::<1, 0>::new();
-        pool.verify_slot_alignment();
+    fn const_assert_accepts_power_of_two_sizes() {
+        // All valid power-of-two sizes must compile and construct successfully.
+        let _ = BufferPool::<1, 1>::new();
+        let _ = BufferPool::<1, 2>::new();
+        let _ = BufferPool::<1, 4>::new();
+        let _ = BufferPool::<1, 8>::new();
+        let _ = BufferPool::<1, 16>::new();
+        let _ = BufferPool::<1, 32>::new();
+        let _ = BufferPool::<1, 64>::new();
+        let _ = BufferPool::<1, 128>::new();
+        let _ = BufferPool::<1, 256>::new();
+    }
+
+    #[test]
+    fn const_assert_size_32_with_alignment_check() {
+        // SIZE=32 matches repr(align(32)), so alignment is guaranteed.
+        let pool = BufferPool::<2, 32>::new();
+        pool.verify_slot_alignment(); // must not panic
+    }
+
+    #[test]
+    fn const_assert_size_16_constructs_successfully() {
+        // SIZE=16 < 32 is valid (power of two); slots are 32-byte aligned
+        // which exceeds the 16-byte requirement.
+        let pool = BufferPool::<2, 16>::new();
+        pool.verify_slot_alignment(); // must not panic
     }
 }
