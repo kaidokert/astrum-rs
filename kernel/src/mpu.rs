@@ -740,19 +740,24 @@ impl core::fmt::Display for MpuError {
 /// 3. `base` is aligned to `size` (`base & (size - 1) == 0`)
 /// 4. `base + size` does not overflow `u32`
 pub fn validate_mpu_region(base: u32, size: u32) -> Result<(), MpuError> {
-    if size < 32 {
-        return Err(MpuError::SizeTooSmall);
-    }
-    if !size.is_power_of_two() {
-        return Err(MpuError::SizeNotPowerOfTwo);
-    }
-    if base & (size - 1) != 0 {
-        return Err(MpuError::BaseNotAligned);
-    }
-    if base.checked_add(size).is_none() {
-        return Err(MpuError::AddressOverflow);
-    }
-    Ok(())
+    let err = if size < 32 {
+        MpuError::SizeTooSmall
+    } else if !size.is_power_of_two() {
+        MpuError::SizeNotPowerOfTwo
+    } else if base & (size - 1) != 0 {
+        MpuError::BaseNotAligned
+    } else if base.checked_add(size).is_none() {
+        MpuError::AddressOverflow
+    } else {
+        return Ok(());
+    };
+    klog!(
+        "validate_mpu_region REJECT base={:#010x} size={}: {}",
+        base,
+        size,
+        err
+    );
+    Err(err)
 }
 
 #[cfg(test)]
