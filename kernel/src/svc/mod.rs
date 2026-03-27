@@ -4745,6 +4745,79 @@ mod tests {
         );
     }
 
+    /// Verify that at least 3 distinct BufferError failure modes return
+    /// OperationFailed in r0 with unique, correct discriminant values in r1.
+    ///
+    /// Exercises: SelfLend (via SYS_BUF_LEND), AlreadyLent (via SYS_BUF_LEND),
+    /// and NotLent (via SYS_BUF_REVOKE).
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_lend_distinct_error_details() {
+        use crate::buffer_pool::BufferError;
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
+        let eop = SvcError::OperationFailed.to_u32();
+        let mut k = kernel(0, 0, 0);
+
+        // Allocate a writable buffer as P0
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
+        assert!(!SvcError::is_error(slot), "alloc should succeed");
+
+        // --- (1) SelfLend: P0 lends to itself ---
+        let (r0_self, r1_self) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 0);
+        assert_eq!(r0_self, eop, "self-lend must return OperationFailed");
+        assert_eq!(
+            r1_self,
+            BufferError::SelfLend.discriminant(),
+            "r1 must carry SelfLend discriminant"
+        );
+
+        // --- (2) AlreadyLent: lend to P1, then try lending again ---
+        let (base, rid) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
+        assert!(
+            SvcError::from_u32(base).is_none(),
+            "lend to P1 should succeed, got 0x{:08x}",
+            base
+        );
+        assert!((4..=7).contains(&rid), "region id in expected range");
+        // Try lending the same slot again while already lent
+        let (r0_already, r1_already) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
+        assert_eq!(r0_already, eop, "double-lend must return OperationFailed");
+        assert_eq!(
+            r1_already,
+            BufferError::AlreadyLent.discriminant(),
+            "r1 must carry AlreadyLent discriminant"
+        );
+
+        // Revoke the active lend so we can test NotLent cleanly
+        assert_eq!(
+            dispatch_r0(&mut k, SYS_BUF_REVOKE, slot, 1),
+            0,
+            "revoke should succeed"
+        );
+
+        // --- (3) NotLent: revoke when no active lend ---
+        let (r0_notlent, r1_notlent) = dispatch_r01(&mut k, SYS_BUF_REVOKE, slot, 1);
+        assert_eq!(
+            r0_notlent, eop,
+            "revoke-not-lent must return OperationFailed"
+        );
+        assert_eq!(
+            r1_notlent,
+            BufferError::NotLent.discriminant(),
+            "r1 must carry NotLent discriminant"
+        );
+
+        // --- All three r1 discriminants must be distinct ---
+        assert_ne!(r1_self, r1_already, "SelfLend vs AlreadyLent must differ");
+        assert_ne!(r1_self, r1_notlent, "SelfLend vs NotLent must differ");
+        assert_ne!(r1_already, r1_notlent, "AlreadyLent vs NotLent must differ");
+
+        // --- Verify exact expected discriminant values ---
+        assert_eq!(r1_self, 8, "SelfLend discriminant should be 8");
+        assert_eq!(r1_already, 6, "AlreadyLent discriminant should be 6");
+        assert_eq!(r1_notlent, 7, "NotLent discriminant should be 7");
+    }
+
     #[cfg(feature = "dynamic-mpu")]
     use device::low32_buf;
 
