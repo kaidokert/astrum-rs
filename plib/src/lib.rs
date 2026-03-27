@@ -987,6 +987,46 @@ pub fn sys_debug_exit(code: u32) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(SYS_DEBUG_EXIT, code, 0u32, 0u32))
 }
 
+// ── Buffer error discriminant decoder ──────────────────────────────────
+
+/// Map a buffer-error discriminant (from r1 detail) to a human-readable name.
+///
+/// The discriminant values match those returned by `BufferError::discriminant()`
+/// and `MpuError::discriminant()` in the kernel (see architecture.md §14).
+///
+/// - `1..=8`       — direct `BufferError` variants
+/// - `0x101..=0x110` — `BufferError::Mpu(inner)` sub-errors
+/// - anything else — `"Unknown"`
+pub fn describe_buf_error(detail: u32) -> &'static str {
+    match detail {
+        1 => "InvalidSlot",
+        2 => "SlotNotFree",
+        3 => "SlotNotBorrowed",
+        4 => "InvalidSize",
+        5 => "NotOwner",
+        6 => "AlreadyLent",
+        7 => "NotLent",
+        8 => "SelfLend",
+        0x101 => "Mpu:RegionCountMismatch",
+        0x102 => "Mpu:SizeTooSmall",
+        0x103 => "Mpu:SizeNotPowerOfTwo",
+        0x104 => "Mpu:BaseNotAligned",
+        0x105 => "Mpu:AddressOverflow",
+        0x106 => "Mpu:SlotExhausted",
+        0x107 => "Mpu:AlreadyInitialized",
+        0x108 => "Mpu:CodeRegionInvalid",
+        0x109 => "Mpu:DataRegionInvalid",
+        0x10A => "Mpu:StackGuardInvalid",
+        0x10B => "Mpu:EncodeSizeFailed",
+        0x10C => "Mpu:BackgroundRegionInvalid",
+        0x10D => "Mpu:StackRegionInvalid",
+        0x10E => "Mpu:DisabledRegionInvalid",
+        0x10F => "Mpu:PeripheralRegionInvalid",
+        0x110 => "Mpu:CacheAlreadySealed",
+        _ => "Unknown",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate alloc;
@@ -1776,5 +1816,52 @@ mod tests {
             assert_eq!(crate::PartitionSpec::from((pe, 7)).r0(), 7);
         }
         assert_eq!(u32::from(crate::EntryAddr::from(0x1000u32)), 0x1000);
+    }
+
+    // ── describe_buf_error tests ───────────────────────────────────────
+
+    #[test]
+    fn describe_buf_error_buffer_error_variants() {
+        assert_eq!(describe_buf_error(1), "InvalidSlot");
+        assert_eq!(describe_buf_error(2), "SlotNotFree");
+        assert_eq!(describe_buf_error(3), "SlotNotBorrowed");
+        assert_eq!(describe_buf_error(4), "InvalidSize");
+        assert_eq!(describe_buf_error(5), "NotOwner");
+        assert_eq!(describe_buf_error(6), "AlreadyLent");
+        assert_eq!(describe_buf_error(7), "NotLent");
+        assert_eq!(describe_buf_error(8), "SelfLend");
+    }
+
+    #[test]
+    fn describe_buf_error_mpu_sub_errors() {
+        assert_eq!(describe_buf_error(0x101), "Mpu:RegionCountMismatch");
+        assert_eq!(describe_buf_error(0x102), "Mpu:SizeTooSmall");
+        assert_eq!(describe_buf_error(0x103), "Mpu:SizeNotPowerOfTwo");
+        assert_eq!(describe_buf_error(0x104), "Mpu:BaseNotAligned");
+        assert_eq!(describe_buf_error(0x105), "Mpu:AddressOverflow");
+        assert_eq!(describe_buf_error(0x106), "Mpu:SlotExhausted");
+        assert_eq!(describe_buf_error(0x107), "Mpu:AlreadyInitialized");
+        assert_eq!(describe_buf_error(0x108), "Mpu:CodeRegionInvalid");
+        assert_eq!(describe_buf_error(0x109), "Mpu:DataRegionInvalid");
+        assert_eq!(describe_buf_error(0x10A), "Mpu:StackGuardInvalid");
+        assert_eq!(describe_buf_error(0x10B), "Mpu:EncodeSizeFailed");
+        assert_eq!(describe_buf_error(0x10C), "Mpu:BackgroundRegionInvalid");
+        assert_eq!(describe_buf_error(0x10D), "Mpu:StackRegionInvalid");
+        assert_eq!(describe_buf_error(0x10E), "Mpu:DisabledRegionInvalid");
+        assert_eq!(describe_buf_error(0x10F), "Mpu:PeripheralRegionInvalid");
+        assert_eq!(describe_buf_error(0x110), "Mpu:CacheAlreadySealed");
+    }
+
+    #[test]
+    fn describe_buf_error_unknown_values() {
+        assert_eq!(describe_buf_error(0), "Unknown");
+        assert_eq!(describe_buf_error(0xFF), "Unknown");
+        assert_eq!(describe_buf_error(u32::MAX), "Unknown");
+        // Gaps: 9 is not a valid BufferError discriminant
+        assert_eq!(describe_buf_error(9), "Unknown");
+        // 0x100 is the Mpu offset base, not a valid sub-error
+        assert_eq!(describe_buf_error(0x100), "Unknown");
+        // 0x111 is past the last Mpu sub-error
+        assert_eq!(describe_buf_error(0x111), "Unknown");
     }
 }
