@@ -13,12 +13,12 @@ pub fn handle_buffer_lend<const S: usize, const Z: usize>(
 ) -> (u32, Option<u32>) {
     let slot = r1 as usize;
     if r2 & 0xFE00 != 0 {
-        return (SvcError::OperationFailed.to_u32(), None);
+        return (SvcError::OperationFailed.to_u32(), Some(0xFE));
     }
     let target_raw = (r2 & 0xFF) as usize;
     let writable = r2 & rtos_traits::syscall::lend_flags::WRITABLE != 0;
     if target_raw >= partition_count {
-        return (SvcError::InvalidPartition.to_u32(), None);
+        return (SvcError::InvalidPartition.to_u32(), Some(0xFD));
     }
     match buffers.share_with_partition(
         slot,
@@ -39,9 +39,9 @@ pub fn handle_buffer_lend<const S: usize, const Z: usize>(
                 };
                 (r0, Some(rid as u32))
             }
-            None => (SvcError::InvalidBuffer.to_u32(), None),
+            None => (SvcError::InvalidBuffer.to_u32(), Some(0xFC)),
         },
-        Err(e) => (e.to_svc_error().to_u32(), None),
+        Err(e) => (e.to_svc_error().to_u32(), Some(e.discriminant())),
     }
 }
 #[cfg(test)]
@@ -56,11 +56,16 @@ mod tests {
         let f = |p: &mut BufferPool<4, 32>, r1, r2, r3| {
             handle_buffer_lend(p, &d, 0, 2, 100, r1, r2, r3, 0xCC)
         };
-        assert_eq!(f(&mut p, 0, 0x0200, 0), (eop, None));
-        assert_eq!(f(&mut p, 0, 5, 0), (eip, None));
+        assert_eq!(f(&mut p, 0, 0x0200, 0), (eop, Some(0xFE)));
+        assert_eq!(f(&mut p, 0, 5, 0), (eip, Some(0xFD)));
         let s = p.alloc(0, BorrowMode::Write).unwrap() as u32;
         let (r0, r1) = f(&mut p, s, 1, 50);
         assert_eq!(r0, p.slot_base_address(s as usize).unwrap());
         assert!(r1.is_some());
+        // Self-lend (partition 0 → partition 0) must return SelfLend discriminant
+        use crate::buffer_pool::BufferError;
+        let (r0, r1) = handle_buffer_lend(&mut p, &d, 0, 2, 100, s, 0, 0, 0xCC);
+        assert_eq!(r0, SvcError::OperationFailed.to_u32());
+        assert_eq!(r1, Some(BufferError::SelfLend.discriminant()));
     }
 }
