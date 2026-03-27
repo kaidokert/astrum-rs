@@ -655,6 +655,33 @@ pub enum MpuError {
     CacheAlreadySealed,
 }
 
+impl MpuError {
+    /// Return a unique, stable `u32` discriminant for this error variant.
+    ///
+    /// These values are returned in `r1` on SVC error paths and must remain
+    /// stable across releases.
+    pub fn discriminant(&self) -> u32 {
+        match self {
+            Self::RegionCountMismatch => 1,
+            Self::SizeTooSmall => 2,
+            Self::SizeNotPowerOfTwo => 3,
+            Self::BaseNotAligned => 4,
+            Self::AddressOverflow => 5,
+            Self::SlotExhausted => 6,
+            Self::AlreadyInitialized => 7,
+            Self::CodeRegionInvalid { .. } => 8,
+            Self::DataRegionInvalid { .. } => 9,
+            Self::StackGuardInvalid { .. } => 10,
+            Self::EncodeSizeFailed { .. } => 11,
+            Self::BackgroundRegionInvalid { .. } => 12,
+            Self::StackRegionInvalid { .. } => 13,
+            Self::DisabledRegionInvalid { .. } => 14,
+            Self::PeripheralRegionInvalid { .. } => 15,
+            Self::CacheAlreadySealed => 16,
+        }
+    }
+}
+
 impl core::fmt::Display for MpuError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -2468,5 +2495,38 @@ mod tests {
         // Valid code region but invalid data region → Err.
         let pcb = make_pcb_with_code_region(0x0800_0000, 0x2000_0000, 100, 0x0800_0000, 256);
         assert!(partition_mpu_regions(&pcb).is_err());
+    }
+
+    #[test]
+    fn mpu_error_discriminants_are_unique_and_stable() {
+        let variants: &[(MpuError, u32)] = &[
+            (MpuError::RegionCountMismatch, 1),
+            (MpuError::SizeTooSmall, 2),
+            (MpuError::SizeNotPowerOfTwo, 3),
+            (MpuError::BaseNotAligned, 4),
+            (MpuError::AddressOverflow, 5),
+            (MpuError::SlotExhausted, 6),
+            (MpuError::AlreadyInitialized, 7),
+            (MpuError::CodeRegionInvalid { base: 0, size: 0 }, 8),
+            (MpuError::DataRegionInvalid { base: 0, size: 0 }, 9),
+            (MpuError::StackGuardInvalid { base: 0, size: 0 }, 10),
+            (MpuError::EncodeSizeFailed { size: 0 }, 11),
+            (MpuError::BackgroundRegionInvalid { base: 0, size: 0 }, 12),
+            (MpuError::StackRegionInvalid { base: 0, size: 0 }, 13),
+            (MpuError::DisabledRegionInvalid { base: 0, size: 0 }, 14),
+            (MpuError::PeripheralRegionInvalid { base: 0, size: 0 }, 15),
+            (MpuError::CacheAlreadySealed, 16),
+        ];
+        // Verify each variant maps to its expected value.
+        for (variant, expected) in variants {
+            assert_eq!(variant.discriminant(), *expected, "{:?}", variant);
+        }
+        // Verify uniqueness: no two variants share a discriminant.
+        let mut seen = [false; 17]; // indices 1..=16
+        for (variant, _) in variants {
+            let d = variant.discriminant() as usize;
+            assert!(!seen[d], "duplicate discriminant {d}");
+            seen[d] = true;
+        }
     }
 }

@@ -44,6 +44,25 @@ pub enum BufferError {
 }
 
 impl BufferError {
+    /// Return a unique, stable `u32` discriminant for this error variant.
+    ///
+    /// For `Mpu(inner)`, the discriminant is `0x100 + inner.discriminant()`,
+    /// encoding the inner [`MpuError`] variant.  These values are returned
+    /// in `r1` on SVC error paths and must remain stable across releases.
+    pub fn discriminant(&self) -> u32 {
+        match self {
+            Self::InvalidSlot => 1,
+            Self::SlotNotFree => 2,
+            Self::SlotNotBorrowed => 3,
+            Self::InvalidSize => 4,
+            Self::Mpu(inner) => 0x100 + inner.discriminant(),
+            Self::NotOwner => 5,
+            Self::AlreadyLent => 6,
+            Self::NotLent => 7,
+            Self::SelfLend => 8,
+        }
+    }
+
     /// Map this buffer error to the corresponding [`rtos_traits::syscall::SvcError`].
     pub fn to_svc_error(&self) -> rtos_traits::syscall::SvcError {
         use rtos_traits::syscall::SvcError;
@@ -59,6 +78,19 @@ impl BufferError {
 }
 
 impl BufferPoolError {
+    /// Return a unique, stable `u32` discriminant for this error variant.
+    ///
+    /// These values are returned in `r1` on SVC error paths and must remain
+    /// stable across releases.
+    pub fn discriminant(&self) -> u32 {
+        match self {
+            Self::InvalidSlot => 1,
+            Self::NotBorrowed => 2,
+            Self::AlreadyBorrowed => 3,
+            Self::NotOwner => 4,
+        }
+    }
+
     /// Map this buffer-pool error to the corresponding [`rtos_traits::syscall::SvcError`].
     pub fn to_svc_error(&self) -> rtos_traits::syscall::SvcError {
         use rtos_traits::syscall::SvcError;
@@ -1836,5 +1868,65 @@ mod tests {
         // which exceeds the 16-byte requirement.
         let pool = BufferPool::<2, 16>::new();
         pool.verify_slot_alignment(); // must not panic
+    }
+
+    #[test]
+    fn buffer_error_discriminants_are_unique_and_stable() {
+        let variants: &[(BufferError, u32)] = &[
+            (BufferError::InvalidSlot, 1),
+            (BufferError::SlotNotFree, 2),
+            (BufferError::SlotNotBorrowed, 3),
+            (BufferError::InvalidSize, 4),
+            (BufferError::NotOwner, 5),
+            (BufferError::AlreadyLent, 6),
+            (BufferError::NotLent, 7),
+            (BufferError::SelfLend, 8),
+        ];
+        for (variant, expected) in variants {
+            assert_eq!(variant.discriminant(), *expected, "{:?}", variant);
+        }
+        // Verify uniqueness among non-Mpu variants.
+        let mut seen = [false; 9]; // indices 1..=8
+        for (variant, _) in variants {
+            let d = variant.discriminant() as usize;
+            assert!(!seen[d], "duplicate discriminant {d}");
+            seen[d] = true;
+        }
+    }
+
+    #[test]
+    fn buffer_error_mpu_delegates_with_offset() {
+        use crate::mpu::MpuError;
+        // Mpu variant encodes as 0x100 + inner discriminant.
+        let inner = MpuError::SizeTooSmall;
+        let err = BufferError::Mpu(inner);
+        assert_eq!(err.discriminant(), 0x100 + 2);
+
+        let inner2 = MpuError::CacheAlreadySealed;
+        let err2 = BufferError::Mpu(inner2);
+        assert_eq!(err2.discriminant(), 0x100 + 16);
+
+        // Mpu discriminants never collide with non-Mpu discriminants (all < 0x100).
+        assert!(err.discriminant() >= 0x100);
+    }
+
+    #[test]
+    fn buffer_pool_error_discriminants_are_unique_and_stable() {
+        let variants: &[(BufferPoolError, u32)] = &[
+            (BufferPoolError::InvalidSlot, 1),
+            (BufferPoolError::NotBorrowed, 2),
+            (BufferPoolError::AlreadyBorrowed, 3),
+            (BufferPoolError::NotOwner, 4),
+        ];
+        for (variant, expected) in variants {
+            assert_eq!(variant.discriminant(), *expected, "{:?}", variant);
+        }
+        // Verify uniqueness.
+        let mut seen = [false; 5]; // indices 1..=4
+        for (variant, _) in variants {
+            let d = variant.discriminant() as usize;
+            assert!(!seen[d], "duplicate discriminant {d}");
+            seen[d] = true;
+        }
     }
 }
