@@ -2062,7 +2062,10 @@ where
                         &self.dynamic_strategy,
                     ) {
                         Ok(()) => 0,
-                        Err(e) => e.to_svc_error().to_u32(),
+                        Err(e) => {
+                            frame.r1 = e.discriminant();
+                            e.to_svc_error().to_u32()
+                        }
                     }
                 }
             }
@@ -2078,7 +2081,10 @@ where
                             new_owner,
                         ) {
                             Ok(()) => 0,
-                            Err(e) => e.to_svc_error().to_u32(),
+                            Err(e) => {
+                                frame.r1 = e.discriminant();
+                                e.to_svc_error().to_u32()
+                            }
                         }
                     }
                     _ => SvcError::InvalidPartition.to_u32(),
@@ -4176,6 +4182,36 @@ mod tests {
         assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 1), eop);
         // Invalid partition ID → InvalidPartition
         assert_eq!(dispatch_r0(&mut k, SYS_BUF_TRANSFER, slot, 99), epart);
+    }
+
+    /// SYS_BUF_REVOKE writes BufferError discriminant into r1 on error.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_revoke_sets_r1_on_error() {
+        use crate::buffer_pool::BufferError;
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_REVOKE};
+        let mut k = kernel(0, 0, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
+        assert!(!SvcError::is_error(slot), "alloc should succeed");
+        // Revoke without an active lend → NotLent error
+        let (r0, r1) = dispatch_r01(&mut k, SYS_BUF_REVOKE, slot, 1);
+        assert_eq!(r0, SvcError::OperationFailed.to_u32());
+        assert_eq!(r1, BufferError::NotLent.discriminant());
+    }
+
+    /// SYS_BUF_TRANSFER writes BufferError discriminant into r1 on error.
+    #[cfg(feature = "dynamic-mpu")]
+    #[test]
+    fn buf_transfer_sets_r1_on_error() {
+        use crate::buffer_pool::BufferError;
+        use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_TRANSFER};
+        let mut k = kernel(0, 0, 0);
+        let slot = dispatch_r0(&mut k, SYS_BUF_ALLOC, 1, 0);
+        assert!(!SvcError::is_error(slot), "alloc should succeed");
+        // Self-transfer (partition 0 → 0) → SelfLend error
+        let (r0, r1) = dispatch_r01(&mut k, SYS_BUF_TRANSFER, slot, 0);
+        assert_eq!(r0, SvcError::OperationFailed.to_u32());
+        assert_eq!(r1, BufferError::SelfLend.discriminant());
     }
 
     /// Verify that an unauthorized third partition (P2) cannot revoke a lend
