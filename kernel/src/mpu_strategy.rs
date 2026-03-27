@@ -691,7 +691,14 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
         permissions: u32,
         owner: u8,
     ) -> Result<u8, MpuError> {
-        crate::mpu::validate_mpu_region(base, size)?;
+        crate::mpu::validate_mpu_region(base, size).inspect_err(|&e| {
+            crate::klog!(
+                "add_window: validate_mpu_region failed base=0x{:08x} size={} err={:?}",
+                base,
+                size,
+                e
+            );
+        })?;
 
         with_cs(|cs| {
             let mut slots = self.slots.borrow(cs).borrow_mut();

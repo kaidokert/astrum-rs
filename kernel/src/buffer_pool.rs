@@ -298,7 +298,16 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
 
         let region_id = strategy
             .add_window(base, SIZE as u32, rasr, target)
-            .map_err(BufferError::Mpu)?;
+            .map_err(|e| {
+                crate::klog!(
+                    "share_with_partition: add_window failed slot={} base=0x{:08x} size={} err={:?}",
+                    slot,
+                    base,
+                    SIZE,
+                    e
+                );
+                BufferError::Mpu(e)
+            })?;
 
         s.lent_to = Some(LendRecord {
             target,
