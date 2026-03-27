@@ -11,6 +11,7 @@
 #![no_std]
 
 pub use rtos_traits::api::decode_rc;
+pub use rtos_traits::api::decode_rc_r01_detail;
 pub use rtos_traits::api::SvcError;
 
 // ── Re-exported partition types (from rtos-traits) ────────────────────
@@ -895,19 +896,20 @@ pub fn sys_buf_write(slot: BufferSlotId, data: &[u8]) -> Result<u32, SvcError> {
 ///
 /// `Ok((base_addr, region_id))` with the physical base address of the buffer
 /// slot (r0) and the MPU region assigned to the target (r1), or
-/// `Err(SvcError)` if the syscall failed.
+/// `Err((SvcError, detail))` if the syscall failed, where `detail` is a
+/// kernel-specific error discriminant from `r1`.
 #[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_lend(
     slot: BufferSlotId,
     target: u8,
     writable: bool,
-) -> Result<(*mut u8, u32), SvcError> {
+) -> Result<(*mut u8, u32), (SvcError, u32)> {
     let flags: u32 = if writable { lend_flags::WRITABLE } else { 0 };
     let r2 = (target as u32) | flags;
     // SAFETY: svc_r01! triggers a supervisor call whose handler validates all
     // arguments.  The slot and packed r2 contain only small integer values;
     // no pointers are passed.
-    let (r0, r1) = rtos_traits::api::decode_rc_r01(rtos_traits::svc_r01!(
+    let (r0, r1) = rtos_traits::api::decode_rc_r01_detail(rtos_traits::svc_r01!(
         SYS_BUF_LEND,
         slot.as_raw() as u32,
         r2,
@@ -922,17 +924,19 @@ pub fn sys_buf_lend(
 ///
 /// # Returns
 ///
-/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+/// `Ok(0)` on success, or `Err((SvcError, detail))` if the syscall failed,
+/// where `detail` is a kernel-specific error discriminant from `r1`.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_buf_revoke(slot: BufferSlotId, target: u8) -> Result<u32, SvcError> {
-    // SAFETY: svc! triggers a supervisor call whose handler validates all
+pub fn sys_buf_revoke(slot: BufferSlotId, target: u8) -> Result<u32, (SvcError, u32)> {
+    // SAFETY: svc_r01! triggers a supervisor call whose handler validates all
     // arguments.  Only small integer values are passed; no pointers.
-    decode_rc(rtos_traits::svc!(
+    rtos_traits::api::decode_rc_r01_detail(rtos_traits::svc_r01!(
         SYS_BUF_REVOKE,
         slot.as_raw() as u32,
         target as u32,
         0u32
     ))
+    .map(|(r0, _)| r0)
 }
 
 /// Transfer ownership of a buffer slot to another partition.
@@ -941,17 +945,19 @@ pub fn sys_buf_revoke(slot: BufferSlotId, target: u8) -> Result<u32, SvcError> {
 ///
 /// # Returns
 ///
-/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+/// `Ok(0)` on success, or `Err((SvcError, detail))` if the syscall failed,
+/// where `detail` is a kernel-specific error discriminant from `r1`.
 #[cfg(feature = "dynamic-mpu")]
-pub fn sys_buf_transfer(slot: BufferSlotId, new_owner: u8) -> Result<u32, SvcError> {
-    // SAFETY: svc! triggers a supervisor call whose handler validates all
+pub fn sys_buf_transfer(slot: BufferSlotId, new_owner: u8) -> Result<u32, (SvcError, u32)> {
+    // SAFETY: svc_r01! triggers a supervisor call whose handler validates all
     // arguments.  Only small integer values are passed; no pointers.
-    decode_rc(rtos_traits::svc!(
+    rtos_traits::api::decode_rc_r01_detail(rtos_traits::svc_r01!(
         SYS_BUF_TRANSFER,
         slot.as_raw() as u32,
         new_owner as u32,
         0u32
     ))
+    .map(|(r0, _)| r0)
 }
 
 /// Print a debug message via semihosting.

@@ -135,6 +135,23 @@ pub fn decode_rc_r01(r0r1: (u32, u32)) -> Result<(u32, u32), SvcError> {
     }
 }
 
+/// Like [`decode_rc_r01`] but preserves the `r1` detail value on error.
+///
+/// On success returns `Ok((r0, r1))`; on error returns
+/// `Err((SvcError, r1))` where `r1` carries a kernel-specific error
+/// detail (e.g. a discriminant from `BufferError` or `MpuError`).
+#[inline(always)]
+pub fn decode_rc_r01_detail(r0r1: (u32, u32)) -> Result<(u32, u32), (SvcError, u32)> {
+    if SvcError::is_error(r0r1.0) {
+        Err((
+            SvcError::from_u32(r0r1.0).unwrap_or(SvcError::InvalidSyscall),
+            r0r1.1,
+        ))
+    } else {
+        Ok(r0r1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// Return an array of all [`SvcError`] variants.
@@ -260,5 +277,57 @@ mod tests {
             decode_rc_r01((code, 0x1234)),
             Err(SvcError::InvalidResource)
         );
+    }
+
+    // ── decode_rc_r01_detail tests ────────────────────────────────────
+
+    #[test]
+    fn detail_success_preserves_both() {
+        assert_eq!(decode_rc_r01_detail((5, 0x2000_0000)), Ok((5, 0x2000_0000)));
+    }
+
+    #[test]
+    fn detail_success_zero_pair() {
+        assert_eq!(decode_rc_r01_detail((0, 0)), Ok((0, 0)));
+    }
+
+    #[test]
+    fn detail_error_preserves_r1() {
+        let code = SvcError::InvalidResource.to_u32();
+        assert_eq!(
+            decode_rc_r01_detail((code, 0x1234)),
+            Err((SvcError::InvalidResource, 0x1234))
+        );
+    }
+
+    #[test]
+    fn detail_error_zero_detail() {
+        let code = SvcError::OperationFailed.to_u32();
+        assert_eq!(
+            decode_rc_r01_detail((code, 0)),
+            Err((SvcError::OperationFailed, 0))
+        );
+    }
+
+    #[test]
+    fn detail_unknown_error_maps_to_invalid_syscall_with_detail() {
+        let code: u32 = 0x8000_0001;
+        assert_eq!(
+            decode_rc_r01_detail((code, 42)),
+            Err((SvcError::InvalidSyscall, 42))
+        );
+    }
+
+    #[test]
+    fn detail_round_trip_all_variants() {
+        for variant in all_variants() {
+            let code = variant.to_u32();
+            let detail = code & 0xFF; // arbitrary detail per variant
+            assert_eq!(
+                decode_rc_r01_detail((code, detail)),
+                Err((variant, detail)),
+                "{variant:?} detail round-trip failed"
+            );
+        }
     }
 }
