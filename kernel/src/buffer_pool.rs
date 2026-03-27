@@ -503,6 +503,72 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
         self.slots.get(slot).map(|s| s.data.as_ptr() as u32)
     }
 
+    /// Check whether `addr` satisfies SIZE-alignment.
+    ///
+    /// Extracted as a standalone helper so it can be unit-tested with
+    /// synthetic addresses without constructing a real pool.
+    #[allow(clippy::manual_is_multiple_of)] // explicit modulo for pre-1.76 portability
+    pub const fn check_slot_aligned(addr: usize) -> bool {
+        SIZE != 0 && (addr % SIZE) == 0
+    }
+
+    /// Panic if any slot's `data` pointer is not aligned to `SIZE` bytes.
+    ///
+    /// This cannot be checked at compile time because pointer values are
+    /// determined at link/load time.  Call this once after construction
+    /// (e.g. in an init routine) to catch linker-placement mistakes early.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any slot is misaligned.  Must only be called during
+    /// boot-time initialisation, never from handler-mode code (SVC,
+    /// PendSV, etc.) where a panic would be unrecoverable.
+    pub fn verify_slot_alignment(&self) {
+        for (i, slot) in self.slots.iter().enumerate() {
+            let addr = slot.data.as_ptr() as usize;
+            if !Self::check_slot_aligned(addr) {
+                panic!(
+                    "BufferPool slot {} data at {:#x} is not {}-byte aligned",
+                    i, addr, SIZE
+                );
+            }
+        }
+    }
+
+    /// Construct a new `BufferPool` and immediately verify that every slot's
+    /// data buffer is aligned to `SIZE` bytes, panicking if not.
+    ///
+    /// This is a convenience wrapper around [`new`](Self::new) +
+    /// [`verify_slot_alignment`](Self::verify_slot_alignment).
+    ///
+    /// # Panics
+    ///
+    /// Panics if any slot is misaligned.  Must only be called during
+    /// boot-time initialisation, never from handler-mode code (SVC,
+    /// PendSV, etc.) where a panic would be unrecoverable.
+    #[inline(always)]
+    pub fn verified() -> Self {
+        let pool = Self::new();
+        pool.verify_slot_alignment();
+        pool
+    }
+
+    /// Convenience wrapper: panics if any slot is misaligned.
+    ///
+    /// Identical to [`verify_slot_alignment`](Self::verify_slot_alignment)
+    /// but named to read naturally as an assertion in init sequences:
+    /// ```ignore
+    /// POOL.assert_aligned();
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if any slot is misaligned.  Boot-time only; see
+    /// [`verify_slot_alignment`](Self::verify_slot_alignment).
+    pub fn assert_aligned(&self) {
+        self.verify_slot_alignment();
+    }
+
     /// Revoke all active `lent_to` records for slots owned by `owner`,
     /// removing each MPU window via `strategy.remove_window`.
     pub fn revoke_all_shared(&mut self, owner: u8, strategy: &dyn MpuStrategy) {
@@ -1643,5 +1709,57 @@ mod tests {
         // Unshare must clear the deadline
         pool.unshare_from_partition(0, 1, 2, &ds).unwrap();
         assert_eq!(pool.deadline(0), None);
+    }
+
+    // ------------------------------------------------------------------
+    // verify_slot_alignment / assert_aligned / check_slot_aligned tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn verify_slot_alignment_passes_for_aligned_pool() {
+        // BufferSlot has repr(C, align(32)), so data at offset 0 is
+        // 32-byte aligned.  SIZE=32 must pass.
+        let pool = BufferPool::<2, 32>::new();
+        pool.verify_slot_alignment(); // must not panic
+    }
+
+    #[test]
+    fn assert_aligned_passes_for_aligned_pool() {
+        let pool = BufferPool::<2, 32>::new();
+        pool.assert_aligned(); // must not panic
+    }
+
+    #[test]
+    fn check_slot_aligned_with_synthetic_addresses() {
+        // 32-byte alignment checks
+        assert!(BufferPool::<1, 32>::check_slot_aligned(0));
+        assert!(BufferPool::<1, 32>::check_slot_aligned(32));
+        assert!(BufferPool::<1, 32>::check_slot_aligned(64));
+        assert!(BufferPool::<1, 32>::check_slot_aligned(1024));
+        // Misaligned addresses must be detected
+        assert!(!BufferPool::<1, 32>::check_slot_aligned(1));
+        assert!(!BufferPool::<1, 32>::check_slot_aligned(16));
+        assert!(!BufferPool::<1, 32>::check_slot_aligned(33));
+        assert!(!BufferPool::<1, 32>::check_slot_aligned(48));
+        // 64-byte alignment checks
+        assert!(BufferPool::<1, 64>::check_slot_aligned(0));
+        assert!(BufferPool::<1, 64>::check_slot_aligned(128));
+        assert!(!BufferPool::<1, 64>::check_slot_aligned(32));
+        assert!(!BufferPool::<1, 64>::check_slot_aligned(65));
+    }
+
+    #[test]
+    fn verified_passes_for_aligned_pool() {
+        // Must not panic — equivalent to new() + verify_slot_alignment().
+        let _pool = BufferPool::<2, 32>::verified();
+    }
+
+    #[test]
+    #[should_panic(expected = "not")]
+    fn verify_slot_alignment_panics_for_zero_size() {
+        // SIZE == 0 is degenerate: check_slot_aligned always returns false,
+        // so verify_slot_alignment must panic for every slot.
+        let pool = BufferPool::<1, 0>::new();
+        pool.verify_slot_alignment();
     }
 }
