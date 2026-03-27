@@ -1309,7 +1309,7 @@ where
             { C::DR },
         >,
     ) -> Self {
-        Self {
+        let kernel = Self {
             active_partition: None,
             tick: TickCounter::new(),
             current_partition: 255, // sentinel for "no partition running yet"
@@ -1342,7 +1342,10 @@ where
             irq_bindings,
             sleep_queue: crate::waitqueue::SleepQueue::new(),
             _memory: PhantomData,
-        }
+        };
+        #[cfg(feature = "dynamic-mpu")]
+        kernel.buffers.assert_aligned();
+        kernel
     }
 
     /// Create a `Kernel` with empty partition table and schedule.
@@ -6735,6 +6738,26 @@ mod tests {
         assert_eq!(k.schedule().entries().len(), 1);
         assert_eq!(k.schedule().entries()[0].partition_index, 0);
         assert_eq!(k.schedule().entries()[0].duration_ticks, 100);
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-mpu")]
+    fn init_kernel_struct_calls_assert_aligned() {
+        // Verify that init_kernel_struct completes without panicking,
+        // which confirms buffers.assert_aligned() passes for host-allocated memory.
+        let mut core = <TestConfig as KernelConfig>::Core::default();
+        let mut s = ScheduleTable::new();
+        s.add(ScheduleEntry::new(0, 100)).unwrap();
+        *core.schedule_mut() = s;
+        let pcb = PartitionControlBlock::new(0, 0, 0, 0, MpuRegion::new(0, 0, 0));
+        assert!(core.partitions_mut().add(pcb).is_ok());
+        let k = Kernel::<TestConfig>::init_kernel_struct(
+            core,
+            &[],
+            crate::virtual_device::DeviceRegistry::new(),
+        );
+        // If we reach here, assert_aligned() did not panic — alignment is correct
+        assert_eq!(k.current_partition, 255);
     }
 
     #[test]
