@@ -253,6 +253,10 @@ name = "buf_lend_addr_test"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 
 [[example]]
+name = "buf_align_boot_test"
+required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+
+[[example]]
 name = "buf_deadline_test"
 required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
 

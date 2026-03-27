@@ -1,0 +1,3 @@
+# mode: contains
+buf_align_boot_test: start
+buf_align_boot_test: PASS
