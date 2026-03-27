@@ -130,7 +130,7 @@ values.
 | `WaitQueueFull`    | `0xFFFF_FFFD`  | Wait queue at capacity, cannot block       |
 | `TransitionFailed` | `0xFFFF_FFFC`  | Partition state transition not permitted   |
 | `InvalidPartition` | `0xFFFF_FFFB`  | Partition index out of range               |
-| `OperationFailed`  | `0xFFFF_FFFA`  | Direction violation, message too large, etc |
+| `OperationFailed`  | `0xFFFF_FFFA`  | Direction violation, message too large, etc. For buffer syscalls, `r1` contains a sub-error detail discriminant — see [architecture.md §14](architecture.md#14-svc-error-return-abi--r1-detail-convention) |
 | `InvalidPointer`   | `0xFFFF_FFF9`  | User pointer outside caller's MPU region   |
 
 Module-level error enums (`SamplingError`, `QueuingError`,
