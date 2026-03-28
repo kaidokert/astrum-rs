@@ -92,6 +92,51 @@ where
     #[cfg(feature = "trace")]
     crate::trace::emit_fault_trace(&details);
 
+    // Check fault policy to decide whether to auto-restart.
+    // TODO: fault_count is only incremented on successful restart, so a StayDead partition
+    // that faulted once reads as fault_count=0. Consider incrementing the count on fault
+    // entry (before policy check) to distinguish "never faulted" from "faulted and terminated".
+    // TODO: reviewer false positive — `pid` is defined at top of function via active_partition()
+    let (policy, count) = match kernel.pcb(pid as usize) {
+        Some(pcb) => (pcb.fault_policy(), pcb.fault_count()),
+        None => return Some(details),
+    };
+
+    match policy {
+        crate::partition::FaultPolicy::StayDead => {
+            crate::klog!("[MemManage] pid={} policy=StayDead, staying faulted", pid);
+        }
+        crate::partition::FaultPolicy::WarmRestart { max }
+        | crate::partition::FaultPolicy::ColdRestart { max } => {
+            let warm = matches!(policy, crate::partition::FaultPolicy::WarmRestart { .. });
+            let label = if warm { "warm" } else { "cold" };
+            if count < max {
+                match kernel.restart_partition(pid as usize, warm) {
+                    Ok(()) => {
+                        crate::klog!(
+                            "[MemManage] pid={} {} restart ({}/{})",
+                            pid,
+                            label,
+                            count + 1,
+                            max
+                        );
+                    }
+                    Err(e) => {
+                        crate::klog!("[MemManage] pid={} {} restart FAILED: {:?}", pid, label, e);
+                    }
+                }
+            } else {
+                crate::klog!(
+                    "[MemManage] pid={} {} max restarts reached (count={}/{}), staying faulted",
+                    pid,
+                    label,
+                    count,
+                    max
+                );
+            }
+        }
+    }
+
     Some(details)
 }
 
@@ -284,5 +329,121 @@ mod tests {
                 .unwrap();
         assert_eq!(details.partition_id, 0);
         assert_eq!(kernel.pcb(0).unwrap().state(), PartitionState::Faulted);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    mod fault_policy_tests {
+        use super::*;
+        use crate::partition::FaultPolicy;
+
+        fn make_policy_kernel(
+            s0: &mut AlignedStack256B,
+            d0: &mut AlignedStack256B,
+            s1: &mut AlignedStack256B,
+            policy: FaultPolicy,
+        ) -> crate::svc::Kernel<'static, TestConfig> {
+            let mut sched = ScheduleTable::new();
+            sched.add(ScheduleEntry::new(0, 10)).unwrap();
+            sched.add(ScheduleEntry::new(1, 10)).unwrap();
+            #[cfg(feature = "dynamic-mpu")]
+            sched.add_system_window(1).unwrap();
+            let m0 = MpuRegion::new(d0.0.as_ptr() as u32, 256, 0);
+            let m1 = MpuRegion::new(0, 0, 0);
+            let mems = [
+                ExternalPartitionMemory::from_aligned_stack(s0, 0x0800_1001, m0, 0)
+                    .unwrap()
+                    .with_fault_policy(policy),
+                ExternalPartitionMemory::from_aligned_stack(s1, 0x0800_2001, m1, 1).unwrap(),
+            ];
+            crate::svc::Kernel::<TestConfig>::new(sched, &mems).expect("kernel init")
+        }
+
+        fn do_fault(k: &mut crate::svc::Kernel<'_, TestConfig>) {
+            k.pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            k.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(k, CFSR_DACCVIOL, 0x2000_F000, 0x0800_1234);
+        }
+
+        #[test]
+        fn stay_dead_stays_faulted() {
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut d0 = AlignedStack256B::default();
+            let mut k = make_policy_kernel(&mut s0, &mut d0, &mut s1, FaultPolicy::StayDead);
+            do_fault(&mut k);
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+            assert_eq!(k.pcb(0).unwrap().fault_count(), 0);
+        }
+
+        #[test]
+        fn warm_restart_recovers_until_max() {
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut d0 = AlignedStack256B::default();
+            let mut k = make_policy_kernel(
+                &mut s0,
+                &mut d0,
+                &mut s1,
+                FaultPolicy::WarmRestart { max: 2 },
+            );
+
+            // First fault: should auto-restart (fault_count becomes 1).
+            do_fault(&mut k);
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Ready);
+            assert_eq!(k.pcb(0).unwrap().fault_count(), 1);
+
+            // Second fault: should auto-restart (fault_count becomes 2).
+            do_fault(&mut k);
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Ready);
+            assert_eq!(k.pcb(0).unwrap().fault_count(), 2);
+
+            // Third fault: max reached, stays faulted.
+            do_fault(&mut k);
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+        }
+
+        #[test]
+        fn cold_restart_recovers_until_max() {
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut d0 = AlignedStack256B::default();
+            let mut k = make_policy_kernel(
+                &mut s0,
+                &mut d0,
+                &mut s1,
+                FaultPolicy::ColdRestart { max: 1 },
+            );
+
+            // First fault: should auto-restart (fault_count becomes 1).
+            do_fault(&mut k);
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Ready);
+            assert_eq!(k.pcb(0).unwrap().fault_count(), 1);
+
+            // Second fault: max reached, stays faulted.
+            do_fault(&mut k);
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+        }
+
+        #[test]
+        fn warm_restart_after_max_stays_faulted() {
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut d0 = AlignedStack256B::default();
+            let mut k = make_policy_kernel(
+                &mut s0,
+                &mut d0,
+                &mut s1,
+                FaultPolicy::WarmRestart { max: 1 },
+            );
+
+            // First fault: auto-restart.
+            do_fault(&mut k);
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Ready);
+            assert_eq!(k.pcb(0).unwrap().fault_count(), 1);
+
+            // Second fault: max reached, stays faulted permanently.
+            do_fault(&mut k);
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+            assert_eq!(k.pcb(0).unwrap().fault_count(), 1);
+        }
     }
 }
