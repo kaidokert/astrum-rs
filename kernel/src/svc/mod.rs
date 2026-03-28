@@ -2597,6 +2597,46 @@ where
         Ok(())
     }
 
+    /// Activate a partition's registered error handler after a fault.
+    ///
+    /// Steps: (1) store `ErrorStatus` via `set_last_error`, (2) set
+    /// `in_error_handler = true`, (3) reinitialize the stack frame with the
+    /// error handler as entry point.  The partition is **not** transitioned
+    /// to `Faulted` — it remains schedulable so the handler can run.
+    ///
+    /// Returns the new stack pointer on success, or `None` if the pid is
+    /// invalid, no error handler is registered, or stack reinit fails.
+    pub fn activate_error_handler(
+        &mut self,
+        pid: usize,
+        details: &crate::fault::FaultDetails,
+    ) -> Option<u32> {
+        let handler_addr = self.pcb(pid)?.error_handler()?;
+
+        // (1) Store ErrorStatus.
+        let status: crate::error_handler::ErrorStatus = (*details).into();
+        self.set_last_error(pid, status);
+
+        // (2) Set in_error_handler flag.
+        self.pcb_mut(pid)?.set_in_error_handler(true);
+
+        // (3) Reinitialize stack frame with error handler as entry point.
+        let base = self.pcb(pid)?.stack_base();
+        let size = self.pcb(pid)?.stack_size();
+        let word_count = (size / 4) as usize;
+        // SAFETY: base/size come from the validated PCB stack region; the
+        // kernel owns partition stack memory during fault handling.
+        let stack_slice = unsafe { core::slice::from_raw_parts_mut(base as *mut u32, word_count) };
+        let ix = crate::context::init_stack_frame(stack_slice, handler_addr, None)?;
+        let sp = u32::try_from(ix)
+            .ok()
+            .and_then(|v| v.checked_mul(4))
+            .and_then(|offset| base.checked_add(offset))?;
+
+        self.set_sp(pid, sp);
+        Some(sp)
+    }
+
     /// Record an error status snapshot for a partition.
     ///
     /// Overwrites any previously stored error for `pid`. Out-of-range `pid`

@@ -36,11 +36,13 @@ macro_rules! define_memmanage_handler {
                         $crate::klog!(
                             "[MemManage] partition={} CFSR={:#010x} MMFAR={:#010x} PC={:#010x}",
                             d.partition_id, d.cfsr, d.mmfar, d.faulting_pc);
-                        // If the partition was restarted (state back to Ready),
-                        // return its fresh SP so we can update PSP accordingly.
+                        // If the partition was restarted (Ready) or its error
+                        // handler was activated (in_error_handler), return the
+                        // fresh SP so we can update PSP accordingly.
                         let pid = d.partition_id as usize;
                         if k.pcb(pid).map_or(false, |pcb|
-                            pcb.state() == $crate::partition::PartitionState::Ready)
+                            pcb.state() == $crate::partition::PartitionState::Ready
+                            || pcb.in_error_handler())
                         {
                             return Some(k.partition_sp()[pid]);
                         }
@@ -106,10 +108,22 @@ where
 {
     let pid = kernel.active_partition()?;
     let details = crate::fault::FaultDetails::new(pid, cfsr, mmfar, faulting_pc);
-    kernel.fault_partition(pid as usize);
 
     #[cfg(feature = "trace")]
     crate::trace::emit_fault_trace(&details);
+
+    // If the partition has a registered error handler, activate it instead
+    // of transitioning to Faulted.
+    if kernel
+        .pcb(pid as usize)
+        .is_some_and(|pcb| pcb.error_handler().is_some())
+    {
+        kernel.activate_error_handler(pid as usize, &details);
+        return Some(details);
+    }
+
+    // No error handler — apply existing fault policy.
+    kernel.fault_partition(pid as usize);
 
     // Check fault policy to decide whether to auto-restart.
     // TODO: fault_count is only incremented on successful restart, so a StayDead partition
@@ -467,6 +481,135 @@ mod tests {
             do_fault(&mut k);
             assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
             assert_eq!(k.pcb(0).unwrap().fault_count(), 1);
+        }
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    mod error_handler_tests {
+        use super::*;
+        use crate::error_handler::{ErrorStatus, FaultKind};
+        use crate::partition::FaultPolicy;
+        use crate::partition_core::SP_SENTINEL_FAULT;
+
+        const HANDLER_ADDR: u32 = 0x0800_3001;
+
+        fn make_handler_kernel(
+            s0: &mut AlignedStack256B,
+            d0: &mut AlignedStack256B,
+            s1: &mut AlignedStack256B,
+            error_handler: Option<u32>,
+        ) -> crate::svc::Kernel<'static, TestConfig> {
+            let mut sched = ScheduleTable::new();
+            sched.add(ScheduleEntry::new(0, 10)).unwrap();
+            sched.add(ScheduleEntry::new(1, 10)).unwrap();
+            sched.add_system_window(1).unwrap();
+            let m0 = MpuRegion::new(d0.0.as_ptr() as u32, 256, 0);
+            let m1 = MpuRegion::new(0, 0, 0);
+            let mut epm0 = ExternalPartitionMemory::from_aligned_stack(s0, 0x0800_1001, m0, 0)
+                .unwrap()
+                .with_fault_policy(FaultPolicy::StayDead);
+            if let Some(addr) = error_handler {
+                epm0 = epm0.with_error_handler(addr);
+            }
+            let mems = [
+                epm0,
+                ExternalPartitionMemory::from_aligned_stack(s1, 0x0800_2001, m1, 1).unwrap(),
+            ];
+            crate::svc::Kernel::<TestConfig>::new(sched, &mems).expect("kernel init")
+        }
+
+        #[test]
+        fn error_handler_activates_on_fault() {
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut d0 = AlignedStack256B::default();
+            let mut k = make_handler_kernel(&mut s0, &mut d0, &mut s1, Some(HANDLER_ADDR));
+            k.pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            k.active_partition = Some(0);
+
+            let cfsr = CFSR_DACCVIOL | CFSR_MMARVALID;
+            let details =
+                handle_memmanage_fault::<TestConfig>(&mut k, cfsr, 0x2000_F000, 0x0800_1234)
+                    .expect("should return fault details");
+
+            // Partition must NOT transition to Faulted.
+            assert_ne!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+
+            // in_error_handler flag must be set.
+            assert!(k.pcb(0).unwrap().in_error_handler());
+
+            // ErrorStatus must be stored via set_last_error.
+            let err = k.get_last_error(0).expect("error status must be stored");
+            assert_eq!(err.kind(), FaultKind::MemManage);
+            assert_eq!(err.failed_partition(), 0);
+            assert_eq!(err.faulting_addr(), 0x2000_F000);
+            assert_eq!(err.cfsr(), cfsr);
+            assert_eq!(err.faulting_pc(), 0x0800_1234);
+
+            // Stack must be reinitialized (SP is not sentinel).
+            let sp = k.partition_sp()[0];
+            assert_ne!(sp, SP_SENTINEL_FAULT, "SP must not be sentinel");
+            assert_ne!(sp, 0, "SP must be valid");
+
+            // Fault details are still returned correctly.
+            assert_eq!(details.partition_id, 0);
+            assert_eq!(details.cfsr, cfsr);
+        }
+
+        #[test]
+        fn no_error_handler_uses_default_policy() {
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut d0 = AlignedStack256B::default();
+            let mut k = make_handler_kernel(&mut s0, &mut d0, &mut s1, None);
+            k.pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            k.active_partition = Some(0);
+
+            handle_memmanage_fault::<TestConfig>(
+                &mut k,
+                CFSR_DACCVIOL | CFSR_MMARVALID,
+                0x2000_F000,
+                0x0800_1234,
+            )
+            .expect("should return fault details");
+
+            // Without error handler, partition transitions to Faulted (StayDead policy).
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+            assert!(!k.pcb(0).unwrap().in_error_handler());
+            assert!(k.get_last_error(0).is_none());
+            assert_eq!(k.partition_sp()[0], SP_SENTINEL_FAULT);
+        }
+
+        #[test]
+        fn activate_error_handler_reinits_stack_with_handler_pc() {
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut d0 = AlignedStack256B::default();
+            let mut k = make_handler_kernel(&mut s0, &mut d0, &mut s1, Some(HANDLER_ADDR));
+
+            let details =
+                crate::fault::FaultDetails::new(0, CFSR_DACCVIOL, 0x2000_0000, 0x0800_1000);
+            let sp = k
+                .activate_error_handler(0, &details)
+                .expect("should succeed");
+
+            // SP must point within the stack region.
+            let base = k.pcb(0).unwrap().stack_base();
+            let size = k.pcb(0).unwrap().stack_size();
+            assert!(sp >= base && sp < base + size, "SP must be within stack");
+
+            // Verify the exception frame has the handler address as PC.
+            // init_stack_frame layout: [r4..r11 | r0, r1, r2, r3, r12, lr, PC, xpsr]
+            // PC is at offset 14 words from base index (8 saved + 6 into hw frame).
+            let stack_slice =
+                unsafe { core::slice::from_raw_parts(base as *const u32, (size / 4) as usize) };
+            let sp_idx = ((sp - base) / 4) as usize;
+            // PC is at sp_idx + 14 (8 software context + 6 into exception frame).
+            let pc = stack_slice[sp_idx + 14];
+            assert_eq!(pc, HANDLER_ADDR, "stacked PC must be error handler address");
         }
     }
 }
