@@ -81,4 +81,5 @@ QEMU_PERIPHERAL_EXAMPLES=(
     qemu_pac_uart0
     qemu_pac_i2c0
     qemu_pac_adc0
+    qemu_pac_ssi0
 )
