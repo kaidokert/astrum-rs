@@ -112,14 +112,21 @@ where
     #[cfg(feature = "trace")]
     crate::trace::emit_fault_trace(&details);
 
-    // If the partition has a registered error handler, activate it instead
-    // of transitioning to Faulted.
+    // If the partition has a registered error handler and is NOT already
+    // inside the error handler (double fault), activate the handler.
+    // A double fault (fault while in_error_handler) bypasses the handler
+    // to prevent infinite loops — the default fault policy applies instead.
     if kernel
         .pcb(pid as usize)
-        .is_some_and(|pcb| pcb.error_handler().is_some())
+        .is_some_and(|pcb| pcb.error_handler().is_some() && !pcb.in_error_handler())
     {
         kernel.activate_error_handler(pid as usize, &details);
         return Some(details);
+    }
+
+    // Clear in_error_handler so the PCB is clean before applying fault policy.
+    if let Some(pcb) = kernel.pcb_mut(pid as usize) {
+        pcb.set_in_error_handler(false);
     }
 
     // No error handler — apply existing fault policy.
@@ -129,7 +136,6 @@ where
     // TODO: fault_count is only incremented on successful restart, so a StayDead partition
     // that faulted once reads as fault_count=0. Consider incrementing the count on fault
     // entry (before policy check) to distinguish "never faulted" from "faulted and terminated".
-    // TODO: reviewer false positive — `pid` is defined at top of function via active_partition()
     let (policy, count) = match kernel.pcb(pid as usize) {
         Some(pcb) => (pcb.fault_policy(), pcb.fault_count()),
         None => return Some(details),
@@ -582,6 +588,171 @@ mod tests {
             assert!(!k.pcb(0).unwrap().in_error_handler());
             assert!(k.get_last_error(0).is_none());
             assert_eq!(k.partition_sp()[0], SP_SENTINEL_FAULT);
+        }
+
+        /// Helper: create a handler kernel with a configurable fault policy.
+        fn make_handler_policy_kernel(
+            s0: &mut AlignedStack256B,
+            d0: &mut AlignedStack256B,
+            s1: &mut AlignedStack256B,
+            error_handler: Option<u32>,
+            policy: FaultPolicy,
+        ) -> crate::svc::Kernel<'static, TestConfig> {
+            let mut sched = ScheduleTable::new();
+            sched.add(ScheduleEntry::new(0, 10)).unwrap();
+            sched.add(ScheduleEntry::new(1, 10)).unwrap();
+            sched.add_system_window(1).unwrap();
+            let m0 = MpuRegion::new(d0.0.as_ptr() as u32, 256, 0);
+            let m1 = MpuRegion::new(0, 0, 0);
+            let mut epm0 = ExternalPartitionMemory::from_aligned_stack(s0, 0x0800_1001, m0, 0)
+                .unwrap()
+                .with_fault_policy(policy);
+            if let Some(addr) = error_handler {
+                epm0 = epm0.with_error_handler(addr);
+            }
+            let mems = [
+                epm0,
+                ExternalPartitionMemory::from_aligned_stack(s1, 0x0800_2001, m1, 1).unwrap(),
+            ];
+            crate::svc::Kernel::<TestConfig>::new(sched, &mems).expect("kernel init")
+        }
+
+        #[test]
+        fn double_fault_bypasses_handler_stay_dead() {
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut d0 = AlignedStack256B::default();
+            let mut k = make_handler_kernel(&mut s0, &mut d0, &mut s1, Some(HANDLER_ADDR));
+
+            // First fault: error handler activates.
+            k.pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            k.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(
+                &mut k,
+                CFSR_DACCVIOL | CFSR_MMARVALID,
+                0x2000_F000,
+                0x0800_1234,
+            );
+            assert!(k.pcb(0).unwrap().in_error_handler());
+            assert_ne!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+
+            // Second fault (double fault): handler must NOT re-activate.
+            // Partition has StayDead policy, so it should stay faulted.
+            k.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(
+                &mut k,
+                CFSR_DACCVIOL | CFSR_MMARVALID,
+                0x2000_A000,
+                0x0800_3456,
+            );
+
+            // in_error_handler must be cleared.
+            assert!(!k.pcb(0).unwrap().in_error_handler());
+            // Partition must be Faulted (default policy applied).
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+            // SP must be sentinel.
+            assert_eq!(k.partition_sp()[0], SP_SENTINEL_FAULT);
+        }
+
+        #[test]
+        fn double_fault_with_warm_restart_policy() {
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut d0 = AlignedStack256B::default();
+            let mut k = make_handler_policy_kernel(
+                &mut s0,
+                &mut d0,
+                &mut s1,
+                Some(HANDLER_ADDR),
+                FaultPolicy::WarmRestart { max: 2 },
+            );
+
+            // First fault: error handler activates.
+            k.pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            k.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(
+                &mut k,
+                CFSR_DACCVIOL | CFSR_MMARVALID,
+                0x2000_F000,
+                0x0800_1234,
+            );
+            assert!(k.pcb(0).unwrap().in_error_handler());
+            assert_ne!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+
+            // Double fault while in error handler: warm restart policy applies.
+            k.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(
+                &mut k,
+                CFSR_DACCVIOL | CFSR_MMARVALID,
+                0x2000_A000,
+                0x0800_5678,
+            );
+
+            // in_error_handler must be cleared.
+            assert!(!k.pcb(0).unwrap().in_error_handler());
+            // WarmRestart policy should auto-restart (fault_count=1, max=2).
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Ready);
+            assert_eq!(k.pcb(0).unwrap().fault_count(), 1);
+        }
+
+        #[test]
+        fn double_fault_with_cold_restart_exhausted() {
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut d0 = AlignedStack256B::default();
+            let mut k = make_handler_policy_kernel(
+                &mut s0,
+                &mut d0,
+                &mut s1,
+                Some(HANDLER_ADDR),
+                FaultPolicy::ColdRestart { max: 1 },
+            );
+
+            // First fault: error handler activates.
+            k.pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            k.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(
+                &mut k,
+                CFSR_DACCVIOL | CFSR_MMARVALID,
+                0x2000_F000,
+                0x0800_1234,
+            );
+            assert!(k.pcb(0).unwrap().in_error_handler());
+
+            // Double fault: cold restart (fault_count becomes 1).
+            k.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(&mut k, CFSR_DACCVIOL, 0x2000_B000, 0x0800_9ABC);
+            assert!(!k.pcb(0).unwrap().in_error_handler());
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Ready);
+            assert_eq!(k.pcb(0).unwrap().fault_count(), 1);
+
+            // Next normal fault: error handler activates again (in_error_handler was cleared).
+            k.pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            k.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(
+                &mut k,
+                CFSR_DACCVIOL | CFSR_MMARVALID,
+                0x2000_C000,
+                0x0800_DEF0,
+            );
+            assert!(k.pcb(0).unwrap().in_error_handler());
+            assert_ne!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+
+            // Another double fault: max restarts exhausted, stays faulted.
+            k.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(&mut k, CFSR_DACCVIOL, 0x2000_D000, 0x0800_1111);
+            assert!(!k.pcb(0).unwrap().in_error_handler());
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
+            assert_eq!(k.pcb(0).unwrap().fault_count(), 1);
         }
 
         #[test]
