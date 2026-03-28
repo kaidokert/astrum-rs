@@ -16,6 +16,7 @@ panic-semihosting = { version = "0.6", features = ["exit"], optional = true }
 rtos-traits = { path = "../rtos-traits" }
 rtos-trace = { version = "0.2", default-features = false, optional = true }
 rtt-target = { version = "0.6", optional = true }
+tudelft-lm3s6965-pac = { version = "0.1", optional = true }
 
 [[example]]
 name = "hello"
@@ -516,6 +517,7 @@ arinc-compat = ["ipc-sampling", "ipc-queuing", "ipc-blackboard", "ipc-message"]
 # custom one (e.g. from bind_interrupts!) can be linked instead.
 custom-ivt = []
 qemu = []
+qemu-peripherals = ["dep:tudelft-lm3s6965-pac"]
 dynamic-mpu = ["rtos-traits/dynamic-mpu", "plib/dynamic-mpu"]
 partition-debug = ["rtos-traits/partition-debug"]
 panic-halt = ["dep:panic-halt"]
