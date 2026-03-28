@@ -1361,6 +1361,84 @@ mod tests {
         assert_eq!(s2_final.base, 0x2000_C000, "p2 RAM base in R4");
     }
 
+    // ------------------------------------------------------------------
+    // Single-peripheral and multi-peripheral slot allocation tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn one_peripheral_reserved_for_returns_one() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rbar, rasr) = data_region(0x2000_0000, 4096, 5);
+        ds.configure_partition(0, &[(rbar, rasr)], 1).unwrap();
+        assert_eq!(
+            ds.peripheral_reserved_for(0),
+            1,
+            "1 peripheral → peripheral_reserved_for must return 1"
+        );
+    }
+
+    #[test]
+    fn one_peripheral_ram_at_slot_index_one() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rbar, rasr) = data_region(0x2000_0000, 4096, 5);
+        ds.configure_partition(0, &[(rbar, rasr)], 1).unwrap();
+        // Slot 0 (R4) reserved for peripheral, should be None.
+        assert!(
+            ds.slot(4).is_none(),
+            "slot 0 (R4) must be None — reserved for peripheral"
+        );
+        // Slot 1 (R5) should hold the RAM region.
+        let desc = ds.slot(5).expect("RAM must be at slot index 1 (R5)");
+        assert_eq!(desc.base, 0x2000_0000);
+        assert_eq!(desc.owner, 0);
+    }
+
+    #[test]
+    fn one_peripheral_slots_two_and_three_available() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rbar, rasr) = data_region(0x2000_0000, 4096, 5);
+        ds.configure_partition(0, &[(rbar, rasr)], 1).unwrap();
+        // Slots 2 and 3 (R6, R7) must remain None — available for
+        // buffer lend windows.
+        assert!(
+            ds.slot(6).is_none(),
+            "slot 2 (R6) must be None — available for lend windows"
+        );
+        assert!(
+            ds.slot(7).is_none(),
+            "slot 3 (R7) must be None — available for lend windows"
+        );
+    }
+
+    #[test]
+    fn three_peripherals_ram_at_slot_three_peripherals_at_zero_to_two() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rbar, rasr) = data_region(0x2000_0000, 4096, 7);
+        ds.configure_partition(0, &[(rbar, rasr)], 3).unwrap();
+        assert_eq!(
+            ds.peripheral_reserved_for(0),
+            3,
+            "3 peripherals → peripheral_reserved_for must return 3"
+        );
+        // RAM must be at slot 3 (R7).
+        let desc = ds.slot(7).expect("RAM must be at slot index 3 (R7)");
+        assert_eq!(desc.base, 0x2000_0000);
+        assert_eq!(desc.owner, 0);
+        // Slots 0-2 (R4-R6) reserved for peripherals, should be None.
+        assert!(
+            ds.slot(4).is_none(),
+            "slot 0 (R4) must be None — reserved for peripheral"
+        );
+        assert!(
+            ds.slot(5).is_none(),
+            "slot 1 (R5) must be None — reserved for peripheral"
+        );
+        assert!(
+            ds.slot(6).is_none(),
+            "slot 2 (R6) must be None — reserved for peripheral"
+        );
+    }
+
     /// Simulates the boot-time loop that configures ALL partitions
     /// (boot + non-boot) before `wire_boot_peripherals`, verifying
     /// that every partition's `peripheral_reserved` is set correctly.
