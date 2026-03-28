@@ -73,6 +73,28 @@ impl PartialEq for DebugBufferRef {
 #[cfg(feature = "partition-debug")]
 impl Eq for DebugBufferRef {}
 
+/// Policy controlling what happens when a partition faults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaultPolicy {
+    /// Partition stays in Faulted state permanently.
+    StayDead,
+    /// Partition is warm-restarted (state preserved) up to `max` times.
+    WarmRestart { max: u32 },
+    /// Partition is cold-restarted (full reset) up to `max` times.
+    ColdRestart { max: u32 },
+}
+
+/// Describes how a partition was most recently started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartCondition {
+    /// Normal first boot.
+    NormalBoot,
+    /// Restarted with state preserved after a fault.
+    WarmRestart,
+    /// Restarted with full reset after a fault.
+    ColdRestart,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartitionState {
     Ready,
@@ -158,6 +180,12 @@ pub struct PartitionControlBlock {
     /// Optional code (text) MPU region for partitions whose code lives in a
     /// separate flash/RAM region that must be explicitly mapped.
     code_mpu_region: Option<MpuRegion>,
+    /// Policy controlling restart behavior after a fault.
+    fault_policy: FaultPolicy,
+    /// Number of times this partition has faulted and been restarted.
+    fault_count: u32,
+    /// How this partition was most recently started.
+    start_condition: StartCondition,
 }
 
 impl PartitionControlBlock {
@@ -190,6 +218,9 @@ impl PartitionControlBlock {
             stack_limit: stack_base,
             r0_hint: 0,
             code_mpu_region: None,
+            fault_policy: FaultPolicy::StayDead,
+            fault_count: 0,
+            start_condition: StartCondition::NormalBoot,
         }
     }
 
@@ -213,6 +244,21 @@ impl PartitionControlBlock {
     /// Returns the optional code MPU region.
     pub fn code_mpu_region(&self) -> Option<&MpuRegion> {
         self.code_mpu_region.as_ref()
+    }
+
+    /// Returns the partition's fault policy.
+    pub fn fault_policy(&self) -> FaultPolicy {
+        self.fault_policy
+    }
+
+    /// Returns the number of faults this partition has experienced.
+    pub fn fault_count(&self) -> u32 {
+        self.fault_count
+    }
+
+    /// Returns how this partition was most recently started.
+    pub fn start_condition(&self) -> StartCondition {
+        self.start_condition
     }
 
     /// Replace peripheral regions via `&mut self` (post-creation setter).
@@ -4221,5 +4267,57 @@ mod tests {
                 assert_ne!(a.discriminant(), b.discriminant(), "dup: {a:?} vs {b:?}");
             }
         }
+    }
+
+    #[test]
+    fn pcb_fault_policy_defaults_to_stay_dead() {
+        let pcb = make_pcb();
+        assert_eq!(pcb.fault_policy(), FaultPolicy::StayDead);
+    }
+
+    #[test]
+    fn pcb_fault_count_defaults_to_zero() {
+        let pcb = make_pcb();
+        assert_eq!(pcb.fault_count(), 0);
+    }
+
+    #[test]
+    fn pcb_start_condition_defaults_to_normal_boot() {
+        let pcb = make_pcb();
+        assert_eq!(pcb.start_condition(), StartCondition::NormalBoot);
+    }
+
+    #[test]
+    fn fault_policy_derives_debug_clone_copy_partial_eq_eq() {
+        let a = FaultPolicy::StayDead;
+        let b = a; // Copy
+        let c = Clone::clone(&a); // Clone
+        assert_eq!(a, b); // PartialEq
+        assert_eq!(b, c); // Eq (implied by PartialEq + Eq bound)
+                          // Debug
+        let _ = format!("{:?}", a);
+
+        let warm = FaultPolicy::WarmRestart { max: 3 };
+        let cold = FaultPolicy::ColdRestart { max: 5 };
+        assert_ne!(warm, cold);
+        assert_ne!(a, warm);
+        assert_eq!(warm, FaultPolicy::WarmRestart { max: 3 });
+        assert_eq!(cold, FaultPolicy::ColdRestart { max: 5 });
+    }
+
+    #[test]
+    fn start_condition_derives_debug_clone_copy_partial_eq_eq() {
+        let a = StartCondition::NormalBoot;
+        let b = a; // Copy
+        let c = Clone::clone(&a); // Clone
+        assert_eq!(a, b); // PartialEq
+        assert_eq!(b, c);
+        let _ = format!("{:?}", a);
+
+        let warm = StartCondition::WarmRestart;
+        let cold = StartCondition::ColdRestart;
+        assert_ne!(a, warm);
+        assert_ne!(warm, cold);
+        assert_ne!(a, cold);
     }
 }
