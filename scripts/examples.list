@@ -68,6 +68,7 @@ DYNAMIC_MPU_EXAMPLES=(
     pendsv_primask_dynamic_test
     plib_dev_read_timed_test
     peripheral_buf_lend_test
+    single_periph_boot_test
     # Disabled pending MPU config fixes:
     # mpu_dynamic_test buffer_pool_test virtual_uart_demo uart1_loopback
 )
