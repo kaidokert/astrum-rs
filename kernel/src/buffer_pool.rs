@@ -178,6 +178,98 @@ impl<const SIZE: usize> BufferSlot<SIZE> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Compile-time alignment wrappers for BufferSlot
+// ---------------------------------------------------------------------------
+
+/// Internal macro: define a `#[repr(C, align(N))]` wrapper around
+/// `BufferSlot<N>`, so that arrays of this type are guaranteed to start
+/// at an N-byte-aligned address — satisfying the ARMv7-M MPU requirement
+/// without relying on linker placement.
+macro_rules! define_aligned_slot {
+    ($name:ident, $size:literal) => {
+        #[repr(C, align($size))]
+        pub struct $name {
+            slot: BufferSlot<$size>,
+        }
+
+        impl $name {
+            pub const fn new() -> Self {
+                Self {
+                    slot: BufferSlot::new(),
+                }
+            }
+
+            pub fn as_slot(&self) -> &BufferSlot<$size> {
+                &self.slot
+            }
+
+            pub fn as_slot_mut(&mut self) -> &mut BufferSlot<$size> {
+                &mut self.slot
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl core::ops::Deref for $name {
+            type Target = BufferSlot<$size>;
+            fn deref(&self) -> &Self::Target {
+                &self.slot
+            }
+        }
+
+        impl core::ops::DerefMut for $name {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.slot
+            }
+        }
+    };
+}
+
+define_aligned_slot!(AlignedSlot32, 32);
+define_aligned_slot!(AlignedSlot64, 64);
+define_aligned_slot!(AlignedSlot128, 128);
+define_aligned_slot!(AlignedSlot256, 256);
+
+/// Select the correctly-aligned [`BufferSlot`] wrapper for a given buffer
+/// SIZE.  Supported sizes: 32, 64, 128, 256.  Any other size produces a
+/// compile error.
+///
+/// # Examples
+///
+/// ```ignore
+/// use cortex_m_rtos::aligned_buffer_slot;
+/// type Slot = aligned_buffer_slot!(64);
+/// let s = Slot::new();
+/// assert_eq!(core::mem::align_of::<Slot>(), 64);
+/// ```
+#[macro_export]
+macro_rules! aligned_buffer_slot {
+    (32) => {
+        $crate::buffer_pool::AlignedSlot32
+    };
+    (64) => {
+        $crate::buffer_pool::AlignedSlot64
+    };
+    (128) => {
+        $crate::buffer_pool::AlignedSlot128
+    };
+    (256) => {
+        $crate::buffer_pool::AlignedSlot256
+    };
+    ($other:literal) => {
+        compile_error!(concat!(
+            "aligned_buffer_slot!(",
+            stringify!($other),
+            "): unsupported size. Supported sizes are 32, 64, 128, 256."
+        ))
+    };
+}
+
 pub struct BufferPool<const SLOTS: usize, const SIZE: usize> {
     slots: [BufferSlot<SIZE>; SLOTS],
     /// Per-slot optional deadline (tick count). When set, the slot can be
@@ -601,15 +693,10 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
     /// Panics if any slot is misaligned.  Must only be called during
     /// boot-time initialisation, never from handler-mode code (SVC,
     /// PendSV, etc.) where a panic would be unrecoverable.
+    #[deprecated(note = "use check_alignment() for fallible boot-time checking")]
     pub fn verify_slot_alignment(&self) {
-        for (i, slot) in self.slots.iter().enumerate() {
-            let addr = slot.data.as_ptr() as usize;
-            if !Self::check_slot_aligned(addr) {
-                panic!(
-                    "BufferPool slot {} data at {:#x} is not {}-byte aligned",
-                    i, addr, SIZE
-                );
-            }
+        if let Err(e) = self.check_alignment() {
+            panic!("{e}");
         }
     }
 
@@ -617,7 +704,7 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
     /// data buffer is aligned to `SIZE` bytes, panicking if not.
     ///
     /// This is a convenience wrapper around [`new`](Self::new) +
-    /// [`verify_slot_alignment`](Self::verify_slot_alignment).
+    /// [`assert_aligned`](Self::assert_aligned).
     ///
     /// # Panics
     ///
@@ -627,24 +714,44 @@ impl<const SLOTS: usize, const SIZE: usize> BufferPool<SLOTS, SIZE> {
     #[inline(always)]
     pub fn verified() -> Self {
         let pool = Self::new();
-        pool.verify_slot_alignment();
+        pool.assert_aligned();
         pool
+    }
+
+    // TODO: tight coupling — check_alignment returns crate::boot::BootError directly.
+    // A cleaner approach would be returning a BufferPoolError that BootError wraps,
+    // decoupling the resource pool from the boot orchestrator.
+
+    /// Check that every slot's data buffer is aligned to `SIZE` bytes,
+    /// returning a [`BootError::BufferPoolMisaligned`] on the first
+    /// misaligned slot found.
+    pub fn check_alignment(&self) -> Result<(), crate::boot::BootError> {
+        for (i, slot) in self.slots.iter().enumerate() {
+            let addr = slot.data.as_ptr() as usize;
+            if !Self::check_slot_aligned(addr) {
+                return Err(crate::boot::BootError::BufferPoolMisaligned {
+                    slot: i,
+                    addr: addr as u32,
+                    required: SIZE as u32,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Convenience wrapper: panics if any slot is misaligned.
     ///
-    /// Identical to [`verify_slot_alignment`](Self::verify_slot_alignment)
-    /// but named to read naturally as an assertion in init sequences:
-    /// ```ignore
-    /// POOL.assert_aligned();
-    /// ```
+    /// Equivalent to `self.check_alignment().unwrap()`.
     ///
     /// # Panics
     ///
     /// Panics if any slot is misaligned.  Boot-time only; see
-    /// [`verify_slot_alignment`](Self::verify_slot_alignment).
+    /// [`check_alignment`](Self::check_alignment).
+    // TODO: assert_aligned() uses .unwrap() which panics in kernel code.
+    // Callers in the boot path should prefer check_alignment()? instead.
+    // Kept as a convenience for non-boot contexts (e.g. Kernel::new in tests).
     pub fn assert_aligned(&self) {
-        self.verify_slot_alignment();
+        self.check_alignment().unwrap();
     }
 
     /// Revoke all active `lent_to` records for slots owned by `owner`,
@@ -1794,6 +1901,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
+    #[allow(deprecated)]
     fn verify_slot_alignment_passes_for_aligned_pool() {
         // BufferSlot has repr(C, align(32)), so data at offset 0 is
         // 32-byte aligned.  SIZE=32 must pass.
@@ -1856,6 +1964,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn const_assert_size_32_with_alignment_check() {
         // SIZE=32 matches repr(align(32)), so alignment is guaranteed.
         let pool = BufferPool::<2, 32>::new();
@@ -1863,6 +1972,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn const_assert_size_16_constructs_successfully() {
         // SIZE=16 < 32 is valid (power of two); slots are 32-byte aligned
         // which exceeds the 16-byte requirement.
@@ -1928,5 +2038,88 @@ mod tests {
             assert!(!seen[d], "duplicate discriminant {d}");
             seen[d] = true;
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // aligned_buffer_slot! macro and AlignedSlot* tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn aligned_slot_types_have_correct_alignment() {
+        assert_eq!(core::mem::align_of::<AlignedSlot32>(), 32);
+        assert_eq!(core::mem::align_of::<AlignedSlot64>(), 64);
+        assert_eq!(core::mem::align_of::<AlignedSlot128>(), 128);
+        assert_eq!(core::mem::align_of::<AlignedSlot256>(), 256);
+    }
+
+    #[test]
+    fn aligned_slot_data_ptrs_satisfy_alignment() {
+        let s32 = AlignedSlot32::new();
+        assert_eq!(s32.data().as_ptr() as usize % 32, 0);
+        let s64 = AlignedSlot64::new();
+        assert_eq!(s64.data().as_ptr() as usize % 64, 0);
+        let s128 = AlignedSlot128::new();
+        assert_eq!(s128.data().as_ptr() as usize % 128, 0);
+        let s256 = AlignedSlot256::new();
+        assert_eq!(s256.data().as_ptr() as usize % 256, 0);
+    }
+
+    #[test]
+    fn aligned_slot_deref_and_access() {
+        let mut slot = AlignedSlot64::new();
+        assert_eq!(slot.state(), BorrowState::Free);
+        assert_eq!(*slot.data(), [0u8; 64]);
+        slot.as_slot_mut().data_mut()[0] = 0xAB;
+        assert_eq!(slot.data()[0], 0xAB);
+    }
+
+    #[test]
+    fn aligned_slot_default_matches_new() {
+        let a = AlignedSlot128::new();
+        let b = AlignedSlot128::default();
+        assert_eq!(a.data(), b.data());
+        assert_eq!(a.state(), b.state());
+    }
+
+    #[test]
+    fn aligned_slot_array_elements_are_aligned() {
+        let slots = [
+            AlignedSlot64::new(),
+            AlignedSlot64::new(),
+            AlignedSlot64::new(),
+            AlignedSlot64::new(),
+        ];
+        for (i, slot) in slots.iter().enumerate() {
+            let addr = slot.data().as_ptr() as usize;
+            assert_eq!(
+                addr % 64,
+                0,
+                "element {} at {:#x} not 64-byte aligned",
+                i,
+                addr
+            );
+        }
+    }
+
+    #[test]
+    fn aligned_buffer_slot_macro_selects_correct_type() {
+        type S32 = aligned_buffer_slot!(32);
+        type S64 = aligned_buffer_slot!(64);
+        type S128 = aligned_buffer_slot!(128);
+        type S256 = aligned_buffer_slot!(256);
+        assert_eq!(core::mem::align_of::<S32>(), 32);
+        assert_eq!(core::mem::align_of::<S64>(), 64);
+        assert_eq!(core::mem::align_of::<S128>(), 128);
+        assert_eq!(core::mem::align_of::<S256>(), 256);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn existing_buffer_pool_32_unchanged() {
+        let mut pool = BufferPool::<2, 32>::new();
+        pool.verify_slot_alignment();
+        let idx = pool.alloc(0, BorrowMode::Read).unwrap();
+        assert_eq!(idx, 0);
+        pool.release(0, 0).unwrap();
     }
 }

@@ -184,6 +184,15 @@ pub enum BootError {
     KernelInit(ConfigError),
     /// FPU lazy stacking (LSPEN | ASPEN) not active after enabling FPU.
     FpuLazyStackingNotActive,
+    /// Buffer pool slot misaligned (MPU requires data aligned to buffer size).
+    BufferPoolMisaligned {
+        /// Slot index within the pool.
+        slot: usize,
+        /// Actual address of the slot's data buffer.
+        addr: u32,
+        /// Required alignment in bytes (== buffer size).
+        required: u32,
+    },
 }
 
 impl core::fmt::Display for BootError {
@@ -274,6 +283,16 @@ impl core::fmt::Display for BootError {
                 write!(
                     f,
                     "FPCCR lazy stacking (LSPEN|ASPEN) not active after FPU enable"
+                )
+            }
+            Self::BufferPoolMisaligned {
+                slot,
+                addr,
+                required,
+            } => {
+                write!(
+                    f,
+                    "buffer pool slot {slot} misaligned: addr=0x{addr:08x}, required={required}-byte alignment"
                 )
             }
         }
@@ -504,6 +523,11 @@ where
                 })?;
             }
         }
+
+        // Buffer pool alignment check: MPU requires each slot's data
+        // buffer to be aligned to the buffer size.
+        #[cfg(feature = "dynamic-mpu")]
+        k.buffers().check_alignment()?;
 
         // Register partitions with SystemView so all tasks are known
         // before the scheduler starts.
@@ -1615,6 +1639,58 @@ mod tests {
         let mask = FPCCR_LSPEN | FPCCR_ASPEN;
         assert_eq!(mask, 0xC000_0000);
         assert_eq!(mask.count_ones(), 2);
+    }
+
+    #[test]
+    fn buffer_pool_misaligned_construction_and_display() {
+        let err = BootError::BufferPoolMisaligned {
+            slot: 3,
+            addr: 0x2000_0123,
+            required: 64,
+        };
+        assert_eq!(
+            err,
+            BootError::BufferPoolMisaligned {
+                slot: 3,
+                addr: 0x2000_0123,
+                required: 64,
+            }
+        );
+        assert_eq!(
+            std::format!("{err}"),
+            "buffer pool slot 3 misaligned: addr=0x20000123, required=64-byte alignment"
+        );
+    }
+
+    #[test]
+    fn buffer_pool_misaligned_display_slot_zero() {
+        let err = BootError::BufferPoolMisaligned {
+            slot: 0,
+            addr: 0x2000_0010,
+            required: 32,
+        };
+        assert_eq!(
+            std::format!("{err}"),
+            "buffer pool slot 0 misaligned: addr=0x20000010, required=32-byte alignment"
+        );
+    }
+
+    #[test]
+    fn buffer_pool_misaligned_ne_other_variants() {
+        let misaligned = BootError::BufferPoolMisaligned {
+            slot: 0,
+            addr: 0x2000_0001,
+            required: 32,
+        };
+        assert_ne!(misaligned, BootError::NoReadyPartition);
+        assert_ne!(
+            misaligned,
+            BootError::BufferPoolMisaligned {
+                slot: 1,
+                addr: 0x2000_0001,
+                required: 32,
+            }
+        );
     }
 
     /// On host builds, fpu-context is not enabled, so init_fpu() is a no-op.
