@@ -377,6 +377,7 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
     use crate::scheduler::ScheduleEvent;
 
     let prev_active = kernel.active_partition;
+    let _ = prev_active; // used by trace feature
     let event = crate::svc::scheduler::advance_schedule_tick(kernel);
     let current_tick = kernel.tick().get();
     match event {
@@ -391,8 +392,8 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
             let bh = crate::run_bottom_half!(kernel, current_tick, &kernel.dynamic_strategy);
             let has_rx = match bh {
                 Ok(b) => b.has_rx_data,
-                Err(e) => {
-                    crate::klog!("BUG: {}", e);
+                Err(_e) => {
+                    crate::klog!("BUG: {}", _e);
                     false
                 }
             };

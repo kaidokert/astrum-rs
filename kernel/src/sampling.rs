@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(p.current_size(), 0);
         assert_eq!(p.timestamp(), 0);
         assert_eq!(p.connected_port(), None);
-        assert_eq!(p.data(), &[]);
+        assert_eq!(p.data(), &[] as &[u8]);
     }
 
     #[test]

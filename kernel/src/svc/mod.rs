@@ -1602,12 +1602,12 @@ where
         match self.registry.get_mut(device_id) {
             Some(d) => match f(d, pid) {
                 Ok(val) => val,
-                Err(e) => {
+                Err(_e) => {
                     crate::klog!(
                         "dev_dispatch: DeviceError dev={} pid={} err={:?}",
                         device_id,
                         pid,
-                        e
+                        _e
                     );
                     SvcError::OperationFailed.to_u32()
                 }

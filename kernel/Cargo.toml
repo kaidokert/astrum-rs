@@ -546,7 +546,7 @@ name = "qemu_pac_timer_chain"
 required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
 
 [features]
-default = ["arinc-compat"]
+default = ["arinc-compat", "dynamic-mpu"]
 
 # IPC primitives (optional, enabled via arinc-compat by default)
 ipc-sampling = []

@@ -41,19 +41,25 @@ macro_rules! svc {
     ($id:expr, $a:expr, $b:expr, $c:expr) => {{
         let r: u32;
         #[cfg(target_arch = "arm")]
-        // SAFETY: The inline `svc #0` instruction triggers the SVCall
-        // exception whose handler (`SVC_HANDLER`) inspects and validates
-        // the arguments.  The register constraints match the kernel's
-        // documented SVC ABI (id in r0, args in r1-r3, r12 clobbered).
-        unsafe {
-            core::arch::asm!(
-                "svc #0",
-                inout("r0") $id => r,
-                in("r1") $a,
-                in("r2") $b,
-                in("r3") $c,
-                out("r12") _,
-            )
+        {
+            let id: u32 = $id;
+            let a: u32 = $a;
+            let b: u32 = $b;
+            let c: u32 = $c;
+            // SAFETY: The inline `svc #0` instruction triggers the SVCall
+            // exception whose handler (`SVC_HANDLER`) inspects and validates
+            // the arguments.  The register constraints match the kernel's
+            // documented SVC ABI (id in r0, args in r1-r3, r12 clobbered).
+            unsafe {
+                core::arch::asm!(
+                    "svc #0",
+                    inout("r0") id => r,
+                    in("r1") a,
+                    in("r2") b,
+                    in("r3") c,
+                    out("r12") _,
+                )
+            }
         }
         #[cfg(not(target_arch = "arm"))]
         {
@@ -179,19 +185,25 @@ macro_rules! svc_r01 {
         let r0: u32;
         let r1: u32;
         #[cfg(target_arch = "arm")]
-        // SAFETY: The inline `svc #0` instruction triggers the SVCall
-        // exception whose handler inspects and validates the arguments.
-        // The register constraints match the kernel's SVC ABI (id in r0,
-        // args in r1-r3, result in r0+r1, r12 clobbered).
-        unsafe {
-            core::arch::asm!(
-                "svc #0",
-                inout("r0") $id => r0,
-                inout("r1") $a => r1,
-                in("r2") $b,
-                in("r3") $c,
-                out("r12") _,
-            )
+        {
+            let id: u32 = $id;
+            let a: u32 = $a;
+            let b: u32 = $b;
+            let c: u32 = $c;
+            // SAFETY: The inline `svc #0` instruction triggers the SVCall
+            // exception whose handler inspects and validates the arguments.
+            // The register constraints match the kernel's SVC ABI (id in r0,
+            // args in r1-r3, result in r0+r1, r12 clobbered).
+            unsafe {
+                core::arch::asm!(
+                    "svc #0",
+                    inout("r0") id => r0,
+                    inout("r1") a => r1,
+                    in("r2") b,
+                    in("r3") c,
+                    out("r12") _,
+                )
+            }
         }
         #[cfg(not(target_arch = "arm"))]
         {

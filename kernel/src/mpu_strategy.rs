@@ -698,12 +698,12 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
         permissions: u32,
         owner: u8,
     ) -> Result<u8, MpuError> {
-        crate::mpu::validate_mpu_region(base, size).inspect_err(|&e| {
+        crate::mpu::validate_mpu_region(base, size).inspect_err(|&_e| {
             crate::klog!(
                 "add_window: validate_mpu_region failed base=0x{:08x} size={} err={:?}",
                 base,
                 size,
-                e
+                _e
             );
         })?;
 
