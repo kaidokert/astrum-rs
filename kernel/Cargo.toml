@@ -529,6 +529,10 @@ required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
 name = "qemu_pac_pwm0"
 required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
 
+[[example]]
+name = "qemu_pac_pwm0_deadband"
+required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
+
 [features]
 default = ["arinc-compat"]
 
