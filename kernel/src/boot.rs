@@ -1982,4 +1982,121 @@ mod tests {
             .discriminant()
         );
     }
+
+    /// Exhaustive Display coverage for every BootError variant.
+    /// Uses a match-all so adding a variant without updating causes a compile error.
+    #[test]
+    fn boot_error_display_exhaustive() {
+        use crate::mpu::MpuError;
+        use crate::partition::ConfigError;
+        fn has(e: &BootError, keys: &[&str]) {
+            let m = std::format!("{e}");
+            for k in keys {
+                assert!(m.contains(k), "missing {k:?} in: {m}");
+            }
+        }
+        // Construct every variant, format it, and check key diagnostic fields.
+        has(
+            &BootError::StackInitFailed { partition_index: 2 },
+            &["2", "stack init"],
+        );
+        has(&BootError::NoReadyPartition, &["no partition ready"]);
+        has(
+            &BootError::StackAlignmentError {
+                partition_index: 1,
+                base: 0x2000_0200,
+                size: 1024,
+            },
+            &["1", "20000200", "1024"],
+        );
+        has(
+            &BootError::StackSizeError {
+                partition_index: 3,
+                size: 48,
+            },
+            &["3", "48"],
+        );
+        has(
+            &BootError::StackSizeOverflow { partition_index: 4 },
+            &["4", "overflow"],
+        );
+        has(
+            &BootError::StorageMisaligned {
+                address: 0x2000_0100,
+                required: 512,
+            },
+            &["20000100", "512"],
+        );
+        has(
+            &BootError::StackRegionError { partition_index: 5 },
+            &["5", "stack region"],
+        );
+        has(
+            &BootError::MpuDataRegionError { partition_index: 6 },
+            &["6", "MPU data region"],
+        );
+        has(
+            &BootError::SentinelMpuWithEnforce { partition_index: 7 },
+            &["7", "sentinel", "MPU_ENFORCE"],
+        );
+        has(
+            &BootError::SentinelPromotionFailed { partition_index: 8 },
+            &["8", "sentinel"],
+        );
+        has(
+            &BootError::MpuCachePopulationFailed {
+                partition_index: 9,
+                source: MpuError::SlotExhausted,
+            },
+            &["9", "SlotExhausted"],
+        );
+        has(
+            &BootError::BootMpuInitFailed {
+                reason: "region setup failed",
+            },
+            &["region setup failed", "boot MPU init"],
+        );
+        has(&BootError::KernelNotInitialized, &["not initialized"]);
+        has(
+            &BootError::TooManyPartitions { given: 10, max: 4 },
+            &["10", "4"],
+        );
+        has(
+            &BootError::KernelInit(ConfigError::ScheduleEmpty),
+            &["kernel init failed", "empty"],
+        );
+        has(
+            &BootError::FpuLazyStackingNotActive,
+            &["FPCCR", "lazy stacking"],
+        );
+        has(
+            &BootError::BufferPoolMisaligned {
+                slot: 3,
+                addr: 0x2000_0033,
+                required: 64,
+            },
+            &["3", "20000033", "64"],
+        );
+        // Exhaustive match (no wildcard) — compile error if a variant is added.
+        let sentinel = BootError::NoReadyPartition;
+        match sentinel {
+            BootError::StackInitFailed { .. }
+            | BootError::NoReadyPartition
+            | BootError::StackAlignmentError { .. }
+            | BootError::StackSizeError { .. }
+            | BootError::StackSizeOverflow { .. }
+            | BootError::StorageMisaligned { .. }
+            | BootError::StackRegionError { .. }
+            | BootError::MpuDataRegionError { .. }
+            | BootError::SentinelMpuWithEnforce { .. }
+            | BootError::SentinelPromotionFailed { .. }
+            | BootError::MpuCachePopulationFailed { .. }
+            | BootError::BootMpuInitFailed { .. }
+            | BootError::KernelNotInitialized
+            | BootError::TooManyPartitions { .. }
+            | BootError::KernelInit(_)
+            | BootError::FpuLazyStackingNotActive
+            | BootError::BufferPoolMisaligned { .. } => {}
+        }
+    }
 }

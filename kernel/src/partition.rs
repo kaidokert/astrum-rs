@@ -2274,6 +2274,137 @@ mod tests {
         }
     }
 
+    /// Exhaustive Display coverage for every ConfigError variant.
+    /// Uses a match-all so adding a variant without updating causes a compile error.
+    #[test]
+    fn config_error_display_exhaustive() {
+        fn has(e: &ConfigError, keys: &[&str]) {
+            let m = format!("{e}");
+            for k in keys {
+                assert!(m.contains(k), "missing {k:?} in: {m}");
+            }
+        }
+        // Construct every variant, format it, and check key diagnostic fields.
+        has(&ConfigError::ScheduleEmpty, &["empty"]);
+        has(
+            &ConfigError::ScheduleIndexOutOfBounds {
+                entry_index: 3,
+                partition_index: 9,
+                num_partitions: 4,
+            },
+            &["3", "9", "4"],
+        );
+        has(
+            &ConfigError::MpuRegionInvalid {
+                partition_id: 1,
+                detail: MpuError::SizeTooSmall,
+            },
+            &["1", &format!("{}", MpuError::SizeTooSmall)],
+        );
+        has(
+            &ConfigError::StackSizeInvalid { partition_id: 2 },
+            &["2", "power of two"],
+        );
+        has(
+            &ConfigError::StackBaseNotAligned { partition_id: 3 },
+            &["3", "not aligned"],
+        );
+        has(
+            &ConfigError::StackOverflow { partition_id: 4 },
+            &["4", "overflow"],
+        );
+        has(&ConfigError::PartitionTableFull, &["full"]);
+        has(
+            &ConfigError::PartitionIdMismatch {
+                index: 1,
+                expected_id: 1,
+                actual_id: 5,
+            },
+            &["1", "5"],
+        );
+        has(
+            &ConfigError::StackInitFailed { partition_id: 6 },
+            &["6", "stack"],
+        );
+        has(
+            &ConfigError::PartitionCountMismatch {
+                expected: 4,
+                actual: 2,
+            },
+            &["4", "2"],
+        );
+        has(
+            &ConfigError::PeripheralRegionInvalid {
+                partition_id: 7,
+                region_index: 2,
+                detail: MpuError::BaseNotAligned,
+            },
+            &["7", "2", &format!("{}", MpuError::BaseNotAligned)],
+        );
+        has(
+            &ConfigError::TooManyPeripheralRegions {
+                partition_id: 8,
+                got: 5,
+                max: 3,
+            },
+            &["8", "5", "3"],
+        );
+        has(
+            &ConfigError::CodeRegionInvalid {
+                partition_id: 9,
+                detail: MpuError::AddressOverflow,
+            },
+            &["9", &format!("{}", MpuError::AddressOverflow)],
+        );
+        has(
+            &ConfigError::EntryPointNotThumb {
+                partition_id: 10,
+                entry_point: 0x0800_0100,
+            },
+            &["10", "0x08000100", "Thumb"],
+        );
+        has(
+            &ConfigError::EntryPointOutsideCodeRegion {
+                partition_id: 11,
+                entry_point: 0x0900_0000,
+                region_base: 0x0800_0000,
+                region_size: 0x0001_0000,
+            },
+            &["11", "0x09000000", "0x08000000", "0x08010000"],
+        );
+        #[cfg(feature = "dynamic-mpu")]
+        has(&ConfigError::NoSystemWindow, &["system window"]);
+        #[cfg(feature = "dynamic-mpu")]
+        has(
+            &ConfigError::SystemWindowTooInfrequent {
+                max_gap_ticks: 500,
+                threshold_ticks: 200,
+            },
+            &["500", "200"],
+        );
+        // Exhaustive match (no wildcard) — compile error if a variant is added.
+        let sentinel = ConfigError::ScheduleEmpty;
+        match sentinel {
+            ConfigError::ScheduleEmpty
+            | ConfigError::ScheduleIndexOutOfBounds { .. }
+            | ConfigError::MpuRegionInvalid { .. }
+            | ConfigError::StackSizeInvalid { .. }
+            | ConfigError::StackBaseNotAligned { .. }
+            | ConfigError::StackOverflow { .. }
+            | ConfigError::PartitionTableFull
+            | ConfigError::PartitionIdMismatch { .. }
+            | ConfigError::StackInitFailed { .. }
+            | ConfigError::PartitionCountMismatch { .. }
+            | ConfigError::PeripheralRegionInvalid { .. }
+            | ConfigError::TooManyPeripheralRegions { .. }
+            | ConfigError::CodeRegionInvalid { .. }
+            | ConfigError::EntryPointNotThumb { .. }
+            | ConfigError::EntryPointOutsideCodeRegion { .. } => {}
+            #[cfg(feature = "dynamic-mpu")]
+            ConfigError::NoSystemWindow | ConfigError::SystemWindowTooInfrequent { .. } => {}
+        }
+    }
+
     // ------------------------------------------------------------------
     // PartitionConfig::validate
     // ------------------------------------------------------------------
