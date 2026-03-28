@@ -812,7 +812,6 @@ pub enum ConfigError {
     /// kernel bottom-half processing (buffer pool transfers, virtual
     /// device I/O, etc.). Without at least one system window in the
     /// schedule, bottom-half work will never run and IPC will stall.
-    #[cfg(feature = "dynamic-mpu")]
     NoSystemWindow,
     /// The gap between system windows exceeds the acceptable threshold.
     ///
@@ -820,7 +819,6 @@ pub enum ConfigError {
     /// enough to service bottom-half work in a timely manner. If the maximum
     /// gap between consecutive system windows (including wrap-around) exceeds
     /// the configured threshold, real-time deadlines may be missed.
-    #[cfg(feature = "dynamic-mpu")]
     SystemWindowTooInfrequent {
         /// The actual maximum gap in ticks between system windows.
         max_gap_ticks: u32,
@@ -920,14 +918,12 @@ impl core::fmt::Display for ConfigError {
                  not within code region [{region_base:#010x}..{:#010x})",
                 region_base.wrapping_add(*region_size)
             ),
-            #[cfg(feature = "dynamic-mpu")]
             Self::NoSystemWindow => write!(
                 f,
                 "schedule contains no system window: bottom-half processing \
                  (buffer pool transfers, virtual device I/O) requires at least \
                  one system window entry"
             ),
-            #[cfg(feature = "dynamic-mpu")]
             Self::SystemWindowTooInfrequent {
                 max_gap_ticks,
                 threshold_ticks,
@@ -975,9 +971,7 @@ impl ConfigError {
             Self::CodeRegionInvalid { detail, .. } => 0x300 + detail.discriminant(),
             Self::EntryPointNotThumb { .. } => 11,
             Self::EntryPointOutsideCodeRegion { .. } => 12,
-            #[cfg(feature = "dynamic-mpu")]
             Self::NoSystemWindow => 13,
-            #[cfg(feature = "dynamic-mpu")]
             Self::SystemWindowTooInfrequent { .. } => 14,
         }
     }
@@ -2462,9 +2456,7 @@ mod tests {
             },
             &["11", "0x09000000", "0x08000000", "0x08010000"],
         );
-        #[cfg(feature = "dynamic-mpu")]
         has(&ConfigError::NoSystemWindow, &["system window"]);
-        #[cfg(feature = "dynamic-mpu")]
         has(
             &ConfigError::SystemWindowTooInfrequent {
                 max_gap_ticks: 500,
@@ -2489,9 +2481,9 @@ mod tests {
             | ConfigError::TooManyPeripheralRegions { .. }
             | ConfigError::CodeRegionInvalid { .. }
             | ConfigError::EntryPointNotThumb { .. }
-            | ConfigError::EntryPointOutsideCodeRegion { .. } => {}
-            #[cfg(feature = "dynamic-mpu")]
-            ConfigError::NoSystemWindow | ConfigError::SystemWindowTooInfrequent { .. } => {}
+            | ConfigError::EntryPointOutsideCodeRegion { .. }
+            | ConfigError::NoSystemWindow
+            | ConfigError::SystemWindowTooInfrequent { .. } => {}
         }
     }
 
@@ -2908,7 +2900,6 @@ mod tests {
     // ConfigError::NoSystemWindow (dynamic-mpu feature)
     // ------------------------------------------------------------------
 
-    #[cfg(feature = "dynamic-mpu")]
     mod no_system_window_tests {
         use super::*;
 
@@ -2959,7 +2950,6 @@ mod tests {
     // ConfigError::SystemWindowTooInfrequent (dynamic-mpu feature)
     // ------------------------------------------------------------------
 
-    #[cfg(feature = "dynamic-mpu")]
     mod system_window_too_infrequent_tests {
         use super::*;
 
@@ -4201,19 +4191,15 @@ mod tests {
             0x305
         );
 
-        // Feature-gated variants.
-        #[cfg(feature = "dynamic-mpu")]
-        {
-            assert_eq!(ConfigError::NoSystemWindow.discriminant(), 13);
-            assert_eq!(
-                ConfigError::SystemWindowTooInfrequent {
-                    max_gap_ticks: 100,
-                    threshold_ticks: 50,
-                }
-                .discriminant(),
-                14
-            );
-        }
+        assert_eq!(ConfigError::NoSystemWindow.discriminant(), 13);
+        assert_eq!(
+            ConfigError::SystemWindowTooInfrequent {
+                max_gap_ticks: 100,
+                threshold_ticks: 50,
+            }
+            .discriminant(),
+            14
+        );
     }
 
     /// Verify all ConfigError discriminants are non-zero and unique.
@@ -4272,9 +4258,7 @@ mod tests {
                 region_base: 0x0900_0000,
                 region_size: 0x1000,
             },
-            #[cfg(feature = "dynamic-mpu")]
             ConfigError::NoSystemWindow,
-            #[cfg(feature = "dynamic-mpu")]
             ConfigError::SystemWindowTooInfrequent {
                 max_gap_ticks: 100,
                 threshold_ticks: 50,
@@ -4297,9 +4281,9 @@ mod tests {
                 | ConfigError::TooManyPeripheralRegions { .. }
                 | ConfigError::CodeRegionInvalid { .. }
                 | ConfigError::EntryPointNotThumb { .. }
-                | ConfigError::EntryPointOutsideCodeRegion { .. } => {}
-                #[cfg(feature = "dynamic-mpu")]
-                ConfigError::NoSystemWindow | ConfigError::SystemWindowTooInfrequent { .. } => {}
+                | ConfigError::EntryPointOutsideCodeRegion { .. }
+                | ConfigError::NoSystemWindow
+                | ConfigError::SystemWindowTooInfrequent { .. } => {}
             }
         }
         // All non-zero.
