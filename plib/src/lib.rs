@@ -40,7 +40,8 @@ pub use rtos_traits::buf_syscall;
 
 // Control
 pub use rtos_traits::syscall::{
-    SYS_GET_PARTITION_ID, SYS_GET_TIME, SYS_IRQ_ACK, SYS_SLEEP_TICKS, SYS_YIELD,
+    SYS_GET_PARTITION_ID, SYS_GET_START_CONDITION, SYS_GET_TIME, SYS_IRQ_ACK, SYS_SLEEP_TICKS,
+    SYS_YIELD,
 };
 // Events
 pub use rtos_traits::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT};
@@ -365,6 +366,31 @@ pub fn sys_yield() -> Result<u32, SvcError> {
 /// the syscall failed.
 pub fn sys_get_partition_id() -> Result<PartitionId, SvcError> {
     decode_rc(rtos_traits::svc!(SYS_GET_PARTITION_ID, 0u32, 0u32, 0u32)).map(PartitionId::new)
+}
+
+/// Describes how a partition was most recently started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartCondition {
+    /// Normal first boot.
+    NormalBoot,
+    /// Restarted with state preserved after a fault.
+    WarmRestart,
+    /// Restarted with full reset after a fault.
+    ColdRestart,
+}
+
+/// Get the start condition of the calling partition.
+///
+/// # Returns
+///
+/// `Ok(StartCondition)` indicating how the partition was started, or
+/// `Err(SvcError)` if the syscall failed.
+pub fn sys_get_start_condition() -> Result<StartCondition, SvcError> {
+    decode_rc(rtos_traits::svc!(SYS_GET_START_CONDITION, 0u32, 0u32, 0u32)).map(|v| match v {
+        1 => StartCondition::WarmRestart,
+        2 => StartCondition::ColdRestart,
+        _ => StartCondition::NormalBoot,
+    })
 }
 
 /// Get the current kernel tick count.

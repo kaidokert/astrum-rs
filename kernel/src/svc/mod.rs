@@ -2040,6 +2040,16 @@ where
                 }
             }
             Some(SyscallId::GetTime) => self.tick.get() as u32,
+            Some(SyscallId::GetStartCondition) => {
+                match self.partitions().get(self.current_partition as usize) {
+                    Some(pcb) => match pcb.start_condition() {
+                        crate::partition::StartCondition::NormalBoot => 0,
+                        crate::partition::StartCondition::WarmRestart => 1,
+                        crate::partition::StartCondition::ColdRestart => 2,
+                    },
+                    None => SvcError::InvalidPartition.to_u32(),
+                }
+            }
             Some(SyscallId::SleepTicks) => {
                 // NOTE: self.core.partitions_mut() is intentional – split borrow
                 // needed because self.sleep_queue is also mutably borrowed.
@@ -3129,6 +3139,7 @@ mod tests {
     pub use crate::scheduler::ScheduleEvent;
     pub use crate::semaphore::Semaphore;
     pub use crate::syscall::SYS_GET_PARTITION_ID;
+    pub use crate::syscall::SYS_GET_START_CONDITION;
     pub use crate::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT, SYS_IRQ_ACK, SYS_YIELD};
 
     // ---- Kernel::new() is the canonical constructor ----
@@ -3440,6 +3451,35 @@ mod tests {
             dispatch_syscall(&mut ef, &mut t, caller);
             assert_eq!(ef.r0, caller as u32);
         }
+    }
+
+    #[test]
+    fn get_start_condition_returns_correct_value() {
+        use crate::partition::StartCondition;
+        let mut k = kernel(0, 0, 0);
+        k.active_partition = Some(0);
+        // Fix invariant: only P0 should be Running.
+        try_transition(k.partitions_mut(), 1, PartitionState::Ready);
+
+        // Default start condition is NormalBoot → 0
+        let r = dispatch_r0(&mut k, SYS_GET_START_CONDITION, 0, 0);
+        assert_eq!(r, 0, "NormalBoot should return 0");
+
+        // Set WarmRestart → 1
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_start_condition(StartCondition::WarmRestart);
+        let r = dispatch_r0(&mut k, SYS_GET_START_CONDITION, 0, 0);
+        assert_eq!(r, 1, "WarmRestart should return 1");
+
+        // Set ColdRestart → 2
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .set_start_condition(StartCondition::ColdRestart);
+        let r = dispatch_r0(&mut k, SYS_GET_START_CONDITION, 0, 0);
+        assert_eq!(r, 2, "ColdRestart should return 2");
     }
 
     #[test]

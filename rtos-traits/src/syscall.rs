@@ -36,6 +36,8 @@ pub const SYS_DEBUG_EXIT: u32 = 32;
 pub const SYS_IRQ_ACK: u32 = 38;
 /// Sleep for a number of ticks: r1=ticks (u16). Blocks the calling partition.
 pub const SYS_SLEEP_TICKS: u32 = 39;
+/// Get start condition: returns 0=NormalBoot, 1=WarmRestart, 2=ColdRestart in r0.
+pub const SYS_GET_START_CONDITION: u32 = 40;
 
 // ── Feature-gated syscall numbers ─────────────────────────────────────
 
@@ -126,6 +128,7 @@ mod tests {
         ("SYS_DEBUG_EXIT", SYS_DEBUG_EXIT, 32),
         ("SYS_IRQ_ACK", SYS_IRQ_ACK, 38),
         ("SYS_SLEEP_TICKS", SYS_SLEEP_TICKS, 39),
+        ("SYS_GET_START_CONDITION", SYS_GET_START_CONDITION, 40),
     ];
 
     #[test]
@@ -146,7 +149,7 @@ mod tests {
 
     #[test]
     fn base_constant_count() {
-        assert_eq!(BASE_SYSCALLS.len(), 26);
+        assert_eq!(BASE_SYSCALLS.len(), 27);
     }
 
     /// Dynamic-MPU syscall constants: (name, actual, expected).

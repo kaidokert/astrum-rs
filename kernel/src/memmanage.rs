@@ -109,27 +109,32 @@ where
         crate::partition::FaultPolicy::WarmRestart { max }
         | crate::partition::FaultPolicy::ColdRestart { max } => {
             let warm = matches!(policy, crate::partition::FaultPolicy::WarmRestart { .. });
-            let label = if warm { "warm" } else { "cold" };
+            let _label = if warm { "warm" } else { "cold" };
             if count < max {
                 match kernel.restart_partition(pid as usize, warm) {
                     Ok(()) => {
                         crate::klog!(
                             "[MemManage] pid={} {} restart ({}/{})",
                             pid,
-                            label,
+                            _label,
                             count + 1,
                             max
                         );
                     }
-                    Err(e) => {
-                        crate::klog!("[MemManage] pid={} {} restart FAILED: {:?}", pid, label, e);
+                    Err(_e) => {
+                        crate::klog!(
+                            "[MemManage] pid={} {} restart FAILED: {:?}",
+                            pid,
+                            _label,
+                            _e
+                        );
                     }
                 }
             } else {
                 crate::klog!(
                     "[MemManage] pid={} {} max restarts reached (count={}/{}), staying faulted",
                     pid,
-                    label,
+                    _label,
                     count,
                     max
                 );
