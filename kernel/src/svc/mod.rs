@@ -1035,6 +1035,8 @@ where
     /// partitions. Entries are inserted by `SYS_SLEEP` and drained each
     /// tick in [`expire_timed_waits`](Self::expire_timed_waits).
     pub sleep_queue: crate::waitqueue::SleepQueue<{ C::N }>,
+    /// Per-partition last-error snapshot, populated when a partition faults.
+    pub last_error: [Option<crate::error_handler::ErrorStatus>; C::N],
     _memory: PhantomData<&'mem ()>,
 }
 
@@ -1289,6 +1291,7 @@ where
             ports: C::Ports::default(),
             irq_bindings,
             sleep_queue: crate::waitqueue::SleepQueue::new(),
+            last_error: [None; C::N],
             _memory: PhantomData,
         };
         kernel.buffers.assert_aligned();
@@ -1331,6 +1334,7 @@ where
             ports: C::Ports::default(),
             irq_bindings: &[],
             sleep_queue: crate::waitqueue::SleepQueue::new(),
+            last_error: [None; C::N],
             _memory: PhantomData,
         }
     }
@@ -2557,7 +2561,34 @@ where
         pcb.transition(crate::partition::PartitionState::Ready)
             .map_err(|_| RestartError::TransitionFailed)?;
 
+        // Clear any recorded error status for this partition.
+        self.clear_last_error(pid);
+
         Ok(())
+    }
+
+    /// Record an error status snapshot for a partition.
+    ///
+    /// Overwrites any previously stored error for `pid`. Out-of-range `pid`
+    /// values are silently ignored (no partition exists to store against).
+    pub fn set_last_error(&mut self, pid: usize, status: crate::error_handler::ErrorStatus) {
+        if let Some(slot) = self.last_error.get_mut(pid) {
+            *slot = Some(status);
+        }
+    }
+
+    /// Retrieve the most recent error status for a partition, if any.
+    pub fn get_last_error(&self, pid: usize) -> Option<crate::error_handler::ErrorStatus> {
+        self.last_error.get(pid).copied().flatten()
+    }
+
+    /// Clear the stored error status for a partition.
+    ///
+    /// Out-of-range `pid` values are silently ignored.
+    pub fn clear_last_error(&mut self, pid: usize) {
+        if let Some(slot) = self.last_error.get_mut(pid) {
+            *slot = None;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -3013,6 +3044,7 @@ mod tests {
     mod debug;
     mod device;
     mod events;
+    mod last_error;
     mod message;
     mod restart;
     mod scheduler;
@@ -3181,6 +3213,7 @@ mod tests {
             ports: <TestConfig as KernelConfig>::Ports::default(),
             irq_bindings: &[],
             sleep_queue: crate::waitqueue::SleepQueue::new(),
+            last_error: [None; TestConfig::N],
             _memory: PhantomData,
         };
         // Add semaphores via facade method
