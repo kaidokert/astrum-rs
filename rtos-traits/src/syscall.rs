@@ -38,6 +38,10 @@ pub const SYS_IRQ_ACK: u32 = 38;
 pub const SYS_SLEEP_TICKS: u32 = 39;
 /// Get start condition: returns 0=NormalBoot, 1=WarmRestart, 2=ColdRestart in r0.
 pub const SYS_GET_START_CONDITION: u32 = 40;
+/// Register error handler: r1=entry_point_addr. Returns 0 on success.
+pub const SYS_REGISTER_ERROR_HANDLER: u32 = 41;
+/// Get error status: returns packed ErrorStatus in r0-r3, or SvcError if none.
+pub const SYS_GET_ERROR_STATUS: u32 = 42;
 
 // ── Feature-gated syscall numbers ─────────────────────────────────────
 
@@ -111,6 +115,8 @@ mod tests {
         ("SYS_IRQ_ACK", SYS_IRQ_ACK, 38),
         ("SYS_SLEEP_TICKS", SYS_SLEEP_TICKS, 39),
         ("SYS_GET_START_CONDITION", SYS_GET_START_CONDITION, 40),
+        ("SYS_REGISTER_ERROR_HANDLER", SYS_REGISTER_ERROR_HANDLER, 41),
+        ("SYS_GET_ERROR_STATUS", SYS_GET_ERROR_STATUS, 42),
     ];
 
     #[test]
@@ -131,7 +137,7 @@ mod tests {
 
     #[test]
     fn base_constant_count() {
-        assert_eq!(BASE_SYSCALLS.len(), 27);
+        assert_eq!(BASE_SYSCALLS.len(), 29);
     }
 
     /// Dynamic-MPU syscall constants: (name, actual, expected).

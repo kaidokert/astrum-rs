@@ -926,6 +926,14 @@ pub fn dispatch_syscall<const N: usize>(
         Some(SyscallId::EventSet) => ev::handle_event_set(partitions, frame.r1 as usize, frame.r2),
         Some(SyscallId::EventClear) => ev::handle_event_clear(partitions, caller, frame.r2),
         Some(SyscallId::IrqAck) => SvcError::InvalidResource.to_u32(),
+        Some(SyscallId::RegisterErrorHandler) => match partitions.get_mut(caller) {
+            Some(pcb) => {
+                pcb.set_error_handler(Some(frame.r1));
+                0
+            }
+            None => SvcError::InvalidPartition.to_u32(),
+        },
+        Some(SyscallId::GetErrorStatus) => SvcError::InvalidSyscall.to_u32(),
         Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
     };
@@ -2327,6 +2335,28 @@ where
                     debug::handle_debug_write(self.partitions_mut(), pid, data)
                 }
             }
+            Some(SyscallId::RegisterErrorHandler) => {
+                let pid = self.current_partition as usize;
+                match self.partitions_mut().get_mut(pid) {
+                    Some(pcb) => {
+                        pcb.set_error_handler(Some(frame.r1));
+                        0
+                    }
+                    None => SvcError::InvalidPartition.to_u32(),
+                }
+            }
+            Some(SyscallId::GetErrorStatus) => {
+                let pid = self.current_partition as usize;
+                match self.get_last_error(pid) {
+                    Some(es) => {
+                        frame.r1 = es.faulting_addr();
+                        frame.r2 = es.cfsr();
+                        frame.r3 = es.faulting_pc();
+                        (es.kind().as_u32() << 8) | es.failed_partition() as u32
+                    }
+                    None => SvcError::InvalidResource.to_u32(),
+                }
+            }
             Some(SyscallId::IrqAck) => {
                 let irq_num = arg1 as u8;
                 let caller_id = self.current_partition;
@@ -3043,6 +3073,7 @@ mod tests {
 
     mod debug;
     mod device;
+    mod error_handler_syscall;
     mod events;
     mod last_error;
     mod message;

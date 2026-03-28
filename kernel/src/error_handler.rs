@@ -19,6 +19,31 @@ pub enum FaultKind {
     DeadlineMiss,
 }
 
+impl FaultKind {
+    /// Convert to a raw `u32` discriminant for ABI packing.
+    pub const fn as_u32(self) -> u32 {
+        match self {
+            Self::MemManage => 0,
+            Self::BusFault => 1,
+            Self::UsageFault => 2,
+            Self::StackOverflow => 3,
+            Self::DeadlineMiss => 4,
+        }
+    }
+
+    /// Convert from a raw `u32` discriminant.
+    pub const fn from_u32(v: u32) -> Option<Self> {
+        match v {
+            0 => Some(Self::MemManage),
+            1 => Some(Self::BusFault),
+            2 => Some(Self::UsageFault),
+            3 => Some(Self::StackOverflow),
+            4 => Some(Self::DeadlineMiss),
+            _ => None,
+        }
+    }
+}
+
 /// Snapshot of a partition fault for post-mortem inspection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErrorStatus {

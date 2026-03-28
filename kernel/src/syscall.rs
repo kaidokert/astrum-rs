@@ -4,10 +4,11 @@
 pub use rtos_traits::syscall::SYS_GET_PARTITION_ID;
 pub use rtos_traits::syscall::{
     SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ, SYS_DEBUG_EXIT, SYS_DEBUG_PRINT, SYS_EVT_CLEAR,
-    SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_START_CONDITION, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV,
-    SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED,
-    SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS, SYS_SAMPLING_READ,
-    SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_YIELD,
+    SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_ERROR_STATUS, SYS_GET_START_CONDITION, SYS_GET_TIME,
+    SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV,
+    SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS,
+    SYS_REGISTER_ERROR_HANDLER, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL,
+    SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_YIELD,
 };
 
 // Buffer and device syscall numbers — defined in rtos-traits, re-exported here.
@@ -65,6 +66,8 @@ pub enum SyscallId {
     BufferRevoke,
     BufferTransfer,
     BufferRead,
+    RegisterErrorHandler,
+    GetErrorStatus,
     #[cfg(feature = "partition-debug")]
     DebugNotify,
     #[cfg(feature = "partition-debug")]
@@ -119,6 +122,8 @@ impl SyscallId {
             SYS_BUF_REVOKE => Some(Self::BufferRevoke),
             SYS_BUF_TRANSFER => Some(Self::BufferTransfer),
             SYS_BUF_READ => Some(Self::BufferRead),
+            SYS_REGISTER_ERROR_HANDLER => Some(Self::RegisterErrorHandler),
+            SYS_GET_ERROR_STATUS => Some(Self::GetErrorStatus),
             #[cfg(feature = "partition-debug")]
             SYS_DEBUG_NOTIFY => Some(Self::DebugNotify),
             #[cfg(feature = "partition-debug")]
@@ -171,6 +176,8 @@ impl SyscallId {
             Self::BufferRevoke => "buf_revoke",
             Self::BufferTransfer => "buf_transfer",
             Self::BufferRead => "buf_read",
+            Self::RegisterErrorHandler => "register_error_handler",
+            Self::GetErrorStatus => "get_error_status",
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => "debug_notify",
             #[cfg(feature = "partition-debug")]
@@ -222,6 +229,8 @@ impl SyscallId {
             Self::BufferRevoke => SYS_BUF_REVOKE,
             Self::BufferTransfer => SYS_BUF_TRANSFER,
             Self::BufferRead => SYS_BUF_READ,
+            Self::RegisterErrorHandler => SYS_REGISTER_ERROR_HANDLER,
+            Self::GetErrorStatus => SYS_GET_ERROR_STATUS,
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => SYS_DEBUG_NOTIFY,
             #[cfg(feature = "partition-debug")]
@@ -277,6 +286,8 @@ mod tests {
         (SYS_BUF_REVOKE, SyscallId::BufferRevoke),
         (SYS_BUF_TRANSFER, SyscallId::BufferTransfer),
         (SYS_BUF_READ, SyscallId::BufferRead),
+        (SYS_REGISTER_ERROR_HANDLER, SyscallId::RegisterErrorHandler),
+        (SYS_GET_ERROR_STATUS, SyscallId::GetErrorStatus),
         #[cfg(feature = "partition-debug")]
         (SYS_DEBUG_NOTIFY, SyscallId::DebugNotify),
     ];
@@ -308,7 +319,7 @@ mod tests {
         assert_eq!(SyscallId::from_u32(39), Some(SyscallId::SleepTicks));
         // 40 is now SYS_GET_START_CONDITION.
         assert_eq!(SyscallId::from_u32(40), Some(SyscallId::GetStartCondition));
-        assert_eq!(SyscallId::from_u32(41), None);
+        assert_eq!(SyscallId::from_u32(43), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -317,11 +328,11 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        // Base: 41, +1 for partition-debug
+        // Base: 43, +1 for partition-debug
         #[cfg(not(feature = "partition-debug"))]
-        assert_eq!(ALL_VARIANTS.len(), 41);
+        assert_eq!(ALL_VARIANTS.len(), 43);
         #[cfg(feature = "partition-debug")]
-        assert_eq!(ALL_VARIANTS.len(), 42);
+        assert_eq!(ALL_VARIANTS.len(), 44);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);
