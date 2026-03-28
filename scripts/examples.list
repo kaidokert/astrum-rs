@@ -82,4 +82,5 @@ QEMU_PERIPHERAL_EXAMPLES=(
     qemu_pac_i2c0
     qemu_pac_adc0
     qemu_pac_ssi0
+    qemu_pac_timer0_periodic
 )
