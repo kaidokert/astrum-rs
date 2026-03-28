@@ -60,21 +60,6 @@ macro_rules! _detect_dropped_ticks {
     };
 }
 
-#[cfg(not(feature = "dynamic-mpu"))]
-#[macro_export]
-#[doc(hidden)]
-macro_rules! _unified_handle_tick {
-    ($kernel:expr) => {{
-        $crate::_detect_dropped_ticks!($kernel);
-        let event = $crate::svc::scheduler::advance_schedule_tick(&mut $kernel);
-        if let Some(pid) = event {
-            $kernel.set_next_partition(pid);
-            cortex_m::peripheral::SCB::set_pendsv();
-        }
-    }};
-}
-
-#[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _unified_handle_tick {
@@ -82,7 +67,6 @@ macro_rules! _unified_handle_tick {
         $crate::_detect_dropped_ticks!($kernel);
         let event = $crate::svc::scheduler::advance_schedule_tick(&mut $kernel);
         $crate::_unified_handle_tick_event!($kernel, event, $tick, $strategy);
-        #[cfg(feature = "dynamic-mpu")]
         $kernel.fallback_revoke_expired_buffers();
     }};
 }
@@ -90,7 +74,6 @@ macro_rules! _unified_handle_tick {
 /// Shared helper: run bottom-half processing for system window and wake any
 /// blocked device readers. Used by both `_unified_handle_tick_event!` and
 /// `_unified_handle_yield!` to avoid code duplication.
-#[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _unified_run_system_window {
@@ -115,7 +98,6 @@ macro_rules! _unified_run_system_window {
     }};
 }
 
-#[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _unified_handle_tick_event {
@@ -133,20 +115,6 @@ macro_rules! _unified_handle_tick_event {
     }};
 }
 
-#[cfg(not(feature = "dynamic-mpu"))]
-#[macro_export]
-#[doc(hidden)]
-macro_rules! _unified_handle_yield {
-    ($kernel:expr) => {{
-        use $crate::svc::YieldResult;
-        let result = $kernel.yield_current_slot();
-        if let Some(pid) = result.partition_id() {
-            $kernel.set_next_partition(pid);
-        }
-    }};
-}
-
-#[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! _unified_handle_yield {
@@ -246,7 +214,6 @@ macro_rules! define_unified_harness {
     };
     // Internal: handlers only (SysTick, PendSV, SVC linkage, kernel state)
     (@handlers $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        #[cfg(feature = "dynamic-mpu")]
         static HARNESS_STRATEGY: $crate::mpu_strategy::DynamicStrategy<
             {<$Config as $crate::config::KernelConfig>::N}
         > = $crate::mpu_strategy::DynamicStrategy::<
@@ -255,28 +222,11 @@ macro_rules! define_unified_harness {
 
         /// Boot-time MPU initialisation hook called from `boot::boot_preconfigured()`
         /// before `SCB::set_pendsv()` triggers the first context switch.
-        /// Programs static regions R0-R3 for the first scheduled partition.
-        #[cfg(not(feature = "dynamic-mpu"))]
-        #[no_mangle]
-        fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) -> Result<(), &'static str> {
-            if !<$Config as $crate::config::KernelConfig>::MPU_ENFORCE { return Ok(()); }
-            $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
-                let pid = k.next_partition();
-                let pcb = k.pcb(pid as usize)
-                    .ok_or("boot: next_partition PID missing from partition table")?;
-                $crate::mpu::apply_partition_mpu_cached(mpu, pcb);
-                Ok(())
-            })?
-        }
-
-        /// Boot-time MPU initialisation hook called from `boot::boot_preconfigured()`
-        /// before `SCB::set_pendsv()` triggers the first context switch.
         /// Programs static regions R0-R3 and dynamic slot 0 (R4) for the
         /// first scheduled partition.  Also populates dynamic slots 1-3
         /// (R5-R7) with peripheral regions from all partitions, so that
         /// `program_regions()` hardware-programs them on every PendSV
         /// context switch.
-        #[cfg(feature = "dynamic-mpu")]
         #[no_mangle]
         fn __boot_mpu_init(mpu: &cortex_m::peripheral::MPU) -> Result<(), &'static str> {
             $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
@@ -352,13 +302,8 @@ macro_rules! define_unified_harness {
         }
 
         $crate::define_unified_kernel!($Config, |k| {
-            #[cfg(not(feature = "dynamic-mpu"))]
-            $crate::_unified_handle_yield!(k);
-            #[cfg(feature = "dynamic-mpu")]
-            {
-                let tick_val = k.tick().get();
-                $crate::_unified_handle_yield!(k, tick_val, &HARNESS_STRATEGY);
-            }
+            let tick_val = k.tick().get();
+            $crate::_unified_handle_yield!(k, tick_val, &HARNESS_STRATEGY);
             // Flush partition debug buffers at yield boundaries.
             // Zero-cost when partition-debug is disabled or budget is 0.
             k.drain_debug_auto();
@@ -385,14 +330,12 @@ macro_rules! define_unified_harness {
             // the schedule and SVC dispatch does not reprogram the MPU.
             let p = unsafe { cortex_m::Peripherals::steal() };
 
-            // Dynamic mode: disable MPU up front so base-region and
-            // dynamic-strategy writes share a single disable/enable cycle.
-            #[cfg(feature = "dynamic-mpu")]
+            // Disable MPU up front so base-region and dynamic-strategy
+            // writes share a single disable/enable cycle.
             if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
                 $crate::mpu::mpu_disable(&p.MPU);
             }
 
-            #[cfg_attr(not(feature = "dynamic-mpu"), allow(unused_variables))]
             let pid = match $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
                 let pid = k.next_partition();
                 let pcb = match k.pcb(pid as usize) {
@@ -406,21 +349,10 @@ macro_rules! define_unified_harness {
                     }
                 };
 
-                // Static mode: apply_partition_mpu_cached handles R0-R5
-                // from pre-computed PCB cache (no on-the-fly recomputation).
-                #[cfg(not(feature = "dynamic-mpu"))]
-                if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
-                    $crate::mpu::apply_partition_mpu_cached(&p.MPU, pcb);
-                }
-
-                // Dynamic mode: write R0-R3 from pre-computed cache
+                // Write R0-R3 from pre-computed cache
                 // (MPU already disabled above; R4-R5 overridden below).
-                #[cfg(feature = "dynamic-mpu")]
-                {
-                    if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
-                        $crate::mpu::write_cached_base_regions(&p.MPU, pcb);
-                    }
-
+                if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
+                    $crate::mpu::write_cached_base_regions(&p.MPU, pcb);
                 }
 
                 // Return pid for dynamic-mode peripheral cache lookup.
@@ -431,9 +363,8 @@ macro_rules! define_unified_harness {
                 Err(_) => return,
             };
 
-            // Dynamic mode: write per-partition R4-R7 strategy regions
+            // Write per-partition R4-R7 strategy regions
             // (peripherals, RAM, cross-partition filtering) and re-enable.
-            #[cfg(feature = "dynamic-mpu")]
             if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
                 let values = HARNESS_STRATEGY.partition_region_values(pid);
                 for &(rbar, rasr) in &values {
