@@ -1020,13 +1020,29 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     }
 
     /// Builder: attach peripheral MPU regions; validates non-zero-size regions.
-    pub fn with_peripheral_regions(mut self, regions: &[MpuRegion]) -> Result<Self, ConfigError> {
+    ///
+    /// Uses the global [`MAX_PERIPHERAL_REGIONS`] limit.  To enforce a
+    /// config-specific limit, use [`with_peripheral_regions_limited`](Self::with_peripheral_regions_limited).
+    pub fn with_peripheral_regions(self, regions: &[MpuRegion]) -> Result<Self, ConfigError> {
+        self.with_peripheral_regions_limited(regions, MAX_PERIPHERAL_REGIONS)
+    }
+
+    /// Builder: attach peripheral MPU regions with an explicit cap.
+    ///
+    /// `max_regions` is the maximum number of non-zero-size peripheral
+    /// regions allowed.  Pass a config's `MAX_PERIPHERAL_REGIONS`
+    /// associated constant to enforce per-config limits.
+    pub fn with_peripheral_regions_limited(
+        mut self,
+        regions: &[MpuRegion],
+        max_regions: usize,
+    ) -> Result<Self, ConfigError> {
         let non_zero_count = regions.iter().filter(|r| r.size() != 0).count();
-        if non_zero_count > MAX_PERIPHERAL_REGIONS {
+        if non_zero_count > max_regions {
             return Err(ConfigError::TooManyPeripheralRegions {
                 partition_id: self.partition_id,
                 got: non_zero_count,
-                max: MAX_PERIPHERAL_REGIONS,
+                max: max_regions,
             });
         }
         // TODO: reviewer false positive — `i` is used as `region_index` in the error path below.
@@ -1045,7 +1061,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
                 ConfigError::TooManyPeripheralRegions {
                     partition_id: self.partition_id,
                     got: non_zero_count,
-                    max: MAX_PERIPHERAL_REGIONS,
+                    max: max_regions,
                 }
             })?;
         }

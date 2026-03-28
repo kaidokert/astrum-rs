@@ -554,6 +554,12 @@ pub trait KernelConfig {
     /// This is the floor of Tier 2 in the three-tier priority model.
     const MIN_APP_IRQ_PRIORITY: u8 = 0x20;
 
+    /// Maximum number of peripheral MPU regions a partition may configure.
+    ///
+    /// Defaults to 3 (= `DYNAMIC_SLOT_COUNT − 1`).  Override via
+    /// `max_peripheral_regions = N` in `compose_kernel_config!`.
+    const MAX_PERIPHERAL_REGIONS: usize = 3;
+
     /// Core clock frequency in Hz.
     ///
     /// This is the frequency of the processor core clock that drives the
@@ -873,6 +879,8 @@ macro_rules! _kernel_config_inherent_consts {
             $vis const USE_PROCESSOR_CLOCK: bool =
                 <$name as $crate::config::KernelConfig>::USE_PROCESSOR_CLOCK;
             $vis const MPU_ENFORCE: bool = <$name as $crate::config::KernelConfig>::MPU_ENFORCE;
+            $vis const MAX_PERIPHERAL_REGIONS: usize =
+                <$name as $crate::config::KernelConfig>::MAX_PERIPHERAL_REGIONS;
         }
     };
 }
@@ -1013,6 +1021,9 @@ macro_rules! _kernel_config_field {
     (debug_buffer_size = $v:expr) => {
         #[cfg(feature = "partition-debug")]
         const DEBUG_BUFFER_SIZE: usize = $v;
+    };
+    (max_peripheral_regions = $v:expr) => {
+        const MAX_PERIPHERAL_REGIONS: usize = $v;
     };
 }
 
@@ -2874,6 +2885,63 @@ mod tests {
             assert_eq!(ComposedDynMpu::DR, 8);
             assert_eq!(ComposedDynMpu::SYSTEM_WINDOW_MAX_GAP_TICKS, 200);
         }
+    }
+
+    // ============ compose_kernel_config! max_peripheral_regions override ============
+
+    // Config with custom max_peripheral_regions = 1.
+    compose_kernel_config!(
+        ComposedMaxPeriphOne < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled > {
+            max_peripheral_regions = 1;
+        }
+    );
+
+    // Config without max_peripheral_regions override (should default to 3).
+    compose_kernel_config!(
+        ComposedMaxPeriphDefault < Partitions2,
+        SyncMinimal,
+        MsgMinimal,
+        PortsTiny,
+        DebugDisabled >
+    );
+
+    #[test]
+    fn compose_max_peripheral_regions_override() {
+        assert_eq!(ComposedMaxPeriphOne::MAX_PERIPHERAL_REGIONS, 1);
+    }
+
+    #[test]
+    fn compose_max_peripheral_regions_default() {
+        assert_eq!(ComposedMaxPeriphDefault::MAX_PERIPHERAL_REGIONS, 3);
+    }
+
+    #[test]
+    fn config_max_periph_1_rejects_two_regions() {
+        use crate::partition::{ExternalPartitionMemory, MpuRegion};
+
+        #[repr(align(256))]
+        struct Align256([u32; 64]);
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let r1 = MpuRegion::new(0x4000_0000, 256, 0);
+        let r2 = MpuRegion::new(0x4000_1000, 4096, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 0).unwrap();
+        let result = epm.with_peripheral_regions_limited(
+            &[r1, r2],
+            ComposedMaxPeriphOne::MAX_PERIPHERAL_REGIONS,
+        );
+        assert!(matches!(
+            result,
+            Err(crate::partition::ConfigError::TooManyPeripheralRegions {
+                partition_id: 0,
+                got: 2,
+                max: 1,
+            })
+        ));
     }
 
     compose_kernel_config!(
