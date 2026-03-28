@@ -114,6 +114,70 @@ fn main() -> ! {
 The guard uses `Ordering::Relaxed` because boot runs single-threaded
 before the scheduler starts.
 
+## MPU Enforcement and Build Profiles
+
+When `mpu_enforce = true`, the PendSV handler reprograms MPU regions on
+every context switch. In debug builds (`opt-level = 0`), this region
+programming is significantly slower because the compiler does not inline
+or optimize the register-write sequences. With the default 1 ms SysTick
+period, PendSV can take longer than one tick to complete.
+
+### Failure Mode
+
+When PendSV exceeds the tick period, SysTick fires before the context
+switch finishes. The system enters a state where:
+
+1. PendSV never fully completes a context switch.
+2. No partition code runs — the processor bounces between PendSV and
+   SysTick indefinitely.
+3. RTT output stops (no partition or kernel log code executes), so the
+   system appears completely locked with no diagnostic output.
+
+This failure is silent and looks identical to a hard hang. There is no
+fault, no panic, and no RTT message — just a dead board.
+
+### Runtime Warning
+
+The kernel emits a `klog!` warning at boot when it detects this risky
+combination (`debug_assertions` enabled and `mpu_enforce = true`):
+
+```
+WARNING: MPU enforcement with debug build — PendSV may be too slow for 1ms tick. Use --release or increase tick period.
+```
+
+This warning is printed by `warn_mpu_debug_build()`, which runs early in
+the boot sequence before the scheduler starts. If you see this message
+and then the system locks up, the build profile is almost certainly the
+cause.
+
+### Recommended Build Command
+
+Always compile with `--release` (or at least `opt-level >= 1`) when MPU
+enforcement is enabled:
+
+```sh
+cargo build --release --example <name>
+```
+
+Custom Cargo profiles with `opt-level = 1` also work:
+
+```toml
+# Cargo.toml
+[profile.release-debug]
+inherits = "release"
+opt-level = 1
+debug = true
+```
+
+```sh
+cargo build --profile release-debug --example <name>
+```
+
+The key requirement is that the compiler optimizes the MPU register
+writes enough to keep PendSV under the tick period. `opt-level = 0`
+(the default for `cargo build` without `--release`) does not meet this
+requirement on any tested target.
+
 ## FPU Context Switching (`fpu-context` Feature)
 
 When the `fpu-context` Cargo feature is enabled, the kernel saves and
