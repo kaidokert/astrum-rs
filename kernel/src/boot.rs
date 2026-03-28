@@ -42,6 +42,18 @@ pub fn init_rtt() {
 #[cfg(not(klog_backend = "rtt"))]
 pub fn init_rtt() {}
 
+/// Print a boot banner with crate name and version via `klog!`.
+///
+/// Must be called after `init_rtt()` so output is visible.
+/// Public so the harness macro can call it from `boot()`.
+pub fn boot_banner() {
+    crate::klog!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // FPU initialization (Cortex-M4F+)
 // ---------------------------------------------------------------------------
@@ -1706,5 +1718,18 @@ mod tests {
     fn init_fpu_double_call_safe_without_feature() {
         init_fpu().unwrap();
         init_fpu().unwrap();
+    }
+
+    /// boot_banner() must not panic (on host builds klog_backend="none" so it's a no-op).
+    #[test]
+    fn boot_banner_does_not_panic() {
+        boot_banner();
+    }
+
+    /// boot_banner() can be called multiple times without panic.
+    #[test]
+    fn boot_banner_double_call_safe() {
+        boot_banner();
+        boot_banner();
     }
 }
