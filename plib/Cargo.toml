@@ -9,9 +9,8 @@ rtos-traits = { path = "../rtos-traits" }
 embedded-hal = { version = "0.2", optional = true }
 
 [features]
-default = ["dynamic-mpu"]
+default = []
 partition-debug = ["rtos-traits/partition-debug"]
-dynamic-mpu = ["rtos-traits/dynamic-mpu"]
 # Gates blackboard wrapper functions in plib; raw constants in rtos-traits are
 # intentionally unconditional (harmless without the wrapper API).
 ipc-blackboard = []

@@ -227,59 +227,59 @@ name = "hw_integration"
 
 [[example]]
 name = "mpu_dynamic"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "mpu_dynamic_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "buffer_pool_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "buf_lend_rw_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "buf_lend_ro_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "peripheral_buf_lend_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "single_periph_boot_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "buf_transfer_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "buf_lend_addr_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "buf_align_boot_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "buf_deadline_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "buf_error_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "virtual_uart_demo"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "uart1_loopback"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "mpu_precompute_test"
@@ -291,15 +291,15 @@ required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "mpu_dynamic_base_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "mpu_cached_dynamic_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "pendsv_primask_dynamic_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "plib_abi_test"
@@ -343,11 +343,11 @@ required-features = ["qemu", "log-semihosting", "ipc-blackboard"]
 
 [[example]]
 name = "plib_buf_lend_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "plib_buf_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "plib_debug_print_test"
@@ -359,15 +359,15 @@ required-features = ["qemu", "log-semihosting", "custom-ivt"]
 
 [[example]]
 name = "plib_dev_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "plib_dev_read_timed_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "plib_query_bh_test"
-required-features = ["qemu", "log-semihosting", "dynamic-mpu"]
+required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "plib_sleep_test"
@@ -546,7 +546,7 @@ name = "qemu_pac_timer_chain"
 required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
 
 [features]
-default = ["arinc-compat", "dynamic-mpu"]
+default = ["arinc-compat"]
 
 # IPC primitives (optional, enabled via arinc-compat by default)
 ipc-sampling = []
@@ -562,7 +562,6 @@ arinc-compat = ["ipc-sampling", "ipc-queuing", "ipc-blackboard", "ipc-message"]
 custom-ivt = []
 qemu = []
 qemu-peripherals = ["dep:tudelft-lm3s6965-pac"]
-dynamic-mpu = ["rtos-traits/dynamic-mpu", "plib/dynamic-mpu"]
 partition-debug = ["rtos-traits/partition-debug"]
 panic-halt = ["dep:panic-halt"]
 log-semihosting = ["dep:cortex-m-semihosting", "dep:panic-semihosting"]
