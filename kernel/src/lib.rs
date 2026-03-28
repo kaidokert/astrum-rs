@@ -48,6 +48,8 @@ pub mod error_handler;
 pub use error_handler::{ErrorStatus, FaultKind};
 pub mod events;
 pub mod fault;
+#[cfg(feature = "health-partition")]
+pub mod health;
 pub mod hw_uart;
 pub mod invariants;
 pub mod irq_ack;

@@ -581,6 +581,9 @@ single-core = []
 # FPU context: save/restore FPU registers on context switch (Cortex-M4F+).
 fpu-context = []
 
+# Health monitoring for partition liveness and schedule integrity.
+health-partition = []
+
 # SEGGER SystemView tracing via rtos-trace.
 trace = ["dep:rtos-trace", "dep:systemview-target", "dep:rtt-target", "dep:critical-section"]
 
