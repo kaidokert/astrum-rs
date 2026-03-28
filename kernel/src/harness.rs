@@ -525,8 +525,11 @@ macro_rules! define_unified_harness {
                     })?
                     .with_r0_hint(spec.r0());
                 memories.push(mem)
-                    .map_err(|_| $crate::harness::BootError::KernelInit(
-                        $crate::partition::ConfigError::PartitionTableFull))?;
+                    .map_err(|_| {
+                        $crate::klog!("init_kernel failed: partition table full");
+                        $crate::harness::BootError::KernelInit(
+                            $crate::partition::ConfigError::PartitionTableFull)
+                    })?;
             }
             $crate::svc::Kernel::<$Config>::new(sched, &memories)
                 .map_err(|e| {
@@ -551,7 +554,10 @@ macro_rules! define_unified_harness {
             $crate::harness::init_rtt();
             $crate::harness::boot_banner();
             // Enable FPU before kernel init (no-op when fpu-context is off).
-            $crate::harness::init_fpu()?;
+            $crate::harness::init_fpu().map_err(|e| {
+                $crate::klog!("boot failed: {}", e);
+                e
+            })?;
             let mut k = init_kernel($sched, $entries)?;
             // SAFETY: boot() -> ! never returns, so `k` lives forever on
             // this stack frame. store_kernel publishes its address for
@@ -594,7 +600,10 @@ macro_rules! define_unified_harness {
             $crate::harness::init_rtt();
             $crate::harness::boot_banner();
             // Enable FPU before kernel init (no-op when fpu-context is off).
-            $crate::harness::init_fpu()?;
+            $crate::harness::init_fpu().map_err(|e| {
+                $crate::klog!("boot failed: {}", e);
+                e
+            })?;
             use $crate::partition::{ExternalPartitionMemory, MpuRegion};
             // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
             // by this macro arm, which is invoked at most once per binary (enforced
@@ -614,8 +623,11 @@ macro_rules! define_unified_harness {
                     })?
                     .with_r0_hint(spec.r0());
                 memories.push(mem)
-                    .map_err(|_| $crate::harness::BootError::KernelInit(
-                        $crate::partition::ConfigError::PartitionTableFull))?;
+                    .map_err(|_| {
+                        $crate::klog!("init_kernel failed: partition table full");
+                        $crate::harness::BootError::KernelInit(
+                            $crate::partition::ConfigError::PartitionTableFull)
+                    })?;
             }
             $crate::svc::Kernel::<$Config>::new(sched, &memories)
                 .map_err(|e| {
