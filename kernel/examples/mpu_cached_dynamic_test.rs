@@ -31,6 +31,7 @@ kernel::compose_kernel_config!(
     MsgMinimal,
     PortsTiny,
     DebugEnabled > {
+        // IMPORTANT: Build with --release. Debug builds spin in PendSV.
         mpu_enforce = true;
     }
 );
