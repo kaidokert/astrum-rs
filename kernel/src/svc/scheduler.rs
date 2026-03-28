@@ -141,6 +141,7 @@ where
             transition_outgoing_ready(kernel);
             if let Some(pcb) = kernel.pcb_mut(pid as usize) {
                 pcb.reset_starvation();
+                pcb.increment_run_count();
             }
             kernel.active_partition = Some(pid);
             kernel.set_next_partition(pid);

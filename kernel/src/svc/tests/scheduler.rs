@@ -232,3 +232,43 @@ fn faulted_active_not_transitioned_on_switch() {
         PartitionState::Faulted
     );
 }
+
+#[test]
+fn run_count_increments_on_partition_switch() {
+    let mut k = kernel_2p();
+    // P0 is active/running, run_count starts at 0
+    assert_eq!(k.partitions().get(0).unwrap().run_count(), 0);
+    assert_eq!(k.partitions().get(1).unwrap().run_count(), 0);
+
+    // Tick through P0 slot (2 ticks), switches to P1
+    svc_scheduler::advance_schedule_tick(&mut k); // tick 1: interior
+    let event = svc_scheduler::advance_schedule_tick(&mut k); // tick 2: switch to P1
+    assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
+    assert_eq!(k.partitions().get(1).unwrap().run_count(), 1);
+    assert_eq!(k.partitions().get(0).unwrap().run_count(), 0); // P0 not re-entered yet
+
+    // Tick through P1 slot (2 ticks), then system window (1 tick), then P0
+    svc_scheduler::advance_schedule_tick(&mut k); // tick 1 of P1
+    svc_scheduler::advance_schedule_tick(&mut k); // tick 2 of P1 -> SystemWindow
+    svc_scheduler::advance_schedule_tick(&mut k); // system window tick -> P0
+                                                  // The schedule is: P0(2), P1(2), SW(1) — 5 ticks total
+                                                  // tick3=interior P1, tick4=SW, tick5=P0 switch
+    assert_eq!(k.partitions().get(0).unwrap().run_count(), 1);
+}
+
+#[test]
+fn run_count_not_incremented_for_skipped_partition() {
+    let mut k = kernel_2p();
+    // Move P1 to Faulted so it gets skipped
+    k.partitions_mut()
+        .get_mut(1)
+        .unwrap()
+        .transition(PartitionState::Faulted)
+        .unwrap();
+
+    // Tick through P0 slot, would switch to P1 but P1 is Faulted
+    svc_scheduler::advance_schedule_tick(&mut k);
+    let event = svc_scheduler::advance_schedule_tick(&mut k);
+    assert_eq!(event, ScheduleEvent::None); // skipped
+    assert_eq!(k.partitions().get(1).unwrap().run_count(), 0); // not incremented
+}

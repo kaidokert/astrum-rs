@@ -80,6 +80,7 @@ pub struct ScheduleTable<const N: usize> {
     current_slot: usize,
     ticks_remaining: u32,
     started: bool,
+    major_frame_count: u32,
 }
 
 #[allow(clippy::new_without_default)]
@@ -91,6 +92,7 @@ impl<const N: usize> ScheduleTable<N> {
             current_slot: 0,
             ticks_remaining: 0,
             started: false,
+            major_frame_count: 0,
         }
     }
 
@@ -212,6 +214,11 @@ impl<const N: usize> ScheduleTable<N> {
             .map(|e| e.partition_index)
     }
 
+    /// Returns the number of completed major frames (schedule wraparounds).
+    pub fn major_frame_count(&self) -> u32 {
+        self.major_frame_count
+    }
+
     /// Move to the next slot (with wraparound) and reload `ticks_remaining`.
     /// Returns a reference to the new slot's [`ScheduleEntry`], or a
     /// [`ScheduleError`] if checked arithmetic or bounds checking fails
@@ -219,7 +226,10 @@ impl<const N: usize> ScheduleTable<N> {
     fn step_to_next_slot(&mut self) -> Result<&ScheduleEntry, ScheduleError> {
         let next = match self.current_slot.checked_add(1) {
             Some(n) if n < self.entries.len() => n,
-            Some(_) => 0, // wrap around
+            Some(_) => {
+                self.major_frame_count = self.major_frame_count.saturating_add(1);
+                0 // wrap around
+            }
             None => return Err(ScheduleError::IndexOverflow),
         };
         self.current_slot = next;
@@ -927,5 +937,50 @@ mod tests {
         // Wrap from slot 2 back to slot 0.
         assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
         assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(1));
+    }
+
+    #[test]
+    fn major_frame_count_starts_at_zero() {
+        let t = table(&[(0, 2), (1, 2)]);
+        assert_eq!(t.major_frame_count(), 0);
+    }
+
+    #[test]
+    fn major_frame_count_increments_on_wraparound() {
+        let mut t = table(&[(0, 1), (1, 1)]);
+        assert_eq!(t.major_frame_count(), 0);
+        // Tick through slot 0 -> switch to slot 1
+        assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(t.major_frame_count(), 0); // no wrap yet
+                                              // Tick through slot 1 -> wrap to slot 0
+        assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
+        assert_eq!(t.major_frame_count(), 1); // first wrap
+                                              // Complete another major frame
+        assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(t.major_frame_count(), 1);
+        assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
+        assert_eq!(t.major_frame_count(), 2); // second wrap
+    }
+
+    #[test]
+    fn major_frame_count_with_force_advance() {
+        let mut t = table(&[(0, 5), (1, 5)]);
+        assert_eq!(t.major_frame_count(), 0);
+        assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(t.major_frame_count(), 0);
+        // Force advance from slot 1 wraps to slot 0
+        assert_eq!(t.force_advance(), ScheduleEvent::PartitionSwitch(0));
+        assert_eq!(t.major_frame_count(), 1);
+    }
+
+    #[test]
+    fn major_frame_count_single_slot_wraps_every_cycle() {
+        let mut t = table(&[(0, 2)]);
+        for i in 0..5u32 {
+            assert_eq!(t.major_frame_count(), i);
+            assert_eq!(t.advance_tick(), ScheduleEvent::None);
+            assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(0));
+        }
+        assert_eq!(t.major_frame_count(), 5);
     }
 }

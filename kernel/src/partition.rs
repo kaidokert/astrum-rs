@@ -199,6 +199,8 @@ pub struct PartitionControlBlock {
     error_handler: Option<u32>,
     /// Flag indicating the error handler is currently executing.
     in_error_handler: bool,
+    /// Number of times this partition has been switched to by the scheduler.
+    run_count: u32,
 }
 
 impl PartitionControlBlock {
@@ -236,6 +238,7 @@ impl PartitionControlBlock {
             start_condition: StartCondition::NormalBoot,
             error_handler: None,
             in_error_handler: false,
+            run_count: 0,
         }
     }
 
@@ -289,6 +292,16 @@ impl PartitionControlBlock {
     /// Increments the fault counter (saturating).
     pub fn increment_fault_count(&mut self) {
         self.fault_count = self.fault_count.saturating_add(1);
+    }
+
+    /// Returns the number of times this partition has been switched to.
+    pub fn run_count(&self) -> u32 {
+        self.run_count
+    }
+
+    /// Increments the run counter (saturating).
+    pub fn increment_run_count(&mut self) {
+        self.run_count = self.run_count.saturating_add(1);
     }
 
     /// Returns the error handler entry point address, if registered.
@@ -4536,5 +4549,30 @@ mod tests {
         .unwrap()
         .with_error_handler(0x0800_3001);
         assert_eq!(epm.error_handler(), Some(0x0800_3001));
+    }
+
+    #[test]
+    fn run_count_starts_at_zero() {
+        let pcb = make_pcb();
+        assert_eq!(pcb.run_count(), 0);
+    }
+
+    #[test]
+    fn run_count_increments() {
+        let mut pcb = make_pcb();
+        assert_eq!(pcb.run_count(), 0);
+        pcb.increment_run_count();
+        assert_eq!(pcb.run_count(), 1);
+        pcb.increment_run_count();
+        pcb.increment_run_count();
+        assert_eq!(pcb.run_count(), 3);
+    }
+
+    #[test]
+    fn run_count_saturates_at_max() {
+        let mut pcb = make_pcb();
+        pcb.run_count = u32::MAX;
+        pcb.increment_run_count();
+        assert_eq!(pcb.run_count(), u32::MAX);
     }
 }
