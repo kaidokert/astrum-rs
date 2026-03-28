@@ -4,7 +4,6 @@
 #![feature(const_index)]
 #![feature(const_trait_impl)]
 #![feature(generic_const_exprs)]
-#![feature(where_clause_attrs)]
 // Require SAFETY comments for all unsafe blocks in the kernel library
 #![deny(clippy::undocumented_unsafe_blocks)]
 
@@ -45,6 +44,8 @@ pub use config::{
 pub mod context;
 #[cfg(feature = "partition-debug")]
 pub mod debug;
+pub mod error_handler;
+pub use error_handler::{ErrorStatus, FaultKind};
 pub mod events;
 pub mod fault;
 pub mod hw_uart;
