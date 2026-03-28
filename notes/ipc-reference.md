@@ -46,21 +46,19 @@ Defined in `kernel/src/syscall.rs`. Number 1 is reserved (gap).
 | 17     | `SYS_BB_DISPLAY`     | `BbDisplay`       | Display blackboard message   |               |
 | 18     | `SYS_BB_READ`        | `BbRead`          | Read blackboard message      |               |
 | 19     | `SYS_BB_CLEAR`       | `BbClear`         | Clear blackboard             |               |
-| 20     | `SYS_BUF_ALLOC`     | `BufferAlloc`     | Allocate buffer pool slot    | `dynamic-mpu` |
-| 21     | `SYS_BUF_RELEASE`   | `BufferRelease`   | Release buffer pool slot     | `dynamic-mpu` |
-| 22     | `SYS_DEV_OPEN`      | `DevOpen`         | Open virtual device          | `dynamic-mpu` |
-| 23     | `SYS_DEV_READ`      | `DevRead`         | Read from virtual device     | `dynamic-mpu` |
-| 24     | `SYS_DEV_WRITE`     | `DevWrite`        | Write to virtual device      | `dynamic-mpu` |
-| 25     | `SYS_DEV_IOCTL`     | `DevIoctl`        | Device I/O control           | `dynamic-mpu` |
-| 26     | `SYS_BUF_WRITE`     | `BufferWrite`     | Write data to buffer slot    | `dynamic-mpu` |
-| 29     | `SYS_DEV_CLOSE`     | `DevClose`        | Close virtual device         | `dynamic-mpu` |
-| 30     | `SYS_DEV_READ_TIMED`| `DevReadTimed`    | Blocking device read         | `dynamic-mpu` |
+| 20     | `SYS_BUF_ALLOC`     | `BufferAlloc`     | Allocate buffer pool slot    |               |
+| 21     | `SYS_BUF_RELEASE`   | `BufferRelease`   | Release buffer pool slot     |               |
+| 22     | `SYS_DEV_OPEN`      | `DevOpen`         | Open virtual device          |               |
+| 23     | `SYS_DEV_READ`      | `DevRead`         | Read from virtual device     |               |
+| 24     | `SYS_DEV_WRITE`     | `DevWrite`        | Write to virtual device      |               |
+| 25     | `SYS_DEV_IOCTL`     | `DevIoctl`        | Device I/O control           |               |
+| 26     | `SYS_BUF_WRITE`     | `BufferWrite`     | Write data to buffer slot    |               |
+| 29     | `SYS_DEV_CLOSE`     | `DevClose`        | Close virtual device         |               |
+| 30     | `SYS_DEV_READ_TIMED`| `DevReadTimed`    | Blocking device read         |               |
 
-Total: 19 base syscalls spanning numbers 0-19 (number 1 is reserved and
-returns `InvalidSyscall`). When the `dynamic-mpu` feature is enabled, 9
-additional syscalls (20-26, 29-30) bring the total to 28. The first
-invalid number is 20 (without `dynamic-mpu`) or 31 (with it); all
-invalid numbers return `SvcError::InvalidSyscall`.
+Total: 28 syscalls spanning numbers 0-30 (number 1 is reserved and
+returns `InvalidSyscall`; numbers 27-28 are unused). The first invalid
+number is 31; all invalid numbers return `SvcError::InvalidSyscall`.
 
 ## 2. Register Calling Convention
 
@@ -148,7 +146,7 @@ region and that `ptr + len` does not overflow `u32`. If validation
 fails, the syscall returns `SvcError::InvalidPointer` (`0xFFFF_FFF9`)
 without performing any operation. The validated syscalls are: MsgSend,
 MsgRecv, SamplingWrite, SamplingRead, QueuingSend, QueuingRecv,
-QueuingStatus, BbDisplay, BbRead, and (with `dynamic-mpu`) BufferWrite,
+QueuingStatus, BbDisplay, BbRead, BufferWrite,
 DevRead, DevWrite, and DevReadTimed. Syscalls that pass integer
 arguments rather than pointers (e.g., DevOpen passes a device ID,
 DevIoctl passes opaque command/argument values, DevClose passes a
@@ -495,7 +493,7 @@ in their next time slot.
 
 ## 10. Buffer Pool
 
-Source: `kernel/src/buffer_pool.rs`. Requires `dynamic-mpu` feature.
+Source: `kernel/src/buffer_pool.rs`.
 For the MPU region strategy (DynamicStrategy, R4-R7 slot tracking) and
 context-switch integration, see
 [architecture.md §11.1](architecture.md#111-mpustrategy-trait-and-dynamicstrategy)
@@ -609,7 +607,7 @@ and [§11.3](architecture.md#113-system-window-schedule-entries-and-bottom-half-
 ## 11. Virtual Devices
 
 Source: `kernel/src/virtual_device.rs` and `kernel/src/virtual_uart.rs`.
-Requires `dynamic-mpu` feature. For the system-window schedule entries
+For the system-window schedule entries
 that drive bottom-half processing (UART transfer, ISR drain), see
 [architecture.md §11.3](architecture.md#113-system-window-schedule-entries-and-bottom-half-processing)
 and [§11.5](architecture.md#115-virtual-device-abstraction-layer).
