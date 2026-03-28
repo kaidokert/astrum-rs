@@ -106,6 +106,15 @@ pub enum PartitionState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransitionError;
 
+/// Error from [`Kernel::restart_partition`](crate::svc::Kernel::restart_partition).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartError {
+    InvalidPid,
+    NotFaulted,
+    StackInitFailed,
+    TransitionFailed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MpuRegion {
     base: u32,
@@ -264,6 +273,16 @@ impl PartitionControlBlock {
     /// Returns how this partition was most recently started.
     pub fn start_condition(&self) -> StartCondition {
         self.start_condition
+    }
+
+    /// Sets the start condition for this partition.
+    pub fn set_start_condition(&mut self, condition: StartCondition) {
+        self.start_condition = condition;
+    }
+
+    /// Increments the fault counter (saturating).
+    pub fn increment_fault_count(&mut self) {
+        self.fault_count = self.fault_count.saturating_add(1);
     }
 
     /// Replace peripheral regions via `&mut self` (post-creation setter).
@@ -581,6 +600,7 @@ impl PartitionControlBlock {
                 | (PartitionState::Waiting, PartitionState::Ready)
                 | (PartitionState::Running, PartitionState::Faulted)
                 | (PartitionState::Ready, PartitionState::Faulted)
+                | (PartitionState::Faulted, PartitionState::Ready)
         );
         if ok {
             if to == PartitionState::Waiting {
@@ -1971,15 +1991,19 @@ mod tests {
     }
 
     #[test]
-    fn faulted_is_terminal() {
+    fn faulted_only_allows_ready_transition() {
         let mut pcb = make_pcb();
         pcb.transition(PartitionState::Running).unwrap();
         pcb.transition(PartitionState::Faulted).unwrap();
-        assert!(pcb.transition(PartitionState::Ready).is_err());
+        // Faulted → Ready is valid (restart path).
+        // Faulted → Running/Waiting/Faulted are still rejected.
         assert!(pcb.transition(PartitionState::Running).is_err());
         assert!(pcb.transition(PartitionState::Waiting).is_err());
         assert!(pcb.transition(PartitionState::Faulted).is_err());
         assert_eq!(pcb.state(), PartitionState::Faulted);
+        // Now verify the Faulted → Ready path works.
+        assert!(pcb.transition(PartitionState::Ready).is_ok());
+        assert_eq!(pcb.state(), PartitionState::Ready);
     }
 
     #[test]

@@ -2570,6 +2570,80 @@ where
         }
     }
 
+    /// Restart a faulted partition. `warm = true` preserves RAM;
+    /// `warm = false` zeros the partition's MPU data region first.
+    pub fn restart_partition(
+        &mut self,
+        pid: usize,
+        warm: bool,
+    ) -> Result<(), crate::partition::RestartError> {
+        use crate::partition::RestartError;
+
+        // (1) Validate pid and that PCB is Faulted.
+        {
+            let pcb = self.pcb(pid).ok_or(RestartError::InvalidPid)?;
+            if pcb.state() != crate::partition::PartitionState::Faulted {
+                return Err(RestartError::NotFaulted);
+            }
+        }
+
+        // (2) Clean up IPC state.
+        self.cleanup_partition_ipc(pid);
+
+        // Read PCB fields needed for stack reinit.
+        let pcb = self.pcb(pid).ok_or(RestartError::InvalidPid)?;
+        let entry = pcb.entry_point();
+        let base = pcb.stack_base();
+        let size = pcb.stack_size();
+        let r0 = pcb.r0_hint();
+        let mpu_base = pcb.mpu_region().base();
+        let mpu_size = pcb.mpu_region().size();
+
+        // (3) Cold restart: zero the partition's RAM region.
+        if !warm && mpu_size > 0 {
+            // SAFETY: mpu_base/mpu_size come from the validated PCB MPU region;
+            // the kernel owns partition memory exclusively while the partition
+            // is Faulted. write_bytes operates on individual bytes, so there is
+            // no alignment requirement beyond u8.
+            unsafe {
+                core::ptr::write_bytes(mpu_base as *mut u8, 0, mpu_size as usize);
+            }
+        }
+
+        // (4) Reinitialize stack frame.
+        let word_count = (size / 4) as usize;
+        // SAFETY: base/size come from the validated PCB stack region; the
+        // kernel owns partition stack memory while the partition is Faulted.
+        // The stack base is guaranteed 4-byte aligned because it originates
+        // from AlignedStack (8-byte aligned) in ExternalPartitionMemory.
+        let stack_slice = unsafe { core::slice::from_raw_parts_mut(base as *mut u32, word_count) };
+        let ix = crate::context::init_stack_frame(stack_slice, entry, Some(r0))
+            .ok_or(RestartError::StackInitFailed)?;
+        let sp = u32::try_from(ix)
+            .ok()
+            .and_then(|v| v.checked_mul(4))
+            .and_then(|offset| base.checked_add(offset))
+            .ok_or(RestartError::StackInitFailed)?;
+
+        // (5) Update partition_sp (clearing SP_SENTINEL_FAULT).
+        self.set_sp(pid, sp);
+
+        // (6-9) Update PCB fields and transition state.
+        let pcb = self.pcb_mut(pid).ok_or(RestartError::InvalidPid)?;
+        pcb.set_start_condition(if warm {
+            crate::partition::StartCondition::WarmRestart
+        } else {
+            crate::partition::StartCondition::ColdRestart
+        });
+        pcb.increment_fault_count();
+        pcb.set_sleep_until(0);
+        pcb.reset_starvation();
+        pcb.transition(crate::partition::PartitionState::Ready)
+            .map_err(|_| RestartError::TransitionFailed)?;
+
+        Ok(())
+    }
+
     // -------------------------------------------------------------------------
     // Core state facade methods (active_partition, tick, yield_requested)
     //
@@ -3037,6 +3111,7 @@ mod tests {
     mod device;
     mod events;
     mod message;
+    mod restart;
     mod scheduler;
     mod sleep;
     mod sync;
