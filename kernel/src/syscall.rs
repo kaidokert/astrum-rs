@@ -10,7 +10,7 @@ pub use rtos_traits::syscall::{
     SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_YIELD,
 };
 
-// Dynamic-MPU syscall numbers — defined in rtos-traits, re-exported here.
+// Buffer and device syscall numbers — defined in rtos-traits, re-exported here.
 pub use rtos_traits::syscall::{
     SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_RELEASE, SYS_BUF_REVOKE, SYS_BUF_TRANSFER,
     SYS_BUF_WRITE, SYS_DEV_CLOSE, SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_READ_TIMED,
@@ -51,34 +51,19 @@ pub enum SyscallId {
     IrqAck,
     SleepTicks,
     GetStartCondition,
-    #[cfg(feature = "dynamic-mpu")]
     BufferAlloc,
-    #[cfg(feature = "dynamic-mpu")]
     BufferRelease,
-    #[cfg(feature = "dynamic-mpu")]
     DevOpen,
-    #[cfg(feature = "dynamic-mpu")]
     DevRead,
-    #[cfg(feature = "dynamic-mpu")]
     DevWrite,
-    #[cfg(feature = "dynamic-mpu")]
     DevIoctl,
-    #[cfg(feature = "dynamic-mpu")]
     BufferWrite,
-    #[cfg(feature = "dynamic-mpu")]
     DevClose,
-    #[cfg(feature = "dynamic-mpu")]
     DevReadTimed,
-    // TODO: QueryBottomHalf gated behind dynamic-mpu; see SYS_QUERY_BOTTOM_HALF comment.
-    #[cfg(feature = "dynamic-mpu")]
     QueryBottomHalf,
-    #[cfg(feature = "dynamic-mpu")]
     BufferLend,
-    #[cfg(feature = "dynamic-mpu")]
     BufferRevoke,
-    #[cfg(feature = "dynamic-mpu")]
     BufferTransfer,
-    #[cfg(feature = "dynamic-mpu")]
     BufferRead,
     #[cfg(feature = "partition-debug")]
     DebugNotify,
@@ -120,33 +105,19 @@ impl SyscallId {
             SYS_IRQ_ACK => Some(Self::IrqAck),
             SYS_SLEEP_TICKS => Some(Self::SleepTicks),
             SYS_GET_START_CONDITION => Some(Self::GetStartCondition),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_ALLOC => Some(Self::BufferAlloc),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_RELEASE => Some(Self::BufferRelease),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_DEV_OPEN => Some(Self::DevOpen),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_DEV_READ => Some(Self::DevRead),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_DEV_WRITE => Some(Self::DevWrite),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_DEV_IOCTL => Some(Self::DevIoctl),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_WRITE => Some(Self::BufferWrite),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_DEV_CLOSE => Some(Self::DevClose),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_DEV_READ_TIMED => Some(Self::DevReadTimed),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_QUERY_BOTTOM_HALF => Some(Self::QueryBottomHalf),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_LEND => Some(Self::BufferLend),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_REVOKE => Some(Self::BufferRevoke),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_TRANSFER => Some(Self::BufferTransfer),
-            #[cfg(feature = "dynamic-mpu")]
             SYS_BUF_READ => Some(Self::BufferRead),
             #[cfg(feature = "partition-debug")]
             SYS_DEBUG_NOTIFY => Some(Self::DebugNotify),
@@ -186,33 +157,19 @@ impl SyscallId {
             Self::IrqAck => "irq_ack",
             Self::SleepTicks => "sleep_ticks",
             Self::GetStartCondition => "get_start_condition",
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferAlloc => "buf_alloc",
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferRelease => "buf_release",
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevOpen => "dev_open",
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevRead => "dev_read",
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevWrite => "dev_write",
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevIoctl => "dev_ioctl",
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferWrite => "buf_write",
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevClose => "dev_close",
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevReadTimed => "dev_read_timed",
-            #[cfg(feature = "dynamic-mpu")]
             Self::QueryBottomHalf => "query_bottom_half",
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferLend => "buf_lend",
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferRevoke => "buf_revoke",
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferTransfer => "buf_transfer",
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferRead => "buf_read",
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => "debug_notify",
@@ -251,33 +208,19 @@ impl SyscallId {
             Self::IrqAck => SYS_IRQ_ACK,
             Self::SleepTicks => SYS_SLEEP_TICKS,
             Self::GetStartCondition => SYS_GET_START_CONDITION,
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferAlloc => SYS_BUF_ALLOC,
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferRelease => SYS_BUF_RELEASE,
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevOpen => SYS_DEV_OPEN,
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevRead => SYS_DEV_READ,
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevWrite => SYS_DEV_WRITE,
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevIoctl => SYS_DEV_IOCTL,
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferWrite => SYS_BUF_WRITE,
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevClose => SYS_DEV_CLOSE,
-            #[cfg(feature = "dynamic-mpu")]
             Self::DevReadTimed => SYS_DEV_READ_TIMED,
-            #[cfg(feature = "dynamic-mpu")]
             Self::QueryBottomHalf => SYS_QUERY_BOTTOM_HALF,
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferLend => SYS_BUF_LEND,
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferRevoke => SYS_BUF_REVOKE,
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferTransfer => SYS_BUF_TRANSFER,
-            #[cfg(feature = "dynamic-mpu")]
             Self::BufferRead => SYS_BUF_READ,
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => SYS_DEBUG_NOTIFY,
@@ -320,33 +263,19 @@ mod tests {
         (SYS_IRQ_ACK, SyscallId::IrqAck),
         (SYS_SLEEP_TICKS, SyscallId::SleepTicks),
         (SYS_GET_START_CONDITION, SyscallId::GetStartCondition),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_ALLOC, SyscallId::BufferAlloc),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_RELEASE, SyscallId::BufferRelease),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_DEV_OPEN, SyscallId::DevOpen),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_DEV_READ, SyscallId::DevRead),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_DEV_WRITE, SyscallId::DevWrite),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_DEV_IOCTL, SyscallId::DevIoctl),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_WRITE, SyscallId::BufferWrite),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_DEV_CLOSE, SyscallId::DevClose),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_DEV_READ_TIMED, SyscallId::DevReadTimed),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_QUERY_BOTTOM_HALF, SyscallId::QueryBottomHalf),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_LEND, SyscallId::BufferLend),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_REVOKE, SyscallId::BufferRevoke),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_TRANSFER, SyscallId::BufferTransfer),
-        #[cfg(feature = "dynamic-mpu")]
         (SYS_BUF_READ, SyscallId::BufferRead),
         #[cfg(feature = "partition-debug")]
         (SYS_DEBUG_NOTIFY, SyscallId::DebugNotify),
@@ -388,14 +317,10 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        // Base: 27, +14 for dynamic-mpu, +1 for partition-debug
-        #[cfg(all(not(feature = "dynamic-mpu"), not(feature = "partition-debug")))]
-        assert_eq!(ALL_VARIANTS.len(), 27);
-        #[cfg(all(feature = "dynamic-mpu", not(feature = "partition-debug")))]
+        // Base: 41, +1 for partition-debug
+        #[cfg(not(feature = "partition-debug"))]
         assert_eq!(ALL_VARIANTS.len(), 41);
-        #[cfg(all(not(feature = "dynamic-mpu"), feature = "partition-debug"))]
-        assert_eq!(ALL_VARIANTS.len(), 28);
-        #[cfg(all(feature = "dynamic-mpu", feature = "partition-debug"))]
+        #[cfg(feature = "partition-debug")]
         assert_eq!(ALL_VARIANTS.len(), 42);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
