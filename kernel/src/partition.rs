@@ -865,6 +865,49 @@ impl core::fmt::Display for ConfigError {
     }
 }
 
+impl ConfigError {
+    /// Return a unique, stable `u32` discriminant for this error variant.
+    ///
+    /// For variants that wrap an [`MpuError`] inner value, the discriminant
+    /// encodes the inner error at an offset (`base + inner.discriminant()`):
+    ///
+    /// | Window          | Range           | Used by                       |
+    /// |-----------------|-----------------|-------------------------------|
+    /// | `0x001..=0x0FF` | plain variants  | simple `ConfigError` kinds    |
+    /// | `0x100..=0x1FF` | MPU region      | `MpuRegionInvalid`            |
+    /// | `0x200..=0x2FF` | peripheral      | `PeripheralRegionInvalid`     |
+    /// | `0x300..=0x3FF` | code region     | `CodeRegionInvalid`           |
+    ///
+    /// `MpuError::discriminant()` must stay within `1..=255` to avoid
+    /// collisions between windows.
+    ///
+    /// These values may be returned in `r1` on SVC error paths and must
+    /// remain stable across releases.
+    pub fn discriminant(&self) -> u32 {
+        match self {
+            Self::ScheduleEmpty => 1,
+            Self::ScheduleIndexOutOfBounds { .. } => 2,
+            Self::MpuRegionInvalid { detail, .. } => 0x100 + detail.discriminant(),
+            Self::StackSizeInvalid { .. } => 3,
+            Self::StackBaseNotAligned { .. } => 4,
+            Self::StackOverflow { .. } => 5,
+            Self::PartitionTableFull => 6,
+            Self::PartitionIdMismatch { .. } => 7,
+            Self::StackInitFailed { .. } => 8,
+            Self::PartitionCountMismatch { .. } => 9,
+            Self::PeripheralRegionInvalid { detail, .. } => 0x200 + detail.discriminant(),
+            Self::TooManyPeripheralRegions { .. } => 10,
+            Self::CodeRegionInvalid { detail, .. } => 0x300 + detail.discriminant(),
+            Self::EntryPointNotThumb { .. } => 11,
+            Self::EntryPointOutsideCodeRegion { .. } => 12,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::NoSystemWindow => 13,
+            #[cfg(feature = "dynamic-mpu")]
+            Self::SystemWindowTooInfrequent { .. } => 14,
+        }
+    }
+}
+
 /// Fixed-capacity table of partition control blocks.
 pub struct PartitionTable<const N: usize> {
     partitions: Vec<PartitionControlBlock, N>,
@@ -3823,5 +3866,229 @@ mod tests {
             .with_peripheral_regions(&regions)
             .unwrap();
         assert_eq!(epm.peripheral_regions().len(), 3);
+    }
+
+    // ------------------------------------------------------------------
+    // ConfigError::discriminant
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn config_error_discriminant_stable_values() {
+        use crate::mpu::MpuError;
+
+        // Plain variants — hardcoded stable assertions.
+        assert_eq!(ConfigError::ScheduleEmpty.discriminant(), 1);
+        assert_eq!(
+            ConfigError::ScheduleIndexOutOfBounds {
+                entry_index: 0,
+                partition_index: 0,
+                num_partitions: 1,
+            }
+            .discriminant(),
+            2
+        );
+        assert_eq!(
+            ConfigError::StackSizeInvalid { partition_id: 0 }.discriminant(),
+            3
+        );
+        assert_eq!(
+            ConfigError::StackBaseNotAligned { partition_id: 0 }.discriminant(),
+            4
+        );
+        assert_eq!(
+            ConfigError::StackOverflow { partition_id: 0 }.discriminant(),
+            5
+        );
+        assert_eq!(ConfigError::PartitionTableFull.discriminant(), 6);
+        assert_eq!(
+            ConfigError::PartitionIdMismatch {
+                index: 0,
+                expected_id: 0,
+                actual_id: 1,
+            }
+            .discriminant(),
+            7
+        );
+        assert_eq!(
+            ConfigError::StackInitFailed { partition_id: 0 }.discriminant(),
+            8
+        );
+        assert_eq!(
+            ConfigError::PartitionCountMismatch {
+                expected: 2,
+                actual: 1,
+            }
+            .discriminant(),
+            9
+        );
+        assert_eq!(
+            ConfigError::TooManyPeripheralRegions {
+                partition_id: 0,
+                got: 4,
+                max: 3,
+            }
+            .discriminant(),
+            10
+        );
+        assert_eq!(
+            ConfigError::EntryPointNotThumb {
+                partition_id: 0,
+                entry_point: 0x0800_0000,
+            }
+            .discriminant(),
+            11
+        );
+        assert_eq!(
+            ConfigError::EntryPointOutsideCodeRegion {
+                partition_id: 0,
+                entry_point: 0x0800_0000,
+                region_base: 0x0900_0000,
+                region_size: 0x1000,
+            }
+            .discriminant(),
+            12
+        );
+
+        // Variants wrapping MpuError — offset-encoded, hardcoded literals.
+        // MpuError::SizeTooSmall = 2, so MpuRegionInvalid = 0x102.
+        assert_eq!(
+            ConfigError::MpuRegionInvalid {
+                partition_id: 0,
+                detail: MpuError::SizeTooSmall,
+            }
+            .discriminant(),
+            0x102
+        );
+        // MpuError::BaseNotAligned = 4, so PeripheralRegionInvalid = 0x204.
+        assert_eq!(
+            ConfigError::PeripheralRegionInvalid {
+                partition_id: 0,
+                region_index: 0,
+                detail: MpuError::BaseNotAligned,
+            }
+            .discriminant(),
+            0x204
+        );
+        // MpuError::AddressOverflow = 5, so CodeRegionInvalid = 0x305.
+        assert_eq!(
+            ConfigError::CodeRegionInvalid {
+                partition_id: 0,
+                detail: MpuError::AddressOverflow,
+            }
+            .discriminant(),
+            0x305
+        );
+
+        // Feature-gated variants.
+        #[cfg(feature = "dynamic-mpu")]
+        {
+            assert_eq!(ConfigError::NoSystemWindow.discriminant(), 13);
+            assert_eq!(
+                ConfigError::SystemWindowTooInfrequent {
+                    max_gap_ticks: 100,
+                    threshold_ticks: 50,
+                }
+                .discriminant(),
+                14
+            );
+        }
+    }
+
+    /// Verify all ConfigError discriminants are non-zero and unique.
+    /// Uses an exhaustive match so adding a variant without updating
+    /// this test causes a compile error.
+    #[test]
+    fn config_error_discriminants_all_nonzero_and_unique() {
+        use crate::mpu::MpuError;
+        let m = MpuError::SizeTooSmall; // representative inner error
+        let variants: &[ConfigError] = &[
+            ConfigError::ScheduleEmpty,
+            ConfigError::ScheduleIndexOutOfBounds {
+                entry_index: 0,
+                partition_index: 0,
+                num_partitions: 1,
+            },
+            ConfigError::MpuRegionInvalid {
+                partition_id: 0,
+                detail: m,
+            },
+            ConfigError::StackSizeInvalid { partition_id: 0 },
+            ConfigError::StackBaseNotAligned { partition_id: 0 },
+            ConfigError::StackOverflow { partition_id: 0 },
+            ConfigError::PartitionTableFull,
+            ConfigError::PartitionIdMismatch {
+                index: 0,
+                expected_id: 0,
+                actual_id: 1,
+            },
+            ConfigError::StackInitFailed { partition_id: 0 },
+            ConfigError::PartitionCountMismatch {
+                expected: 2,
+                actual: 1,
+            },
+            ConfigError::PeripheralRegionInvalid {
+                partition_id: 0,
+                region_index: 0,
+                detail: m,
+            },
+            ConfigError::TooManyPeripheralRegions {
+                partition_id: 0,
+                got: 4,
+                max: 3,
+            },
+            ConfigError::CodeRegionInvalid {
+                partition_id: 0,
+                detail: m,
+            },
+            ConfigError::EntryPointNotThumb {
+                partition_id: 0,
+                entry_point: 0x0800_0000,
+            },
+            ConfigError::EntryPointOutsideCodeRegion {
+                partition_id: 0,
+                entry_point: 0x0800_0000,
+                region_base: 0x0900_0000,
+                region_size: 0x1000,
+            },
+            #[cfg(feature = "dynamic-mpu")]
+            ConfigError::NoSystemWindow,
+            #[cfg(feature = "dynamic-mpu")]
+            ConfigError::SystemWindowTooInfrequent {
+                max_gap_ticks: 100,
+                threshold_ticks: 50,
+            },
+        ];
+        // Exhaustive match — compiler errors if a variant is missing.
+        for e in variants {
+            match e {
+                ConfigError::ScheduleEmpty
+                | ConfigError::ScheduleIndexOutOfBounds { .. }
+                | ConfigError::MpuRegionInvalid { .. }
+                | ConfigError::StackSizeInvalid { .. }
+                | ConfigError::StackBaseNotAligned { .. }
+                | ConfigError::StackOverflow { .. }
+                | ConfigError::PartitionTableFull
+                | ConfigError::PartitionIdMismatch { .. }
+                | ConfigError::StackInitFailed { .. }
+                | ConfigError::PartitionCountMismatch { .. }
+                | ConfigError::PeripheralRegionInvalid { .. }
+                | ConfigError::TooManyPeripheralRegions { .. }
+                | ConfigError::CodeRegionInvalid { .. }
+                | ConfigError::EntryPointNotThumb { .. }
+                | ConfigError::EntryPointOutsideCodeRegion { .. } => {}
+                #[cfg(feature = "dynamic-mpu")]
+                ConfigError::NoSystemWindow | ConfigError::SystemWindowTooInfrequent { .. } => {}
+            }
+        }
+        // All non-zero.
+        for v in variants {
+            assert_ne!(v.discriminant(), 0, "non-zero: {v:?}");
+        }
+        // All unique (O(n²) but N is small).
+        for (i, a) in variants.iter().enumerate() {
+            for b in &variants[i + 1..] {
+                assert_ne!(a.discriminant(), b.discriminant(), "dup: {a:?} vs {b:?}");
+            }
+        }
     }
 }
