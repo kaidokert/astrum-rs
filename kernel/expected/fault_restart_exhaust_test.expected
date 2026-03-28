@@ -1,0 +1,10 @@
+# mode: contains
+fault_restart_exhaust_test: start
+p0 run #1: start_condition=NormalBoot
+[MemManage]
+p0 run #2: start_condition=WarmRestart
+[MemManage]
+p0 run #3: start_condition=WarmRestart
+[MemManage]
+p0 permanently faulted
+fault_restart_exhaust_test: PASS

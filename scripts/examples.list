@@ -36,6 +36,7 @@ EXAMPLES=(
     boot_banner_test
     # Fault-recovery / survival tests
     adversarial_survive
+    fault_restart_exhaust_test
 )
 
 CUSTOM_IVT_EXAMPLES=(

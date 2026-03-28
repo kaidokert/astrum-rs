@@ -30,20 +30,42 @@ macro_rules! define_memmanage_handler {
                 $crate::fault::faulting_pc_from_psp(exc_return, psp)
             }.unwrap_or(0);
 
-            let _ = $crate::state::with_kernel_mut::<$Config, _, _>(|k| {
+            let restart_sp = $crate::state::with_kernel_mut::<$Config, _, Option<u32>>(|k| {
                 match $crate::memmanage::handle_memmanage_fault::<$Config>(k, cfsr, mmfar, faulting_pc) {
-                    Some(d) => $crate::klog!(
-                        "[MemManage] partition={} CFSR={:#010x} MMFAR={:#010x} PC={:#010x}",
-                        d.partition_id, d.cfsr, d.mmfar, d.faulting_pc),
+                    Some(d) => {
+                        $crate::klog!(
+                            "[MemManage] partition={} CFSR={:#010x} MMFAR={:#010x} PC={:#010x}",
+                            d.partition_id, d.cfsr, d.mmfar, d.faulting_pc);
+                        // If the partition was restarted (state back to Ready),
+                        // return its fresh SP so we can update PSP accordingly.
+                        let pid = d.partition_id as usize;
+                        if k.pcb(pid).map_or(false, |pcb|
+                            pcb.state() == $crate::partition::PartitionState::Ready)
+                        {
+                            return Some(k.partition_sp()[pid]);
+                        }
+                    },
                     None => $crate::klog!(
                         "[MemManage] no active partition CFSR={:#010x} MMFAR={:#010x} PC={:#010x}",
                         cfsr, mmfar, faulting_pc),
                 }
+                None
             });
 
-            // Redirect stacked PC to WFI trampoline to prevent re-execution.
-            // SAFETY: PSP exception frame is valid; fault_trampoline is a valid code address.
-            unsafe { $crate::fault::write_stacked_pc(psp, $crate::fault::fault_trampoline as u32); }
+            if matches!(restart_sp, Ok(Some(_))) {
+                // Partition was restarted: point PSP past the software context
+                // (r4-r11 = 8 words = 32 bytes) to the exception frame so the
+                // CPU unstacks the fresh entry point on return.  PendSV will
+                // later save r4-r11 into the software context area and
+                // partition_sp[pid] will remain correct.
+                let sp = restart_sp.unwrap().unwrap();
+                // SAFETY: sp is a valid stack address from restart_partition.
+                unsafe { cortex_m::register::psp::write(sp + 32); }
+            } else {
+                // Partition stays faulted: redirect to WFI trampoline.
+                // SAFETY: PSP exception frame is valid; fault_trampoline is a valid code address.
+                unsafe { $crate::fault::write_stacked_pc(psp, $crate::fault::fault_trampoline as u32); }
+            }
             // SAFETY: Privileged context; CFSR is write-1-to-clear.
             unsafe { $crate::fault::clear_mmfsr(); }
             // TODO: reviewer false positive — SCB::set_pendsv() is a static method in cortex-m 0.7
@@ -113,6 +135,10 @@ where
             if count < max {
                 match kernel.restart_partition(pid as usize, warm) {
                     Ok(()) => {
+                        // Clear active_partition: the partition is now Ready,
+                        // not Running, so the invariant checker must not see
+                        // it as the active Running partition.
+                        kernel.set_core_active_partition(None);
                         crate::klog!(
                             "[MemManage] pid={} {} restart ({}/{})",
                             pid,

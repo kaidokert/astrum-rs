@@ -496,6 +496,10 @@ required-features = ["qemu", "log-semihosting"]
 name = "adversarial_survive"
 required-features = ["qemu", "log-semihosting"]
 
+[[example]]
+name = "fault_restart_exhaust_test"
+required-features = ["qemu", "log-semihosting"]
+
 [features]
 default = ["arinc-compat"]
 
