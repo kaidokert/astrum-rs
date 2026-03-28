@@ -76,7 +76,7 @@ kernel::define_unified_kernel!(TestConfig, |_k| {});
 #[used]
 static _SVC: kernel::SvcDispatchFn = kernel::svc::SVC_HANDLER;
 static STRATEGY: DynamicStrategy = DynamicStrategy::new();
-kernel::define_pendsv_dynamic!(STRATEGY, TestConfig);
+kernel::define_pendsv!(dynamic: STRATEGY, TestConfig);
 
 /// Slot index allocated by P1 (u32::MAX = not yet allocated).
 static P1_ALLOC_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);

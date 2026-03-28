@@ -56,7 +56,7 @@ static mut STACKS: [AlignedStack; NP] = {
 };
 
 // These #[no_mangle] statics are required by the PendSV assembly handler
-// (define_pendsv_dynamic!) which references them by symbol name. They cannot
+// (define_pendsv!(dynamic: ...)) which references them by symbol name. They cannot
 // be encapsulated behind a Mutex because the assembly performs raw loads/stores.
 #[no_mangle]
 static mut PARTITION_SP: [u32; NP] = [0; NP];
@@ -70,7 +70,7 @@ kernel::define_unified_kernel!(TestConfig, |_k| {});
 
 static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 
-kernel::define_pendsv_dynamic!(STRATEGY, TestConfig);
+kernel::define_pendsv!(dynamic: STRATEGY, TestConfig);
 
 /// Compute the expected RASR value for partition `pid`.
 ///
@@ -191,8 +191,7 @@ fn main() -> ! {
 
     // Build schedule table: P0(2) → system window(1) → P1(2) → system window(1)
     // TODO: system windows are unconditionally added because this example is
-    // inherently dynamic-mpu-only (uses DynamicStrategy, define_pendsv_dynamic!).
-    // Consider adding a top-level #[cfg(feature = "dynamic-mpu")] to the whole file.
+    // inherently dynamic-mpu-only (uses DynamicStrategy, define_pendsv!(dynamic: ...)).
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).unwrap();
     if sched.add_system_window(1).is_err() {

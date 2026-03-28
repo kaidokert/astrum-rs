@@ -8,7 +8,7 @@
 //! QEMU example: dynamic MPU R4 reprogramming across partition switches.
 //!
 //! Two partitions with different data regions. On each context switch the
-//! `DynamicStrategy` is configured in SysTick, and `define_pendsv_dynamic!`
+//! `DynamicStrategy` is configured in SysTick, and `define_pendsv!(dynamic: ...)`
 //! programs R4-R7 into the MPU hardware inside PendSV — just before
 //! switching to the incoming partition.
 //!
@@ -69,7 +69,7 @@ kernel::define_unified_kernel!(TestConfig, |_k| {});
 
 static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 
-kernel::define_pendsv_dynamic!(STRATEGY, TestConfig);
+kernel::define_pendsv!(dynamic: STRATEGY, TestConfig);
 
 const _: PartitionEntry = partition_main;
 extern "C" fn partition_main() -> ! {
@@ -148,8 +148,7 @@ fn main() -> ! {
 
     // Build schedule table: P0(2) → system window(1) → P1(2) → system window(1)
     // TODO: system windows are unconditionally added because this example is
-    // inherently dynamic-mpu-only (uses DynamicStrategy, define_pendsv_dynamic!).
-    // Consider adding a top-level #[cfg(feature = "dynamic-mpu")] to the whole file.
+    // inherently dynamic-mpu-only (uses DynamicStrategy, define_pendsv!(dynamic: ...)).
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).unwrap();
     if sched.add_system_window(1).is_err() {

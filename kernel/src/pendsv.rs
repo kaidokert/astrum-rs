@@ -90,7 +90,6 @@ macro_rules! define_pendsv {
     (dynamic: $strategy:ident, $Config:ty) => {
         /// Rust shim called from the PendSV assembly to program MPU
         /// regions R0-R3 (cached base) + R4-R7 (dynamic strategy).
-        #[cfg(feature = "dynamic-mpu")]
         #[no_mangle]
         extern "C" fn __pendsv_program_mpu() {
             // SAFETY: PendSV is the lowest-priority exception, so no
@@ -349,13 +348,6 @@ macro_rules! define_pendsv {
             pendsv_systick_clear = const $crate::pendsv::PENDSV_SYSTICK_CLEAR,
         );
     };
-}
-
-/// Backwards compatibility wrapper.
-#[cfg(feature = "dynamic-mpu")]
-#[macro_export]
-macro_rules! define_pendsv_dynamic {
-    ($strategy:ident, $Config:ty) => { $crate::define_pendsv!(dynamic: $strategy, $Config); };
 }
 
 /// Offset of `stack_limit` within `PartitionControlBlock`.
