@@ -501,6 +501,10 @@ required-features = ["qemu", "log-semihosting"]
 name = "fault_restart_exhaust_test"
 required-features = ["qemu", "log-semihosting"]
 
+[[example]]
+name = "qemu_pac_uart0"
+required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
+
 [features]
 default = ["arinc-compat"]
 

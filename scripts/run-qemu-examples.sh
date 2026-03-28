@@ -139,10 +139,12 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 
     # Parse flags (consume from positional args).
     DYNAMIC_MPU=0
+    QEMU_PERIPHERALS=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --strict) STRICT=1 ;;
             --dynamic-mpu) DYNAMIC_MPU=1 ;;
+            --qemu-peripherals) QEMU_PERIPHERALS=1 ;;
             --record) RECORD=1 ;;
             --only) shift; ONLY="$1" ;;
         esac
@@ -163,9 +165,10 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
             [EXAMPLES]="qemu,log-semihosting,ipc-blackboard"
             [CUSTOM_IVT_EXAMPLES]="qemu,log-semihosting,custom-ivt"
             [DYNAMIC_MPU_EXAMPLES]="qemu,log-semihosting,dynamic-mpu"
+            [QEMU_PERIPHERAL_EXAMPLES]="qemu,log-semihosting,qemu-peripherals"
         )
         found=0
-        for category in EXAMPLES CUSTOM_IVT_EXAMPLES DYNAMIC_MPU_EXAMPLES; do
+        for category in EXAMPLES CUSTOM_IVT_EXAMPLES DYNAMIC_MPU_EXAMPLES QEMU_PERIPHERAL_EXAMPLES; do
             declare -n list="$category"
             for ex in "${list[@]}"; do
                 if [[ "$ex" == "$ONLY" ]]; then
@@ -190,6 +193,12 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
             echo ""
             echo "=== Dynamic-MPU examples ==="
             $RUN_FN "qemu,log-semihosting,dynamic-mpu" "${DYNAMIC_MPU_EXAMPLES[@]}"
+        fi
+
+        if [[ "$QEMU_PERIPHERALS" -eq 1 ]]; then
+            echo ""
+            echo "=== QEMU peripheral examples ==="
+            $RUN_FN "qemu,log-semihosting,qemu-peripherals" "${QEMU_PERIPHERAL_EXAMPLES[@]}"
         fi
     fi
 

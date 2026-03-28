@@ -1,0 +1,3 @@
+# mode: contains
+qemu_pac_uart0: start
+qemu_pac_uart0: PASS partition TX complete
