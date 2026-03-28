@@ -99,6 +99,13 @@ const RAM_SLOT_COUNT: usize = 1;
 /// reserve 0 slots.
 pub const PERIPHERAL_RESERVED_SLOTS: usize = 2;
 
+// Compile-time check: the canonical MAX_PERIPHERAL_REGIONS (in partition.rs)
+// must equal the slot-derived value so partition limits stay in sync with MPU capacity.
+const _: () = assert!(
+    crate::partition::MAX_PERIPHERAL_REGIONS == DYNAMIC_SLOT_COUNT - RAM_SLOT_COUNT,
+    "MAX_PERIPHERAL_REGIONS out of sync with dynamic MPU slot layout"
+);
+
 /// Upper bound (exclusive) on peripherals `wire_boot_peripherals` may wire.
 /// Accounts for the RAM slot and preserves at least one free dynamic slot
 /// for runtime `add_window`.

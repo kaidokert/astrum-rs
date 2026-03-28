@@ -3,6 +3,22 @@ use heapless::Vec;
 #[cfg(feature = "partition-debug")]
 use crate::debug::DebugBuffer;
 use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
+
+/// Maximum number of peripheral regions a partition may configure.
+///
+/// When the `dynamic-mpu` feature is active, `mpu_strategy` statically
+/// asserts that `DYNAMIC_SLOT_COUNT − RAM_SLOT_COUNT` equals this value,
+/// keeping partition limits and MPU capacity in sync.
+pub const MAX_PERIPHERAL_REGIONS: usize = 3;
+
+/// Storage type for peripheral MPU regions.  Capacity is tied to
+/// [`MAX_PERIPHERAL_REGIONS`]; the static assert below guards against drift.
+pub type PeripheralRegionVec = Vec<MpuRegion, 3>;
+const _: () = assert!(
+    MAX_PERIPHERAL_REGIONS == 3,
+    "update PeripheralRegionVec capacity to match MAX_PERIPHERAL_REGIONS"
+);
+
 use crate::partition_core::StackStorage;
 pub use rtos_traits::partition::{
     EntryAddr, EntryPointFn, IsrHandler, PartitionBody, PartitionEntry, PartitionSpec,
@@ -116,7 +132,7 @@ pub struct PartitionControlBlock {
     event_wait_mask: u32,
     /// Optional peripheral register block regions for user-space drivers.
     /// Supports up to 3 peripheral regions (mapped to MPU R4–R6).
-    peripheral_regions: Vec<MpuRegion, 3>,
+    peripheral_regions: PeripheralRegionVec,
     /// Flag set by SYS_DEBUG_NOTIFY syscall, cleared after kernel drains debug ring buffer.
     debug_pending: bool,
     /// Reference to the partition's debug ring buffer (type-erased via trait object).
@@ -533,8 +549,8 @@ pub struct PartitionConfig {
     pub entry_point: EntryAddr,
     pub mpu_region: MpuRegion,
     /// Optional peripheral register block regions for user-space drivers.
-    /// Supports up to 2 peripheral regions (Approach D).
-    pub peripheral_regions: Vec<MpuRegion, 2>,
+    /// Supports up to 3 peripheral regions (MAX_PERIPHERAL_REGIONS).
+    pub peripheral_regions: PeripheralRegionVec,
     /// Initial r0 value passed to the partition entry point.
     pub r0_hint: u32,
     /// Optional MPU region for the partition's code (text + rodata).
@@ -696,8 +712,13 @@ pub enum ConfigError {
         region_index: usize,
         detail: MpuError,
     },
-    /// Too many peripheral regions for a partition (exceeds heapless::Vec capacity).
-    PeripheralRegionCapacityExceeded { partition_id: u8 },
+    /// The number of non-zero-size peripheral regions exceeds the maximum
+    /// allowed by the dynamic MPU slot layout.
+    TooManyPeripheralRegions {
+        partition_id: u8,
+        got: usize,
+        max: usize,
+    },
     /// A partition's code region failed MPU validation.
     CodeRegionInvalid { partition_id: u8, detail: MpuError },
     /// A partition's entry point does not have the Thumb bit (bit\[0\]) set.
@@ -789,9 +810,14 @@ impl core::fmt::Display for ConfigError {
                 f,
                 "partition {partition_id}: peripheral region {region_index} invalid: {detail}"
             ),
-            Self::PeripheralRegionCapacityExceeded { partition_id } => write!(
+            Self::TooManyPeripheralRegions {
+                partition_id,
+                got,
+                max,
+            } => write!(
                 f,
-                "partition {partition_id}: too many peripheral regions (capacity exceeded)"
+                "partition {partition_id}: too many peripheral regions \
+                 (got {got}, max {max})"
             ),
             Self::CodeRegionInvalid {
                 partition_id,
@@ -924,7 +950,7 @@ pub struct ExternalPartitionMemory<'mem> {
     stack: &'mem mut [u32],
     entry_point: EntryAddr,
     mpu_region: MpuRegion,
-    peripheral_regions: Vec<MpuRegion, 2>,
+    peripheral_regions: PeripheralRegionVec,
     code_mpu_region: Option<MpuRegion>,
     r0_hint: u32,
     partition_id: u8,
@@ -995,6 +1021,15 @@ impl<'mem> ExternalPartitionMemory<'mem> {
 
     /// Builder: attach peripheral MPU regions; validates non-zero-size regions.
     pub fn with_peripheral_regions(mut self, regions: &[MpuRegion]) -> Result<Self, ConfigError> {
+        let non_zero_count = regions.iter().filter(|r| r.size() != 0).count();
+        if non_zero_count > MAX_PERIPHERAL_REGIONS {
+            return Err(ConfigError::TooManyPeripheralRegions {
+                partition_id: self.partition_id,
+                got: non_zero_count,
+                max: MAX_PERIPHERAL_REGIONS,
+            });
+        }
+        // TODO: reviewer false positive — `i` is used as `region_index` in the error path below.
         for (i, r) in regions.iter().enumerate() {
             if r.size() == 0 {
                 continue;
@@ -1007,8 +1042,10 @@ impl<'mem> ExternalPartitionMemory<'mem> {
                 }
             })?;
             self.peripheral_regions.push(*r).map_err(|_| {
-                ConfigError::PeripheralRegionCapacityExceeded {
+                ConfigError::TooManyPeripheralRegions {
                     partition_id: self.partition_id,
+                    got: non_zero_count,
+                    max: MAX_PERIPHERAL_REGIONS,
                 }
             })?;
         }
@@ -1054,7 +1091,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     pub fn mpu_region(&self) -> &MpuRegion {
         &self.mpu_region
     }
-    pub fn peripheral_regions(&self) -> &Vec<MpuRegion, 2> {
+    pub fn peripheral_regions(&self) -> &PeripheralRegionVec {
         &self.peripheral_regions
     }
     pub fn code_mpu_region(&self) -> Option<&MpuRegion> {
@@ -1746,11 +1783,10 @@ mod tests {
     #[test]
     fn exclusive_static_regions_capacity_bounded_by_peripheral_vec() {
         let pcb = make_pcb();
-        // peripheral_regions Vec<MpuRegion, 3>: at most 3 peripherals
-        assert!(pcb.peripheral_regions().len() <= 3);
-        // exclusive_static_regions Vec<(u32, u32), 4>: at most 1 + 3 = 4 entries
+        assert!(pcb.peripheral_regions().len() <= MAX_PERIPHERAL_REGIONS);
+        // exclusive_static_regions capacity = 1 (stack) + MAX_PERIPHERAL_REGIONS
         let regions = pcb.exclusive_static_regions();
-        assert!(regions.len() <= 4);
+        assert!(regions.len() <= 1 + MAX_PERIPHERAL_REGIONS);
     }
 
     #[test]
@@ -3302,18 +3338,32 @@ mod tests {
     aligned_stack_round_trip_test!(ext_pmem_from_aligned_stack_4k, AlignedStack4K, 4096);
 
     #[test]
-    fn ext_pmem_peripheral_regions_caps_at_two() {
+    fn ext_pmem_peripheral_regions_caps_at_three() {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        // 3 non-zero regions should succeed (matches MAX_PERIPHERAL_REGIONS).
         let r1 = MpuRegion::new(0x4000_0000, 256, 0);
-        let r2 = MpuRegion::new(0x4000_1000, 256, 0);
-        let r3 = MpuRegion::new(0x4000_2000, 256, 0);
-        let result = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 0)
+        let r2 = MpuRegion::new(0x4000_1000, 4096, 0);
+        let r3 = MpuRegion::new(0x4000_2000, 8192, 0);
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 0)
             .unwrap()
-            .with_peripheral_regions(&[r1, r2, r3]);
+            .with_peripheral_regions(&[r1, r2, r3])
+            .unwrap();
+        assert_eq!(epm.peripheral_regions().len(), 3);
+
+        // 4 non-zero regions should fail with TooManyPeripheralRegions.
+        let mut buf2 = Align256([0u32; 64]);
+        let r4 = MpuRegion::new(0x4000_4000, 16384, 0);
+        let result = ExternalPartitionMemory::new(&mut buf2.0, 1, mpu, 0)
+            .unwrap()
+            .with_peripheral_regions(&[r1, r2, r3, r4]);
         assert!(matches!(
             result,
-            Err(ConfigError::PeripheralRegionCapacityExceeded { partition_id: 0 })
+            Err(ConfigError::TooManyPeripheralRegions {
+                partition_id: 0,
+                got: 4,
+                max: 3,
+            })
         ));
     }
 
@@ -3708,5 +3758,54 @@ mod tests {
         let body: PartitionBody = _dummy_body;
         let addr: EntryAddr = body.into();
         assert_eq!(addr, EntryAddr::from_entry(body));
+    }
+
+    // ------------------------------------------------------------------
+    // TooManyPeripheralRegions
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn ext_pmem_rejects_4_nonzero_peripheral_regions() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let regions = [
+            MpuRegion::new(0x4000_0000, 256, 0),
+            MpuRegion::new(0x4000_1000, 4096, 0),
+            MpuRegion::new(0x4000_2000, 8192, 0),
+            MpuRegion::new(0x4000_4000, 16384, 0),
+        ];
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 5)
+            .unwrap()
+            .with_peripheral_regions(&regions)
+            .unwrap_err();
+        match err {
+            ConfigError::TooManyPeripheralRegions {
+                partition_id,
+                got,
+                max,
+            } => {
+                assert_eq!(partition_id, 5);
+                assert_eq!(got, 4);
+                assert_eq!(max, 3);
+            }
+            other => panic!("expected TooManyPeripheralRegions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ext_pmem_allows_3_nonzero_plus_1_zero_peripheral_regions() {
+        let mut buf = Align256([0u32; 64]);
+        let mpu = MpuRegion::new(0x2000_0000, 256, 0);
+        let regions = [
+            MpuRegion::new(0x4000_0000, 256, 0),
+            MpuRegion::new(0x4000_1000, 4096, 0),
+            MpuRegion::new(0x4000_2000, 8192, 0),
+            MpuRegion::new(0x0000_0000, 0, 0), // zero-size, not counted
+        ];
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 2)
+            .unwrap()
+            .with_peripheral_regions(&regions)
+            .unwrap();
+        assert_eq!(epm.peripheral_regions().len(), 3);
     }
 }

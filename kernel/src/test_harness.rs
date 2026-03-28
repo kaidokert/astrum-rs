@@ -3,7 +3,8 @@ use crate::context::ExceptionFrame;
 use crate::kernel_config_types;
 use crate::message::MessageQueue;
 use crate::partition::{
-    ConfigError, ExternalPartitionMemory, MpuRegion, PartitionState, TransitionError,
+    ConfigError, ExternalPartitionMemory, MpuRegion, PartitionState, PeripheralRegionVec,
+    TransitionError,
 };
 use crate::partition_core::{AlignedStack1K, StackStorage}; // StackStorage: trait for as_u32_slice()
 use crate::scheduler::{ScheduleEntry, ScheduleTable};
@@ -65,7 +66,7 @@ impl KernelTestHarness {
     #[allow(deprecated)]
     fn build_kernel(
         n: usize,
-        mut peripheral_fn: impl FnMut(usize) -> Vec<MpuRegion, 2>,
+        mut peripheral_fn: impl FnMut(usize) -> PeripheralRegionVec,
     ) -> Result<Self, HarnessError> {
         if n == 0 || n > HarnessConfig::N {
             return Err(HarnessError::InvalidPartitionCount);
@@ -122,7 +123,7 @@ impl KernelTestHarness {
     }
 
     pub fn with_partitions(n: usize) -> Result<Self, HarnessError> {
-        Self::build_kernel(n, |_| Vec::new())
+        Self::build_kernel(n, |_| PeripheralRegionVec::new())
     }
 
     /// Create a harness with two partitions and semaphores initialised at the
@@ -163,7 +164,7 @@ impl KernelTestHarness {
     /// Kernel::new → PCB.with_peripheral_regions → accessor / MPU programming.
     pub fn with_peripheral_regions() -> Result<Self, HarnessError> {
         Self::build_kernel(2, |i| {
-            let mut periph = Vec::new();
+            let mut periph = PeripheralRegionVec::new();
             if i == 0 {
                 periph
                     .push(MpuRegion::new(0x4000_0000, 256, 0x03))
@@ -181,7 +182,7 @@ impl KernelTestHarness {
     /// for multi-partition peripheral differentiation.
     pub fn with_two_peripheral_partitions() -> Result<Self, HarnessError> {
         Self::build_kernel(2, |i| {
-            let mut periph = Vec::new();
+            let mut periph = PeripheralRegionVec::new();
             let (base, size) = match i {
                 0 => (0x4000_0000, 4096),
                 _ => (0x4001_0000, 256),
