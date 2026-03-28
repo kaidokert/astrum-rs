@@ -30,7 +30,6 @@ impl KernelConfig for HarnessConfig {
     const BS: usize = 4;
     const BM: usize = 4;
     const BW: usize = 4;
-    #[cfg(feature = "dynamic-mpu")]
     const BP: usize = 4;
     kernel_config_types!();
 }
@@ -77,7 +76,6 @@ impl KernelTestHarness {
                 .add(ScheduleEntry::new(i as u8, 10))
                 .map_err(|_| HarnessError::ScheduleFull)?;
         }
-        #[cfg(feature = "dynamic-mpu")]
         schedule
             .add_system_window(10)
             .map_err(|_| HarnessError::ScheduleFull)?;
@@ -209,7 +207,6 @@ impl KernelTestHarness {
                 .add(ScheduleEntry::new(i as u8, 10))
                 .map_err(|_| HarnessError::ScheduleFull)?;
         }
-        #[cfg(feature = "dynamic-mpu")]
         schedule
             .add_system_window(10)
             .map_err(|_| HarnessError::ScheduleFull)?;
@@ -1648,7 +1645,6 @@ mod tests {
     /// This tests the actual dynamic-mode runtime path executed during
     /// PendSV context switches, unlike the static-mode test above.
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     fn two_peripheral_partitions_cached_peripheral_regions() {
         use crate::mpu::precompute_mpu_cache;
         use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
@@ -2676,7 +2672,6 @@ mod tests {
         schedule
             .add(ScheduleEntry::new(1, 10))
             .expect("schedule P1");
-        #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(10).expect("system window");
 
         // P0: sentinel mpu_region (size==0).

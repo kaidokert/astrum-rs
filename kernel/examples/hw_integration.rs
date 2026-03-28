@@ -72,10 +72,8 @@ fn main() -> ! {
     klog!("hw_integration: start");
     let mut sched = ScheduleTable::<{ Cfg::SCHED }>::new();
     if sched.add(ScheduleEntry::new(0, 2)).is_err() { loop { kexit!(failure); } }
-    #[cfg(feature = "dynamic-mpu")]
     if sched.add_system_window(1).is_err() { loop { kexit!(failure); } }
     if sched.add(ScheduleEntry::new(1, 2)).is_err() { loop { kexit!(failure); } }
-    #[cfg(feature = "dynamic-mpu")]
     if sched.add_system_window(1).is_err() { loop { kexit!(failure); } }
     let entry_fns: [PartitionEntry; Cfg::N] = [p0_main, p1_main];
     let mut k = {

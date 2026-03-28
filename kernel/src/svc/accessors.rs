@@ -13,11 +13,8 @@ impl<'mem, C: KernelConfig> Kernel<'mem, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
     C::Core:
         CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,

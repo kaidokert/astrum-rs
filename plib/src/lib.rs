@@ -36,7 +36,6 @@ pub struct QueuingPortStatus {
     pub direction: u32,
 }
 
-#[cfg(feature = "dynamic-mpu")]
 pub use rtos_traits::buf_syscall;
 
 // ── Re-exported syscall constants (from rtos-traits) ──────────────────
@@ -58,15 +57,12 @@ pub use rtos_traits::syscall::{
     SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE,
 };
 // Device driver & query (dynamic-mpu only, defined in rtos-traits)
-#[cfg(feature = "dynamic-mpu")]
 pub use rtos_traits::syscall::{
     SYS_DEV_CLOSE, SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_READ_TIMED, SYS_DEV_WRITE,
     SYS_QUERY_BOTTOM_HALF,
 };
 // Buffer pool (dynamic-mpu only, defined in rtos-traits)
-#[cfg(feature = "dynamic-mpu")]
 pub use rtos_traits::syscall::lend_flags;
-#[cfg(feature = "dynamic-mpu")]
 pub use rtos_traits::syscall::{
     SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_RELEASE, SYS_BUF_REVOKE, SYS_BUF_TRANSFER,
     SYS_BUF_WRITE,
@@ -83,7 +79,6 @@ pub use rtos_traits::syscall::{SYS_DEBUG_NOTIFY, SYS_DEBUG_WRITE};
 // ── Re-exported resource ID newtypes (from rtos-traits) ─────────────
 #[cfg(feature = "ipc-blackboard")]
 pub use rtos_traits::ids::BlackboardId;
-#[cfg(feature = "dynamic-mpu")]
 pub use rtos_traits::ids::{BufferSlotId, DeviceId};
 pub use rtos_traits::ids::{
     EventMask, MutexId, PartitionId, QueuingPortId, SamplingPortId, SemaphoreId,
@@ -704,7 +699,6 @@ pub fn sys_bb_clear(board_id: BlackboardId) -> Result<u32, SvcError> {
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_open(device_id: DeviceId) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_DEV_OPEN,
@@ -721,7 +715,6 @@ pub fn sys_dev_open(device_id: DeviceId) -> Result<u32, SvcError> {
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_close(device_id: DeviceId) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_DEV_CLOSE,
@@ -739,7 +732,6 @@ pub fn sys_dev_close(device_id: DeviceId) -> Result<u32, SvcError> {
 ///
 /// `Ok(value)` with a device-specific result, or `Err(SvcError)` if the
 /// syscall failed.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_ioctl(device_id: DeviceId, cmd: u32, arg: u32) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_DEV_IOCTL,
@@ -753,7 +745,6 @@ pub fn sys_dev_ioctl(device_id: DeviceId, cmd: u32, arg: u32) -> Result<u32, Svc
 ///
 /// ABI: r1 = device_id, r2 = buf_len, r3 = buf_ptr.
 /// Returns `Ok(n)` bytes read or `Err(SvcError)`.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_read(device_id: DeviceId, buf: &mut [u8]) -> Result<u32, SvcError> {
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The buf pointer is valid for buf.len() bytes and the
@@ -770,7 +761,6 @@ pub fn sys_dev_read(device_id: DeviceId, buf: &mut [u8]) -> Result<u32, SvcError
 ///
 /// ABI: r1 = device_id, r2 = data_len, r3 = data_ptr.
 /// Returns `Ok(0)` on success or `Err(SvcError)`.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_write(device_id: DeviceId, data: &[u8]) -> Result<u32, SvcError> {
     // SAFETY: svc! triggers a supervisor call whose handler validates all
     // arguments.  The data pointer is valid for data.len() bytes and the
@@ -790,7 +780,6 @@ pub fn sys_dev_write(device_id: DeviceId, data: &[u8]) -> Result<u32, SvcError> 
 ///
 /// Kernel side: handled by the `DevReadTimed` arm in `kernel/src/svc.rs`, which
 /// unpacks r2 via [`unpack_packed_r2`](kernel::unpack_packed_r2).
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_dev_read_timed(
     device_id: DeviceId,
     buf: &mut [u8],
@@ -814,7 +803,6 @@ pub fn sys_dev_read_timed(
 /// Query whether a bottom-half handler is pending for a device.
 ///
 /// ABI: r1 = device_id. Returns `Ok(status)` or `Err(SvcError)`.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_query_bottom_half(device_id: DeviceId) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_QUERY_BOTTOM_HALF,
@@ -828,7 +816,6 @@ pub fn sys_query_bottom_half(device_id: DeviceId) -> Result<u32, SvcError> {
 ///
 /// Like [`sys_query_bottom_half`] but also captures the stale flag from r1.
 /// Returns `Ok((ticks_since_bottom_half, stale_flag))` or `Err(SvcError)`.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_query_bottom_half_with_stale(device_id: DeviceId) -> Result<(u32, u32), SvcError> {
     let (r0, r1) =
         rtos_traits::svc_r01!(SYS_QUERY_BOTTOM_HALF, device_id.as_raw() as u32, 0u32, 0u32);
@@ -846,7 +833,6 @@ pub fn sys_query_bottom_half_with_stale(device_id: DeviceId) -> Result<(u32, u32
 ///
 /// `Ok(slot)` with the allocated slot index, or `Err(SvcError)` if the
 /// syscall failed.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_alloc(writable: bool, max_ticks: u16) -> Result<BufferSlotId, SvcError> {
     let mode = if writable { 1u32 } else { 0u32 };
     decode_rc(rtos_traits::svc!(
@@ -865,7 +851,6 @@ pub fn sys_buf_alloc(writable: bool, max_ticks: u16) -> Result<BufferSlotId, Svc
 /// # Returns
 ///
 /// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_release(slot: BufferSlotId) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(
         SYS_BUF_RELEASE,
@@ -883,7 +868,6 @@ pub fn sys_buf_release(slot: BufferSlotId) -> Result<u32, SvcError> {
 ///
 /// `Ok(n)` with the number of bytes read, `Err(SvcError::OperationFailed)`
 /// if `dst` exceeds 65 535 bytes, or `Err(SvcError)` if the syscall failed.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_read(slot: BufferSlotId, dst: &mut [u8]) -> Result<u32, SvcError> {
     if dst.len() > u16::MAX as usize {
         return Err(SvcError::InvalidParameter);
@@ -904,7 +888,6 @@ pub fn sys_buf_read(slot: BufferSlotId, dst: &mut [u8]) -> Result<u32, SvcError>
 ///
 /// `Ok(n)` with the number of bytes written, `Err(SvcError::OperationFailed)`
 /// if `data` exceeds 65 535 bytes, or `Err(SvcError)` if the syscall failed.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_write(slot: BufferSlotId, data: &[u8]) -> Result<u32, SvcError> {
     if data.len() > u16::MAX as usize {
         return Err(SvcError::InvalidParameter);
@@ -927,7 +910,6 @@ pub fn sys_buf_write(slot: BufferSlotId, data: &[u8]) -> Result<u32, SvcError> {
 /// slot (r0) and the MPU region assigned to the target (r1), or
 /// `Err((SvcError, detail))` if the syscall failed, where `detail` is a
 /// kernel-specific error discriminant from `r1`.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_lend(
     slot: BufferSlotId,
     target: u8,
@@ -955,7 +937,6 @@ pub fn sys_buf_lend(
 ///
 /// `Ok(0)` on success, or `Err((SvcError, detail))` if the syscall failed,
 /// where `detail` is a kernel-specific error discriminant from `r1`.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_revoke(slot: BufferSlotId, target: u8) -> Result<u32, (SvcError, u32)> {
     // SAFETY: svc_r01! triggers a supervisor call whose handler validates all
     // arguments.  Only small integer values are passed; no pointers.
@@ -976,7 +957,6 @@ pub fn sys_buf_revoke(slot: BufferSlotId, target: u8) -> Result<u32, (SvcError, 
 ///
 /// `Ok(0)` on success, or `Err((SvcError, detail))` if the syscall failed,
 /// where `detail` is a kernel-specific error discriminant from `r1`.
-#[cfg(feature = "dynamic-mpu")]
 pub fn sys_buf_transfer(slot: BufferSlotId, new_owner: u8) -> Result<u32, (SvcError, u32)> {
     // SAFETY: svc_r01! triggers a supervisor call whose handler validates all
     // arguments.  Only small integer values are passed; no pointers.
@@ -1305,7 +1285,6 @@ mod tests {
     // crate's documented testing policy (see module docs).
 
     /// Verify the buf_syscall re-export is accessible (ABI helpers).
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_syscall_reexport_abi_helpers_accessible() {
         assert_eq!(crate::buf_syscall::pack_lend_r2(1, false), 1);
@@ -1460,7 +1439,6 @@ mod tests {
         assert_eq!(crate::SYS_DEBUG_WRITE, src::SYS_DEBUG_WRITE);
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn syscall_dev_constants_reexported_match_traits_source() {
         use rtos_traits::syscall as src;
@@ -1499,26 +1477,22 @@ mod tests {
         assert_eq!(crate::BlackboardId::new(6), src::BlackboardId::new(6));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn device_id_reexported_matches_source() {
         use rtos_traits::ids as src;
         assert_eq!(crate::DeviceId::new(7), src::DeviceId::new(7));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_open_returns_ok_zero_on_host() {
         assert_eq!(sys_dev_open(DeviceId::new(0)), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_close_returns_ok_zero_on_host() {
         assert_eq!(sys_dev_close(DeviceId::new(0)), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_ioctl_returns_ok_zero_on_host() {
         assert_eq!(sys_dev_ioctl(DeviceId::new(0), 1, 2), Ok(0));
@@ -1528,47 +1502,40 @@ mod tests {
     /// The host stub always returns Ok(0) without populating buffers or
     /// verifying written data.  Data-integrity verification is covered by
     /// QEMU integration tests (e.g. plib_dev_read_timed_test.rs).
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_returns_ok_zero_on_host() {
         let mut buf = [0u8; 8];
         assert_eq!(sys_dev_read(DeviceId::new(0), &mut buf), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_empty_buf_returns_ok_zero_on_host() {
         let mut buf = [0u8; 0];
         assert_eq!(sys_dev_read(DeviceId::new(1), &mut buf), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_write_returns_ok_zero_on_host() {
         assert_eq!(sys_dev_write(DeviceId::new(0), &[0xDE, 0xAD]), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_write_empty_data_returns_ok_zero_on_host() {
         assert_eq!(sys_dev_write(DeviceId::new(1), &[]), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_returns_ok_zero_on_host() {
         let mut buf = [0u8; 8];
         assert_eq!(sys_dev_read_timed(DeviceId::new(0), &mut buf, 100), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_empty_buf_returns_ok_zero_on_host() {
         let mut buf = [0u8; 0];
         assert_eq!(sys_dev_read_timed(DeviceId::new(1), &mut buf, 50), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_rejects_oversized_buf() {
         let mut big = vec![0u8; u16::MAX as usize + 1];
@@ -1578,7 +1545,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_packing_boundary() {
         let mut buf = vec![0u8; u16::MAX as usize];
@@ -1588,77 +1554,65 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn query_bottom_half_returns_ok_zero_on_host() {
         assert_eq!(sys_query_bottom_half(DeviceId::new(0)), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn query_bottom_half_max_device_id_returns_ok_zero_on_host() {
         assert_eq!(sys_query_bottom_half(DeviceId::new(u8::MAX)), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn query_bottom_half_with_stale_returns_ok_zero_pair_on_host() {
         let result = sys_query_bottom_half_with_stale(DeviceId::new(0));
         assert_eq!(result, Ok((0, 0)));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn query_bottom_half_with_stale_max_device_id_on_host() {
         let result = sys_query_bottom_half_with_stale(DeviceId::new(u8::MAX));
         assert_eq!(result, Ok((0, 0)));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_alloc_readonly_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_alloc(false, 0), Ok(BufferSlotId::new(0)));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_alloc_writable_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_alloc(true, 100), Ok(BufferSlotId::new(0)));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_alloc_max_ticks_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_alloc(false, u16::MAX), Ok(BufferSlotId::new(0)));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_release_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_release(BufferSlotId::new(0)), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_release_max_slot_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_release(BufferSlotId::new(u8::MAX)), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_returns_ok_zero_on_host() {
         let mut buf = [0u8; 16];
         assert_eq!(sys_buf_read(BufferSlotId::new(0), &mut buf), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_empty_dst_returns_ok_zero_on_host() {
         let mut buf = [0u8; 0];
         assert_eq!(sys_buf_read(BufferSlotId::new(1), &mut buf), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_rejects_oversized_dst() {
         let mut big = vec![0u8; u16::MAX as usize + 1];
@@ -1668,26 +1622,22 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_boundary_len_accepted() {
         let mut buf = vec![0u8; u16::MAX as usize];
         assert_eq!(sys_buf_read(BufferSlotId::new(0), &mut buf), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_write_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_write(BufferSlotId::new(0), &[0xDE, 0xAD]), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_write_empty_data_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_write(BufferSlotId::new(1), &[]), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_write_rejects_oversized_data() {
         let big = vec![0u8; u16::MAX as usize + 1];
@@ -1697,14 +1647,12 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_write_boundary_len_accepted() {
         let data = vec![0u8; u16::MAX as usize];
         assert_eq!(sys_buf_write(BufferSlotId::new(0), &data), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn lend_r2_packing_readonly_sets_target_only() {
         // Verify the inline packing in sys_buf_lend: r2 = target | flags.
@@ -1717,7 +1665,6 @@ mod tests {
         assert_eq!(pack(0xFF, false), 0xFF);
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn lend_r2_packing_writable_sets_bit8_and_target() {
         fn pack(target: u8, writable: bool) -> u32 {
@@ -1733,7 +1680,6 @@ mod tests {
     /// sys_buf_lend propagates the kernel's region_id / base_addr, or that
     /// the packed r2 reaches the SVC handler.  Register-level verification
     /// is covered by the plib_buf_lend_test.rs QEMU integration test.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_readonly_returns_ok_on_host() {
         assert_eq!(
@@ -1742,7 +1688,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_writable_returns_ok_on_host() {
         assert_eq!(
@@ -1751,25 +1696,21 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_revoke_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_revoke(BufferSlotId::new(0), 1), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_revoke_max_slot_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_revoke(BufferSlotId::new(u8::MAX), 0), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_transfer_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_transfer(BufferSlotId::new(0), 1), Ok(0));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_transfer_max_slot_returns_ok_zero_on_host() {
         assert_eq!(sys_buf_transfer(BufferSlotId::new(u8::MAX), u8::MAX), Ok(0));

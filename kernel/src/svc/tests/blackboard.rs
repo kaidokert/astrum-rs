@@ -139,8 +139,3 @@ fn blackboard_syscalls_reject_out_of_bounds_pointer() {
         "BbRead should reject out-of-bounds pointer"
     );
 }
-
-#[cfg(not(feature = "dynamic-mpu"))]
-pub(super) fn low32_buf(page: usize) -> *mut u8 {
-    crate::test_mmap::low32_buf(page)
-}

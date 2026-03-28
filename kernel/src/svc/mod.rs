@@ -1,9 +1,7 @@
 pub mod accessors;
 #[cfg(feature = "ipc-blackboard")]
 pub mod blackboard;
-#[cfg(feature = "dynamic-mpu")]
 pub mod buf;
-#[cfg(feature = "dynamic-mpu")]
 pub mod buffer;
 pub mod debug;
 pub mod events;
@@ -87,7 +85,6 @@ pub const KERNEL_DATA_END: u32 = 0x2000_0000;
 /// The 3-argument `frame(r0, r1, r2)` helper fills `r3` with this value.
 /// The SYS_BUF_LEND handler treats it as "no deadline" so that tests written
 /// before the r3-deadline feature continue to work unchanged.
-#[cfg(any(test, feature = "dynamic-mpu"))]
 const LEGACY_TEST_FRAME_R3_SENTINEL: u32 = 0xCC;
 
 /// Return the runtime end-address of the kernel data region.
@@ -195,7 +192,6 @@ pub fn validate_user_ptr<const N: usize>(
 /// Same three-guard ordering as `validate_user_ptr` (flash → grant → SRAM),
 /// but the grant step also checks dynamic MPU windows from
 /// `strategy.accessible_regions(pid)` before falling back to static regions.
-#[cfg(feature = "dynamic-mpu")]
 pub fn validate_user_ptr_dynamic<const N: usize>(
     partitions: &PartitionTable<N>,
     strategy: &crate::mpu_strategy::DynamicStrategy,
@@ -279,7 +275,6 @@ pub fn validate_user_ptr_dynamic<const N: usize>(
 ///     // Process region...
 /// }
 /// ```
-#[cfg(feature = "dynamic-mpu")]
 pub fn all_accessible_regions<const N: usize>(
     partitions: &PartitionTable<N>,
     strategy: &crate::mpu_strategy::DynamicStrategy,
@@ -327,7 +322,6 @@ impl YieldResult for ScheduleEvent {
         }
     }
     fn is_system_window(&self) -> bool {
-        #[cfg(feature = "dynamic-mpu")]
         if matches!(self, Self::SystemWindow) {
             return true;
         }
@@ -350,7 +344,6 @@ use crate::tick::TickCounter;
 // Re-export for callers who need to call methods on TickCounter from facade methods
 #[allow(unused_imports)]
 pub use crate::tick::TickCounterOps;
-#[cfg(feature = "dynamic-mpu")]
 use crate::virtual_device::VirtualDevice;
 
 // TODO: cortex-m-rt's #[exception] macro requires SVCall handlers to have
@@ -624,9 +617,7 @@ macro_rules! define_unified_kernel {
             const BM: usize = $bm;
             const BW: usize = $bw;
             $(
-                #[cfg(feature = "dynamic-mpu")]
                 const BP: usize = $bp;
-                #[cfg(feature = "dynamic-mpu")]
                 const BZ: usize = $bz;
             )?
 
@@ -981,11 +972,8 @@ pub struct Kernel<'mem, C: KernelConfig>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     /// Currently active partition index, if any.
@@ -1003,22 +991,16 @@ where
     /// arrived while the previous one was still pending). Incremented by
     /// the SysTick handler when it detects PENDSTSET was already set.
     pub ticks_dropped: u32,
-    #[cfg(feature = "dynamic-mpu")]
     pub buffers: crate::buffer_pool::BufferPool<{ C::BP }, { C::BZ }>,
-    #[cfg(feature = "dynamic-mpu")]
     pub uart_pair: crate::virtual_uart::VirtualUartPair,
     /// ISR top-half to bottom-half ring buffer (8 records, 16-byte payload).
-    #[cfg(feature = "dynamic-mpu")]
     pub isr_ring: crate::split_isr::IsrRingBuffer<8, 16>,
     /// Optional hardware UART backend, checked after `uart_pair` in
     /// `dev_dispatch`. Set via [`set_hw_uart`](Self::set_hw_uart).
-    #[cfg(feature = "dynamic-mpu")]
     pub hw_uart: Option<crate::hw_uart::HwUartBackend>,
     /// Device registry for dynamic device dispatch.
-    #[cfg(feature = "dynamic-mpu")]
     pub registry: crate::virtual_device::DeviceRegistry<'static, { C::DR }>,
     /// Wait queue for partitions blocked on device reads.
-    #[cfg(feature = "dynamic-mpu")]
     pub dev_wait_queue: crate::waitqueue::DeviceWaitQueue<{ C::N }>,
     /// Dynamic MPU strategy for managing runtime memory windows.
     ///
@@ -1026,22 +1008,18 @@ where
     /// to a partition via the buffer pool, it should be registered here.
     /// The `check_user_ptr_dynamic` method queries this strategy to validate
     /// pointers against both static MPU regions and dynamic windows.
-    #[cfg(feature = "dynamic-mpu")]
     pub dynamic_strategy: crate::mpu_strategy::DynamicStrategy,
     /// Counts ticks since the last bottom-half (system window) processing.
     ///
     /// Incremented on each call to `advance_schedule_tick()`, reset to 0
     /// when `ScheduleEvent::SystemWindow` is returned. Used to monitor
     /// bottom-half staleness at runtime.
-    #[cfg(feature = "dynamic-mpu")]
     pub ticks_since_bottom_half: u32,
     /// Diagnostic flag: true when `ticks_since_bottom_half` exceeds
     /// `C::SYSTEM_WINDOW_MAX_GAP_TICKS`, indicating bottom-half processing
     /// is overdue. Used for runtime health monitoring.
-    #[cfg(feature = "dynamic-mpu")]
     bottom_half_stale: bool,
     /// Guard flag for nested bottom-half detection. Set/cleared by `run_bottom_half!`.
-    #[cfg(feature = "dynamic-mpu")]
     pub in_bottom_half: bool,
     /// Partition/schedule state sub-struct containing partitions, schedule,
     /// current_partition, next_partition, and partition_sp.
@@ -1065,11 +1043,8 @@ impl<'mem, C: KernelConfig> Default for Kernel<'mem, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
     C::Core:
         CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
@@ -1088,10 +1063,7 @@ where
 {
     fn default() -> Self {
         #[allow(deprecated)]
-        Self::new_empty(
-            #[cfg(feature = "dynamic-mpu")]
-            crate::virtual_device::DeviceRegistry::new(),
-        )
+        Self::new_empty(crate::virtual_device::DeviceRegistry::new())
     }
 }
 
@@ -1099,11 +1071,8 @@ impl<'mem, C: KernelConfig> Kernel<'mem, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
     C::Core:
         CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
@@ -1157,7 +1126,6 @@ where
         Self::with_config(
             schedule,
             &configs,
-            #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
             &[],
         )
@@ -1173,17 +1141,13 @@ where
     pub fn with_config(
         schedule: ScheduleTable<{ C::SCHED }>,
         configs: &[PartitionConfig],
-        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
-            'static,
-            { C::DR },
-        >,
+        registry: crate::virtual_device::DeviceRegistry<'static, { C::DR }>,
         irq_bindings: &'static [crate::irq_dispatch::IrqBinding],
     ) -> Result<Self, ConfigError> {
         if schedule.is_empty() {
             return Err(ConfigError::ScheduleEmpty);
         }
         for (i, entry) in schedule.entries().iter().enumerate() {
-            #[cfg(feature = "dynamic-mpu")]
             if entry.is_system_window {
                 continue;
             }
@@ -1196,12 +1160,10 @@ where
             }
         }
         // Validate system window presence for dynamic-mpu builds.
-        #[cfg(feature = "dynamic-mpu")]
         if !schedule.has_system_window() {
             return Err(ConfigError::NoSystemWindow);
         }
         // Validate system window frequency for dynamic-mpu builds.
-        #[cfg(feature = "dynamic-mpu")]
         {
             let max_gap = schedule.max_ticks_without_system_window();
             if max_gap > C::SYSTEM_WINDOW_MAX_GAP_TICKS {
@@ -1290,12 +1252,7 @@ where
         }
         #[cfg(debug_assertions)]
         crate::invariants::assert_no_overlapping_mpu_regions(core.partitions().as_slice());
-        Ok(Self::init_kernel_struct(
-            core,
-            irq_bindings,
-            #[cfg(feature = "dynamic-mpu")]
-            registry,
-        ))
+        Ok(Self::init_kernel_struct(core, irq_bindings, registry))
     }
 
     /// Construct a `Kernel` from a fully-populated `Core` and IRQ bindings.
@@ -1306,10 +1263,7 @@ where
     fn init_kernel_struct(
         core: C::Core,
         irq_bindings: &'static [crate::irq_dispatch::IrqBinding],
-        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
-            'static,
-            { C::DR },
-        >,
+        registry: crate::virtual_device::DeviceRegistry<'static, { C::DR }>,
     ) -> Self {
         let kernel = Self {
             active_partition: None,
@@ -1317,25 +1271,15 @@ where
             current_partition: 255, // sentinel for "no partition running yet"
             yield_requested: false,
             ticks_dropped: 0,
-            #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
-            #[cfg(feature = "dynamic-mpu")]
             uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
-            #[cfg(feature = "dynamic-mpu")]
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
-            #[cfg(feature = "dynamic-mpu")]
             hw_uart: None,
-            #[cfg(feature = "dynamic-mpu")]
             registry,
-            #[cfg(feature = "dynamic-mpu")]
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
-            #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
-            #[cfg(feature = "dynamic-mpu")]
             ticks_since_bottom_half: 0,
-            #[cfg(feature = "dynamic-mpu")]
             bottom_half_stale: false,
-            #[cfg(feature = "dynamic-mpu")]
             in_bottom_half: false,
             core,
             sync: C::Sync::default(),
@@ -1345,7 +1289,6 @@ where
             sleep_queue: crate::waitqueue::SleepQueue::new(),
             _memory: PhantomData,
         };
-        #[cfg(feature = "dynamic-mpu")]
         kernel.buffers.assert_aligned();
         kernel
     }
@@ -1362,10 +1305,7 @@ where
     #[deprecated(since = "0.1.0", note = "use Kernel::new() instead")]
     #[cfg(test)]
     pub(crate) fn new_empty(
-        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<
-            'static,
-            { C::DR },
-        >,
+        registry: crate::virtual_device::DeviceRegistry<'static, { C::DR }>,
     ) -> Self {
         Self {
             active_partition: None,
@@ -1373,25 +1313,15 @@ where
             current_partition: 255, // sentinel for "no partition running yet"
             yield_requested: false,
             ticks_dropped: 0,
-            #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
-            #[cfg(feature = "dynamic-mpu")]
             uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
-            #[cfg(feature = "dynamic-mpu")]
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
-            #[cfg(feature = "dynamic-mpu")]
             hw_uart: None,
-            #[cfg(feature = "dynamic-mpu")]
             registry,
-            #[cfg(feature = "dynamic-mpu")]
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
-            #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
-            #[cfg(feature = "dynamic-mpu")]
             ticks_since_bottom_half: 0,
-            #[cfg(feature = "dynamic-mpu")]
             bottom_half_stale: false,
-            #[cfg(feature = "dynamic-mpu")]
             in_bottom_half: false,
             core: C::Core::default(),
             sync: C::Sync::default(),
@@ -1445,7 +1375,6 @@ where
     /// is enabled. Falls back to [`check_user_ptr`](Self::check_user_ptr)
     /// when the feature is disabled.
     #[inline(always)]
-    #[cfg(feature = "dynamic-mpu")]
     pub fn check_user_ptr_dynamic(&self, ptr: u32, len: usize) -> Result<(), u32> {
         validate_user_ptr_dynamic(
             self.partitions(),
@@ -1456,14 +1385,6 @@ where
         )
         .then_some(())
         .ok_or(SvcError::InvalidPointer.to_u32())
-    }
-
-    /// Fallback: delegates to [`check_user_ptr`](Self::check_user_ptr) when
-    /// `dynamic-mpu` is disabled.
-    #[inline(always)]
-    #[cfg(not(feature = "dynamic-mpu"))]
-    pub fn check_user_ptr_dynamic(&self, ptr: u32, len: usize) -> Result<(), u32> {
-        self.check_user_ptr(ptr, len)
     }
 
     // -------------------------------------------------------------------------
@@ -1556,7 +1477,6 @@ where
     /// it reachable via syscall dispatch.
     // TODO: migrate remaining callers to register hw_uart in the registry
     // at init time, then remove this method (backlog item 195).
-    #[cfg(feature = "dynamic-mpu")]
     pub fn set_hw_uart(&mut self, backend: crate::hw_uart::HwUartBackend) {
         self.hw_uart = Some(backend);
     }
@@ -1593,7 +1513,6 @@ where
     /// (virtual UARTs, hardware UART, etc.) must be registered at init time.
     /// Returns `InvalidResource` when the ID is unknown or `OperationFailed`
     /// when the closure returns a `DeviceError`.
-    #[cfg(feature = "dynamic-mpu")]
     fn dev_dispatch<F>(&mut self, device_id: u8, f: F) -> u32
     where
         F: FnOnce(&mut dyn VirtualDevice, u8) -> Result<u32, crate::virtual_device::DeviceError>,
@@ -1647,7 +1566,6 @@ where
         self.ports
             .blackboards_mut()
             .tick_timeouts(current_tick, &mut expired);
-        #[cfg(feature = "dynamic-mpu")]
         self.dev_wait_queue
             .drain_expired(current_tick, &mut expired);
         for &pid in expired.iter() {
@@ -1694,7 +1612,6 @@ where
         self.sync.semaphores_mut().remove_from_waitqueues(pid_u8);
 
         // (4) Release all buffer pool slots owned by partition (dynamic-mpu only).
-        #[cfg(feature = "dynamic-mpu")]
         self.buffers
             .release_all_for_partition(pid_u8, &self.dynamic_strategy);
 
@@ -2066,7 +1983,6 @@ where
                 }
                 r
             }
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferAlloc) => {
                 let (r0, r1_ov) = buf::handle_buf_alloc(
                     &mut self.buffers,
@@ -2080,7 +1996,6 @@ where
                 }
                 r0
             }
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferRelease) => {
                 let (r0, r1_ov) = buf::handle_buf_release(
                     &mut self.buffers,
@@ -2092,7 +2007,6 @@ where
                 }
                 r0
             }
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferLend) => {
                 let pc = self.partition_count();
                 let tick = self.tick.get();
@@ -2112,7 +2026,6 @@ where
                 }
                 r0
             }
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferRevoke) => {
                 let slot = frame.r1 as usize;
                 let target_raw = frame.r2 as usize;
@@ -2134,7 +2047,6 @@ where
                     }
                 }
             }
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferTransfer) => {
                 let slot = frame.r1 as usize;
                 let new_owner_raw = frame.r2 as usize;
@@ -2155,7 +2067,6 @@ where
                     _ => SvcError::InvalidPartition.to_u32(),
                 }
             }
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferWrite) => {
                 match self.check_user_ptr_dynamic(frame.r3, frame.r2 as usize) {
                     Err(e) => e,
@@ -2177,7 +2088,6 @@ where
                     }
                 }
             }
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::BufferRead) => {
                 match self.check_user_ptr_dynamic(frame.r3, frame.r2 as usize) {
                     Err(e) => e,
@@ -2199,12 +2109,10 @@ where
                     }
                 }
             }
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevOpen) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
                 dev.open(pid)?;
                 Ok(0)
             }),
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevRead) => {
                 let len = frame.r2 as usize;
                 match self.check_user_ptr_dynamic(frame.r3, len) {
@@ -2220,7 +2128,6 @@ where
                     }
                 }
             }
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevWrite) => {
                 let len = frame.r2 as usize;
                 match self.check_user_ptr_dynamic(frame.r3, len) {
@@ -2236,16 +2143,13 @@ where
                     }
                 }
             }
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevIoctl) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
                 dev.ioctl(pid, frame.r2, frame.r3)
             }),
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevClose) => self.dev_dispatch(frame.r1 as u8, |dev, pid| {
                 dev.close(pid)?;
                 Ok(0)
             }),
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::DevReadTimed) => {
                 // r1 = device_id, r2 = (timeout_ticks << 16 | buf_len), r3 = buf_ptr
                 // Canonical caller: plib::sys_dev_read_timed (plib/src/lib.rs) packs r2.
@@ -2294,7 +2198,6 @@ where
             // TODO: QueryBottomHalf gated behind dynamic-mpu because underlying
             // ticks_since_bottom_half/is_bottom_half_stale are feature-gated. Future
             // refactor should make bottom-half health monitoring unconditional.
-            #[cfg(feature = "dynamic-mpu")]
             Some(SyscallId::QueryBottomHalf) => {
                 frame.r1 = u32::from(self.is_bottom_half_stale());
                 self.ticks_since_bottom_half
@@ -2698,7 +2601,6 @@ where
         self.core.set_yield_requested(requested);
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     pub(crate) fn mpu_tick_bookkeeping(&mut self, system_window: bool) {
         if system_window {
             self.ticks_since_bottom_half = 0;
@@ -2717,7 +2619,6 @@ where
     pub fn yield_current_slot(&mut self) -> impl YieldResult {
         #[allow(unused_variables)]
         let (result, skipped) = self.schedule_mut().force_advance_to_partition();
-        #[cfg(feature = "dynamic-mpu")]
         if skipped > 0 {
             self.ticks_since_bottom_half = 0;
             self.bottom_half_stale = false;
@@ -2813,7 +2714,6 @@ where
     /// `C::SYSTEM_WINDOW_MAX_GAP_TICKS`, indicating that the system window
     /// has not been reached within the expected time. The flag is cleared
     /// when a `SystemWindow` event occurs.
-    #[cfg(feature = "dynamic-mpu")]
     #[inline(always)]
     pub fn is_bottom_half_stale(&self) -> bool {
         self.bottom_half_stale
@@ -2824,7 +2724,6 @@ where
     /// This allows external monitoring code to reset the flag after observing
     /// and logging a stale condition, enabling detection of subsequent stale
     /// events.
-    #[cfg(feature = "dynamic-mpu")]
     #[inline(always)]
     pub fn clear_bottom_half_stale(&mut self) {
         self.bottom_half_stale = false;
@@ -2860,7 +2759,6 @@ where
     /// deferred to the next system window.
     ///
     /// Returns the number of buffers revoked, or 0 if the stale flag is not set.
-    #[cfg(feature = "dynamic-mpu")]
     pub fn fallback_revoke_expired_buffers(&mut self) -> usize {
         if !self.bottom_half_stale {
             return 0;
@@ -2871,35 +2769,30 @@ where
     }
 
     /// Returns an immutable reference to the buffer pool.
-    #[cfg(feature = "dynamic-mpu")]
     #[inline(always)]
     pub fn buffers(&self) -> &crate::buffer_pool::BufferPool<{ C::BP }, { C::BZ }> {
         &self.buffers
     }
 
     /// Returns a mutable reference to the buffer pool.
-    #[cfg(feature = "dynamic-mpu")]
     #[inline(always)]
     pub fn buffers_mut(&mut self) -> &mut crate::buffer_pool::BufferPool<{ C::BP }, { C::BZ }> {
         &mut self.buffers
     }
 
     /// Returns an immutable reference to the device wait queue.
-    #[cfg(feature = "dynamic-mpu")]
     #[inline(always)]
     pub fn dev_wait_queue(&self) -> &crate::waitqueue::DeviceWaitQueue<{ C::N }> {
         &self.dev_wait_queue
     }
 
     /// Returns a mutable reference to the device wait queue.
-    #[cfg(feature = "dynamic-mpu")]
     #[inline(always)]
     pub fn dev_wait_queue_mut(&mut self) -> &mut crate::waitqueue::DeviceWaitQueue<{ C::N }> {
         &mut self.dev_wait_queue
     }
 
     /// Returns an immutable reference to the hardware UART backend.
-    #[cfg(feature = "dynamic-mpu")]
     #[inline(always)]
     pub fn hw_uart(&self) -> &Option<crate::hw_uart::HwUartBackend> {
         &self.hw_uart
@@ -3002,11 +2895,8 @@ fn apply_recv_outcome<'mem, C: KernelConfig>(
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
     C::Core:
         CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
@@ -3131,7 +3021,6 @@ mod tests {
     pub use crate::kernel_config_types;
     pub use crate::message::MessageQueue;
     pub use crate::mpu::MpuError;
-    #[cfg(feature = "dynamic-mpu")]
     pub use crate::mpu_strategy::MpuStrategy;
     pub use crate::partition::{ExternalPartitionMemory, MpuRegion, PartitionControlBlock};
     pub use crate::partition_core::AlignedStack1K;
@@ -3149,6 +3038,7 @@ mod tests {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
         schedule.add(ScheduleEntry::new(1, 5)).unwrap();
+        schedule.add_system_window(1).unwrap();
         schedule.start();
 
         let mut stk0 = AlignedStack1K::default();
@@ -3167,6 +3057,7 @@ mod tests {
     fn kernel_new_forwards_code_mpu_region() {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
+        schedule.add_system_window(1).unwrap();
         schedule.start();
 
         let mut stk0 = AlignedStack1K::default();
@@ -3206,7 +3097,6 @@ mod tests {
     /// Returns the registry and raw pointers to each backend so that tests
     /// can call backend-specific helpers (e.g. `push_rx`, `pop_tx`) on the
     /// same instances that `dev_dispatch` routes to.
-    #[cfg(feature = "dynamic-mpu")]
     fn default_registry() -> (
         crate::virtual_device::DeviceRegistry<'static, 4>,
         *mut crate::virtual_uart::VirtualUartBackend,
@@ -3227,7 +3117,6 @@ mod tests {
 
     /// Build a Kernel with a caller-supplied device registry,
     /// pre-populated with 2 running partitions.
-    #[cfg(feature = "dynamic-mpu")]
     fn kernel_with_registry(
         sem_count: usize,
         mtx_count: usize,
@@ -3248,13 +3137,8 @@ mod tests {
         mtx_count: usize,
         msg_queue_count: usize,
     ) -> Kernel<'static, TestConfig> {
-        #[cfg(feature = "dynamic-mpu")]
         {
             kernel_impl(sem_count, mtx_count, msg_queue_count, default_registry().0)
-        }
-        #[cfg(not(feature = "dynamic-mpu"))]
-        {
-            kernel_impl(sem_count, mtx_count, msg_queue_count)
         }
     }
 
@@ -3264,7 +3148,7 @@ mod tests {
         sem_count: usize,
         mtx_count: usize,
         msg_queue_count: usize,
-        #[cfg(feature = "dynamic-mpu")] registry: crate::virtual_device::DeviceRegistry<'static, 4>,
+        registry: crate::virtual_device::DeviceRegistry<'static, 4>,
     ) -> Kernel<'static, TestConfig> {
         // Build the core with pre-populated partitions.
         let mut core = <TestConfig as KernelConfig>::Core::default();
@@ -3278,25 +3162,15 @@ mod tests {
             current_partition: 0,
             yield_requested: false,
             ticks_dropped: 0,
-            #[cfg(feature = "dynamic-mpu")]
             buffers: crate::buffer_pool::BufferPool::new(),
-            #[cfg(feature = "dynamic-mpu")]
             uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
-            #[cfg(feature = "dynamic-mpu")]
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
-            #[cfg(feature = "dynamic-mpu")]
             hw_uart: None,
-            #[cfg(feature = "dynamic-mpu")]
             registry,
-            #[cfg(feature = "dynamic-mpu")]
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
-            #[cfg(feature = "dynamic-mpu")]
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
-            #[cfg(feature = "dynamic-mpu")]
             ticks_since_bottom_half: 0,
-            #[cfg(feature = "dynamic-mpu")]
             bottom_half_stale: false,
-            #[cfg(feature = "dynamic-mpu")]
             in_bottom_half: false,
             core,
             sync: <TestConfig as KernelConfig>::Sync::default(),
@@ -3343,7 +3217,6 @@ mod tests {
     /// Dispatch a 3-register SVC and return `(r0, r1)`.
     // TODO: consider whether dynamic-mpu feature-gating on these helpers is
     // too aggressive — callers outside dynamic-mpu tests may need them.
-    #[cfg(feature = "dynamic-mpu")]
     fn dispatch_r01(k: &mut Kernel<'static, TestConfig>, r0: u32, r1: u32, r2: u32) -> (u32, u32) {
         let mut ef = frame(r0, r1, r2);
         dispatch_checked(k, &mut ef);
@@ -3353,7 +3226,6 @@ mod tests {
     /// Dispatch a 4-register SVC and return `r0`.
     ///
     /// Like [`dispatch_r0`] but passes all four argument registers.
-    #[cfg(feature = "dynamic-mpu")]
     fn dispatch_r04(
         k: &mut Kernel<'static, TestConfig>,
         r0: u32,
@@ -3370,7 +3242,6 @@ mod tests {
     ///
     /// Useful for tests that need additional partitions beyond the default P0/P1
     /// created by [`kernel()`].
-    #[cfg(feature = "dynamic-mpu")]
     fn add_running_partition(k: &mut Kernel<'static, TestConfig>, id: u8) {
         k.partitions_mut().add(pcb(id)).unwrap();
         k.partitions_mut()
@@ -3587,7 +3458,6 @@ mod tests {
     ) -> Result<Kernel<'static, TestConfig>, ConfigError> {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
         let mut stk = AlignedStack1K::default();
         let mem = ExternalPartitionMemory::from_aligned_stack(&mut stk, 0x0800_0001, region, 0)?;
@@ -3659,7 +3529,6 @@ mod tests {
     fn mem_kernel(entry: u32, mpu: MpuRegion) -> Result<Kernel<'static, TestConfig>, ConfigError> {
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let mut stk = AlignedStack1K::default();
         let m = ExternalPartitionMemory::from_aligned_stack(&mut stk, entry, mpu, 0)?;
@@ -3711,7 +3580,6 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let mut stack = AlignedStack256B::default();
         let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, entry, mpu, 0)?;
@@ -3751,7 +3619,6 @@ mod tests {
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 5)).unwrap();
         sched.add(ScheduleEntry::new(1, 5)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         let mut stack0 = AlignedStack256B::default();
@@ -3782,7 +3649,6 @@ mod tests {
         // the config vec push, not schedule validation.
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let err = Kernel::<TestConfig>::new(sched, &mems);
         assert!(matches!(err, Err(ConfigError::PartitionTableFull)));
@@ -3821,7 +3687,6 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
@@ -3844,7 +3709,6 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let mut stack = AlignedStack256B::default();
@@ -3912,7 +3776,6 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
@@ -3931,7 +3794,6 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
@@ -3951,7 +3813,6 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let mut stack = AlignedStack256B::default();
@@ -3967,7 +3828,6 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mut sched = ScheduleTable::<4>::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         let mut stack = AlignedStack256B::default();
@@ -4145,7 +4005,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_alloc_release_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_RELEASE};
@@ -4179,7 +4038,6 @@ mod tests {
         ); // wrong owner
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_alloc_sets_deadline_from_r2() {
         use crate::syscall::SYS_BUF_ALLOC;
@@ -4206,7 +4064,6 @@ mod tests {
         assert_eq!(k.buffers().deadline(slot1), Some(100));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_revoke_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
@@ -4247,8 +4104,8 @@ mod tests {
         {
             let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 257);
             assert!(
-                base_addr < 0x8000_0000,
-                "writable lend r0 must be a valid address"
+                SvcError::from_u32(base_addr).is_none(),
+                "writable lend r0 must not be a known SvcError"
             );
             k.dynamic_strategy
                 .slot(region_id as u8)
@@ -4264,7 +4121,6 @@ mod tests {
     }
 
     /// SYS_BUF_LEND must reject r2 values with reserved bits 9-15 set.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_reserved_bits_rejected() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND};
@@ -4283,7 +4139,7 @@ mod tests {
         {
             let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 0x0101);
             assert!(
-                base_addr < 0x8000_0000,
+                SvcError::from_u32(base_addr).is_none(),
                 "writable lend with no reserved bits should succeed"
             );
             k.dynamic_strategy
@@ -4294,7 +4150,6 @@ mod tests {
 
     /// SYS_BUF_LEND r3 deadline-ticks: r3=0 → no deadline, r3>0 → deadline
     /// set to current_tick + r3, and lend deadline overrides alloc deadline.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_deadline_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
@@ -4309,7 +4164,7 @@ mod tests {
         {
             let mut ef = frame4(SYS_BUF_LEND, slot as u32, 1, 0);
             dispatch_checked(&mut k, &mut ef);
-            assert!(ef.r0 < 0x8000_0000, "lend should succeed");
+            assert!(SvcError::from_u32(ef.r0).is_none(), "lend should succeed");
             k.dynamic_strategy
                 .slot(ef.r1 as u8)
                 .expect("r1 must be a valid dynamic MPU slot");
@@ -4330,7 +4185,7 @@ mod tests {
         {
             let mut ef = frame4(SYS_BUF_LEND, slot as u32, 1, 500);
             dispatch_checked(&mut k, &mut ef);
-            assert!(ef.r0 < 0x8000_0000, "lend should succeed");
+            assert!(SvcError::from_u32(ef.r0).is_none(), "lend should succeed");
             k.dynamic_strategy
                 .slot(ef.r1 as u8)
                 .expect("r1 must be a valid dynamic MPU slot");
@@ -4349,7 +4204,7 @@ mod tests {
         {
             let mut ef = frame4(SYS_BUF_LEND, slot as u32, 1, 200);
             dispatch_checked(&mut k, &mut ef);
-            assert!(ef.r0 < 0x8000_0000, "lend should succeed");
+            assert!(SvcError::from_u32(ef.r0).is_none(), "lend should succeed");
             k.dynamic_strategy
                 .slot(ef.r1 as u8)
                 .expect("r1 must be a valid dynamic MPU slot");
@@ -4361,7 +4216,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_transfer_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_TRANSFER};
@@ -4390,7 +4244,6 @@ mod tests {
     }
 
     /// SYS_BUF_REVOKE writes BufferError discriminant into r1 on error.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_revoke_sets_r1_on_error() {
         use crate::buffer_pool::BufferError;
@@ -4405,7 +4258,6 @@ mod tests {
     }
 
     /// SYS_BUF_TRANSFER writes BufferError discriminant into r1 on error.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_transfer_sets_r1_on_error() {
         use crate::buffer_pool::BufferError;
@@ -4423,7 +4275,6 @@ mod tests {
     /// it does not own, nor transfer a buffer it does not own.  Also checks
     /// that the authorized owner (P0) can still revoke after the failed attempt,
     /// ensuring no state corruption occurred.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_unauthorized_revoke_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE, SYS_BUF_TRANSFER};
@@ -4464,7 +4315,6 @@ mod tests {
     /// Verify that the lendee (P1) cannot re-lend a buffer it was lent by P0.
     /// Also checks that the owner (P0) can still revoke after the failed
     /// re-lend attempt.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lendee_cannot_relend_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
@@ -4499,7 +4349,6 @@ mod tests {
     /// Verify one-level lend depth enforcement via `dispatch_r0`:
     /// the lendee (P1) cannot re-lend a borrowed buffer back to P0 or forward
     /// to a third partition (P2).
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn target_cannot_relend_shared_buffer() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
@@ -4555,7 +4404,6 @@ mod tests {
 
     /// Verify that the lendee (P1) cannot revoke a buffer it was lent by P0.
     /// Only the owner may revoke a lend.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn target_cannot_revoke_shared_buffer() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_REVOKE};
@@ -4603,7 +4451,6 @@ mod tests {
 
     /// Verify that the lendee (P1) cannot release a buffer owned by P0.
     /// Only the owner may release, and only when the buffer is not lent.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn target_cannot_release_shared_buffer() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_RELEASE, SYS_BUF_REVOKE};
@@ -4647,7 +4494,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_READ};
@@ -4680,7 +4526,6 @@ mod tests {
         assert_eq!(svc!(SYS_BUF_READ, 99, 32, ptr as u32), eres);
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_write_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_WRITE};
@@ -4724,7 +4569,6 @@ mod tests {
 
     /// SYS_BUF_WRITE and SYS_BUF_READ must reject out-of-bounds pointers
     /// with `SvcError::InvalidPointer`.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buffer_syscalls_reject_out_of_bounds_pointer() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_READ, SYS_BUF_WRITE};
@@ -4745,7 +4589,6 @@ mod tests {
     }
 
     /// Lend with r2=1 (no WRITABLE flag) must produce an AP_RO_RO window.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_readonly_dispatch() {
         use crate::mpu::{decode_rasr_ap, AP_RO_RO};
@@ -4756,7 +4599,7 @@ mod tests {
         // Lend read-only: r2 = 1 (target=1, no WRITABLE flag)
         let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
         assert!(
-            base_addr < 0x8000_0000,
+            SvcError::from_u32(base_addr).is_none(),
             "r0 should contain valid base address"
         );
         let desc = k
@@ -4776,7 +4619,6 @@ mod tests {
     }
 
     /// Lend with WRITABLE flag must produce an AP_FULL_ACCESS window.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_writable_ap_dispatch() {
         use crate::mpu::{decode_rasr_ap, AP_FULL_ACCESS};
@@ -4787,7 +4629,7 @@ mod tests {
         // Lend writable: r2 = target(1) | WRITABLE(0x100)
         let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1 | 0x100);
         assert!(
-            base_addr < 0x8000_0000,
+            SvcError::from_u32(base_addr).is_none(),
             "r0 should contain valid base address"
         );
         let desc = k
@@ -4807,7 +4649,6 @@ mod tests {
     }
 
     /// BorrowedRead owner can lend read-only through the SVC handler.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_read_owner_share_dispatch() {
         use crate::mpu::{decode_rasr_ap, AP_RO_RO};
@@ -4819,7 +4660,7 @@ mod tests {
         // Lend read-only to partition 1
         let (base_addr, region_id) = dispatch_r01(&mut k, SYS_BUF_LEND, slot, 1);
         assert!(
-            base_addr < 0x8000_0000,
+            SvcError::from_u32(base_addr).is_none(),
             "r0 should contain valid base address"
         );
         let desc = k
@@ -4839,7 +4680,6 @@ mod tests {
     }
 
     /// BorrowedRead owner cannot lend with WRITABLE flag — must get PermissionDenied.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_read_owner_writable_rejected_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND};
@@ -4857,7 +4697,6 @@ mod tests {
     }
 
     /// Owner can still read a buffer via SYS_BUF_READ while it is lent.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_read_while_lent_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_WRITE};
@@ -4892,7 +4731,6 @@ mod tests {
     }
 
     /// SYS_BUF_RELEASE must fail while the buffer is lent, succeed after revoke.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_release_while_lent_dispatch() {
         use crate::syscall::{SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_RELEASE, SYS_BUF_REVOKE};
@@ -4927,7 +4765,6 @@ mod tests {
     ///
     /// Exercises: SelfLend (via SYS_BUF_LEND), AlreadyLent (via SYS_BUF_LEND),
     /// and NotLent (via SYS_BUF_REVOKE).
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn buf_lend_distinct_error_details() {
         use crate::buffer_pool::BufferError;
@@ -4995,12 +4832,10 @@ mod tests {
         assert_eq!(r1_notlent, 7, "NotLent discriminant should be 7");
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     use device::low32_buf;
 
     // ---- DevReadTimed dispatch tests ----
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_immediate_data_returns_byte_count() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
@@ -5030,7 +4865,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_blocks_on_empty_with_timeout() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
@@ -5054,7 +4888,6 @@ mod tests {
         assert_eq!(k.dev_wait_queue().len(), 1);
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_blocking_sets_yield_requested() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
@@ -5082,7 +4915,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_nonblocking_empty_returns_zero() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
@@ -5108,7 +4940,6 @@ mod tests {
         assert_eq!(k.dev_wait_queue().len(), 0);
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_nonblocking_packed_len64_returns_zero() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
@@ -5134,7 +4965,6 @@ mod tests {
         assert_eq!(k.dev_wait_queue().len(), 0, "must not enqueue a waiter");
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_invalid_device_returns_error() {
         use crate::syscall::SYS_DEV_READ_TIMED;
@@ -5146,7 +4976,6 @@ mod tests {
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_rejects_out_of_bounds_pointer() {
         use crate::syscall::SYS_DEV_READ_TIMED;
@@ -5157,7 +4986,6 @@ mod tests {
         assert_eq!(ef.r0, SvcError::InvalidPointer.to_u32());
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dev_read_timed_multibyte_reads_correct_buffer_length() {
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
@@ -5632,7 +5460,6 @@ mod tests {
 
     /// Comprehensive test for validate_user_ptr_dynamic covering dynamic windows,
     /// static region fallback, partition isolation, multiple windows, and edge cases.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn validate_ptr_dynamic_comprehensive() {
         use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
@@ -5665,7 +5492,6 @@ mod tests {
     }
 
     /// Test validate_user_ptr_dynamic with peripheral regions.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn validate_ptr_dynamic_in_peripheral_region_passes() {
         use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
@@ -5695,7 +5521,6 @@ mod tests {
     }
 
     /// Test that validate_user_ptr_dynamic rejects pointers in kernel code region.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn validate_ptr_dynamic_in_kernel_code_fails() {
         use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
@@ -5733,7 +5558,6 @@ mod tests {
     ///
     /// TODO: Add rejection tests when KERNEL_DATA_END is set to an actual value
     /// (e.g., 0x2000_1000) to reserve kernel BSS/data at SRAM start.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn validate_ptr_dynamic_kernel_data_empty_range() {
         use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
@@ -5754,7 +5578,6 @@ mod tests {
     /// This verifies the dynamic nature of pointer validation: when a window
     /// is removed via `remove_window`, `validate_user_ptr_dynamic` correctly
     /// rejects pointers that were valid before revocation.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn validate_ptr_dynamic_window_revocation() {
         use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
@@ -5796,7 +5619,6 @@ mod tests {
     /// Mirrors `validate_ptr_own_stack_in_kernel_data_accepted` but exercises
     /// the dynamic-MPU code path: Guard 2b (static grant) must fire before
     /// Guard 3 (SRAM kernel-data rejection).
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn validate_ptr_dynamic_own_stack_in_kernel_data_accepted() {
         use crate::mpu_strategy::DynamicStrategy;
@@ -5825,7 +5647,6 @@ mod tests {
 
     /// Comprehensive test for all_accessible_regions covering static/dynamic
     /// combination, ordering, partition isolation, and edge cases.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn all_accessible_regions_comprehensive() {
         use crate::mpu_strategy::{DynamicStrategy, MpuStrategy};
@@ -5882,7 +5703,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn check_user_ptr_dynamic_accepts_dynamic_window() {
         let k = kernel(0, 0, 0);
@@ -5904,7 +5724,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn check_user_ptr_dynamic_rejects_wrong_owner_and_revocation() {
         let k = kernel(0, 0, 0);
@@ -6026,9 +5845,6 @@ mod tests {
             );
         }
     }
-
-    #[cfg(not(feature = "dynamic-mpu"))]
-    use blackboard::low32_buf;
 
     // ---- BbRead blocking dispatch tests ----
 
@@ -6712,7 +6528,6 @@ mod tests {
     // ---- hw_uart integration tests ----
 
     /// hw_uart starts as None; virtual UARTs still work.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn hw_uart_none_virtual_uarts_still_dispatch() {
         use crate::syscall::SYS_DEV_OPEN;
@@ -6729,7 +6544,6 @@ mod tests {
     }
 
     /// Unknown device ID returns InvalidResource when hw_uart is None.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn hw_uart_none_unknown_id_returns_invalid_resource() {
         use crate::syscall::SYS_DEV_OPEN;
@@ -6740,7 +6554,6 @@ mod tests {
     }
 
     /// After registering hw_uart in the registry, dev_dispatch routes to it.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn hw_uart_registered_and_dispatch_open_write_read() {
         use crate::hw_uart::HwUartBackend;
@@ -6776,7 +6589,6 @@ mod tests {
     }
 
     /// Registry rejects duplicate device IDs, preventing shadowing.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn registry_rejects_duplicate_device_id() {
         use crate::hw_uart::HwUartBackend;
@@ -6795,7 +6607,6 @@ mod tests {
     // ---- device registry integration tests ----
 
     /// Open + close lifecycle via a device registered in the registry.
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn registry_dispatch_open_close_lifecycle() {
         use crate::syscall::{SYS_DEV_CLOSE, SYS_DEV_OPEN};
@@ -6837,7 +6648,6 @@ mod tests {
         // Test valid config succeeds
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         s.add_system_window(1).unwrap();
         let k = Kernel::<TestConfig>::new(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().len(), 1);
@@ -6848,7 +6658,6 @@ mod tests {
     fn kernel_create_succeeds_with_valid_config() {
         let mut s: ScheduleTable<4> = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 100)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         s.add_system_window(1).unwrap();
         let mut stk = AlignedStack1K::default();
         let mem =
@@ -6966,11 +6775,6 @@ mod tests {
         schedule: ScheduleTable<4>,
         memories: &[ExternalPartitionMemory<'_>],
     ) -> Result<Kernel<'static, TestConfig>, ConfigError> {
-        #[cfg(not(feature = "dynamic-mpu"))]
-        {
-            Kernel::<TestConfig>::new(schedule, memories)
-        }
-        #[cfg(feature = "dynamic-mpu")]
         {
             let mut schedule = schedule;
             schedule
@@ -7041,7 +6845,6 @@ mod tests {
         let k = Kernel::<TestConfig>::init_kernel_struct(
             core,
             &[],
-            #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
         );
         assert_eq!(k.current_partition, 255);
@@ -7055,7 +6858,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     fn init_kernel_struct_calls_assert_aligned() {
         // Verify that init_kernel_struct completes without panicking,
         // which confirms buffers.assert_aligned() passes for host-allocated memory.
@@ -7154,7 +6956,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn kernel_new_rejects_no_system_window() {
         // Schedule with only partition entries (no system window)
@@ -7176,7 +6977,6 @@ mod tests {
         assert!(matches!(result, Err(ConfigError::NoSystemWindow)));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn kernel_new_rejects_system_window_too_infrequent() {
         // Create schedule with system window gap exceeding SYSTEM_WINDOW_MAX_GAP_TICKS (100).
@@ -7206,7 +7006,6 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn kernel_new_accepts_system_window_at_exact_threshold() {
         // Create schedule with system window gap exactly equal to SYSTEM_WINDOW_MAX_GAP_TICKS (100).
@@ -7333,9 +7132,6 @@ mod tests {
     /// the rest of P1's slot and the full P0 slot to reach the next P1
     /// boundary.  Under `dynamic-mpu` the schedule inserts an extra
     /// SystemWindow(1) between P1 and P0.
-    #[cfg(not(feature = "dynamic-mpu"))]
-    const INTER_P1_TICKS: usize = 2 + 5;
-    #[cfg(feature = "dynamic-mpu")]
     const INTER_P1_TICKS: usize = 2 + 1 + 5;
 
     /// Helper to create a Kernel with a started schedule and partitions.
@@ -7346,7 +7142,6 @@ mod tests {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
         schedule.add(ScheduleEntry::new(1, 3)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
         schedule.start();
         let mut stk0 = AlignedStack1K::default();
@@ -7418,9 +7213,6 @@ mod tests {
     #[test]
     fn schedule_accessor_returns_schedule_table() {
         let k = kernel_with_schedule();
-        #[cfg(not(feature = "dynamic-mpu"))]
-        assert_eq!((k.schedule().major_frame_ticks, k.schedule().len()), (8, 2));
-        #[cfg(feature = "dynamic-mpu")]
         assert_eq!((k.schedule().major_frame_ticks, k.schedule().len()), (9, 3));
     }
 
@@ -7449,40 +7241,6 @@ mod tests {
             ScheduleEvent::PartitionSwitch(1)
         );
         assert_eq!(k.active_partition(), Some(1));
-    }
-
-    #[test]
-    #[cfg(not(feature = "dynamic-mpu"))]
-    fn advance_schedule_tick_updates_next_partition() {
-        use crate::scheduler::ScheduleEvent;
-        let mut k = kernel_with_schedule();
-        // Initially next_partition is 0 (default)
-        assert_eq!(k.next_partition(), 0);
-        // Advance 4 ticks within slot 0 - no switch, next_partition unchanged
-        for _ in 0..4 {
-            assert_eq!(
-                svc_scheduler::advance_schedule_tick(&mut k),
-                ScheduleEvent::None
-            );
-            assert_eq!(k.next_partition(), 0);
-        }
-        // 5th tick triggers switch to P1, next_partition updated
-        assert_eq!(
-            svc_scheduler::advance_schedule_tick(&mut k),
-            ScheduleEvent::PartitionSwitch(1)
-        );
-        assert_eq!(k.next_partition(), 1);
-        // Continue through P1's slot (3 ticks), then wrap to P0
-        for _ in 0..2 {
-            svc_scheduler::advance_schedule_tick(&mut k);
-            assert_eq!(k.next_partition(), 1);
-        }
-        // 3rd tick of P1's slot triggers switch back to P0
-        assert_eq!(
-            svc_scheduler::advance_schedule_tick(&mut k),
-            ScheduleEvent::PartitionSwitch(0)
-        );
-        assert_eq!(k.next_partition(), 0);
     }
 
     #[test]
@@ -7681,7 +7439,6 @@ mod tests {
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
         schedule.add(ScheduleEntry::new(1, 3)).unwrap();
         schedule.add(ScheduleEntry::new(2, 4)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         {
             schedule.add_system_window(1).unwrap();
         }
@@ -7788,9 +7545,6 @@ mod tests {
         // P1 has 3 ticks, P2 has 4 ticks, P0 has 5 ticks.
         // After hitting P1 boundary (1 tick consumed), remaining = 2 + 4 + 5 = 11.
         // Under dynamic-mpu there is an extra SystemWindow tick.
-        #[cfg(not(feature = "dynamic-mpu"))]
-        const CYCLE_TICKS: usize = 2 + 4 + 5;
-        #[cfg(feature = "dynamic-mpu")]
         const CYCLE_TICKS: usize = 2 + 4 + 1 + 5;
 
         for skip in 1..=STARVATION_THRESHOLD {
@@ -7997,25 +7751,6 @@ mod tests {
             outgoing: u8,
             incoming: u8,
         }
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let boundaries = [
-            Boundary {
-                interior_ticks: 4,
-                outgoing: 0,
-                incoming: 1,
-            }, // P0→P1
-            Boundary {
-                interior_ticks: 2,
-                outgoing: 1,
-                incoming: 0,
-            }, // P1→P0
-            Boundary {
-                interior_ticks: 4,
-                outgoing: 0,
-                incoming: 1,
-            }, // P0→P1
-        ];
-        #[cfg(feature = "dynamic-mpu")]
         let boundaries = [
             Boundary {
                 interior_ticks: 4,
@@ -8046,7 +7781,6 @@ mod tests {
             }
 
             // On dynamic-mpu, the P1→P0 boundary has a SystemWindow tick first.
-            #[cfg(feature = "dynamic-mpu")]
             if i == 1 {
                 assert_eq!(
                     svc_scheduler::advance_schedule_tick(&mut k),
@@ -8213,178 +7947,9 @@ mod tests {
         }
     }
 
-    /// Regression: once a Waiting partition transitions back to Ready, it
-    /// must be scheduled normally when its next slot comes up.
-    #[test]
-    #[cfg(not(feature = "dynamic-mpu"))]
-    fn waiting_partition_resumes_after_transition_to_ready() {
-        use crate::scheduler::ScheduleEvent;
-        let mut k = kernel_with_schedule();
-        // Schedule: P0(5 ticks), P1(3 ticks), major frame = 8 ticks.
-
-        // Advance 4 ticks into P0's first slot.
-        for _ in 0..4 {
-            assert_eq!(
-                svc_scheduler::advance_schedule_tick(&mut k),
-                ScheduleEvent::None
-            );
-        }
-        // Put P1 into Waiting before its slot.
-        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
-        pcb1.transition(PartitionState::Running).unwrap();
-        pcb1.transition(PartitionState::Waiting).unwrap();
-
-        // Tick 5: P1's slot boundary — skipped because Waiting.
-        assert_eq!(
-            svc_scheduler::advance_schedule_tick(&mut k),
-            ScheduleEvent::None
-        );
-
-        // Advance through rest of P1's slot (2 ticks) + P0's next slot (5 ticks).
-        // Total: 7 more ticks to reach P1's next slot boundary.
-        for _ in 0..7 {
-            svc_scheduler::advance_schedule_tick(&mut k);
-        }
-
-        // Unblock P1: Waiting -> Ready.
-        let pcb1 = k.partitions_mut().get_mut(1).unwrap();
-        pcb1.transition(PartitionState::Ready).unwrap();
-        assert_eq!(
-            k.partitions().get(1).unwrap().state(),
-            PartitionState::Ready
-        );
-
-        // Next tick enters P1's second slot — should switch to P1.
-        // We are at tick 12, which is 4 ticks into P0's second slot.
-        // Need to reach P1's next boundary at tick 13 (5+3+5 = 13).
-        // Actually let me recalculate: we did 4+1+7 = 12 ticks total.
-        // Major frame = 8, so 12 mod 8 = 4 ticks into 2nd major frame.
-        // P0 slot ends at tick 5 of each frame. We need 1 more tick.
-
-        // The schedule wraps: P0(5), P1(3), P0(5), P1(3)...
-        // Tick 1-4: interior of P0 slot 1
-        // Tick 5: switch to P1 (skipped)
-        // Tick 6-7: interior of P1 slot
-        // Tick 8: switch to P0 (wraps to slot 0)
-        // Tick 9-12: interior of P0 slot 2
-        // Tick 13: switch to P1
-
-        // We've done 12 ticks. One more should switch to P1.
-        let event = svc_scheduler::advance_schedule_tick(&mut k);
-        assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
-        assert_eq!(k.active_partition(), Some(1));
-    }
-
     /// Regression: multiple simultaneously Waiting partitions must all be
     /// skipped. Only non-Waiting partitions produce PartitionSwitch events.
     #[test]
-    #[cfg(not(feature = "dynamic-mpu"))]
-    fn multi_partition_waiting_scheduler_skip() {
-        use crate::scheduler::ScheduleEvent;
-
-        // Build a 4-partition schedule: P0(3), P1(2), P2(2), P3(3) = 10 ticks
-        let mut schedule = ScheduleTable::<4>::new();
-        schedule.add(ScheduleEntry::new(0, 3)).unwrap();
-        schedule.add(ScheduleEntry::new(1, 2)).unwrap();
-        schedule.add(ScheduleEntry::new(2, 2)).unwrap();
-        schedule.add(ScheduleEntry::new(3, 3)).unwrap();
-        schedule.start();
-
-        let mut stk0 = AlignedStack1K::default();
-        let mut stk1 = AlignedStack1K::default();
-        let mut stk2 = AlignedStack1K::default();
-        let mut stk3 = AlignedStack1K::default();
-        let mems = [
-            ExternalPartitionMemory::from_aligned_stack(
-                &mut stk0,
-                0x0800_0001,
-                MpuRegion::new(0x2000_0000, 4096, 0),
-                0,
-            )
-            .unwrap(),
-            ExternalPartitionMemory::from_aligned_stack(
-                &mut stk1,
-                0x0800_1001,
-                MpuRegion::new(0x2000_1000, 4096, 0),
-                1,
-            )
-            .unwrap(),
-            ExternalPartitionMemory::from_aligned_stack(
-                &mut stk2,
-                0x0800_2001,
-                MpuRegion::new(0x2000_2000, 4096, 0),
-                2,
-            )
-            .unwrap(),
-            ExternalPartitionMemory::from_aligned_stack(
-                &mut stk3,
-                0x0800_3001,
-                MpuRegion::new(0x2000_3000, 4096, 0),
-                3,
-            )
-            .unwrap(),
-        ];
-        let mut k = kernel_from_ext(schedule, &mems);
-
-        // Transition P1 and P2 to Waiting (Ready -> Running -> Waiting).
-        for pid in [1u8, 2] {
-            let pcb = k.partitions_mut().get_mut(pid as usize).unwrap();
-            pcb.transition(PartitionState::Running).unwrap();
-            pcb.transition(PartitionState::Waiting).unwrap();
-            assert_eq!(pcb.state(), PartitionState::Waiting);
-        }
-
-        // Walk through a full major frame (10 ticks) and record events.
-        // Schedule layout:
-        //   tick 1-2: interior of P0 slot (None)
-        //   tick 3:   boundary -> P1 slot (Waiting -> None)
-        //   tick 4:   interior of P1 slot (None)
-        //   tick 5:   boundary -> P2 slot (Waiting -> None)
-        //   tick 6:   interior of P2 slot (None)
-        //   tick 7:   boundary -> P3 slot (PartitionSwitch(3))
-        //   tick 8-9: interior of P3 slot (None)
-        //   tick 10:  boundary -> P0 slot (PartitionSwitch(0)) [wraps]
-        let mut events = [ScheduleEvent::None; 10];
-        for event in &mut events {
-            *event = svc_scheduler::advance_schedule_tick(&mut k);
-            // active_partition must never point to a Waiting partition.
-            if let Some(ap) = k.active_partition() {
-                assert!(ap != 1 && ap != 2, "active_partition was set to P{ap}");
-            }
-        }
-
-        // P0 slot (3 ticks): ticks 1-2 interior, tick 3 = boundary to P1.
-        assert_eq!(events[0], ScheduleEvent::None);
-        assert_eq!(events[1], ScheduleEvent::None);
-        // P1 boundary (Waiting -> skipped).
-        assert_eq!(events[2], ScheduleEvent::None, "P1 slot must be skipped");
-        // P1 interior tick.
-        assert_eq!(events[3], ScheduleEvent::None);
-        // P2 boundary (Waiting -> skipped).
-        assert_eq!(events[4], ScheduleEvent::None, "P2 slot must be skipped");
-        // P2 interior tick.
-        assert_eq!(events[5], ScheduleEvent::None);
-        // P3 boundary (Ready -> PartitionSwitch).
-        assert_eq!(
-            events[6],
-            ScheduleEvent::PartitionSwitch(3),
-            "P3 slot must produce PartitionSwitch(3)"
-        );
-        // P3 interior ticks.
-        assert_eq!(events[7], ScheduleEvent::None);
-        assert_eq!(events[8], ScheduleEvent::None);
-        // Major frame wraps -> P0 boundary (Ready -> PartitionSwitch).
-        assert_eq!(
-            events[9],
-            ScheduleEvent::PartitionSwitch(0),
-            "P0 slot must produce PartitionSwitch(0) on wrap"
-        );
-        // Final state: active_partition must be P0 (last successful switch).
-        assert_eq!(k.active_partition(), Some(0));
-    }
-
-    #[test]
-    #[cfg(feature = "dynamic-mpu")]
     fn ticks_since_bottom_half_tracks_staleness() {
         use crate::scheduler::ScheduleEvent;
         let mut k = kernel_with_schedule();
@@ -8423,7 +7988,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     #[allow(deprecated)]
     fn bottom_half_stale_flag_set_when_threshold_exceeded() {
         // Create a kernel with a schedule that has NO system window.
@@ -8467,7 +8031,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     #[allow(deprecated)]
     fn clear_bottom_half_stale_resets_flag() {
         // Set up a kernel where the stale flag can be triggered
@@ -8506,7 +8069,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     #[allow(deprecated)]
     fn fallback_revoke_noop_when_not_stale() {
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
@@ -8532,7 +8094,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     #[allow(deprecated)]
     fn fallback_revoke_expired_buffers_when_stale() {
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
@@ -8561,7 +8122,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     #[allow(deprecated)]
     fn fallback_revoke_skips_non_expired_buffers() {
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
@@ -8593,7 +8153,6 @@ mod tests {
     /// during tick processing when bottom_half_stale is set, revoking
     /// buffers with expired deadlines even without a SystemWindow event.
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     #[allow(deprecated)]
     fn systick_handler_fallback_revokes_expired_buffers() {
         use crate::buffer_pool::BorrowState;
@@ -8632,7 +8191,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     fn query_bottom_half_returns_ticks_in_r0() {
         let mut k = kernel_with_schedule();
         // Initially both values are zero
@@ -8656,7 +8214,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     #[allow(deprecated)]
     fn query_bottom_half_returns_stale_flag_in_r1() {
         // Use new_empty so we can exceed the threshold without system window reset
@@ -8698,19 +8255,6 @@ mod tests {
         let result = k.yield_current_slot();
         assert_eq!(result.partition_id(), Some(1));
         assert_eq!(k.active_partition(), Some(1));
-    }
-
-    #[test]
-    #[cfg(not(feature = "dynamic-mpu"))]
-    fn yield_current_slot_wraps_around() {
-        let mut k = kernel_with_schedule();
-        // Yield to P1
-        let r1 = k.yield_current_slot();
-        assert_eq!(r1.partition_id(), Some(1));
-        // Yield again: wraps to P0
-        let r2 = k.yield_current_slot();
-        assert_eq!(r2.partition_id(), Some(0));
-        assert_eq!(k.active_partition(), Some(0));
     }
 
     #[test]
@@ -9030,7 +8574,6 @@ mod tests {
             assert_eq!(ev.partition_id(), None);
         }
         // With dynamic-mpu, the system window sits between P1 and P0.
-        #[cfg(feature = "dynamic-mpu")]
         assert_eq!(
             svc_scheduler::advance_schedule_tick(&mut k),
             ScheduleEvent::SystemWindow
@@ -9575,19 +9118,11 @@ mod tests {
             assert_eq!(ev, ScheduleEvent::None, "tick {}: interior", i + 1);
         }
         let ev = svc_scheduler::advance_schedule_tick(&mut k);
-        #[cfg(feature = "dynamic-mpu")]
         assert_eq!(
             ev,
             ScheduleEvent::SystemWindow,
             "3rd tick hits system window"
         );
-        #[cfg(not(feature = "dynamic-mpu"))]
-        assert_eq!(
-            ev,
-            ScheduleEvent::PartitionSwitch(0),
-            "3rd tick switches to P0"
-        );
-        #[cfg(feature = "dynamic-mpu")]
         {
             let ev = svc_scheduler::advance_schedule_tick(&mut k);
             assert_eq!(
@@ -9692,9 +9227,6 @@ mod tests {
         //   Tick 14: P1 slot boundary → P1 Waiting → None
         //   Tick 17: SystemWindow boundary → SystemWindow
         //   Tick 18: P0 slot boundary → PartitionSwitch(0) (wrap #2)
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let major_frame: u32 = 8;
-        #[cfg(feature = "dynamic-mpu")]
         let major_frame: u32 = 9;
 
         let mut wrap_count = 0u32;
@@ -9705,13 +9237,6 @@ mod tests {
             let offset = ((tick - 1) % major_frame) + 1;
 
             // Determine the exact expected event for this tick.
-            #[cfg(not(feature = "dynamic-mpu"))]
-            let expected = match offset {
-                5 => ScheduleEvent::None,               // P1 boundary, Waiting → suppressed
-                8 => ScheduleEvent::PartitionSwitch(0), // major-frame wrap
-                _ => ScheduleEvent::None,
-            };
-            #[cfg(feature = "dynamic-mpu")]
             let expected = match offset {
                 5 => ScheduleEvent::None, // P1 boundary, Waiting → suppressed
                 8 => ScheduleEvent::SystemWindow,
@@ -10397,7 +9922,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dynamic-mpu")]
     fn bug05_dev_read_timed_blocks_then_yield_no_partner() {
         use crate::invariants::assert_partition_state_consistency;
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ_TIMED};
@@ -10563,7 +10087,6 @@ mod tests {
 
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
         schedule.start();
         let mut stk0 = AlignedStack1K::default();
@@ -10766,7 +10289,6 @@ mod tests {
         let mut schedule = ScheduleTable::<4>::new();
         schedule.add(ScheduleEntry::new(0, 5)).unwrap();
         schedule.add(ScheduleEntry::new(1, 3)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
         let mut stk0 = AlignedStack1K::default();
         let mut stk1 = AlignedStack1K::default();
@@ -10806,40 +10328,12 @@ mod tests {
     #[allow(deprecated)]
     fn start_schedule_empty_returns_none() {
         // Create empty kernel via new_empty
-        #[cfg(not(feature = "dynamic-mpu"))]
-        let mut k = Kernel::<TestConfig>::new_empty();
-        #[cfg(feature = "dynamic-mpu")]
         let mut k = Kernel::<TestConfig>::new_empty(crate::virtual_device::DeviceRegistry::new());
 
         // Start empty schedule returns None
         let initial = svc_scheduler::start_schedule(&mut k);
         assert_eq!(initial, None);
         assert_eq!(k.active_partition, None);
-    }
-
-    #[cfg(not(feature = "dynamic-mpu"))]
-    #[test]
-    fn start_schedule_allows_advance_tick() {
-        use crate::scheduler::ScheduleEvent;
-        let mut k = kernel_unstarted_schedule();
-        // Start the schedule
-        let initial = svc_scheduler::start_schedule(&mut k);
-        assert_eq!(initial, Some(0));
-
-        // Now advance ticks - schedule should work normally
-        // P0 has 5 ticks, so 4 advances should return None
-        for _ in 0..4 {
-            assert_eq!(
-                svc_scheduler::advance_schedule_tick(&mut k),
-                ScheduleEvent::None
-            );
-        }
-        // 5th tick triggers switch to P1
-        assert_eq!(
-            svc_scheduler::advance_schedule_tick(&mut k),
-            ScheduleEvent::PartitionSwitch(1)
-        );
-        assert_eq!(k.active_partition, Some(1));
     }
 
     #[test]
@@ -11032,7 +10526,6 @@ mod tests {
                 PartitionState::Waiting,
                 "P0 must remain Waiting during P1's slot / wrap",
             );
-            #[cfg(feature = "dynamic-mpu")]
             if ev == ScheduleEvent::SystemWindow {
                 continue;
             }
@@ -11150,7 +10643,6 @@ mod tests {
             const SP: usize = 2;
             const BS: usize = 2;
             const BW: usize = 2;
-            #[cfg(feature = "dynamic-mpu")]
             const BP: usize = 2;
 
             kernel_config_types!();

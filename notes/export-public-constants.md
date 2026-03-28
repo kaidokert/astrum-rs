@@ -49,7 +49,7 @@ re-exports them. Partitions should never import `rtos-traits` directly.
 | `sys_bb_read(id: u32, buf: &mut [u8])` | BB_READ | 18 | id | len | ptr | `Ok(n)` |
 | `sys_bb_clear(id: u32)` | BB_CLEAR | 19 | id | 0 | 0 | `Ok(0)` |
 
-### `dynamic-mpu` — devices (7 functions)
+### Devices (7 functions)
 
 | Function | Syscall | # | r1 | r2 | r3 | Return |
 |---|---|---|---|---|---|---|
@@ -61,7 +61,7 @@ re-exports them. Partitions should never import `rtos-traits` directly.
 | `sys_dev_read_timed(dev: u8, buf: &mut [u8], t: u16)` | DEV_READ_TIMED | 30 | dev | packed | ptr | `Ok(n)` |
 | `sys_query_bottom_half(dev: u8)` | QUERY_BOTTOM_HALF | 33 | dev | 0 | 0 | `Ok(st)` |
 
-### `dynamic-mpu` — buffer pool (7 functions)
+### Buffer pool (7 functions)
 
 | Function | Syscall | # | r1 | r2 | r3 | Return |
 |---|---|---|---|---|---|---|
@@ -123,7 +123,7 @@ sizes, even though their r2 carries an unpacked length.
 | Feature | Cargo flag | Propagates to | Gated count |
 |---|---|---|---|
 | Partition debug | `partition-debug` | `rtos-traits/partition-debug` | 2 syscalls + 4 macros + types |
-| Dynamic MPU | `dynamic-mpu` | `kernel/dynamic-mpu`, `rtos-traits/dynamic-mpu` | 14 syscalls + `lend_flags` |
+| Dynamic MPU | *(always enabled)* | — | 14 syscalls + `lend_flags` |
 | Blackboard IPC | `ipc-blackboard` | `kernel/ipc-blackboard` | 3 syscalls |
 
 ## Testing Strategy
@@ -139,7 +139,7 @@ equals its `rtos_traits::syscall` source, catching shadowing/drift.
 `u16::MAX + 1` rejected). Lend packing tested for targets 0, 1, 0xFF with
 both writable and read-only modes.
 
-**Feature-gated sets:** Run with `--features ipc-blackboard,dynamic-mpu,partition-debug`.
+**Feature-gated sets:** Run with `--features ipc-blackboard,partition-debug`.
 
 **On-target:** Register-level ABI verification requires QEMU integration tests
 (tracked as TODOs in `plib/src/lib.rs`).

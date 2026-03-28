@@ -17,7 +17,7 @@ cargo llvm-cov --text
 # HTML report (open target/llvm-cov/html/index.html)
 cargo llvm-cov --html
 
-# Fail if coverage drops below threshold (all features, includes dynamic-mpu)
+# Fail if coverage drops below threshold (all features)
 cargo llvm-cov --all-features --fail-under-lines 75
 ```
 

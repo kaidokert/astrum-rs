@@ -4,7 +4,6 @@ use super::*;
 // Device I/O dispatch tests (batch 1)
 // -------------------------------------------------------------------------
 
-#[cfg(feature = "dynamic-mpu")]
 #[test]
 fn dev_open_dispatch_valid_and_invalid() {
     use crate::syscall::SYS_DEV_OPEN;
@@ -26,7 +25,6 @@ fn dev_open_dispatch_valid_and_invalid() {
     assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
 }
 
-#[cfg(feature = "dynamic-mpu")]
 #[test]
 fn dev_write_dispatch_routes_to_uart() {
     use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_WRITE};
@@ -51,7 +49,6 @@ fn dev_write_dispatch_routes_to_uart() {
     assert_eq!(ua.pop_tx(), Some(0xCC));
 }
 
-#[cfg(feature = "dynamic-mpu")]
 #[test]
 fn dev_read_dispatch_routes_to_uart() {
     use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ};
@@ -74,7 +71,6 @@ fn dev_read_dispatch_routes_to_uart() {
     assert_eq!(out, &[0xDE, 0xAD]);
 }
 
-#[cfg(feature = "dynamic-mpu")]
 #[test]
 fn dev_ioctl_dispatch_routes_to_uart() {
     use crate::syscall::{SYS_DEV_IOCTL, SYS_DEV_OPEN};
@@ -97,7 +93,6 @@ fn dev_ioctl_dispatch_routes_to_uart() {
     assert_eq!(ef.r0, 3);
 }
 
-#[cfg(feature = "dynamic-mpu")]
 #[test]
 fn dev_invalid_id_returns_invalid_resource() {
     use crate::syscall::{SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE};
@@ -126,12 +121,10 @@ fn dev_invalid_id_returns_invalid_resource() {
     assert_eq!(ef.r0, inv);
 }
 
-#[cfg(feature = "dynamic-mpu")]
 pub(super) fn low32_buf(page: usize) -> *mut u8 {
     crate::test_mmap::low32_buf(page)
 }
 
-#[cfg(feature = "dynamic-mpu")]
 #[test]
 fn dev_close_after_open_returns_success() {
     use crate::hw_uart::HwUartBackend;
@@ -155,7 +148,6 @@ fn dev_close_after_open_returns_success() {
     assert_eq!(ef.r0, 0);
 }
 
-#[cfg(feature = "dynamic-mpu")]
 #[test]
 fn dev_close_without_open_returns_error() {
     use crate::hw_uart::HwUartBackend;
@@ -175,7 +167,6 @@ fn dev_close_without_open_returns_error() {
     assert_eq!(ef.r0, SvcError::OperationFailed.to_u32());
 }
 
-#[cfg(feature = "dynamic-mpu")]
 #[test]
 fn dev_close_invalid_device_returns_invalid_resource() {
     use crate::syscall::SYS_DEV_CLOSE;

@@ -11,7 +11,6 @@ pub struct ScheduleEntry {
     pub partition_index: u8,
     pub duration_ticks: u32,
     /// Reserved for kernel bottom-half processing when true.
-    #[cfg(feature = "dynamic-mpu")]
     pub is_system_window: bool,
 }
 
@@ -20,7 +19,6 @@ impl ScheduleEntry {
         Self {
             partition_index,
             duration_ticks,
-            #[cfg(feature = "dynamic-mpu")]
             is_system_window: false,
         }
     }
@@ -43,7 +41,6 @@ pub enum ScheduleEvent {
     /// Switch to the specified partition.
     PartitionSwitch(u8),
     /// System window for kernel bottom-half processing (dynamic-mpu only).
-    #[cfg(feature = "dynamic-mpu")]
     SystemWindow,
     /// Idle slot (reserved for future use).
     ///
@@ -151,7 +148,6 @@ impl<const N: usize> ScheduleTable<N> {
     }
 
     /// Add a system window entry. Returns `Err` if table is full or duration is zero.
-    #[cfg(feature = "dynamic-mpu")]
     pub fn add_system_window(&mut self, duration_ticks: u32) -> Result<(), ScheduleEntry> {
         let entry = ScheduleEntry {
             partition_index: 0,
@@ -162,14 +158,12 @@ impl<const N: usize> ScheduleTable<N> {
     }
 
     /// Returns `true` if at least one entry has `is_system_window = true`.
-    #[cfg(feature = "dynamic-mpu")]
     pub fn has_system_window(&self) -> bool {
         self.entries.iter().any(|e| e.is_system_window)
     }
 
     /// Returns the maximum consecutive ticks between system windows (with wraparound).
     /// Returns `major_frame_ticks` if no system windows exist.
-    #[cfg(feature = "dynamic-mpu")]
     pub fn max_ticks_without_system_window(&self) -> u32 {
         if !self.has_system_window() {
             return self.major_frame_ticks;
@@ -237,20 +231,12 @@ impl<const N: usize> ScheduleTable<N> {
         Ok(entry)
     }
 
-    /// When `dynamic-mpu` is disabled there are no `SystemWindow` entries, so
-    /// this simply delegates to [`force_advance`] with `skipped = 0`.
-    #[cfg(not(feature = "dynamic-mpu"))]
-    pub fn force_advance_to_partition(&mut self) -> (ScheduleEvent, usize) {
-        (self.force_advance(), 0)
-    }
-
     /// Advance to the next **partition** slot, skipping any intervening
     /// `SystemWindow` entries.  Returns [`ScheduleEvent::PartitionSwitch`]
     /// or [`ScheduleEvent::None`] if the table is empty/unstarted or
     /// contains only system windows.  Bounded by the table length to
     /// guarantee termination.  Returns the number of system windows
     /// skipped as the second element.
-    #[cfg(feature = "dynamic-mpu")]
     pub fn force_advance_to_partition(&mut self) -> (ScheduleEvent, usize) {
         let len = self.entries.len();
         let mut skipped = 0usize;
@@ -277,7 +263,6 @@ impl<const N: usize> ScheduleTable<N> {
             Ok(e) => e,
             Err(_) => return ScheduleEvent::None,
         };
-        #[cfg(feature = "dynamic-mpu")]
         if entry.is_system_window {
             return ScheduleEvent::SystemWindow;
         }
@@ -613,7 +598,6 @@ mod tests {
         assert_eq!(t.advance_tick(), ScheduleEvent::PartitionSwitch(1));
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     mod dynamic_mpu_tests {
         use super::*;
 

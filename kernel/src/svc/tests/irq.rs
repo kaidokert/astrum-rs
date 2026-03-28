@@ -94,7 +94,6 @@ fn with_irq_bindings_stores_bindings() {
     let mut sched = ScheduleTable::<4>::new();
     sched.add(ScheduleEntry::new(0, 50)).unwrap();
     sched.add(ScheduleEntry::new(1, 50)).unwrap();
-    #[cfg(feature = "dynamic-mpu")]
     sched.add_system_window(1).unwrap();
     let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
     let mut stack0 = AlignedStack256B::default();
@@ -116,7 +115,6 @@ fn with_irq_bindings_irq_ack_dispatch_succeeds() {
     let mut sched = ScheduleTable::<4>::new();
     sched.add(ScheduleEntry::new(0, 50)).unwrap();
     sched.add(ScheduleEntry::new(1, 50)).unwrap();
-    #[cfg(feature = "dynamic-mpu")]
     sched.add_system_window(1).unwrap();
     let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
     let mut stack0 = AlignedStack256B::default();

@@ -510,11 +510,8 @@ pub unsafe fn boot_preconfigured<C: KernelConfig>(
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
     C::Core:
         CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
@@ -615,7 +612,6 @@ where
 
         // Buffer pool alignment check: MPU requires each slot's data
         // buffer to be aligned to the buffer size.
-        #[cfg(feature = "dynamic-mpu")]
         #[allow(clippy::manual_inspect)]
         k.buffers().check_alignment().map_err(|e| {
             crate::klog!("boot: {}", e);
@@ -1431,17 +1427,9 @@ mod tests {
         compose_kernel_config!(BootTestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
         fn create_test_kernel() -> crate::svc::Kernel<'static, BootTestConfig> {
-            #[cfg(not(feature = "dynamic-mpu"))]
-            {
-                #[allow(deprecated)]
-                crate::svc::Kernel::new_empty()
-            }
-            #[cfg(feature = "dynamic-mpu")]
-            {
-                let reg = crate::virtual_device::DeviceRegistry::default();
-                #[allow(deprecated)]
-                crate::svc::Kernel::new_empty(reg)
-            }
+            let reg = crate::virtual_device::DeviceRegistry::default();
+            #[allow(deprecated)]
+            crate::svc::Kernel::new_empty(reg)
         }
 
         // Clear any prior state from other tests.
@@ -1492,7 +1480,6 @@ mod tests {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         s.add_system_window(1).unwrap();
 
         let cfgs = [
@@ -1523,7 +1510,6 @@ mod tests {
         let k = crate::svc::Kernel::<R0Config>::with_config(
             s,
             &cfgs,
-            #[cfg(feature = "dynamic-mpu")]
             crate::virtual_device::DeviceRegistry::new(),
             &[],
         )
@@ -1563,7 +1549,6 @@ mod tests {
         let mut s = ScheduleTable::new();
         s.add(ScheduleEntry::new(0, 50)).unwrap();
         s.add(ScheduleEntry::new(1, 50)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         s.add_system_window(1).unwrap();
 
         let sentinel_mpu = MpuRegion::new(0, 0, 0);

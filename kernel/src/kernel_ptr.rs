@@ -55,11 +55,8 @@ pub unsafe fn store_kernel_ptr<'mem, C: KernelConfig>(k: &mut Kernel<'mem, C>)
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     KERNEL_PTR.store(k as *mut Kernel<'mem, C> as *mut (), Ordering::Release);
@@ -88,11 +85,8 @@ pub unsafe fn load_kernel_ptr<C: KernelConfig>() -> Option<NonNull<Kernel<'stati
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     let ptr = KERNEL_PTR.load(Ordering::Acquire);
@@ -117,17 +111,9 @@ mod tests {
     static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn create_test_kernel() -> Kernel<'static, TestConfig> {
-        #[cfg(not(feature = "dynamic-mpu"))]
-        {
-            #[allow(deprecated)]
-            Kernel::new_empty()
-        }
-        #[cfg(feature = "dynamic-mpu")]
-        {
-            let reg = crate::virtual_device::DeviceRegistry::default();
-            #[allow(deprecated)]
-            Kernel::new_empty(reg)
-        }
+        let reg = crate::virtual_device::DeviceRegistry::default();
+        #[allow(deprecated)]
+        Kernel::new_empty(reg)
     }
 
     #[test]

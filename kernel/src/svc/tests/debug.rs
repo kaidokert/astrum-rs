@@ -168,7 +168,6 @@ fn drain_debug_auto_budget_zero_is_noop() {
         const BS: usize = 4;
         const BW: usize = 4;
         const DEBUG_AUTO_DRAIN_BUDGET: usize = 0;
-        #[cfg(feature = "dynamic-mpu")]
         const BP: usize = 4;
 
         kernel_config_types!();

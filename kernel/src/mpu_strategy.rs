@@ -2103,6 +2103,8 @@ mod tests {
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
         ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
         // Two partitions with distinct IDs and one peripheral each.
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -2176,6 +2178,8 @@ mod tests {
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
         ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
         // Both partitions share the same peripheral at 0x4000_0000.
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -2229,6 +2233,8 @@ mod tests {
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
         ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
         let pcb0 = PartitionControlBlock::new(
             0,
             0x0,
@@ -2529,6 +2535,8 @@ mod tests {
         // peripheral_reserved=2 so wiring goes through reserved slots.
         ds.configure_partition(0, &[data_region(0x2000_0000, 4096, 6)], 2)
             .unwrap();
+        ds.configure_partition(1, &[data_region(0x2000_8000, 4096, 6)], 2)
+            .unwrap();
         assert_eq!(
             ds.wire_boot_peripherals(&[p(0, 0x2000_0000), p(1, 0x2000_8000)]),
             1
@@ -2575,6 +2583,8 @@ mod tests {
 
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
         ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
         assert_eq!(ds.wire_boot_peripherals(&[pcb0, pcb1]), 1);
 
         let cached0 = ds.cached_peripheral_regions(0);
@@ -2604,6 +2614,10 @@ mod tests {
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
         ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
+        let (rbar_p2, rasr_p2) = data_region(0x2001_0000, 4096, 6);
+        ds.configure_partition(2, &[(rbar_p2, rasr_p2)], 2).unwrap();
 
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -2633,7 +2647,7 @@ mod tests {
         .with_peripheral_regions(&[periph(0x4002_0000, 4096)]);
 
         let wired = ds.wire_boot_peripherals(&[pcb0, pcb1, pcb2]);
-        assert_eq!(wired, 2, "only first 2 peripherals wired to reserved slots");
+        assert_eq!(wired, 3, "all 3 unique peripherals wired to reserved slots");
 
         // R7 (slot 3) must be None — no dynamic window slot consumed.
         assert!(ds.slot(7).is_none(), "R7 must be empty after wiring");
@@ -2897,6 +2911,12 @@ mod tests {
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
         ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
+        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
+        let (rbar_p2, rasr_p2) = data_region(0x2001_0000, 4096, 6);
+        ds.configure_partition(2, &[(rbar_p2, rasr_p2)], 2).unwrap();
+        let (rbar_p3, rasr_p3) = data_region(0x2001_8000, 4096, 6);
+        ds.configure_partition(3, &[(rbar_p3, rasr_p3)], 2).unwrap();
 
         let shared_periphs = [periph(0x4000_0000, 4096), periph(0x4001_0000, 256)];
 
@@ -2962,11 +2982,11 @@ mod tests {
         }
 
         // No dynamic window slots consumed by peripherals.
-        // R6 (slot 2) holds partition-0 RAM from configure_partition;
+        // R6 (slot 2) holds the last-configured partition's RAM;
         // R7 (slot 3) must be empty.
         let r6 = ds.slot(6).expect("R6 must hold partition RAM");
         assert_eq!(
-            r6.base, 0x2000_0000,
+            r6.base, 0x2001_8000,
             "R6 must be partition RAM, not a peripheral"
         );
         assert!(

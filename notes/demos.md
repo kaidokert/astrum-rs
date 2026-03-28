@@ -433,21 +433,21 @@ cargo run -p kernel --target thumbv7m-none-eabi --example <name> --features qemu
 
 ---
 
-## Phase 3 Examples (dynamic-mpu)
+## Dynamic MPU Examples
 
-These examples require the `dynamic-mpu` feature gate. They exercise
-the Phase 3 subsystems: dynamic MPU region allocation (R4-R7), buffer
-pool zero-copy lending, and the virtual device abstraction layer.
+These examples exercise the dynamic MPU subsystem: runtime MPU region
+allocation (R4-R7), buffer pool zero-copy lending, and the virtual
+device abstraction layer.
 For the architecture behind these subsystems, see
-[architecture.md §11](architecture.md#11-phase-3--dynamic-mpu-and-virtual-devices-dynamic-mpu-feature).
+[architecture.md §12](architecture.md#12-dynamic-mpu-and-virtual-devices).
 For syscall details, see
 [ipc-reference.md §10 (Buffer Pool)](ipc-reference.md#10-buffer-pool) and
 [§11 (Virtual Devices)](ipc-reference.md#11-virtual-devices).
 
-All Phase 3 examples run with:
+All dynamic MPU examples run with:
 
 ```bash
-cargo run -p kernel --target thumbv7m-none-eabi --example <name> --features dynamic-mpu,qemu
+cargo run -p kernel --target thumbv7m-none-eabi --example <name> --features qemu
 ```
 
 ---
@@ -489,7 +489,7 @@ Data regions (loaded into MPU R4 on each switch):
 #### How to Run
 
 ```bash
-cargo run -p kernel --target thumbv7m-none-eabi --example mpu_dynamic --features dynamic-mpu,qemu
+cargo run -p kernel --target thumbv7m-none-eabi --example mpu_dynamic --features qemu
 ```
 
 #### Expected Output
@@ -543,7 +543,7 @@ SysTick verifies after each PendSV:
 #### How to Run
 
 ```bash
-cargo run -p kernel --target thumbv7m-none-eabi --example mpu_dynamic_test --features dynamic-mpu,qemu
+cargo run -p kernel --target thumbv7m-none-eabi --example mpu_dynamic_test --features qemu
 ```
 
 #### Expected Output
@@ -616,7 +616,7 @@ Lifecycle (driven by SysTick tick count):
 #### How to Run
 
 ```bash
-cargo run -p kernel --target thumbv7m-none-eabi --example buffer_pool_test --features dynamic-mpu,qemu
+cargo run -p kernel --target thumbv7m-none-eabi --example buffer_pool_test --features qemu
 ```
 
 #### Expected Output
@@ -692,7 +692,7 @@ Round-trip flow:
 #### How to Run
 
 ```bash
-cargo run -p kernel --target thumbv7m-none-eabi --example virtual_uart_demo --features dynamic-mpu,qemu
+cargo run -p kernel --target thumbv7m-none-eabi --example virtual_uart_demo --features qemu
 ```
 
 #### Expected Output
@@ -804,7 +804,7 @@ The demo runs 7 test assertions tracked by pass/fail counters:
 #### How to Run
 
 ```bash
-cargo run -p kernel --target thumbv7m-none-eabi --example uart1_loopback --features dynamic-mpu,qemu
+cargo run -p kernel --target thumbv7m-none-eabi --example uart1_loopback --features qemu
 ```
 
 #### Expected Output

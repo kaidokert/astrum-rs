@@ -137,9 +137,6 @@ fn main() -> ! {
     let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
     cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
     cfgs[1].entry_point = EntryAddr::from_entry(p1_main as PartitionEntry);
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let k = Kernel::<Config>::with_config(sched, &cfgs, &[]).expect("svcall_primask: kernel");
-    #[cfg(feature = "dynamic-mpu")]
     let k = Kernel::<Config>::with_config(
         sched,
         &cfgs,

@@ -17,7 +17,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::scheduler::ScheduleTable;
+use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
@@ -75,8 +75,13 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("smoke_test: Peripherals::take");
     hprintln!("smoke_test: start");
 
-    let sched = ScheduleTable::<{ SmokeConfig::SCHED }>::round_robin(1, 3)
-        .expect("smoke_test: round_robin");
+    let mut sched = ScheduleTable::<{ SmokeConfig::SCHED }>::new();
+    sched
+        .add(ScheduleEntry::new(0, 3))
+        .expect("smoke_test: add P0");
+    sched
+        .add_system_window(1)
+        .expect("smoke_test: system window");
 
     let parts: [PartitionSpec; SmokeConfig::N] =
         [PartitionSpec::new(partition_main as PartitionEntry, 0)];

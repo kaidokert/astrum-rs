@@ -114,10 +114,6 @@ fn main() -> ! {
     cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
     cfgs[1].entry_point = EntryAddr::from_entry(p1_main as PartitionEntry);
 
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let k =
-        Kernel::<Config>::with_config(sched, &cfgs, &[]).expect("tick_fairness: Kernel::create");
-    #[cfg(feature = "dynamic-mpu")]
     let k = Kernel::<Config>::with_config(
         sched,
         &cfgs,

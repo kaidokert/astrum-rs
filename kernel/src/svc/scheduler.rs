@@ -24,11 +24,8 @@ pub(crate) fn transition_outgoing_ready<'mem, C: KernelConfig>(kernel: &mut Kern
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
     C::Core:
         CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
@@ -70,11 +67,8 @@ pub fn start_schedule<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>) -> Op
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
     C::Core:
         CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
@@ -103,11 +97,8 @@ pub fn advance_schedule_tick<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
     C::Core:
         CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
@@ -125,7 +116,6 @@ where
     >,
 {
     kernel.tick.increment();
-    #[cfg(feature = "dynamic-mpu")]
     kernel.mpu_tick_bookkeeping(false);
     let event = kernel.schedule_mut().advance_tick();
     match event {
@@ -156,7 +146,6 @@ where
             kernel.set_next_partition(pid);
             event
         }
-        #[cfg(feature = "dynamic-mpu")]
         ScheduleEvent::SystemWindow => {
             kernel.mpu_tick_bookkeeping(true);
             event

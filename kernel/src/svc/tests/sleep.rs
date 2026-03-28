@@ -308,7 +308,6 @@ fn expire_timed_waits_non_expired_stays_waiting() {
 
 // --- device wait queue expiry tests ---
 
-#[cfg(feature = "dynamic-mpu")]
 #[test]
 fn expire_timed_waits_device_reader_expiry() {
     let mut k = kernel(0, 0, 0);

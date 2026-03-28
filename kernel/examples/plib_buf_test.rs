@@ -154,9 +154,6 @@ fn main() -> ! {
     let mut cfgs = PartitionConfig::sentinel_array::<2>();
     cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
     cfgs[1].entry_point = EntryAddr::from_entry(p1_idle as PartitionEntry);
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("plib_buf_test: kernel");
-    #[cfg(feature = "dynamic-mpu")]
     let k = Kernel::<TestConfig>::with_config(
         sched,
         &cfgs,

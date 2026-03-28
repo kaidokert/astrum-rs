@@ -116,7 +116,6 @@ fn sync_tick_overwrite_returns_latest_value() {
     assert_eq!(ef.r0, 10);
 }
 
-#[cfg(feature = "dynamic-mpu")]
 #[test]
 fn sync_tick_affects_buffer_alloc_deadline() {
     use crate::syscall::SYS_BUF_ALLOC;

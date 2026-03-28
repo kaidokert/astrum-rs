@@ -62,9 +62,6 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("sched");
     let mut cfgs = PartitionConfig::sentinel_array::<{ TestConfig::N }>();
     cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let mut k = Kernel::<TestConfig>::with_config(sched, &cfgs, &[]).expect("kernel");
-    #[cfg(feature = "dynamic-mpu")]
     let mut k = Kernel::<TestConfig>::with_config(
         sched,
         &cfgs,

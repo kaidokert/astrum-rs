@@ -46,11 +46,8 @@ pub fn signal_partition_from_isr<C: KernelConfig>(partition_id: u8, event_bits: 
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
     C::Core: crate::config::CoreOps<
         PartTable = crate::partition::PartitionTable<{ C::N }>,

@@ -332,11 +332,8 @@ struct AssertKernelInvariants<C: KernelConfig>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     _marker: core::marker::PhantomData<C>,
@@ -346,11 +343,8 @@ impl<C: KernelConfig> AssertKernelInvariants<C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     /// Zero-sized constant that only compiles if `Kernel<'static, C>` fits in storage
@@ -377,11 +371,8 @@ pub unsafe fn init_kernel_state_at<'mem, C: KernelConfig>(
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     if check_kernel_alignment(ptr as *const u8).is_err() {
@@ -426,11 +417,8 @@ pub unsafe fn init_kernel_state<'mem, C: KernelConfig>(
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     // Compile-time check: ensure Kernel<'mem, C> fits in the storage buffer and
@@ -487,11 +475,8 @@ pub unsafe fn get_kernel_ptr<C: KernelConfig>() -> *mut Kernel<'static, C>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     // SAFETY: This function returns a raw pointer, deferring safety to the caller.
@@ -547,11 +532,8 @@ where
     F: FnOnce(&Kernel<'static, C>) -> R,
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     // SAFETY: We only cast the NonNull to a shared reference inside a
@@ -611,11 +593,8 @@ where
     F: FnOnce(&mut Kernel<'static, C>) -> R,
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     // SAFETY: We only cast the NonNull to a mutable reference inside a
@@ -646,11 +625,8 @@ where
     F: FnOnce(&Kernel<'static, C>) -> R,
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     // SAFETY: Same invariants as the production version. In tests there are
@@ -678,11 +654,8 @@ where
     F: FnOnce(&mut Kernel<'static, C>) -> R,
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     // SAFETY: Same invariants as the production version. In tests there are
@@ -713,17 +686,9 @@ mod tests {
     ///
     /// Abstracts cfg-gated construction logic for DRY compliance.
     fn create_test_kernel() -> Kernel<'static, TestConfig> {
-        #[cfg(not(feature = "dynamic-mpu"))]
-        {
-            #[allow(deprecated)]
-            Kernel::new_empty()
-        }
-        #[cfg(feature = "dynamic-mpu")]
-        {
-            let reg = crate::virtual_device::DeviceRegistry::default();
-            #[allow(deprecated)]
-            Kernel::new_empty(reg)
-        }
+        let reg = crate::virtual_device::DeviceRegistry::default();
+        #[allow(deprecated)]
+        Kernel::new_empty(reg)
     }
 
     #[test]
@@ -946,7 +911,6 @@ mod tests {
         assert_eq!(core::mem::size_of::<local::TestBuffer>(), 1024);
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn run_bottom_half_macro_sets_and_clears_flag() {
         let mut k = create_test_kernel();
@@ -955,7 +919,6 @@ mod tests {
         assert!(!k.in_bottom_half);
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn run_bottom_half_macro_returns_err_on_nested_call() {
         let mut k = create_test_kernel();

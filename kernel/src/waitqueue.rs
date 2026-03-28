@@ -235,20 +235,17 @@ impl<const W: usize> TimedWaitQueue<W> {
 /// Wraps [`TimedWaitQueue`] with device-oriented method names. Each entry
 /// records a partition ID and an optional expiry tick. `W` is the
 /// compile-time maximum number of blocked readers.
-#[cfg(feature = "dynamic-mpu")]
 #[derive(Debug)]
 pub struct DeviceWaitQueue<const W: usize> {
     inner: TimedWaitQueue<W>,
 }
 
-#[cfg(feature = "dynamic-mpu")]
 impl<const W: usize> Default for DeviceWaitQueue<W> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "dynamic-mpu")]
 impl<const W: usize> DeviceWaitQueue<W> {
     /// Create an empty device wait queue.
     pub const fn new() -> Self {
@@ -785,7 +782,6 @@ mod tests {
     // FIFO ordering, expiry logic, and capacity semantics are covered by
     // the TimedWaitQueue tests above.
 
-    #[cfg(feature = "dynamic-mpu")]
     mod device_wait_queue {
         use super::super::*;
 

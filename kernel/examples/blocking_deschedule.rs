@@ -149,7 +149,6 @@ fn main() -> ! {
     // Build schedule
     let mut sched = ScheduleTable::<4>::new();
     sched.add(ScheduleEntry::new(0, 20)).unwrap();
-    #[cfg(feature = "dynamic-mpu")]
     if sched.add_system_window(1).is_err() {
         loop {
             debug::exit(debug::EXIT_FAILURE);
@@ -168,7 +167,6 @@ fn main() -> ! {
     };
 
     // Create unified kernel with schedule and partitions
-    #[cfg(feature = "dynamic-mpu")]
     let mut k = Kernel::<Cfg>::with_config(
         sched,
         &cfgs,
@@ -176,8 +174,6 @@ fn main() -> ! {
         &[],
     )
     .expect("kernel creation");
-    #[cfg(not(feature = "dynamic-mpu"))]
-    let mut k = Kernel::<Cfg>::with_config(sched, &cfgs, &[]).expect("kernel creation");
 
     // Create queuing port for the test
     let dst = k

@@ -4413,4 +4413,5 @@ mod tests {
         pcb.set_fault_policy(FaultPolicy::WarmRestart { max: 2 });
         assert_eq!(pcb.fault_policy(), FaultPolicy::WarmRestart { max: 2 });
     }
+
 }

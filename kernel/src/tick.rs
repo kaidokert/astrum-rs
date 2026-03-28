@@ -190,39 +190,7 @@ impl TickCounterOps for TickCounter {
 // TODO: Consider deferring debug draining to a lower-priority context (e.g., PendSV
 // or idle task) to reduce jitter in the SysTick ISR. Currently this runs on every
 // tick which may add overhead in timing-critical scenarios.
-#[cfg(all(feature = "partition-debug", not(feature = "dynamic-mpu")))]
-#[inline]
-fn drain_debug_at_tick<'mem, C: crate::config::KernelConfig>(
-    kernel: &mut crate::svc::Kernel<'mem, C>,
-) where
-    [(); C::N]:,
-    [(); C::SCHED]:,
-    C::Core: crate::config::CoreOps<
-        PartTable = crate::partition::PartitionTable<{ C::N }>,
-        SchedTable = crate::scheduler::ScheduleTable<{ C::SCHED }>,
-    >,
-    C::Sync: crate::config::SyncOps<
-        SemPool = crate::semaphore::SemaphorePool<{ C::S }, { C::SW }>,
-        MutPool = crate::mutex::MutexPool<{ C::MS }, { C::MW }>,
-    >,
-    C::Msg: crate::config::MsgOps<
-        MsgPool = crate::message::MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
-        QueuingPool = crate::queuing::QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
-    >,
-    C::Ports: crate::config::PortsOps<
-        SamplingPool = crate::sampling::SamplingPortPool<{ C::SP }, { C::SM }>,
-        BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
-    >,
-{
-    let mut ctx = crate::partition_debug::DrainContext::new();
-    kernel.drain_debug_pending(&mut ctx, C::DEBUG_BUFFER_SIZE);
-}
-
-/// Drain partition debug output at tick boundary (dynamic-mpu variant).
-// TODO: Consider deferring debug draining to a lower-priority context (e.g., PendSV
-// or idle task) to reduce jitter in the SysTick ISR. Currently this runs on every
-// tick which may add overhead in timing-critical scenarios.
-#[cfg(all(feature = "partition-debug", feature = "dynamic-mpu"))]
+#[cfg(feature = "partition-debug")]
 #[inline]
 fn drain_debug_at_tick<'mem, C: crate::config::KernelConfig>(
     kernel: &mut crate::svc::Kernel<'mem, C>,
@@ -274,80 +242,11 @@ pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
 /// exception handler. It advances the schedule, triggers PendSV on partition
 /// switches, and expires timed waits for blocking syscalls.
 ///
-/// Takes `&mut Kernel<'mem, C>` to allow callers to compose this with other operations
-/// (e.g., user hooks) within a single critical section, preserving atomicity.
-#[cfg(not(feature = "dynamic-mpu"))]
-pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
-    kernel: &mut crate::svc::Kernel<'mem, C>,
-) where
-    [(); C::N]:,
-    [(); C::SCHED]:,
-    C::Core: crate::config::CoreOps<
-        PartTable = crate::partition::PartitionTable<{ C::N }>,
-        SchedTable = crate::scheduler::ScheduleTable<{ C::SCHED }>,
-    >,
-    C::Sync: crate::config::SyncOps<
-        SemPool = crate::semaphore::SemaphorePool<{ C::S }, { C::SW }>,
-        MutPool = crate::mutex::MutexPool<{ C::MS }, { C::MW }>,
-    >,
-    C::Msg: crate::config::MsgOps<
-        MsgPool = crate::message::MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
-        QueuingPool = crate::queuing::QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
-    >,
-    C::Ports: crate::config::PortsOps<
-        SamplingPool = crate::sampling::SamplingPortPool<{ C::SP }, { C::SM }>,
-        BlackboardPool = crate::blackboard::BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
-    >,
-{
-    use crate::scheduler::ScheduleEvent;
-
-    let prev_next = kernel.next_partition();
-    let prev_active = kernel.active_partition;
-    let event = crate::svc::scheduler::advance_schedule_tick(kernel);
-    if let ScheduleEvent::PartitionSwitch(pid) = event {
-        if kernel.partition_sp().get(pid as usize)
-            != Some(&crate::partition_core::SP_SENTINEL_FAULT)
-        {
-            #[cfg(feature = "trace")]
-            execute_trace_action(context_switch_trace_action(prev_active, pid));
-            #[cfg(not(test))]
-            cortex_m::peripheral::SCB::set_pendsv();
-        } else {
-            // Revert: faulted partition must not stay Running
-            crate::svc::try_transition(
-                kernel.partitions_mut(),
-                pid,
-                crate::partition::PartitionState::Ready,
-            );
-            kernel.active_partition = prev_active;
-            kernel.set_next_partition(prev_next);
-        }
-    }
-
-    enter_idle_if_needed(
-        kernel.all_runnable_faulted(),
-        matches!(event, ScheduleEvent::Idle),
-    );
-
-    let current_tick = kernel.tick().get();
-    kernel.expire_timed_waits::<{ C::N }>(current_tick);
-
-    #[cfg(feature = "partition-debug")]
-    drain_debug_at_tick::<C>(kernel);
-}
-
-/// SysTick handler: advance schedule, trigger PendSV, expire timed waits.
-///
-/// This function is called by the `define_unified_harness!` macro's SysTick
-/// exception handler. It advances the schedule, triggers PendSV on partition
-/// switches, and expires timed waits for blocking syscalls.
-///
-/// With `dynamic-mpu`, also handles system window processing (bottom-half for
+/// Also handles system window processing (bottom-half for
 /// UART transfers, buffer expiry, etc.).
 ///
 /// Takes `&mut Kernel<'mem, C>` to allow callers to compose this with other operations
 /// (e.g., user hooks) within a single critical section, preserving atomicity.
-#[cfg(feature = "dynamic-mpu")]
 pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
     kernel: &mut crate::svc::Kernel<'mem, C>,
 ) where
@@ -416,7 +315,7 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
         matches!(event, ScheduleEvent::Idle),
     );
 
-    // NOTE: already gated — this function is #[cfg(feature = "dynamic-mpu")]
+    // Revoke any expired buffer pool entries.
     kernel.fallback_revoke_expired_buffers();
     kernel.expire_timed_waits::<{ C::N }>(current_tick);
 
@@ -427,14 +326,12 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
 /// RAII guard that clears `in_bottom_half` on drop.
 ///
 /// Ensures the flag is cleared even if `run_bottom_half` panics or returns early.
-#[cfg(feature = "dynamic-mpu")]
 pub struct BottomHalfGuard<'a> {
     /// Reference to the flag to clear on drop. Public for macro use only.
     #[doc(hidden)]
     pub flag: &'a mut bool,
 }
 
-#[cfg(feature = "dynamic-mpu")]
 impl Drop for BottomHalfGuard<'_> {
     fn drop(&mut self) {
         *self.flag = false;
@@ -442,7 +339,6 @@ impl Drop for BottomHalfGuard<'_> {
 }
 
 /// Wraps `run_bottom_half` with guard flag. Returns `Err` on nested calls.
-#[cfg(feature = "dynamic-mpu")]
 #[macro_export]
 macro_rules! run_bottom_half {
     ($kernel:expr, $current_tick:expr, $strategy:expr) => {{
@@ -466,7 +362,6 @@ macro_rules! run_bottom_half {
 }
 
 /// Result of bottom-half processing.
-#[cfg(feature = "dynamic-mpu")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BottomHalfResult {
     /// Bytes transferred UART-A TX → UART-B RX.
@@ -523,7 +418,6 @@ pub struct BottomHalfResult {
 /// Note: Partition waking (`Waiting` → `Ready`) is performed by the caller
 /// (`systick_handler`) based on the returned `BottomHalfResult`, not by this
 /// function.
-#[cfg(feature = "dynamic-mpu")]
 pub fn run_bottom_half<const D: usize, const M: usize, const BP: usize, const BZ: usize>(
     uart_pair: &mut crate::virtual_uart::VirtualUartPair,
     isr_ring: &mut crate::split_isr::IsrRingBuffer<D, M>,
@@ -786,7 +680,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     mod dynamic_tests {
         use crate::buffer_pool::BufferPool;
         use crate::mpu_strategy::DynamicStrategy;
