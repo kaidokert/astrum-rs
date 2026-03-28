@@ -295,15 +295,9 @@ macro_rules! define_unified_harness {
                     $crate::mpu::write_cached_base_regions(mpu, pcb);
                     $crate::mpu::write_cached_periph_regions(mpu, pcb);
                 }
-                // Helper: compute peripheral_reserved for a PCB.
-                // Returns the actual number of peripheral regions configured.
-                fn pcb_periph_reserved(pcb: &$crate::partition::PartitionControlBlock) -> usize {
-                    pcb.peripheral_regions().len()
-                }
-
                 let strategy_result = {
                     let dyn_region = pcb.cached_dynamic_region();
-                    let periph_reserved = pcb_periph_reserved(pcb);
+                    let periph_reserved = pcb.peripheral_regions().len();
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
                         &HARNESS_STRATEGY, pid, &[dyn_region], periph_reserved,
                     )
@@ -333,7 +327,7 @@ macro_rules! define_unified_harness {
                     // (cached_dynamic_region).  If the PCB supports multiple
                     // dynamic regions, this call needs updating.
                     let other_dyn = other_pcb.cached_dynamic_region();
-                    let other_periph = pcb_periph_reserved(other_pcb);
+                    let other_periph = other_pcb.peripheral_regions().len();
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
                         &HARNESS_STRATEGY, other_pid, &[other_dyn], other_periph,
                     ).map_err(|_| "failed to configure non-boot partition")?;

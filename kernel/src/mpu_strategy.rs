@@ -97,6 +97,7 @@ const RAM_SLOT_COUNT: usize = 1;
 /// Number of leading dynamic slots reserved for peripheral MMIO regions
 /// when a partition has peripherals.  Partitions without peripherals
 /// reserve 0 slots.
+#[deprecated(note = "use per-partition peripheral counts or MAX_PERIPHERAL_REGIONS instead")]
 pub const PERIPHERAL_RESERVED_SLOTS: usize = 2;
 
 // Compile-time check: the canonical MAX_PERIPHERAL_REGIONS (in partition.rs)
@@ -1447,28 +1448,14 @@ mod tests {
         let ds = DynamicStrategy::<3>::with_partition_count();
         let boot_pid: u8 = 0;
 
-        // Partition regions: p0 has peripherals (reserved=PERIPHERAL_RESERVED_SLOTS),
-        // p1 has none (reserved=0), p2 has peripherals (reserved=PERIPHERAL_RESERVED_SLOTS).
-        let periph_empty = [false, true, false]; // false = has peripherals
+        // Per-partition peripheral counts: p0 has 2, p1 has 0, p2 has 1.
+        let periph_counts: [usize; 3] = [2, 0, 1];
         let bases: [u32; 3] = [0x2000_0000, 0x2000_4000, 0x2000_8000];
 
-        // Helper matching the harness: peripheral_reserved from "has peripherals?" flag.
-        let pr_for = |empty: bool| -> usize {
-            if empty {
-                0
-            } else {
-                PERIPHERAL_RESERVED_SLOTS
-            }
-        };
-
         // Step 1: configure boot partition (as the macro does first).
-        let region_num_boot = if periph_empty[0] {
-            4u32
-        } else {
-            4 + PERIPHERAL_RESERVED_SLOTS as u32
-        };
+        let region_num_boot = DYNAMIC_REGION_BASE as u32 + periph_counts[0] as u32;
         let (rb, rs) = data_region(bases[0], 4096, region_num_boot);
-        ds.configure_partition(boot_pid, &[(rb, rs)], pr_for(periph_empty[0]))
+        ds.configure_partition(boot_pid, &[(rb, rs)], periph_counts[0])
             .unwrap();
 
         // Step 2: configure all remaining partitions (the new loop).
@@ -1476,28 +1463,16 @@ mod tests {
             if i == boot_pid {
                 continue;
             }
-            let pr = pr_for(periph_empty[i as usize]);
-            let rn = if periph_empty[i as usize] {
-                4u32
-            } else {
-                4 + PERIPHERAL_RESERVED_SLOTS as u32
-            };
+            let pr = periph_counts[i as usize];
+            let rn = DYNAMIC_REGION_BASE as u32 + pr as u32;
             let (rb_i, rs_i) = data_region(bases[i as usize], 4096, rn);
             ds.configure_partition(i, &[(rb_i, rs_i)], pr).unwrap();
         }
 
         // Verify: all partitions have correct peripheral_reserved.
-        assert_eq!(
-            ds.peripheral_reserved_for(0),
-            PERIPHERAL_RESERVED_SLOTS,
-            "p0 has peripherals"
-        );
+        assert_eq!(ds.peripheral_reserved_for(0), 2, "p0 has 2 peripherals");
         assert_eq!(ds.peripheral_reserved_for(1), 0, "p1 has no peripherals");
-        assert_eq!(
-            ds.peripheral_reserved_for(2),
-            PERIPHERAL_RESERVED_SLOTS,
-            "p2 has peripherals"
-        );
+        assert_eq!(ds.peripheral_reserved_for(2), 1, "p2 has 1 peripheral");
     }
 
     // ------------------------------------------------------------------
