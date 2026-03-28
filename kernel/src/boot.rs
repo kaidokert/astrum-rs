@@ -1493,6 +1493,7 @@ mod tests {
                 stack_base: 0,
                 stack_size: 0,
                 fault_policy: crate::partition::FaultPolicy::StayDead,
+                error_handler: None,
             },
             PartitionConfig {
                 id: 1,
@@ -1504,6 +1505,7 @@ mod tests {
                 stack_base: 0,
                 stack_size: 0,
                 fault_policy: crate::partition::FaultPolicy::StayDead,
+                error_handler: None,
             },
         ];
 

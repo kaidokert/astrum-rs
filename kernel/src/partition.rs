@@ -195,6 +195,10 @@ pub struct PartitionControlBlock {
     fault_count: u32,
     /// How this partition was most recently started.
     start_condition: StartCondition,
+    /// Entry point address for the partition's error handler, if registered.
+    error_handler: Option<u32>,
+    /// Flag indicating the error handler is currently executing.
+    in_error_handler: bool,
 }
 
 impl PartitionControlBlock {
@@ -230,6 +234,8 @@ impl PartitionControlBlock {
             fault_policy: FaultPolicy::StayDead,
             fault_count: 0,
             start_condition: StartCondition::NormalBoot,
+            error_handler: None,
+            in_error_handler: false,
         }
     }
 
@@ -283,6 +289,26 @@ impl PartitionControlBlock {
     /// Increments the fault counter (saturating).
     pub fn increment_fault_count(&mut self) {
         self.fault_count = self.fault_count.saturating_add(1);
+    }
+
+    /// Returns the error handler entry point address, if registered.
+    pub fn error_handler(&self) -> Option<u32> {
+        self.error_handler
+    }
+
+    /// Sets (or clears) the error handler entry point address.
+    pub fn set_error_handler(&mut self, addr: Option<u32>) {
+        self.error_handler = addr;
+    }
+
+    /// Returns whether the error handler is currently executing.
+    pub fn in_error_handler(&self) -> bool {
+        self.in_error_handler
+    }
+
+    /// Sets the error handler execution flag.
+    pub fn set_in_error_handler(&mut self, active: bool) {
+        self.in_error_handler = active;
     }
 
     /// Replace peripheral regions via `&mut self` (post-creation setter).
@@ -632,6 +658,8 @@ pub struct PartitionConfig {
     pub stack_size: u32,
     /// Fault handling policy for this partition.
     pub fault_policy: FaultPolicy,
+    /// Entry point address for the partition's error handler.
+    pub error_handler: Option<u32>,
 }
 
 impl PartitionConfig {
@@ -651,6 +679,7 @@ impl PartitionConfig {
             stack_base: 0,
             stack_size: 0,
             fault_policy: FaultPolicy::StayDead,
+            error_handler: None,
         }
     }
 
@@ -669,6 +698,7 @@ impl PartitionConfig {
             stack_base: 0,
             stack_size: 0,
             fault_policy: FaultPolicy::StayDead,
+            error_handler: None,
         }
     }
 
@@ -685,6 +715,12 @@ impl PartitionConfig {
             "sentinel_array: N must be <= 256 (partition ID is u8)"
         );
         core::array::from_fn(|i| Self::sentinel(i as u8))
+    }
+
+    /// Builder: set the error handler entry point address.
+    pub fn with_error_handler(mut self, addr: u32) -> Self {
+        self.error_handler = Some(addr);
+        self
     }
 
     /// Validate all fields of this partition configuration.
@@ -1067,6 +1103,7 @@ pub struct ExternalPartitionMemory<'mem> {
     r0_hint: u32,
     partition_id: u8,
     fault_policy: FaultPolicy,
+    error_handler: Option<u32>,
 }
 
 impl<'mem> ExternalPartitionMemory<'mem> {
@@ -1115,6 +1152,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
             r0_hint: 0,
             partition_id,
             fault_policy: FaultPolicy::StayDead,
+            error_handler: None,
         })
     }
 
@@ -1218,6 +1256,12 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         self
     }
 
+    /// Builder: set the error handler entry point address.
+    pub fn with_error_handler(mut self, addr: u32) -> Self {
+        self.error_handler = Some(addr);
+        self
+    }
+
     pub fn entry_point(&self) -> EntryAddr {
         self.entry_point
     }
@@ -1235,6 +1279,9 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     }
     pub fn fault_policy(&self) -> FaultPolicy {
         self.fault_policy
+    }
+    pub fn error_handler(&self) -> Option<u32> {
+        self.error_handler
     }
     pub fn stack_base(&self) -> u32 {
         self.stack.as_ptr() as u32
@@ -2502,6 +2549,7 @@ mod tests {
             stack_base: 0,
             stack_size: 0,
             fault_policy: FaultPolicy::StayDead,
+            error_handler: None,
         }
     }
 
@@ -4414,4 +4462,79 @@ mod tests {
         assert_eq!(pcb.fault_policy(), FaultPolicy::WarmRestart { max: 2 });
     }
 
+    #[test]
+    fn pcb_error_handler_defaults_to_none() {
+        let pcb = make_pcb();
+        assert_eq!(pcb.error_handler(), None);
+        assert!(!pcb.in_error_handler());
+    }
+
+    #[test]
+    fn pcb_set_error_handler() {
+        let mut pcb = make_pcb();
+        pcb.set_error_handler(Some(0x0800_1001));
+        assert_eq!(pcb.error_handler(), Some(0x0800_1001));
+        pcb.set_error_handler(None);
+        assert_eq!(pcb.error_handler(), None);
+    }
+
+    #[test]
+    fn pcb_set_in_error_handler() {
+        let mut pcb = make_pcb();
+        assert!(!pcb.in_error_handler());
+        pcb.set_in_error_handler(true);
+        assert!(pcb.in_error_handler());
+        pcb.set_in_error_handler(false);
+        assert!(!pcb.in_error_handler());
+    }
+
+    #[test]
+    fn partition_config_with_error_handler_builder() {
+        let cfg = PartitionConfig::new(
+            0,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        )
+        .with_error_handler(0x0800_2001);
+        assert_eq!(cfg.error_handler, Some(0x0800_2001));
+    }
+
+    #[test]
+    fn partition_config_error_handler_defaults_to_none() {
+        let cfg = PartitionConfig::new(
+            0,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        );
+        assert_eq!(cfg.error_handler, None);
+    }
+
+    #[test]
+    fn external_partition_memory_error_handler_defaults_to_none() {
+        use crate::partition_core::AlignedStack256B;
+        let mut storage = AlignedStack256B::default();
+        let epm = ExternalPartitionMemory::from_aligned_stack(
+            &mut storage,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+            0,
+        )
+        .unwrap();
+        assert_eq!(epm.error_handler(), None);
+    }
+
+    #[test]
+    fn external_partition_memory_with_error_handler_builder() {
+        use crate::partition_core::AlignedStack256B;
+        let mut storage = AlignedStack256B::default();
+        let epm = ExternalPartitionMemory::from_aligned_stack(
+            &mut storage,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+            0,
+        )
+        .unwrap()
+        .with_error_handler(0x0800_3001);
+        assert_eq!(epm.error_handler(), Some(0x0800_3001));
+    }
 }
