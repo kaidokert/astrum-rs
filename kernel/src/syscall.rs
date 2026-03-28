@@ -11,7 +11,6 @@ pub use rtos_traits::syscall::{
 };
 
 // Dynamic-MPU syscall numbers — defined in rtos-traits, re-exported here.
-#[cfg(feature = "dynamic-mpu")]
 pub use rtos_traits::syscall::{
     SYS_BUF_ALLOC, SYS_BUF_LEND, SYS_BUF_READ, SYS_BUF_RELEASE, SYS_BUF_REVOKE, SYS_BUF_TRANSFER,
     SYS_BUF_WRITE, SYS_DEV_CLOSE, SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_READ_TIMED,

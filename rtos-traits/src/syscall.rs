@@ -52,42 +52,24 @@ pub const SYS_DEBUG_WRITE: u32 = 0x41;
 
 // ── Dynamic-MPU syscall numbers ──────────────────────────────────────
 
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_ALLOC: u32 = 20;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_RELEASE: u32 = 21;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_OPEN: u32 = 22;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_READ: u32 = 23;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_WRITE: u32 = 24;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_IOCTL: u32 = 25;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_WRITE: u32 = 26;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_CLOSE: u32 = 29;
 /// Timed device read: r1=device_id, r2=(timeout_ticks_hi16 << 16 | buf_len_lo16), r3=buf_ptr
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_DEV_READ_TIMED: u32 = 30;
 /// Query bottom-half status: returns ticks_since_bottom_half in r0, stale flag in r1.
-// TODO: Currently gated behind dynamic-mpu because the underlying ticks_since_bottom_half
-// and is_bottom_half_stale mechanisms are feature-gated. A future refactor should make
-// bottom-half health monitoring unconditional as it's a core architectural concern.
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_QUERY_BOTTOM_HALF: u32 = 33;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_LEND: u32 = 34;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_REVOKE: u32 = 35;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_TRANSFER: u32 = 36;
-#[cfg(feature = "dynamic-mpu")]
 pub const SYS_BUF_READ: u32 = 37;
 
 /// Flags for `SYS_BUF_LEND`, packed into upper bits of r2.
-#[cfg(feature = "dynamic-mpu")]
 pub mod lend_flags {
     /// Grant AP_FULL_ACCESS instead of AP_RO_RO to the target.
     pub const WRITABLE: u32 = 1 << 8;
@@ -153,7 +135,6 @@ mod tests {
     }
 
     /// Dynamic-MPU syscall constants: (name, actual, expected).
-    #[cfg(feature = "dynamic-mpu")]
     const DYN_SYSCALLS: &[(&str, u32, u32)] = &[
         ("SYS_BUF_ALLOC", SYS_BUF_ALLOC, 20),
         ("SYS_BUF_RELEASE", SYS_BUF_RELEASE, 21),
@@ -171,7 +152,6 @@ mod tests {
         ("SYS_BUF_READ", SYS_BUF_READ, 37),
     ];
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn sys_dev_read_timed_number_is_stable() {
         assert_eq!(
@@ -180,7 +160,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn dynamic_mpu_constants_values_unique_no_overlap() {
         assert_eq!(DYN_SYSCALLS.len(), 14);

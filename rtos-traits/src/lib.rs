@@ -3,7 +3,6 @@
 pub mod macros;
 
 pub mod api;
-#[cfg(feature = "dynamic-mpu")]
 pub mod buf_syscall;
 pub mod debug;
 pub mod device;

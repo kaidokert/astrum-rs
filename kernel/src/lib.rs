@@ -33,9 +33,7 @@ pub mod boot;
 pub mod harness;
 
 pub mod blackboard;
-#[cfg(feature = "dynamic-mpu")]
 pub mod buf_syscall;
-#[cfg(feature = "dynamic-mpu")]
 pub mod buffer_pool;
 pub mod config;
 pub use config::{
@@ -49,7 +47,6 @@ pub mod context;
 pub mod debug;
 pub mod events;
 pub mod fault;
-#[cfg(feature = "dynamic-mpu")]
 pub mod hw_uart;
 pub mod invariants;
 pub mod irq_ack;
@@ -59,7 +56,6 @@ pub(crate) mod layout_checks;
 pub mod memmanage;
 pub mod message;
 pub mod mpu;
-#[cfg(feature = "dynamic-mpu")]
 pub mod mpu_strategy;
 pub mod msg_pools;
 pub mod mutex;
@@ -118,11 +114,8 @@ pub use svc::SvcDispatchFn;
 #[cfg(not(test))]
 pub use systick::handle_systick;
 pub use systick::TickHandlerFn;
-#[cfg(feature = "dynamic-mpu")]
 pub mod uart_hal;
-#[cfg(feature = "dynamic-mpu")]
 pub mod virtual_device;
-#[cfg(feature = "dynamic-mpu")]
 pub mod virtual_uart;
 pub mod waitqueue;
 
