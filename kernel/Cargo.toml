@@ -521,6 +521,10 @@ required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
 name = "qemu_pac_timer0_periodic"
 required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
 
+[[example]]
+name = "qemu_pac_timer0_pwm"
+required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
+
 [features]
 default = ["arinc-compat"]
 
