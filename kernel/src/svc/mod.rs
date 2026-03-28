@@ -2373,20 +2373,80 @@ where
                     return;
                 }
                 let warm = frame.r1 != 0;
+                // pid is derived from self.current_partition above, so it
+                // always refers to the calling partition — no cross-partition
+                // stack corruption is possible.
+                // TODO: reviewer false positive on issue #4 — pid == current caller by construction.
+
                 // Clear in_error_handler before transition.
-                self.pcb_mut(pid).unwrap().set_in_error_handler(false);
+                match self.pcb_mut(pid) {
+                    Some(pcb) => pcb.set_in_error_handler(false),
+                    None => {
+                        frame.r0 = SvcError::InvalidPartition.to_u32();
+                        return;
+                    }
+                }
                 // Transition Running -> Faulted so restart_partition can proceed.
-                if self
-                    .pcb_mut(pid)
-                    .unwrap()
-                    .transition(crate::partition::PartitionState::Faulted)
-                    .is_err()
-                {
-                    frame.r0 = SvcError::InvalidSyscall.to_u32();
-                    return;
+                match self.pcb_mut(pid) {
+                    Some(pcb) => {
+                        if pcb
+                            .transition(crate::partition::PartitionState::Faulted)
+                            .is_err()
+                        {
+                            frame.r0 = SvcError::InvalidSyscall.to_u32();
+                            return;
+                        }
+                    }
+                    None => {
+                        frame.r0 = SvcError::InvalidPartition.to_u32();
+                        return;
+                    }
                 }
                 match self.restart_partition(pid, warm) {
-                    Ok(()) => 0,
+                    Ok(()) => {
+                        // restart_partition leaves the partition in Ready state.
+                        // Since this is the active (current) partition, transition
+                        // it back to Running so the invariant holds.
+                        match self.pcb_mut(pid) {
+                            Some(pcb) => {
+                                if pcb
+                                    .transition(crate::partition::PartitionState::Running)
+                                    .is_err()
+                                {
+                                    frame.r0 = SvcError::InvalidSyscall.to_u32();
+                                    return;
+                                }
+                            }
+                            None => {
+                                frame.r0 = SvcError::InvalidPartition.to_u32();
+                                return;
+                            }
+                        }
+                        // Update PSP to the hardware exception frame so the
+                        // exception return resumes at the partition's fresh
+                        // entry point.  partition_sp points to the full
+                        // context frame [r4-r11 | exception_frame]; PSP must
+                        // skip the software-saved registers (8 words).
+                        #[cfg(target_arch = "arm")]
+                        {
+                            let new_sp = match self.partition_sp().get(pid) {
+                                Some(&sp) => sp,
+                                None => {
+                                    frame.r0 = SvcError::InvalidPartition.to_u32();
+                                    return;
+                                }
+                            };
+                            let exc_frame_sp =
+                                new_sp + (crate::context::SAVED_CONTEXT_WORDS as u32 * 4);
+                            // SAFETY: exc_frame_sp is the freshly initialised
+                            // stack from restart_partition, offset past r4-r11
+                            // to the hardware exception frame.  Writing PSP in
+                            // Handler mode is safe; it takes effect on the next
+                            // exception return to Thread mode.
+                            unsafe { cortex_m::register::psp::write(exc_frame_sp) };
+                        }
+                        0
+                    }
                     Err(_) => SvcError::InvalidSyscall.to_u32(),
                 }
             }
@@ -2405,7 +2465,13 @@ where
                 }
                 pcb.set_in_error_handler(false);
                 // Transition Running -> Faulted permanently (StayDead).
-                let _ = pcb.transition(crate::partition::PartitionState::Faulted);
+                if pcb
+                    .transition(crate::partition::PartitionState::Faulted)
+                    .is_err()
+                {
+                    frame.r0 = SvcError::InvalidSyscall.to_u32();
+                    return;
+                }
                 0
             }
             Some(SyscallId::IrqAck) => {
