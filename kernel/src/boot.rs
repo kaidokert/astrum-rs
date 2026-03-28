@@ -207,6 +207,46 @@ pub enum BootError {
     },
 }
 
+impl BootError {
+    /// Return a unique, stable `u32` discriminant for this error variant.
+    ///
+    /// For variants that wrap an inner error, the discriminant encodes the
+    /// inner error at an offset (`base + inner.discriminant()`):
+    ///
+    /// | Window          | Range           | Used by                       |
+    /// |-----------------|-----------------|-------------------------------|
+    /// | `0x001..=0x0FF` | plain variants  | simple `BootError` kinds      |
+    /// | `0x100..=0x1FF` | MPU cache       | `MpuCachePopulationFailed`    |
+    /// | `0x200..=0x2FF` | kernel init     | `KernelInit`                  |
+    ///
+    /// `MpuError::discriminant()` and `ConfigError::discriminant()` must stay
+    /// within their respective ranges to avoid collisions between windows.
+    ///
+    /// These values may be returned in `r1` on SVC error paths and must
+    /// remain stable across releases.
+    pub fn discriminant(&self) -> u32 {
+        match self {
+            Self::StackInitFailed { .. } => 1,
+            Self::NoReadyPartition => 2,
+            Self::StackAlignmentError { .. } => 3,
+            Self::StackSizeError { .. } => 4,
+            Self::StackSizeOverflow { .. } => 5,
+            Self::StorageMisaligned { .. } => 6,
+            Self::StackRegionError { .. } => 7,
+            Self::MpuDataRegionError { .. } => 8,
+            Self::SentinelMpuWithEnforce { .. } => 9,
+            Self::SentinelPromotionFailed { .. } => 10,
+            Self::MpuCachePopulationFailed { source, .. } => 0x100 + source.discriminant(),
+            Self::BootMpuInitFailed { .. } => 11,
+            Self::KernelNotInitialized => 12,
+            Self::TooManyPartitions { .. } => 13,
+            Self::KernelInit(inner) => 0x200 + inner.discriminant(),
+            Self::FpuLazyStackingNotActive => 14,
+            Self::BufferPoolMisaligned { .. } => 15,
+        }
+    }
+}
+
 impl core::fmt::Display for BootError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -1731,5 +1771,173 @@ mod tests {
     fn boot_banner_double_call_safe() {
         boot_banner();
         boot_banner();
+    }
+
+    // -----------------------------------------------------------------------
+    // BootError::discriminant() tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn boot_error_discriminant_stable_values() {
+        use crate::mpu::MpuError;
+
+        assert_eq!(
+            BootError::StackInitFailed { partition_index: 0 }.discriminant(),
+            1
+        );
+        assert_eq!(BootError::NoReadyPartition.discriminant(), 2);
+        assert_eq!(
+            BootError::StackAlignmentError {
+                partition_index: 0,
+                base: 0,
+                size: 0
+            }
+            .discriminant(),
+            3
+        );
+        assert_eq!(
+            BootError::StackSizeError {
+                partition_index: 0,
+                size: 0
+            }
+            .discriminant(),
+            4
+        );
+        assert_eq!(
+            BootError::StackSizeOverflow { partition_index: 0 }.discriminant(),
+            5
+        );
+        assert_eq!(
+            BootError::StorageMisaligned {
+                address: 0,
+                required: 0
+            }
+            .discriminant(),
+            6
+        );
+        assert_eq!(
+            BootError::StackRegionError { partition_index: 0 }.discriminant(),
+            7
+        );
+        assert_eq!(
+            BootError::MpuDataRegionError { partition_index: 0 }.discriminant(),
+            8
+        );
+        assert_eq!(
+            BootError::SentinelMpuWithEnforce { partition_index: 0 }.discriminant(),
+            9
+        );
+        assert_eq!(
+            BootError::SentinelPromotionFailed { partition_index: 0 }.discriminant(),
+            10
+        );
+        assert_eq!(
+            BootError::BootMpuInitFailed { reason: "test" }.discriminant(),
+            11
+        );
+        assert_eq!(BootError::KernelNotInitialized.discriminant(), 12);
+        assert_eq!(
+            BootError::TooManyPartitions { given: 0, max: 0 }.discriminant(),
+            13
+        );
+        assert_eq!(BootError::FpuLazyStackingNotActive.discriminant(), 14);
+        assert_eq!(
+            BootError::BufferPoolMisaligned {
+                slot: 0,
+                addr: 0,
+                required: 0
+            }
+            .discriminant(),
+            15
+        );
+
+        // Wrapped MpuError variants use 0x100 + inner discriminant.
+        assert_eq!(
+            BootError::MpuCachePopulationFailed {
+                partition_index: 0,
+                source: MpuError::SizeTooSmall,
+            }
+            .discriminant(),
+            0x100 + MpuError::SizeTooSmall.discriminant()
+        );
+        assert_eq!(
+            BootError::MpuCachePopulationFailed {
+                partition_index: 0,
+                source: MpuError::CacheAlreadySealed,
+            }
+            .discriminant(),
+            0x100 + MpuError::CacheAlreadySealed.discriminant()
+        );
+
+        // Wrapped ConfigError variants use 0x200 + inner discriminant.
+        assert_eq!(
+            BootError::KernelInit(ConfigError::ScheduleEmpty).discriminant(),
+            0x200 + ConfigError::ScheduleEmpty.discriminant()
+        );
+        assert_eq!(
+            BootError::KernelInit(ConfigError::PartitionTableFull).discriminant(),
+            0x200 + ConfigError::PartitionTableFull.discriminant()
+        );
+    }
+
+    #[test]
+    fn boot_error_discriminants_nonzero_and_unique() {
+        use crate::mpu::MpuError;
+        // Collect one discriminant per variant (representative inner values).
+        let d: [u32; 17] = [
+            BootError::StackInitFailed { partition_index: 0 }.discriminant(),
+            BootError::NoReadyPartition.discriminant(),
+            BootError::StackAlignmentError {
+                partition_index: 0,
+                base: 0,
+                size: 0,
+            }
+            .discriminant(),
+            BootError::StackSizeError {
+                partition_index: 0,
+                size: 0,
+            }
+            .discriminant(),
+            BootError::StackSizeOverflow { partition_index: 0 }.discriminant(),
+            BootError::StorageMisaligned {
+                address: 0,
+                required: 0,
+            }
+            .discriminant(),
+            BootError::StackRegionError { partition_index: 0 }.discriminant(),
+            BootError::MpuDataRegionError { partition_index: 0 }.discriminant(),
+            BootError::SentinelMpuWithEnforce { partition_index: 0 }.discriminant(),
+            BootError::SentinelPromotionFailed { partition_index: 0 }.discriminant(),
+            BootError::MpuCachePopulationFailed {
+                partition_index: 0,
+                source: MpuError::SizeTooSmall,
+            }
+            .discriminant(),
+            BootError::BootMpuInitFailed { reason: "t" }.discriminant(),
+            BootError::KernelNotInitialized.discriminant(),
+            BootError::TooManyPartitions { given: 0, max: 0 }.discriminant(),
+            BootError::KernelInit(ConfigError::ScheduleEmpty).discriminant(),
+            BootError::FpuLazyStackingNotActive.discriminant(),
+            BootError::BufferPoolMisaligned {
+                slot: 0,
+                addr: 0,
+                required: 0,
+            }
+            .discriminant(),
+        ];
+        for (i, &v) in d.iter().enumerate() {
+            assert_ne!(v, 0, "discriminant[{i}] must be non-zero");
+            for (j, &w) in d.iter().enumerate().skip(i + 1) {
+                assert_ne!(v, w, "collision: d[{i}]={v} == d[{j}]={w}");
+            }
+        }
+        // Field values must not affect discriminant.
+        assert_eq!(
+            d[0],
+            BootError::StackInitFailed {
+                partition_index: 99
+            }
+            .discriminant()
+        );
     }
 }
