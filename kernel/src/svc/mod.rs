@@ -1148,6 +1148,7 @@ where
                 code_mpu_region: m.code_mpu_region().copied(),
                 stack_base: m.stack_base(),
                 stack_size: m.stack_size_bytes(),
+                fault_policy: m.fault_policy(),
             };
             configs
                 .push(cfg)
@@ -1281,6 +1282,7 @@ where
                 pcb = pcb.with_code_mpu_region(code_region);
             }
             pcb.set_r0_hint(c.r0_hint);
+            pcb.set_fault_policy(c.fault_policy);
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
             }
@@ -3809,6 +3811,33 @@ mod tests {
             .unwrap();
         Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
             .expect("no code region means no entry point bounds check");
+    }
+
+    #[test]
+    fn kernel_new_propagates_fault_policy_to_pcb() {
+        use crate::partition::FaultPolicy;
+        use crate::partition_core::AlignedStack256B;
+        let mut sched = ScheduleTable::<4>::new();
+        sched.add(ScheduleEntry::new(0, 10)).unwrap();
+        #[cfg(feature = "dynamic-mpu")]
+        sched.add_system_window(1).unwrap();
+        let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
+        let mut stack = AlignedStack256B::default();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, mpu, 0)
+            .unwrap()
+            .with_fault_policy(FaultPolicy::WarmRestart { max: 3 });
+        let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
+            .expect("kernel with fault policy should succeed");
+        let pcb = k.partitions().get(0).unwrap();
+        assert_eq!(pcb.fault_policy(), FaultPolicy::WarmRestart { max: 3 });
+    }
+
+    #[test]
+    fn kernel_new_default_fault_policy_is_stay_dead() {
+        let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
+        let k = ext_kernel(0x0800_1001, mpu).expect("should succeed");
+        let pcb = k.partitions().get(0).unwrap();
+        assert_eq!(pcb.fault_policy(), crate::partition::FaultPolicy::StayDead);
     }
 
     #[test]

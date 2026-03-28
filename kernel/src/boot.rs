@@ -1491,6 +1491,7 @@ mod tests {
                 code_mpu_region: None,
                 stack_base: 0,
                 stack_size: 0,
+                fault_policy: crate::partition::FaultPolicy::StayDead,
             },
             PartitionConfig {
                 id: 1,
@@ -1501,6 +1502,7 @@ mod tests {
                 code_mpu_region: None,
                 stack_base: 0,
                 stack_size: 0,
+                fault_policy: crate::partition::FaultPolicy::StayDead,
             },
         ];
 

@@ -251,6 +251,11 @@ impl PartitionControlBlock {
         self.fault_policy
     }
 
+    /// Set the partition's fault policy.
+    pub fn set_fault_policy(&mut self, policy: FaultPolicy) {
+        self.fault_policy = policy;
+    }
+
     /// Returns the number of faults this partition has experienced.
     pub fn fault_count(&self) -> u32 {
         self.fault_count
@@ -605,6 +610,8 @@ pub struct PartitionConfig {
     pub stack_base: u32,
     /// Stack size in bytes. Zero means sentinel (patched later by boot).
     pub stack_size: u32,
+    /// Fault handling policy for this partition.
+    pub fault_policy: FaultPolicy,
 }
 
 impl PartitionConfig {
@@ -623,6 +630,7 @@ impl PartitionConfig {
             code_mpu_region: None,
             stack_base: 0,
             stack_size: 0,
+            fault_policy: FaultPolicy::StayDead,
         }
     }
 
@@ -640,6 +648,7 @@ impl PartitionConfig {
             code_mpu_region: None,
             stack_base: 0,
             stack_size: 0,
+            fault_policy: FaultPolicy::StayDead,
         }
     }
 
@@ -1043,6 +1052,7 @@ pub struct ExternalPartitionMemory<'mem> {
     code_mpu_region: Option<MpuRegion>,
     r0_hint: u32,
     partition_id: u8,
+    fault_policy: FaultPolicy,
 }
 
 impl<'mem> ExternalPartitionMemory<'mem> {
@@ -1090,6 +1100,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
             code_mpu_region: None,
             r0_hint: 0,
             partition_id,
+            fault_policy: FaultPolicy::StayDead,
         })
     }
 
@@ -1187,6 +1198,12 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         self
     }
 
+    /// Builder: set the fault handling policy for this partition.
+    pub fn with_fault_policy(mut self, policy: FaultPolicy) -> Self {
+        self.fault_policy = policy;
+        self
+    }
+
     pub fn entry_point(&self) -> EntryAddr {
         self.entry_point
     }
@@ -1201,6 +1218,9 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     }
     pub fn code_mpu_region(&self) -> Option<&MpuRegion> {
         self.code_mpu_region.as_ref()
+    }
+    pub fn fault_policy(&self) -> FaultPolicy {
+        self.fault_policy
     }
     pub fn stack_base(&self) -> u32 {
         self.stack.as_ptr() as u32
@@ -2465,6 +2485,7 @@ mod tests {
             code_mpu_region: None,
             stack_base: 0,
             stack_size: 0,
+            fault_policy: FaultPolicy::StayDead,
         }
     }
 
@@ -4319,5 +4340,69 @@ mod tests {
         assert_ne!(a, warm);
         assert_ne!(warm, cold);
         assert_ne!(a, cold);
+    }
+
+    #[test]
+    fn partition_config_fault_policy_defaults_to_stay_dead() {
+        let cfg = PartitionConfig::new(
+            0,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        );
+        assert_eq!(cfg.fault_policy, FaultPolicy::StayDead);
+    }
+
+    #[test]
+    fn partition_config_sentinel_fault_policy_defaults_to_stay_dead() {
+        let cfg = PartitionConfig::sentinel(0);
+        assert_eq!(cfg.fault_policy, FaultPolicy::StayDead);
+    }
+
+    #[test]
+    fn partition_config_fault_policy_can_be_set() {
+        let mut cfg = PartitionConfig::new(
+            0,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        );
+        cfg.fault_policy = FaultPolicy::WarmRestart { max: 3 };
+        assert_eq!(cfg.fault_policy, FaultPolicy::WarmRestart { max: 3 });
+    }
+
+    #[test]
+    fn external_partition_memory_fault_policy_defaults_to_stay_dead() {
+        use crate::partition_core::AlignedStack256B;
+        let mut storage = AlignedStack256B::default();
+        let epm = ExternalPartitionMemory::from_aligned_stack(
+            &mut storage,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+            0,
+        )
+        .unwrap();
+        assert_eq!(epm.fault_policy(), FaultPolicy::StayDead);
+    }
+
+    #[test]
+    fn external_partition_memory_with_fault_policy_builder() {
+        use crate::partition_core::AlignedStack256B;
+        let mut storage = AlignedStack256B::default();
+        let epm = ExternalPartitionMemory::from_aligned_stack(
+            &mut storage,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+            0,
+        )
+        .unwrap()
+        .with_fault_policy(FaultPolicy::ColdRestart { max: 5 });
+        assert_eq!(epm.fault_policy(), FaultPolicy::ColdRestart { max: 5 });
+    }
+
+    #[test]
+    fn pcb_set_fault_policy() {
+        let mut pcb = make_pcb();
+        assert_eq!(pcb.fault_policy(), FaultPolicy::StayDead);
+        pcb.set_fault_policy(FaultPolicy::WarmRestart { max: 2 });
+        assert_eq!(pcb.fault_policy(), FaultPolicy::WarmRestart { max: 2 });
     }
 }
