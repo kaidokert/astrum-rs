@@ -57,6 +57,26 @@ impl<const W: usize> WaitQueue<W> {
     pub fn is_full(&self) -> bool {
         self.inner.is_full()
     }
+
+    /// Remove the first entry matching `pid` and return `true`.
+    ///
+    /// Returns `false` if no entry with that partition ID exists.
+    /// Remaining entries preserve their original FIFO order.
+    pub fn remove_by_id(&mut self, pid: u8) -> bool {
+        let len = self.inner.len();
+        let mut found = false;
+        for _ in 0..len {
+            if let Some(entry) = self.inner.pop_front() {
+                if entry == pid && !found {
+                    found = true; // skip first match
+                } else {
+                    // Cannot fail: we popped one element before pushing.
+                    let _ = self.inner.push_back(entry);
+                }
+            }
+        }
+        found
+    }
 }
 
 /// Compute a safe absolute expiry tick from the current tick and a timeout.
@@ -179,6 +199,26 @@ impl<const W: usize> TimedWaitQueue<W> {
     /// Returns `true` if the queue has reached its compile-time capacity.
     pub fn is_full(&self) -> bool {
         self.inner.is_full()
+    }
+
+    /// Remove the first entry matching `pid` and return `true`.
+    ///
+    /// Returns `false` if no entry with that partition ID exists.
+    /// Remaining entries preserve their original FIFO order.
+    pub fn remove_by_id(&mut self, pid: u8) -> bool {
+        let len = self.inner.len();
+        let mut found = false;
+        for _ in 0..len {
+            if let Some((p, expiry)) = self.inner.pop_front() {
+                if p == pid && !found {
+                    found = true; // skip first match
+                } else {
+                    // Cannot fail: we popped one element before pushing.
+                    let _ = self.inner.push_back((p, expiry));
+                }
+            }
+        }
+        found
     }
 
     /// Non-destructive snapshot of the partition IDs currently in the queue,
@@ -338,6 +378,19 @@ impl<const W: usize> SleepQueue<W> {
     /// Returns the number of entries currently in the queue.
     pub fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    /// Remove the first entry matching `pid` and return `true`.
+    ///
+    /// Returns `false` if no entry with that partition ID exists.
+    /// Remaining entries preserve their sorted order.
+    pub fn remove_by_id(&mut self, pid: u8) -> bool {
+        if let Some(idx) = self.inner.iter().position(|&(p, _)| p == pid) {
+            self.inner.remove(idx);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -880,5 +933,184 @@ mod tests {
     fn safe_expiry_overflow_saturates() {
         assert_eq!(safe_expiry(u64::MAX, 5), u64::MAX);
         assert_eq!(safe_expiry(u64::MAX - 1, 100), u64::MAX);
+    }
+
+    // ---- WaitQueue::remove_by_id tests ----
+
+    #[test]
+    fn wq_remove_by_id_found() {
+        let mut q = WaitQueue::<4>::new();
+        q.push(1).unwrap();
+        q.push(2).unwrap();
+        q.push(3).unwrap();
+        assert!(q.remove_by_id(2));
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.pop_front(), Some(1));
+        assert_eq!(q.pop_front(), Some(3));
+    }
+
+    #[test]
+    fn wq_remove_by_id_not_found() {
+        let mut q = WaitQueue::<4>::new();
+        q.push(1).unwrap();
+        q.push(2).unwrap();
+        assert!(!q.remove_by_id(99));
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.pop_front(), Some(1));
+        assert_eq!(q.pop_front(), Some(2));
+    }
+
+    #[test]
+    fn wq_remove_by_id_empty() {
+        let mut q = WaitQueue::<4>::new();
+        assert!(!q.remove_by_id(1));
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn wq_remove_by_id_preserves_order() {
+        let mut q = WaitQueue::<8>::new();
+        for pid in 0..6u8 {
+            q.push(pid).unwrap();
+        }
+        assert!(q.remove_by_id(3));
+        assert_eq!(q.len(), 5);
+        assert_eq!(q.pop_front(), Some(0));
+        assert_eq!(q.pop_front(), Some(1));
+        assert_eq!(q.pop_front(), Some(2));
+        assert_eq!(q.pop_front(), Some(4));
+        assert_eq!(q.pop_front(), Some(5));
+    }
+
+    #[test]
+    fn wq_remove_by_id_duplicate_removes_first_only() {
+        let mut q = WaitQueue::<4>::new();
+        q.push(5).unwrap();
+        q.push(5).unwrap();
+        q.push(5).unwrap();
+        assert!(q.remove_by_id(5));
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.pop_front(), Some(5));
+        assert_eq!(q.pop_front(), Some(5));
+    }
+
+    // ---- TimedWaitQueue::remove_by_id tests ----
+
+    #[test]
+    fn twq_remove_by_id_found() {
+        let mut q = TimedWaitQueue::<4>::new();
+        q.push(1, 100).unwrap();
+        q.push(2, 200).unwrap();
+        q.push(3, 300).unwrap();
+        assert!(q.remove_by_id(2));
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.pop_front(), Some((1, 100)));
+        assert_eq!(q.pop_front(), Some((3, 300)));
+    }
+
+    #[test]
+    fn twq_remove_by_id_not_found() {
+        let mut q = TimedWaitQueue::<4>::new();
+        q.push(1, 100).unwrap();
+        q.push(2, 200).unwrap();
+        assert!(!q.remove_by_id(99));
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.pop_front(), Some((1, 100)));
+        assert_eq!(q.pop_front(), Some((2, 200)));
+    }
+
+    #[test]
+    fn twq_remove_by_id_empty() {
+        let mut q = TimedWaitQueue::<4>::new();
+        assert!(!q.remove_by_id(1));
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn twq_remove_by_id_preserves_order() {
+        let mut q = TimedWaitQueue::<8>::new();
+        for pid in 0..6u8 {
+            q.push(pid, pid as u64 * 10).unwrap();
+        }
+        assert!(q.remove_by_id(3));
+        assert_eq!(q.len(), 5);
+        assert_eq!(q.pop_front(), Some((0, 0)));
+        assert_eq!(q.pop_front(), Some((1, 10)));
+        assert_eq!(q.pop_front(), Some((2, 20)));
+        assert_eq!(q.pop_front(), Some((4, 40)));
+        assert_eq!(q.pop_front(), Some((5, 50)));
+    }
+
+    #[test]
+    fn twq_remove_by_id_duplicate_removes_first_only() {
+        let mut q = TimedWaitQueue::<4>::new();
+        q.push(5, 100).unwrap();
+        q.push(5, 200).unwrap();
+        q.push(5, 300).unwrap();
+        assert!(q.remove_by_id(5));
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.pop_front(), Some((5, 200)));
+        assert_eq!(q.pop_front(), Some((5, 300)));
+    }
+
+    // ---- SleepQueue::remove_by_id tests ----
+
+    #[test]
+    fn sq_remove_by_id_found() {
+        let mut q = SleepQueue::<4>::new();
+        q.push(1, 100).unwrap();
+        q.push(2, 200).unwrap();
+        q.push(3, 300).unwrap();
+        assert!(q.remove_by_id(2));
+        assert_eq!(q.len(), 2);
+        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(300, &mut out);
+        assert_eq!(out.as_slice(), &[1, 3]);
+    }
+
+    #[test]
+    fn sq_remove_by_id_not_found() {
+        let mut q = SleepQueue::<4>::new();
+        q.push(1, 100).unwrap();
+        q.push(2, 200).unwrap();
+        assert!(!q.remove_by_id(99));
+        assert_eq!(q.len(), 2);
+    }
+
+    #[test]
+    fn sq_remove_by_id_empty() {
+        let mut q = SleepQueue::<4>::new();
+        assert!(!q.remove_by_id(1));
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn sq_remove_by_id_preserves_sorted_order() {
+        let mut q = SleepQueue::<8>::new();
+        // Insert out of order; SleepQueue sorts by expiry.
+        q.push(3, 300).unwrap();
+        q.push(1, 100).unwrap();
+        q.push(2, 200).unwrap();
+        q.push(4, 400).unwrap();
+        // Remove pid 2 (expiry 200)
+        assert!(q.remove_by_id(2));
+        assert_eq!(q.len(), 3);
+        let mut out: heapless::Vec<u8, 8> = heapless::Vec::new();
+        q.drain_expired(400, &mut out);
+        // Should drain in sorted expiry order: 100, 300, 400
+        assert_eq!(out.as_slice(), &[1, 3, 4]);
+    }
+
+    #[test]
+    fn sq_remove_by_id_duplicate_removes_first_only() {
+        let mut q = SleepQueue::<4>::new();
+        q.push(5, 100).unwrap();
+        q.push(5, 200).unwrap();
+        q.push(5, 300).unwrap();
+        assert!(q.remove_by_id(5));
+        assert_eq!(q.len(), 2);
+        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.drain_expired(300, &mut out);
+        assert_eq!(out.as_slice(), &[5, 5]);
     }
 }
