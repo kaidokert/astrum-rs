@@ -934,6 +934,8 @@ pub fn dispatch_syscall<const N: usize>(
             None => SvcError::InvalidPartition.to_u32(),
         },
         Some(SyscallId::GetErrorStatus) => SvcError::InvalidSyscall.to_u32(),
+        Some(SyscallId::RequestRestart) => SvcError::InvalidSyscall.to_u32(),
+        Some(SyscallId::RequestStop) => SvcError::InvalidSyscall.to_u32(),
         Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
     };
@@ -2357,6 +2359,55 @@ where
                     None => SvcError::InvalidResource.to_u32(),
                 }
             }
+            Some(SyscallId::RequestRestart) => {
+                let pid = self.current_partition as usize;
+                let pcb = match self.pcb(pid) {
+                    Some(pcb) => pcb,
+                    None => {
+                        frame.r0 = SvcError::InvalidPartition.to_u32();
+                        return;
+                    }
+                };
+                if !pcb.in_error_handler() {
+                    frame.r0 = SvcError::PermissionDenied.to_u32();
+                    return;
+                }
+                let warm = frame.r1 != 0;
+                // Clear in_error_handler before transition.
+                self.pcb_mut(pid).unwrap().set_in_error_handler(false);
+                // Transition Running -> Faulted so restart_partition can proceed.
+                if self
+                    .pcb_mut(pid)
+                    .unwrap()
+                    .transition(crate::partition::PartitionState::Faulted)
+                    .is_err()
+                {
+                    frame.r0 = SvcError::InvalidSyscall.to_u32();
+                    return;
+                }
+                match self.restart_partition(pid, warm) {
+                    Ok(()) => 0,
+                    Err(_) => SvcError::InvalidSyscall.to_u32(),
+                }
+            }
+            Some(SyscallId::RequestStop) => {
+                let pid = self.current_partition as usize;
+                let pcb = match self.pcb_mut(pid) {
+                    Some(pcb) => pcb,
+                    None => {
+                        frame.r0 = SvcError::InvalidPartition.to_u32();
+                        return;
+                    }
+                };
+                if !pcb.in_error_handler() {
+                    frame.r0 = SvcError::PermissionDenied.to_u32();
+                    return;
+                }
+                pcb.set_in_error_handler(false);
+                // Transition Running -> Faulted permanently (StayDead).
+                let _ = pcb.transition(crate::partition::PartitionState::Faulted);
+                0
+            }
             Some(SyscallId::IrqAck) => {
                 let irq_num = arg1 as u8;
                 let caller_id = self.current_partition;
@@ -3114,6 +3165,7 @@ mod tests {
     mod debug;
     mod device;
     mod error_handler_syscall;
+    mod error_recovery_syscall;
     mod events;
     mod last_error;
     mod message;

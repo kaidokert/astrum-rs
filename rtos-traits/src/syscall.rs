@@ -42,6 +42,10 @@ pub const SYS_GET_START_CONDITION: u32 = 40;
 pub const SYS_REGISTER_ERROR_HANDLER: u32 = 41;
 /// Get error status: returns packed ErrorStatus in r0-r3, or SvcError if none.
 pub const SYS_GET_ERROR_STATUS: u32 = 42;
+/// Request restart from error handler: r1=warm (0=cold, 1=warm). Returns 0 or SvcError.
+pub const SYS_REQUEST_RESTART: u32 = 43;
+/// Request stop from error handler: partition enters permanent Faulted state. Returns 0 or SvcError.
+pub const SYS_REQUEST_STOP: u32 = 44;
 
 // ── Feature-gated syscall numbers ─────────────────────────────────────
 
@@ -117,6 +121,8 @@ mod tests {
         ("SYS_GET_START_CONDITION", SYS_GET_START_CONDITION, 40),
         ("SYS_REGISTER_ERROR_HANDLER", SYS_REGISTER_ERROR_HANDLER, 41),
         ("SYS_GET_ERROR_STATUS", SYS_GET_ERROR_STATUS, 42),
+        ("SYS_REQUEST_RESTART", SYS_REQUEST_RESTART, 43),
+        ("SYS_REQUEST_STOP", SYS_REQUEST_STOP, 44),
     ];
 
     #[test]
@@ -137,7 +143,7 @@ mod tests {
 
     #[test]
     fn base_constant_count() {
-        assert_eq!(BASE_SYSCALLS.len(), 29);
+        assert_eq!(BASE_SYSCALLS.len(), 31);
     }
 
     /// Dynamic-MPU syscall constants: (name, actual, expected).

@@ -42,8 +42,8 @@ pub use rtos_traits::buf_syscall;
 
 // Control
 pub use rtos_traits::syscall::{
-    SYS_GET_PARTITION_ID, SYS_GET_START_CONDITION, SYS_GET_TIME, SYS_IRQ_ACK, SYS_SLEEP_TICKS,
-    SYS_YIELD,
+    SYS_GET_ERROR_STATUS, SYS_GET_PARTITION_ID, SYS_GET_START_CONDITION, SYS_GET_TIME, SYS_IRQ_ACK,
+    SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART, SYS_REQUEST_STOP, SYS_SLEEP_TICKS, SYS_YIELD,
 };
 // Events
 pub use rtos_traits::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT};
@@ -389,6 +389,84 @@ pub fn sys_get_start_condition() -> Result<StartCondition, SvcError> {
         2 => StartCondition::ColdRestart,
         _ => StartCondition::NormalBoot,
     })
+}
+
+/// Register an error handler for the calling partition.
+///
+/// The kernel stores the entry point address so the error handler can be
+/// invoked when the partition faults.
+///
+/// # Returns
+///
+/// `Ok(0)` on success, or `Err(SvcError)` if the syscall failed.
+pub fn sys_register_error_handler(entry: extern "C" fn()) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_REGISTER_ERROR_HANDLER,
+        entry as usize as u32,
+        0u32,
+        0u32
+    ))
+}
+
+/// Retrieve the last error status for the calling partition.
+///
+/// Returns the packed `ErrorStatus` fields from the kernel, or
+/// `Err(SvcError)` if no error has been recorded.
+pub fn sys_get_error_status() -> Result<ErrorStatusInfo, SvcError> {
+    let (r0, r1, r2, r3) = rtos_traits::svc_r0123!(SYS_GET_ERROR_STATUS, 0u32, 0u32, 0u32);
+    if rtos_traits::api::SvcError::is_error(r0) {
+        Err(rtos_traits::api::SvcError::from_u32(r0).unwrap_or(SvcError::InvalidSyscall))
+    } else {
+        Ok(ErrorStatusInfo {
+            kind_and_partition: r0,
+            faulting_addr: r1,
+            cfsr: r2,
+            faulting_pc: r3,
+        })
+    }
+}
+
+/// Packed error status fields returned by [`sys_get_error_status`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ErrorStatusInfo {
+    /// `(fault_kind << 8) | failed_partition`.
+    pub kind_and_partition: u32,
+    pub faulting_addr: u32,
+    pub cfsr: u32,
+    pub faulting_pc: u32,
+}
+
+impl ErrorStatusInfo {
+    /// Extract the fault kind discriminant (upper bits of r0).
+    pub const fn fault_kind_raw(&self) -> u32 {
+        self.kind_and_partition >> 8
+    }
+
+    /// Extract the failed partition ID (lower 8 bits of r0).
+    pub const fn failed_partition(&self) -> u8 {
+        self.kind_and_partition as u8
+    }
+}
+
+/// Request a partition restart from within an error handler.
+///
+/// `warm`: true preserves RAM (warm restart), false zeros data (cold restart).
+/// Returns `Err(SvcError::PermissionDenied)` if not in error handler.
+pub fn sys_request_restart(warm: bool) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_REQUEST_RESTART,
+        warm as u32,
+        0u32,
+        0u32
+    ))
+}
+
+/// Request a permanent stop from within an error handler.
+///
+/// Transitions the partition to Faulted state permanently.
+/// Returns `Err(SvcError::PermissionDenied)` if not in error handler.
+pub fn sys_request_stop() -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(SYS_REQUEST_STOP, 0u32, 0u32, 0u32))
 }
 
 /// Get the current kernel tick count.
