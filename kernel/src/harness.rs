@@ -36,7 +36,7 @@
 
 // Re-export BootError, Never, and init_rtt from boot module for macro access.
 // The canonical definitions live in boot.rs.
-pub use crate::boot::{boot_banner, init_fpu, init_rtt, BootError, Never};
+pub use crate::boot::{boot_banner, init_fpu, init_rtt, warn_mpu_debug_build, BootError, Never};
 
 /// Shared helper: detect dropped SysTick interrupts by reading the ICSR
 /// PENDSTSET bit before the current tick is processed.  Factored out of
@@ -553,6 +553,9 @@ macro_rules! define_unified_harness {
             // Init RTT early so klog! output from init_kernel() is visible.
             $crate::harness::init_rtt();
             $crate::harness::boot_banner();
+            $crate::harness::warn_mpu_debug_build(
+                <$Config as $crate::config::KernelConfig>::MPU_ENFORCE,
+            );
             // Enable FPU before kernel init (no-op when fpu-context is off).
             $crate::harness::init_fpu().map_err(|e| {
                 $crate::klog!("boot failed: {}", e);
@@ -599,6 +602,9 @@ macro_rules! define_unified_harness {
             // Init RTT early so klog! output from init_kernel() is visible.
             $crate::harness::init_rtt();
             $crate::harness::boot_banner();
+            $crate::harness::warn_mpu_debug_build(
+                <$Config as $crate::config::KernelConfig>::MPU_ENFORCE,
+            );
             // Enable FPU before kernel init (no-op when fpu-context is off).
             $crate::harness::init_fpu().map_err(|e| {
                 $crate::klog!("boot failed: {}", e);

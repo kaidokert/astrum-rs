@@ -54,6 +54,20 @@ pub fn boot_banner() {
     );
 }
 
+/// Warn if MPU enforcement is active in a debug build.
+///
+/// When `mpu_enforce` is true and `cfg!(debug_assertions)` is also true,
+/// emits a `klog!` warning that PendSV may be too slow for 1 ms tick.
+/// Call after `boot_banner()` and `init_rtt()`.
+pub fn warn_mpu_debug_build(mpu_enforce: bool) {
+    if cfg!(debug_assertions) && mpu_enforce {
+        crate::klog!(
+            "WARNING: MPU enforcement with debug build — PendSV may be too slow for 1ms tick. \
+             Use --release or increase tick period."
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // FPU initialization (Cortex-M4F+)
 // ---------------------------------------------------------------------------
@@ -2100,5 +2114,12 @@ mod tests {
             | BootError::FpuLazyStackingNotActive
             | BootError::BufferPoolMisaligned { .. } => {}
         }
+    }
+
+    #[test]
+    fn warn_mpu_debug_build_does_not_panic() {
+        // klog! is a no-op in test cfg, so we just verify no panic.
+        warn_mpu_debug_build(true);
+        warn_mpu_debug_build(false);
     }
 }
