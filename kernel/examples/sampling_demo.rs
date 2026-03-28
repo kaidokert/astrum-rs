@@ -151,6 +151,11 @@ extern "C" fn display_main() -> ! {
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().unwrap();
+    hprintln!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
     hprintln!("sampling_demo: start");
 
     // Build schedule: each partition runs for 2 ticks per slot.

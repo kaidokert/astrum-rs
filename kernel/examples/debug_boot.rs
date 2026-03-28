@@ -124,6 +124,11 @@ unsafe fn HardFault(ef: &ExceptionFrame) -> ! {
 #[entry]
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().unwrap();
+    hprintln!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
     hprintln!("debug_boot: start");
 
     // Build schedule

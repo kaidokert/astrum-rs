@@ -111,6 +111,11 @@ extern "C" fn p1_main() -> ! {
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("qemu_smoke: Peripherals::take");
+    hprintln!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
     hprintln!("qemu_smoke: start");
 
     let sched = ScheduleTable::<{ SmokeConfig::SCHED }>::round_robin(2, 3)

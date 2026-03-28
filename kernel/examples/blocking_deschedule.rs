@@ -139,6 +139,11 @@ fn SysTick() {
 #[entry]
 fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
+    hprintln!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
     hprintln!("blocking_deschedule: start");
 
     // Build schedule

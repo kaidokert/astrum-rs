@@ -150,6 +150,11 @@ fn assert_or_fail(cond: bool, msg: &str) {
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().unwrap();
+    hprintln!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
     hprintln!("virtual_uart_demo: start");
 
     // Schedule: P1(2) → system window(1) → P2(2) → system window(1)

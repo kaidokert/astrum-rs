@@ -102,6 +102,11 @@ const REGION_SZ: u32 = 1024;
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("peripherals");
+    hprintln!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
     hprintln!("mpu_cached_test: start");
     let entry_fns: [PartitionEntry; TestConfig::N] = [p0_entry, p1_entry];
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();

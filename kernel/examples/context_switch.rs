@@ -62,6 +62,11 @@ extern "C" fn partition_1_entry() -> ! {
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().unwrap();
+    hprintln!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
     hprintln!("context_switch: setting up two partitions");
 
     let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();

@@ -180,6 +180,11 @@ fn SysTick() {
 fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
     hprintln!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
+    hprintln!(
         "mpu_dynamic_test: start ({} switches over 3 major frames)",
         TARGET_SWITCHES
     );

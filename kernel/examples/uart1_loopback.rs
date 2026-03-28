@@ -370,6 +370,11 @@ fn finish() -> ! {
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().unwrap();
+    hprintln!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
     hprintln!("uart1_loopback: start");
 
     // Build schedule: P1(3) → system window(1) → P2(3) → system window(1)

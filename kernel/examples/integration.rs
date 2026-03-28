@@ -79,6 +79,11 @@ kernel::define_unified_harness!(no_boot, IntegrationConfig, |tick, k| {
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().unwrap();
+    hprintln!(
+        "=== {} v{} ===",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
     hprintln!("integration: start");
     let mut s: ScheduleTable<8> = ScheduleTable::new();
     s.add(ScheduleEntry::new(0, 3)).unwrap();
