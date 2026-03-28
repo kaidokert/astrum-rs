@@ -4,7 +4,8 @@
 pub use rtos_traits::syscall::SYS_GET_PARTITION_ID;
 pub use rtos_traits::syscall::{
     SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ, SYS_DEBUG_EXIT, SYS_DEBUG_PRINT, SYS_EVT_CLEAR,
-    SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_ERROR_STATUS, SYS_GET_START_CONDITION, SYS_GET_TIME,
+    SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_ERROR_STATUS, SYS_GET_MAJOR_FRAME_COUNT,
+    SYS_GET_PARTITION_RUN_COUNT, SYS_GET_SCHEDULE_INFO, SYS_GET_START_CONDITION, SYS_GET_TIME,
     SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV,
     SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS,
     SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART, SYS_REQUEST_STOP, SYS_SAMPLING_READ,
@@ -70,6 +71,9 @@ pub enum SyscallId {
     GetErrorStatus,
     RequestRestart,
     RequestStop,
+    GetPartitionRunCount,
+    GetMajorFrameCount,
+    GetScheduleInfo,
     #[cfg(feature = "partition-debug")]
     DebugNotify,
     #[cfg(feature = "partition-debug")]
@@ -128,6 +132,9 @@ impl SyscallId {
             SYS_GET_ERROR_STATUS => Some(Self::GetErrorStatus),
             SYS_REQUEST_RESTART => Some(Self::RequestRestart),
             SYS_REQUEST_STOP => Some(Self::RequestStop),
+            SYS_GET_PARTITION_RUN_COUNT => Some(Self::GetPartitionRunCount),
+            SYS_GET_MAJOR_FRAME_COUNT => Some(Self::GetMajorFrameCount),
+            SYS_GET_SCHEDULE_INFO => Some(Self::GetScheduleInfo),
             #[cfg(feature = "partition-debug")]
             SYS_DEBUG_NOTIFY => Some(Self::DebugNotify),
             #[cfg(feature = "partition-debug")]
@@ -184,6 +191,9 @@ impl SyscallId {
             Self::GetErrorStatus => "get_error_status",
             Self::RequestRestart => "request_restart",
             Self::RequestStop => "request_stop",
+            Self::GetPartitionRunCount => "get_partition_run_count",
+            Self::GetMajorFrameCount => "get_major_frame_count",
+            Self::GetScheduleInfo => "get_schedule_info",
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => "debug_notify",
             #[cfg(feature = "partition-debug")]
@@ -239,6 +249,9 @@ impl SyscallId {
             Self::GetErrorStatus => SYS_GET_ERROR_STATUS,
             Self::RequestRestart => SYS_REQUEST_RESTART,
             Self::RequestStop => SYS_REQUEST_STOP,
+            Self::GetPartitionRunCount => SYS_GET_PARTITION_RUN_COUNT,
+            Self::GetMajorFrameCount => SYS_GET_MAJOR_FRAME_COUNT,
+            Self::GetScheduleInfo => SYS_GET_SCHEDULE_INFO,
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => SYS_DEBUG_NOTIFY,
             #[cfg(feature = "partition-debug")]
@@ -298,6 +311,9 @@ mod tests {
         (SYS_GET_ERROR_STATUS, SyscallId::GetErrorStatus),
         (SYS_REQUEST_RESTART, SyscallId::RequestRestart),
         (SYS_REQUEST_STOP, SyscallId::RequestStop),
+        (SYS_GET_PARTITION_RUN_COUNT, SyscallId::GetPartitionRunCount),
+        (SYS_GET_MAJOR_FRAME_COUNT, SyscallId::GetMajorFrameCount),
+        (SYS_GET_SCHEDULE_INFO, SyscallId::GetScheduleInfo),
         #[cfg(feature = "partition-debug")]
         (SYS_DEBUG_NOTIFY, SyscallId::DebugNotify),
     ];
@@ -329,7 +345,13 @@ mod tests {
         assert_eq!(SyscallId::from_u32(39), Some(SyscallId::SleepTicks));
         // 40 is now SYS_GET_START_CONDITION.
         assert_eq!(SyscallId::from_u32(40), Some(SyscallId::GetStartCondition));
-        assert_eq!(SyscallId::from_u32(45), None);
+        assert_eq!(
+            SyscallId::from_u32(45),
+            Some(SyscallId::GetPartitionRunCount)
+        );
+        assert_eq!(SyscallId::from_u32(46), Some(SyscallId::GetMajorFrameCount));
+        assert_eq!(SyscallId::from_u32(47), Some(SyscallId::GetScheduleInfo));
+        assert_eq!(SyscallId::from_u32(48), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -340,9 +362,9 @@ mod tests {
         // distinct variant; here we just verify we have the expected count.
         // Base: 45, +1 for partition-debug
         #[cfg(not(feature = "partition-debug"))]
-        assert_eq!(ALL_VARIANTS.len(), 45);
+        assert_eq!(ALL_VARIANTS.len(), 48);
         #[cfg(feature = "partition-debug")]
-        assert_eq!(ALL_VARIANTS.len(), 46);
+        assert_eq!(ALL_VARIANTS.len(), 49);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);

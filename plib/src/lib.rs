@@ -42,8 +42,10 @@ pub use rtos_traits::buf_syscall;
 
 // Control
 pub use rtos_traits::syscall::{
-    SYS_GET_ERROR_STATUS, SYS_GET_PARTITION_ID, SYS_GET_START_CONDITION, SYS_GET_TIME, SYS_IRQ_ACK,
-    SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART, SYS_REQUEST_STOP, SYS_SLEEP_TICKS, SYS_YIELD,
+    SYS_GET_ERROR_STATUS, SYS_GET_MAJOR_FRAME_COUNT, SYS_GET_PARTITION_ID,
+    SYS_GET_PARTITION_RUN_COUNT, SYS_GET_SCHEDULE_INFO, SYS_GET_START_CONDITION, SYS_GET_TIME,
+    SYS_IRQ_ACK, SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART, SYS_REQUEST_STOP,
+    SYS_SLEEP_TICKS, SYS_YIELD,
 };
 // Events
 pub use rtos_traits::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT};
@@ -467,6 +469,62 @@ pub fn sys_request_restart(warm: bool) -> Result<u32, SvcError> {
 /// Returns `Err(SvcError::PermissionDenied)` if not in error handler.
 pub fn sys_request_stop() -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(SYS_REQUEST_STOP, 0u32, 0u32, 0u32))
+}
+
+/// Get the run count for a specific partition.
+///
+/// # Arguments
+///
+/// * `partition_id` - The partition index to query.
+///
+/// # Returns
+///
+/// `Ok(run_count)` with the number of times the partition has been
+/// scheduled, or `Err(SvcError::InvalidPartition)` if the ID is invalid.
+pub fn sys_get_partition_run_count(partition_id: u32) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_GET_PARTITION_RUN_COUNT,
+        partition_id,
+        0u32,
+        0u32
+    ))
+}
+
+/// Get the number of completed major frames (schedule wraparounds).
+///
+/// # Returns
+///
+/// `Ok(count)` with the major frame counter value.
+pub fn sys_get_major_frame_count() -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_GET_MAJOR_FRAME_COUNT,
+        0u32,
+        0u32,
+        0u32
+    ))
+}
+
+/// Schedule info returned by [`sys_get_schedule_info`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScheduleInfo {
+    /// Total ticks in one major frame.
+    pub major_frame_ticks: u32,
+    /// Number of partitions in the system.
+    pub num_partitions: u32,
+}
+
+/// Get static schedule information.
+///
+/// # Returns
+///
+/// `Ok(ScheduleInfo)` with the major frame duration and partition count,
+/// or `Err(SvcError)` if the syscall failed.
+pub fn sys_get_schedule_info() -> Result<ScheduleInfo, SvcError> {
+    let (r0, r1) = rtos_traits::svc_r01!(SYS_GET_SCHEDULE_INFO, 0u32, 0u32, 0u32);
+    decode_rc(r0).map(|major_frame_ticks| ScheduleInfo {
+        major_frame_ticks,
+        num_partitions: r1,
+    })
 }
 
 /// Get the current kernel tick count.

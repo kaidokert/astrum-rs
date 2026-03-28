@@ -936,6 +936,15 @@ pub fn dispatch_syscall<const N: usize>(
         Some(SyscallId::GetErrorStatus) => SvcError::InvalidSyscall.to_u32(),
         Some(SyscallId::RequestRestart) => SvcError::InvalidSyscall.to_u32(),
         Some(SyscallId::RequestStop) => SvcError::InvalidSyscall.to_u32(),
+        Some(SyscallId::GetPartitionRunCount) => {
+            let pid = frame.r1 as usize;
+            match partitions.get(pid) {
+                Some(pcb) => pcb.run_count(),
+                None => SvcError::InvalidPartition.to_u32(),
+            }
+        }
+        Some(SyscallId::GetMajorFrameCount) => SvcError::InvalidSyscall.to_u32(),
+        Some(SyscallId::GetScheduleInfo) => SvcError::InvalidSyscall.to_u32(),
         Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
     };
@@ -2473,6 +2482,18 @@ where
                     return;
                 }
                 0
+            }
+            Some(SyscallId::GetPartitionRunCount) => {
+                let pid = arg1 as usize;
+                match self.partitions().get(pid) {
+                    Some(pcb) => pcb.run_count(),
+                    None => SvcError::InvalidPartition.to_u32(),
+                }
+            }
+            Some(SyscallId::GetMajorFrameCount) => self.schedule().major_frame_count(),
+            Some(SyscallId::GetScheduleInfo) => {
+                frame.r1 = self.partition_count() as u32;
+                self.schedule().major_frame_ticks
             }
             Some(SyscallId::IrqAck) => {
                 let irq_num = arg1 as u8;

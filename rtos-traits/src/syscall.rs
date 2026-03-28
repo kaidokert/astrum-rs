@@ -46,6 +46,12 @@ pub const SYS_GET_ERROR_STATUS: u32 = 42;
 pub const SYS_REQUEST_RESTART: u32 = 43;
 /// Request stop from error handler: partition enters permanent Faulted state. Returns 0 or SvcError.
 pub const SYS_REQUEST_STOP: u32 = 44;
+/// Get partition run count: r1=partition_id. Returns run_count in r0.
+pub const SYS_GET_PARTITION_RUN_COUNT: u32 = 45;
+/// Get major frame count: returns major_frame_count in r0.
+pub const SYS_GET_MAJOR_FRAME_COUNT: u32 = 46;
+/// Get schedule info: returns (major_frame_ticks in r0, num_partitions in r1).
+pub const SYS_GET_SCHEDULE_INFO: u32 = 47;
 
 // ── Feature-gated syscall numbers ─────────────────────────────────────
 
@@ -123,6 +129,13 @@ mod tests {
         ("SYS_GET_ERROR_STATUS", SYS_GET_ERROR_STATUS, 42),
         ("SYS_REQUEST_RESTART", SYS_REQUEST_RESTART, 43),
         ("SYS_REQUEST_STOP", SYS_REQUEST_STOP, 44),
+        (
+            "SYS_GET_PARTITION_RUN_COUNT",
+            SYS_GET_PARTITION_RUN_COUNT,
+            45,
+        ),
+        ("SYS_GET_MAJOR_FRAME_COUNT", SYS_GET_MAJOR_FRAME_COUNT, 46),
+        ("SYS_GET_SCHEDULE_INFO", SYS_GET_SCHEDULE_INFO, 47),
     ];
 
     #[test]
@@ -143,7 +156,7 @@ mod tests {
 
     #[test]
     fn base_constant_count() {
-        assert_eq!(BASE_SYSCALLS.len(), 31);
+        assert_eq!(BASE_SYSCALLS.len(), 34);
     }
 
     /// Dynamic-MPU syscall constants: (name, actual, expected).
