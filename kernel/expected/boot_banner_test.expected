@@ -1,0 +1,4 @@
+# mode: contains
+boot_banner_test: start
+=== kernel v0.1.0 ===
+boot_banner_test: PASS

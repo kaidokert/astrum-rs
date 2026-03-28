@@ -210,6 +210,10 @@ name = "smoke_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "boot_banner_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "peripheral_passthrough"
 required-features = ["qemu", "log-semihosting"]
 
