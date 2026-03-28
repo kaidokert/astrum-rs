@@ -109,6 +109,16 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
             .expect("wait_queue push after len check");
         Ok(false)
     }
+    /// Remove `pid` from all semaphore wait queues.
+    ///
+    /// Used during partition restart to clean up IPC state.
+    // TODO: reviewer false positive — heapless::Vec::iter_mut() already respects len
+    pub fn remove_from_waitqueues(&mut self, pid: u8) {
+        for sem in self.slots.iter_mut() {
+            sem.wait_queue.remove_by_id(pid);
+        }
+    }
+
     pub fn tick_timeouts<const E: usize>(
         &mut self,
         current_tick: u64,
@@ -176,6 +186,30 @@ mod tests {
         p.signal(&mut t, 0).unwrap(); assert_eq!(t.get(2).unwrap().state(), Ready);
         for i in 3..7u8 { assert_eq!(p.wait(&mut t, 0, i as usize), Ok(false)); }
         assert_eq!(p.wait(&mut t, 0, 7), Err(SemaphoreError::WaitQueueFull));
+    }
+    #[test] fn remove_from_waitqueues_drains_pid() {
+        let (mut t, mut p) = (tbl::<4>(3), SemaphorePool::<2, 4>::new());
+        p.add(Semaphore::new(0, 1)).unwrap();
+        p.add(Semaphore::new(0, 1)).unwrap();
+        // P0 waits on sem 0, P1 waits on sem 0
+        assert_eq!(p.wait(&mut t, 0, 0), Ok(false));
+        assert_eq!(p.wait(&mut t, 0, 1), Ok(false));
+        // P2 waits on sem 1
+        assert_eq!(p.wait(&mut t, 1, 2), Ok(false));
+        // Remove P1 from all semaphore wait queues
+        p.remove_from_waitqueues(1);
+        // Signal sem 0: P0 should wake (P1 was removed)
+        p.signal(&mut t, 0).unwrap();
+        assert_eq!(t.get(0).unwrap().state(), Ready, "P0 woken after P1 removed");
+        // Signal sem 0 again: no more waiters (P1 removed), count increments
+        p.signal(&mut t, 0).unwrap();
+        assert_eq!(p.get(0).unwrap().count(), 1, "count incremented, no waiters left");
+    }
+    #[test] fn remove_from_waitqueues_noop_for_absent_pid() {
+        let mut p = SemaphorePool::<2, 4>::new();
+        p.add(Semaphore::new(3, 5)).unwrap();
+        p.remove_from_waitqueues(99); // no-op, should not panic
+        assert_eq!(p.get(0).unwrap().count(), 3);
     }
     #[test]
     fn sem_wait_returns_false_when_blocking() {

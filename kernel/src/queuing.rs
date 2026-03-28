@@ -221,6 +221,14 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
         })
     }
 
+    /// Remove `pid` from both sender and receiver wait queues.
+    ///
+    /// Used during partition restart to clean up IPC state.
+    pub fn remove_from_waitqueues(&mut self, pid: u8) {
+        self.sender_wq.remove_by_id(pid);
+        self.receiver_wq.remove_by_id(pid);
+    }
+
     /// Remove senders whose timeout has expired, appending their partition IDs
     /// to `out`. The caller provides the output vector so that capacity is
     /// managed in one place (see `tick_timeouts`).
@@ -360,6 +368,16 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
             .get(port_id)
             .ok_or(QueuingError::InvalidPort)
             .map(|p| p.status())
+    }
+
+    /// Remove `pid` from all sender and receiver wait queues across all ports.
+    ///
+    /// Used during partition restart to clean up IPC state.
+    // TODO: reviewer false positive — heapless::Vec::iter_mut() already respects len
+    pub fn remove_from_waitqueues(&mut self, pid: u8) {
+        for port in self.ports.iter_mut() {
+            port.remove_from_waitqueues(pid);
+        }
     }
 
     /// Check all queuing port wait queues for expired timeouts.

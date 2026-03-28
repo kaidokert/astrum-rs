@@ -75,6 +75,40 @@ impl<const S: usize, const W: usize> MutexPool<S, W> {
             .push(caller_u8);
         Ok(false)
     }
+    /// Release all mutexes owned by `pid` and remove `pid` from all wait queues.
+    ///
+    /// Used during partition restart to clean up IPC state. When `pid` owns a
+    /// mutex and there are waiters, the next waiter is promoted to owner and
+    /// transitioned to `Ready`. Removes `pid` from every mutex wait queue.
+    pub fn release_mutexes_for_partition<const N: usize>(
+        &mut self,
+        pid: u8,
+        parts: &mut PartitionTable<N>,
+    ) {
+        for i in 0..self.len {
+            if let Some(owner) = self.owners.get_mut(i) {
+                if *owner == Some(pid) {
+                    // Hand off to next waiter, mirroring unlock() logic.
+                    if let Some(queue) = self.queues.get_mut(i) {
+                        if let Some(next) = queue.pop_front() {
+                            *owner = Some(next);
+                            if let Some(pcb) = parts.get_mut(next as usize) {
+                                let _ = pcb.transition(PartitionState::Ready);
+                            }
+                        } else {
+                            *owner = None;
+                        }
+                    } else {
+                        *owner = None;
+                    }
+                }
+            }
+            if let Some(queue) = self.queues.get_mut(i) {
+                queue.remove_by_id(pid);
+            }
+        }
+    }
+
     pub fn unlock<const N: usize>(
         &mut self,
         parts: &mut PartitionTable<N>,
@@ -148,6 +182,42 @@ mod tests {
         assert_eq!(p.lock(&mut t, 0, 0), Ok(true));
         for i in 1..5usize { assert_eq!(p.lock(&mut t, 0, i), Ok(false)); }
         assert_eq!(p.lock(&mut t, 0, 5), Err(MutexError::WaitQueueFull));
+    }
+    #[test] fn release_mutexes_for_partition_clears_owner_and_drains_waitqueue() {
+        let (mut t, mut p) = (tbl::<4>(3), MutexPool::<2, 4>::new(2));
+        // P0 owns mutex 0; P1 and P2 are waiting on mutex 0
+        assert_eq!(p.lock(&mut t, 0, 0), Ok(true));
+        assert_eq!(p.lock(&mut t, 0, 1), Ok(false));
+        assert_eq!(p.lock(&mut t, 0, 2), Ok(false));
+        // P1 owns mutex 1
+        assert_eq!(p.lock(&mut t, 1, 1), Ok(true));
+        // Release all IPC for P1: clears mutex 1 ownership, removes P1 from mutex 0 waitqueue
+        p.release_mutexes_for_partition(1, &mut t);
+        assert_eq!(p.owner(0), Ok(Some(0)), "P0 still owns mutex 0");
+        assert_eq!(p.owner(1), Ok(None), "P1 ownership of mutex 1 cleared");
+        // Unlock mutex 0: P1 was removed from queue, so P2 is next
+        p.unlock(&mut t, 0, 0).unwrap();
+        assert_eq!(p.owner(0), Ok(Some(2)), "P2 promoted after P1 removed from queue");
+    }
+    #[test] fn release_mutexes_for_partition_owner_removed_promotes_waiter() {
+        let (mut t, mut p) = (tbl::<4>(3), MutexPool::<1, 4>::new(1));
+        // P0 owns mutex 0; P1 and P2 are waiting
+        assert_eq!(p.lock(&mut t, 0, 0), Ok(true));
+        assert_eq!(p.lock(&mut t, 0, 1), Ok(false));
+        assert_eq!(p.lock(&mut t, 0, 2), Ok(false));
+        assert_eq!(t.get(1).unwrap().state(), Waiting);
+        assert_eq!(t.get(2).unwrap().state(), Waiting);
+        // Clean up P0 (the owner): next waiter P1 must be promoted
+        p.release_mutexes_for_partition(0, &mut t);
+        assert_eq!(p.owner(0), Ok(Some(1)), "P1 promoted to owner after P0 cleanup");
+        assert_eq!(t.get(1).unwrap().state(), Ready, "P1 transitioned to Ready");
+        assert_eq!(t.get(2).unwrap().state(), Waiting, "P2 still waiting");
+    }
+    #[test] fn release_mutexes_noop_for_uninvolved_partition() {
+        let (mut t, mut p) = (tbl::<4>(2), MutexPool::<2, 4>::new(1));
+        assert_eq!(p.lock(&mut t, 0, 0), Ok(true));
+        p.release_mutexes_for_partition(1, &mut t); // P1 has no involvement
+        assert_eq!(p.owner(0), Ok(Some(0)), "P0 ownership unchanged");
     }
     #[test] fn mutex_lock_returns_false_when_blocking() {
         // Setup: P0 and P1 both in Running state

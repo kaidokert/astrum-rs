@@ -1669,6 +1669,39 @@ where
         }
     }
 
+    /// Clean up all IPC state associated with a partition.
+    ///
+    /// Orchestrates: (1) clear PCB event_flags and event_wait_mask,
+    /// (2) release mutexes owned by the partition and drain it from mutex
+    /// wait queues, (3) remove from semaphore wait queues, (4) release
+    /// buffer pool slots (when dynamic-mpu enabled), (5) remove from
+    /// queuing port wait queues.
+    pub fn cleanup_partition_ipc(&mut self, pid: usize) {
+        let pid_u8 = pid as u8;
+
+        // (1) Clear PCB event flags and wait mask.
+        if let Some(pcb) = self.core.partitions_mut().get_mut(pid) {
+            pcb.set_event_flags(0);
+            pcb.set_event_wait_mask(0);
+        }
+
+        // (2) Release mutexes owned by pid and drain pid from mutex wait queues.
+        self.sync
+            .mutexes_mut()
+            .release_mutexes_for_partition(pid_u8, self.core.partitions_mut());
+
+        // (3) Remove pid from all semaphore wait queues.
+        self.sync.semaphores_mut().remove_from_waitqueues(pid_u8);
+
+        // (4) Release all buffer pool slots owned by partition (dynamic-mpu only).
+        #[cfg(feature = "dynamic-mpu")]
+        self.buffers
+            .release_all_for_partition(pid_u8, &self.dynamic_strategy);
+
+        // (5) Remove pid from queuing port wait queues.
+        self.msg.queuing_mut().remove_from_waitqueues(pid_u8);
+    }
+
     /// Synchronize the kernel's tick counter to the given value.
     ///
     /// Called from the SysTick handler to copy the authoritative tick from
