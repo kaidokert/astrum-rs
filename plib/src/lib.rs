@@ -10,6 +10,9 @@
 
 #![no_std]
 
+#[cfg(feature = "qemu-peripherals")]
+pub mod pwm;
+
 pub use rtos_traits::api::decode_rc;
 pub use rtos_traits::api::decode_rc_r01_detail;
 pub use rtos_traits::api::SvcError;
