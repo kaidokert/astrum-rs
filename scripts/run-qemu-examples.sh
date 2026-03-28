@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Run all QEMU integration examples and check exit codes.
-# Pass --dynamic-mpu to also run dynamic-mpu examples.
 # Pass --strict to fail examples that lack an expected-output file.
 # Pass --record to save captured output as expected-output files.
 # Pass --only <name> to run a single example instead of all.
@@ -138,12 +137,10 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     source "$SCRIPT_DIR/examples.list"
 
     # Parse flags (consume from positional args).
-    DYNAMIC_MPU=0
     QEMU_PERIPHERALS=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --strict) STRICT=1 ;;
-            --dynamic-mpu) DYNAMIC_MPU=1 ;;
             --qemu-peripherals) QEMU_PERIPHERALS=1 ;;
             --record) RECORD=1 ;;
             --only) shift; ONLY="$1" ;;
@@ -164,7 +161,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
         declare -A CATEGORY_FEATURES=(
             [EXAMPLES]="qemu,log-semihosting,ipc-blackboard"
             [CUSTOM_IVT_EXAMPLES]="qemu,log-semihosting,custom-ivt"
-            [DYNAMIC_MPU_EXAMPLES]="qemu,log-semihosting,dynamic-mpu"
+            [DYNAMIC_MPU_EXAMPLES]="qemu,log-semihosting"
             [QEMU_PERIPHERAL_EXAMPLES]="qemu,log-semihosting,qemu-peripherals"
         )
         found=0
@@ -186,14 +183,12 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
         $RUN_FN "qemu,log-semihosting,ipc-blackboard" "${EXAMPLES[@]}"
 
         echo ""
+        echo "=== Dynamic-MPU examples ==="
+        $RUN_FN "qemu,log-semihosting" "${DYNAMIC_MPU_EXAMPLES[@]}"
+
+        echo ""
         echo "=== Custom-IVT examples ==="
         $RUN_FN "qemu,log-semihosting,custom-ivt" "${CUSTOM_IVT_EXAMPLES[@]}"
-
-        if [[ "$DYNAMIC_MPU" -eq 1 ]]; then
-            echo ""
-            echo "=== Dynamic-MPU examples ==="
-            $RUN_FN "qemu,log-semihosting,dynamic-mpu" "${DYNAMIC_MPU_EXAMPLES[@]}"
-        fi
 
         if [[ "$QEMU_PERIPHERALS" -eq 1 ]]; then
             echo ""

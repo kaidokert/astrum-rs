@@ -47,13 +47,6 @@ STATIC_EXAMPLES=(
     scheduler_tick integration sampling_demo queuing_demo blackboard_demo
 )
 
-# Dynamic-MPU examples (require 'qemu,dynamic-mpu' features)
-DYNAMIC_MPU_EXAMPLES=(
-    mpu_dynamic mpu_dynamic_test buffer_pool_test
-    virtual_uart_demo uart1_loopback
-    buf_lend_rw_test buf_transfer_test
-)
-
 # ── Counters ─────────────────────────────────────────────────────────
 CLEAN=0
 TAINTED=0
@@ -124,13 +117,6 @@ echo ""
 echo "=== Static-mode examples (release, --features qemu) ==="
 for ex in "${STATIC_EXAMPLES[@]}"; do
     check_example "$ex" "qemu"
-done
-
-# ── Check dynamic-MPU examples ──────────────────────────────────────
-echo ""
-echo "=== Dynamic-MPU examples (release, --features qemu,dynamic-mpu) ==="
-for ex in "${DYNAMIC_MPU_EXAMPLES[@]}"; do
-    check_example "$ex" "qemu,dynamic-mpu"
 done
 
 # ── Summary ──────────────────────────────────────────────────────────
