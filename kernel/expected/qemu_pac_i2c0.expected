@@ -1,0 +1,3 @@
+# mode: contains
+qemu_pac_i2c0: start
+qemu_pac_i2c0: PASS I2C0 master register access OK

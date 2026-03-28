@@ -79,4 +79,5 @@ DYNAMIC_MPU_EXAMPLES=(
 # for typed MMIO register access to LM3S6965 peripherals.
 QEMU_PERIPHERAL_EXAMPLES=(
     qemu_pac_uart0
+    qemu_pac_i2c0
 )
