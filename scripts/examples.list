@@ -86,6 +86,7 @@ QEMU_PERIPHERAL_EXAMPLES=(
     qemu_pac_timer0_pwm
     qemu_pac_pwm0
     qemu_pac_pwm0_deadband
+    qemu_pac_pwm0_multichannel
     qemu_pac_timer0_capture
     qemu_pac_timer_chain
 )

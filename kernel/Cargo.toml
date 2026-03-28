@@ -534,6 +534,10 @@ name = "qemu_pac_pwm0_deadband"
 required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
 
 [[example]]
+name = "qemu_pac_pwm0_multichannel"
+required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
+
+[[example]]
 name = "qemu_pac_timer0_capture"
 required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
 
