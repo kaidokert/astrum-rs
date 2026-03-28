@@ -25,7 +25,6 @@ impl KernelConfig for TestConfig {
     const SP: usize = 4;
     const BS: usize = 4;
     const BW: usize = 4;
-    #[cfg(feature = "dynamic-mpu")]
     const BP: usize = 4;
 
     kernel_config_types!(AlignedStack4K);

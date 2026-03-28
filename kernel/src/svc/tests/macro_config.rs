@@ -93,7 +93,6 @@ mod unified_kernel_macro_tests {
         const BS: usize = 2;
         const BM: usize = 32;
         const BW: usize = 2;
-        #[cfg(feature = "dynamic-mpu")]
         const BP: usize = 2;
 
         kernel_config_types!();

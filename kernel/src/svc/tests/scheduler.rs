@@ -8,6 +8,7 @@ fn kernel_2p() -> Kernel<'static, TestConfig> {
     let mut schedule = ScheduleTable::<4>::new();
     schedule.add(ScheduleEntry::new(0, 2)).unwrap();
     schedule.add(ScheduleEntry::new(1, 2)).unwrap();
+    schedule.add_system_window(1).unwrap();
     schedule.start();
 
     let mut stk0 = AlignedStack1K::default();
@@ -46,6 +47,7 @@ fn kernel_3p() -> Kernel<'static, TestConfig> {
     schedule.add(ScheduleEntry::new(0, 2)).unwrap();
     schedule.add(ScheduleEntry::new(1, 2)).unwrap();
     schedule.add(ScheduleEntry::new(2, 2)).unwrap();
+    schedule.add_system_window(1).unwrap();
     schedule.start();
 
     let mut stk0 = AlignedStack1K::default();
@@ -168,11 +170,12 @@ fn faulted_skip_three_partition_schedule() {
         svc_scheduler::advance_schedule_tick(&mut k),
         ScheduleEvent::None
     );
-    // P2 slot boundary -> P0 (wrap).
-    assert_eq!(
-        svc_scheduler::advance_schedule_tick(&mut k),
-        ScheduleEvent::PartitionSwitch(0),
-    );
+    // P2 slot boundary -> wrap to P0 (via system window if dynamic-mpu).
+    let mut event = svc_scheduler::advance_schedule_tick(&mut k);
+    if event == ScheduleEvent::SystemWindow {
+        event = svc_scheduler::advance_schedule_tick(&mut k);
+    }
+    assert_eq!(event, ScheduleEvent::PartitionSwitch(0));
     assert_eq!(k.active_partition(), Some(0));
 }
 

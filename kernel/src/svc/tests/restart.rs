@@ -54,11 +54,8 @@ mod integration {
         const BS: usize = 2;
         const BM: usize = 16;
         const BW: usize = 2;
-        #[cfg(feature = "dynamic-mpu")]
         const BP: usize = 4;
-        #[cfg(feature = "dynamic-mpu")]
-        const BZ: usize = 64;
-        #[cfg(feature = "dynamic-mpu")]
+        const BZ: usize = 32;
         const DR: usize = 4;
         kernel_config_types!();
     }
@@ -72,7 +69,6 @@ mod integration {
         let mut sched = ScheduleTable::new();
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
         sched.add(ScheduleEntry::new(1, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         sched.add_system_window(1).unwrap();
         let m0 = MpuRegion::new(d0.0.as_ptr() as u32, 256, 0);
         let m1 = MpuRegion::new(d1.0.as_ptr() as u32, 256, 0);

@@ -120,11 +120,8 @@ pub fn handle_systick<C: KernelConfig>()
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
     C::Core: crate::config::CoreOps<
         PartTable = crate::partition::PartitionTable<{ C::N }>,
@@ -205,11 +202,8 @@ fn trampoline<C: KernelConfig>(handler_ptr: *const (), tick: u64)
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     // SAFETY: store_kernel_ptr was called during boot with a valid Kernel<C>.
@@ -251,11 +245,8 @@ pub fn register_handler<C: KernelConfig>(handler: TickHandlerFn<C>)
 where
     [(); C::N]:,
     [(); C::SCHED]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BP]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::BZ]:,
-    #[cfg(feature = "dynamic-mpu")]
     [(); C::DR]:,
 {
     // Cast the fn pointer to a raw pointer for type-erased storage
@@ -339,11 +330,8 @@ mod tests {
         const BS: usize = 2;
         const BM: usize = 16;
         const BW: usize = 2;
-        #[cfg(feature = "dynamic-mpu")]
         const BP: usize = 4;
-        #[cfg(feature = "dynamic-mpu")]
-        const BZ: usize = 64;
-        #[cfg(feature = "dynamic-mpu")]
+        const BZ: usize = 32;
         const DR: usize = 4;
 
         kernel_config_types!();
@@ -357,7 +345,6 @@ mod tests {
         let mut schedule = ScheduleTable::new();
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         schedule.add(ScheduleEntry::new(1, 10)).unwrap();
-        #[cfg(feature = "dynamic-mpu")]
         schedule.add_system_window(1).unwrap();
         let mut stk0 = AlignedStack256B::default();
         let mut stk1 = AlignedStack256B::default();

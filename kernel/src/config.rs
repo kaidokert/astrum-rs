@@ -505,13 +505,10 @@ pub trait KernelConfig {
     const BW: usize = 1;
 
     /// Buffer pool slot count (only used with `dynamic-mpu` feature).
-    #[cfg(feature = "dynamic-mpu")]
     const BP: usize = 1;
     /// Buffer slot size in bytes (only used with `dynamic-mpu` feature).
-    #[cfg(feature = "dynamic-mpu")]
     const BZ: usize = 32;
     /// Device registry capacity (only used with `dynamic-mpu` feature).
-    #[cfg(feature = "dynamic-mpu")]
     const DR: usize = 4;
     /// Maximum acceptable gap in ticks between system windows.
     ///
@@ -525,7 +522,6 @@ pub trait KernelConfig {
     /// flexibility.
     ///
     /// Only used with the `dynamic-mpu` feature.
-    #[cfg(feature = "dynamic-mpu")]
     const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 = 100;
 
     /// Debug buffer size in bytes per partition (only used with `partition-debug` feature).
@@ -849,13 +845,9 @@ macro_rules! _kernel_config_inherent_consts {
             $vis const BS: usize = <$name as $crate::config::KernelConfig>::BS;
             $vis const BM: usize = <$name as $crate::config::KernelConfig>::BM;
             $vis const BW: usize = <$name as $crate::config::KernelConfig>::BW;
-            #[cfg(feature = "dynamic-mpu")]
             $vis const BP: usize = <$name as $crate::config::KernelConfig>::BP;
-            #[cfg(feature = "dynamic-mpu")]
             $vis const BZ: usize = <$name as $crate::config::KernelConfig>::BZ;
-            #[cfg(feature = "dynamic-mpu")]
             $vis const DR: usize = <$name as $crate::config::KernelConfig>::DR;
-            #[cfg(feature = "dynamic-mpu")]
             $vis const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 =
                 <$name as $crate::config::KernelConfig>::SYSTEM_WINDOW_MAX_GAP_TICKS;
             #[cfg(feature = "partition-debug")]
@@ -1003,19 +995,15 @@ macro_rules! _kernel_config_field {
         const DEBUG_AUTO_DRAIN_BUDGET: usize = $v;
     };
     (buffer_pool_regions = $v:expr) => {
-        #[cfg(feature = "dynamic-mpu")]
         const BP: usize = $v;
     };
     (buffer_zone_size = $v:expr) => {
-        #[cfg(feature = "dynamic-mpu")]
         const BZ: usize = $v;
     };
     (dynamic_regions = $v:expr) => {
-        #[cfg(feature = "dynamic-mpu")]
         const DR: usize = $v;
     };
     (system_window_max_gap_ticks = $v:expr) => {
-        #[cfg(feature = "dynamic-mpu")]
         const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 = $v;
     };
     (debug_buffer_size = $v:expr) => {
@@ -1627,7 +1615,6 @@ mod tests {
         const TICK_PERIOD_US: u32 = 10_000;
         #[cfg(feature = "partition-debug")]
         const DEBUG_BUFFER_SIZE: usize = 512;
-        #[cfg(feature = "dynamic-mpu")]
         const SYSTEM_WINDOW_MAX_GAP_TICKS: u32 = 200;
 
         kernel_config_types!();
@@ -1741,13 +1728,11 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn default_system_window_max_gap_ticks_is_100() {
         assert_eq!(DefaultPriority::SYSTEM_WINDOW_MAX_GAP_TICKS, 100);
     }
 
-    #[cfg(feature = "dynamic-mpu")]
     #[test]
     fn custom_system_window_max_gap_ticks_overrides_default() {
         // Verify CustomPriority can override SYSTEM_WINDOW_MAX_GAP_TICKS
@@ -2274,7 +2259,6 @@ mod tests {
     #[test]
     fn feature_gated_field_aliases_expand_correctly() {
         assert_eq!(FeatureGatedFieldConfig::N, 2);
-        #[cfg(feature = "dynamic-mpu")]
         {
             assert_eq!(FeatureGatedFieldConfig::BP, 8);
             assert_eq!(FeatureGatedFieldConfig::BZ, 64);
@@ -2319,7 +2303,6 @@ mod tests {
         assert_eq!(FeatureGatedE2EConfig::CORE_CLOCK_HZ, 48_000_000);
         // Non-overridden fields retain defaults.
         assert_eq!(FeatureGatedE2EConfig::SCHED, 4);
-        #[cfg(feature = "dynamic-mpu")]
         {
             assert_eq!(FeatureGatedE2EConfig::BP, 8);
             assert_eq!(FeatureGatedE2EConfig::BZ, 64);
@@ -2878,7 +2861,6 @@ mod tests {
         assert_eq!(ComposedDynMpu::QS, MsgMinimal::QUEUES);
         assert_eq!(ComposedDynMpu::SP, PortsTiny::SAMPLING_PORTS);
         // Dynamic-MPU overrides (only compiled when feature is active).
-        #[cfg(feature = "dynamic-mpu")]
         {
             assert_eq!(ComposedDynMpu::BP, 16);
             assert_eq!(ComposedDynMpu::BZ, 128);
