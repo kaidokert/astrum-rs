@@ -296,14 +296,9 @@ macro_rules! define_unified_harness {
                     $crate::mpu::write_cached_periph_regions(mpu, pcb);
                 }
                 // Helper: compute peripheral_reserved for a PCB.
-                // Returns PERIPHERAL_RESERVED_SLOTS when the partition
-                // has peripherals, 0 otherwise.
+                // Returns the actual number of peripheral regions configured.
                 fn pcb_periph_reserved(pcb: &$crate::partition::PartitionControlBlock) -> usize {
-                    if pcb.peripheral_regions().is_empty() {
-                        0
-                    } else {
-                        $crate::mpu_strategy::PERIPHERAL_RESERVED_SLOTS
-                    }
+                    pcb.peripheral_regions().len()
                 }
 
                 let strategy_result = {

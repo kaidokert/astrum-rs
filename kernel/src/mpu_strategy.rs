@@ -633,12 +633,11 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
             return Err(MpuError::RegionCountMismatch);
         }
 
-        // Peripheral MMIO slots must be reserved as a pair (R4-R5) or
-        // not at all.  Any other value is a configuration error.
-        if peripheral_reserved != 0 && peripheral_reserved != PERIPHERAL_RESERVED_SLOTS {
+        // peripheral_reserved must be in 0..=MAX_PERIPHERAL_REGIONS (i.e. 0-3).
+        if peripheral_reserved > crate::partition::MAX_PERIPHERAL_REGIONS {
             return Err(MpuError::RegionCountMismatch);
         }
-        // Validate peripheral_reserved is a valid slot index.
+        // At least one dynamic slot is needed for the partition's RAM region.
         if peripheral_reserved >= DYNAMIC_SLOT_COUNT {
             return Err(MpuError::RegionCountMismatch);
         }
@@ -1195,24 +1194,39 @@ mod tests {
     }
 
     #[test]
-    fn configure_partition_rejects_peripheral_reserved_one() {
-        // Only 0 or 2 are valid; 1 is rejected.
+    fn configure_partition_accepts_peripheral_reserved_three() {
+        // peripheral_reserved=3 places RAM at slot index 3.
+        let ds = DynamicStrategy::new();
+        let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
+        assert_eq!(ds.configure_partition(0, &[(rbar, rasr)], 3), Ok(()));
+        let desc = ds.slot(7).expect("RAM should be in slot 7 (R4+3)");
+        assert_eq!(desc.base, 0x2000_0000);
+        assert_eq!(desc.owner, 0);
+    }
+
+    #[test]
+    fn configure_partition_rejects_peripheral_reserved_four() {
+        // 4 exceeds MAX_PERIPHERAL_REGIONS (3), rejected.
         let ds = DynamicStrategy::new();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
         assert_eq!(
-            ds.configure_partition(0, &[(rbar, rasr)], 1),
+            ds.configure_partition(0, &[(rbar, rasr)], 4),
             Err(MpuError::RegionCountMismatch),
         );
     }
 
     #[test]
-    fn configure_partition_rejects_peripheral_reserved_three() {
+    fn configure_partition_peripheral_reserved_one_ram_at_index_one() {
+        // Verify RAM slot placement for peripheral_reserved=1.
         let ds = DynamicStrategy::new();
-        let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
-        assert_eq!(
-            ds.configure_partition(0, &[(rbar, rasr)], 3),
-            Err(MpuError::RegionCountMismatch),
-        );
+        let (rbar, rasr) = data_region(0x2000_4000, 4096, 4);
+        ds.configure_partition(0, &[(rbar, rasr)], 1).unwrap();
+        // Slot 0 (R4) should be empty (reserved for peripheral).
+        assert!(ds.slot(4).is_none(), "R4 reserved for peripheral");
+        // Slot 1 (R5) should contain RAM.
+        let desc = ds.slot(5).expect("RAM placed at index 1 (R5)");
+        assert_eq!(desc.base, 0x2000_4000);
+        assert_eq!(desc.owner, 0);
     }
 
     #[test]
