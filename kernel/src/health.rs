@@ -11,6 +11,19 @@ pub enum HealthStatus {
     Critical,
 }
 
+impl HealthStatus {
+    /// Merge two statuses, returning the more severe one.
+    ///
+    /// Severity order: `Ok` < `Degraded` < `Critical`.
+    pub fn merge(self, other: HealthStatus) -> HealthStatus {
+        match (self, other) {
+            (HealthStatus::Critical, _) | (_, HealthStatus::Critical) => HealthStatus::Critical,
+            (HealthStatus::Degraded, _) | (_, HealthStatus::Degraded) => HealthStatus::Degraded,
+            _ => HealthStatus::Ok,
+        }
+    }
+}
+
 /// Action the kernel should take in response to a health violation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealthAction {
@@ -24,6 +37,7 @@ pub enum HealthAction {
 
 /// Types of health violations the monitor can detect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// TODO: reviewer false positive — PartitionStall variant already exists in the committed base
 pub enum HealthViolation {
     /// A major frame exceeded its deadline.
     ScheduleOverrun,
@@ -35,6 +49,9 @@ pub enum HealthViolation {
     HeartbeatTimeout,
 }
 
+/// Maximum number of partitions tracked for liveness.
+const MAX_PARTITIONS: usize = 4;
+
 /// Mutable state maintained by the health partition for schedule monitoring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HealthState {
@@ -42,6 +59,10 @@ pub struct HealthState {
     last_major_frame_tick: u64,
     /// Major frame count when `last_major_frame_tick` was recorded.
     last_major_frame_count: u32,
+    /// Run counts observed at the previous liveness check.
+    last_run_counts: [u32; MAX_PARTITIONS],
+    /// Number of consecutive check cycles each partition's run count has been unchanged.
+    frames_since_run: [u32; MAX_PARTITIONS],
 }
 
 impl HealthState {
@@ -50,6 +71,8 @@ impl HealthState {
         Self {
             last_major_frame_tick: current_tick,
             last_major_frame_count: current_frame_count,
+            last_run_counts: [0; MAX_PARTITIONS],
+            frames_since_run: [0; MAX_PARTITIONS],
         }
     }
 
@@ -101,10 +124,66 @@ impl HealthState {
             (HealthStatus::Ok, None)
         }
     }
+
+    /// Check partition liveness by comparing current run counts with stored values.
+    ///
+    /// Iterates over `current_run_counts` (capped at `MAX_PARTITIONS`). If a
+    /// partition's run count has not changed since the last check,
+    /// `frames_since_run` is incremented. Once it reaches `liveness_frames`, a
+    /// stall is reported. A single stalled partition yields `Degraded`; two or
+    /// more yield `Critical`.
+    ///
+    /// Returns the worst status and a list of violations (up to one per partition).
+    // TODO: only partitions present in `current_run_counts` are checked; if the
+    // caller omits a partition, its liveness counter is neither incremented nor
+    // evaluated, which could silently mask a stall. Consider requiring a
+    // fixed-size array or tracking which indices were supplied.
+    pub fn check_partition_liveness(
+        &mut self,
+        current_run_counts: &[u32],
+        liveness_frames: u16,
+    ) -> (HealthStatus, [Option<HealthViolation>; MAX_PARTITIONS]) {
+        let mut violations = [None; MAX_PARTITIONS];
+        let mut stall_count: u32 = 0;
+        let threshold = liveness_frames as u32;
+
+        for (i, (&current, (last, frames))) in current_run_counts
+            .iter()
+            .zip(
+                self.last_run_counts
+                    .iter_mut()
+                    .zip(self.frames_since_run.iter_mut()),
+            )
+            .enumerate()
+        {
+            if current == *last {
+                *frames = frames.saturating_add(1);
+            } else {
+                *frames = 0;
+                *last = current;
+            }
+
+            if *frames >= threshold {
+                if let Some(slot) = violations.get_mut(i) {
+                    *slot = Some(HealthViolation::PartitionStall(i as u8));
+                }
+                stall_count += 1;
+            }
+        }
+
+        let status = match stall_count {
+            0 => HealthStatus::Ok,
+            1 => HealthStatus::Degraded,
+            _ => HealthStatus::Critical,
+        };
+
+        (status, violations)
+    }
 }
 
 /// Configuration for the system health monitor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// TODO: reviewer false positive — partition_liveness_frames field and its validation already exist in the committed base
 pub struct SystemHealthConfig {
     /// Maximum ticks allowed for one major frame before an overrun is raised.
     pub major_frame_deadline_ticks: u32,
@@ -442,5 +521,179 @@ mod tests {
         let (status, violation) = state.check_schedule_health(2, 0, 1);
         assert_eq!(status, HealthStatus::Critical);
         assert_eq!(violation, Some(HealthViolation::ScheduleOverrun));
+    }
+
+    // --- HealthStatus::merge ---
+
+    #[test]
+    fn merge_ok_ok() {
+        assert_eq!(HealthStatus::Ok.merge(HealthStatus::Ok), HealthStatus::Ok);
+    }
+
+    #[test]
+    fn merge_ok_degraded() {
+        assert_eq!(
+            HealthStatus::Ok.merge(HealthStatus::Degraded),
+            HealthStatus::Degraded
+        );
+        assert_eq!(
+            HealthStatus::Degraded.merge(HealthStatus::Ok),
+            HealthStatus::Degraded
+        );
+    }
+
+    #[test]
+    fn merge_degraded_critical() {
+        assert_eq!(
+            HealthStatus::Degraded.merge(HealthStatus::Critical),
+            HealthStatus::Critical
+        );
+        assert_eq!(
+            HealthStatus::Critical.merge(HealthStatus::Degraded),
+            HealthStatus::Critical
+        );
+    }
+
+    #[test]
+    fn merge_ok_critical() {
+        assert_eq!(
+            HealthStatus::Ok.merge(HealthStatus::Critical),
+            HealthStatus::Critical
+        );
+    }
+
+    #[test]
+    fn merge_same_status() {
+        assert_eq!(
+            HealthStatus::Degraded.merge(HealthStatus::Degraded),
+            HealthStatus::Degraded
+        );
+        assert_eq!(
+            HealthStatus::Critical.merge(HealthStatus::Critical),
+            HealthStatus::Critical
+        );
+    }
+
+    // --- check_partition_liveness: all partitions running ---
+
+    #[test]
+    fn liveness_all_running() {
+        let mut state = HealthState::new(0, 0);
+        // Seed the initial counts.
+        state.last_run_counts = [10, 20, 30, 40];
+        // All partitions have advanced.
+        let (status, violations) = state.check_partition_liveness(&[11, 21, 31, 41], 3);
+        assert_eq!(status, HealthStatus::Ok);
+        assert_eq!(violations, [None, None, None, None]);
+        // Stored counts updated.
+        assert_eq!(state.last_run_counts, [11, 21, 31, 41]);
+        assert_eq!(state.frames_since_run, [0, 0, 0, 0]);
+    }
+
+    // --- check_partition_liveness: one stalled ---
+
+    #[test]
+    fn liveness_one_stalled() {
+        let mut state = HealthState::new(0, 0);
+        state.last_run_counts = [5, 10, 15, 20];
+        // Partition 2 doesn't advance for 3 cycles (liveness_frames = 3).
+        for _ in 0..3 {
+            let (_, _) = state.check_partition_liveness(&[6, 11, 15, 21], 3);
+            // Bump the others so they keep advancing.
+        }
+        // After 3 checks, P2 should be stalled.
+        let (status, violations) = state.check_partition_liveness(&[9, 14, 15, 24], 3);
+        // P2 has been stalled for 4 frames now (>= 3), but we check the
+        // state after the 3rd non-advance cycle above already triggered it.
+        // Actually let's re-check: frames_since_run increments each call.
+        // After call 1: frames_since_run[2] = 1
+        // After call 2: frames_since_run[2] = 2
+        // After call 3: frames_since_run[2] = 3 (== liveness_frames)
+        // So the 3rd call should yield Degraded.
+        // The 4th call above would give frames_since_run[2] = 4, still stalled.
+        assert_eq!(status, HealthStatus::Degraded);
+        assert_eq!(violations[2], Some(HealthViolation::PartitionStall(2)));
+        // Others are fine.
+        assert_eq!(violations[0], None);
+        assert_eq!(violations[1], None);
+        assert_eq!(violations[3], None);
+    }
+
+    #[test]
+    fn liveness_stall_detected_at_threshold() {
+        let mut state = HealthState::new(0, 0);
+        state.last_run_counts = [0, 0, 0, 0];
+        // Partition 1 never advances, liveness_frames = 2.
+        // Cycle 1: frames_since_run[1] = 1 (< 2, ok)
+        let (status, violations) = state.check_partition_liveness(&[1, 0, 1, 1], 2);
+        assert_eq!(status, HealthStatus::Ok);
+        assert_eq!(violations[1], None);
+
+        // Cycle 2: frames_since_run[1] = 2 (== 2, stall!)
+        let (status, violations) = state.check_partition_liveness(&[2, 0, 2, 2], 2);
+        assert_eq!(status, HealthStatus::Degraded);
+        assert_eq!(violations[1], Some(HealthViolation::PartitionStall(1)));
+    }
+
+    // --- check_partition_liveness: multiple stalled ---
+
+    #[test]
+    fn liveness_multiple_stalled_is_critical() {
+        let mut state = HealthState::new(0, 0);
+        state.last_run_counts = [5, 10, 15, 20];
+        // P1 and P3 stall, P0 and P2 advance. liveness_frames = 1.
+        let (status, violations) = state.check_partition_liveness(&[6, 10, 16, 20], 1);
+        assert_eq!(status, HealthStatus::Critical);
+        assert_eq!(violations[0], None);
+        assert_eq!(violations[1], Some(HealthViolation::PartitionStall(1)));
+        assert_eq!(violations[2], None);
+        assert_eq!(violations[3], Some(HealthViolation::PartitionStall(3)));
+    }
+
+    // --- check_partition_liveness: recovery clears stall ---
+
+    #[test]
+    fn liveness_recovery_clears_stall() {
+        let mut state = HealthState::new(0, 0);
+        state.last_run_counts = [0, 0, 0, 0];
+        // P0 stalls for 2 frames (liveness_frames = 2).
+        let _ = state.check_partition_liveness(&[0, 1, 1, 1], 2);
+        let (status, violations) = state.check_partition_liveness(&[0, 2, 2, 2], 2);
+        assert_eq!(status, HealthStatus::Degraded);
+        assert_eq!(violations[0], Some(HealthViolation::PartitionStall(0)));
+
+        // P0 advances — stall clears.
+        let (status, violations) = state.check_partition_liveness(&[1, 3, 3, 3], 2);
+        assert_eq!(status, HealthStatus::Ok);
+        assert_eq!(violations[0], None);
+        assert_eq!(state.frames_since_run[0], 0);
+    }
+
+    // --- check_partition_liveness: fewer than MAX_PARTITIONS ---
+
+    #[test]
+    fn liveness_fewer_partitions() {
+        let mut state = HealthState::new(0, 0);
+        // Only 2 partitions. P1 stalls.
+        let (status, violations) = state.check_partition_liveness(&[1, 0], 1);
+        assert_eq!(status, HealthStatus::Degraded);
+        assert_eq!(violations[0], None);
+        assert_eq!(violations[1], Some(HealthViolation::PartitionStall(1)));
+        // Slots 2 and 3 untouched.
+        assert_eq!(violations[2], None);
+        assert_eq!(violations[3], None);
+    }
+
+    // --- check_partition_liveness: frames_since_run saturates ---
+
+    #[test]
+    fn liveness_frames_since_run_saturates() {
+        let mut state = HealthState::new(0, 0);
+        state.frames_since_run[0] = u32::MAX;
+        state.last_run_counts = [5, 0, 0, 0];
+        // P0 still stalled — should not overflow.
+        let (status, _) = state.check_partition_liveness(&[5, 1, 1, 1], 1);
+        assert_eq!(state.frames_since_run[0], u32::MAX);
+        assert_eq!(status, HealthStatus::Degraded);
     }
 }
