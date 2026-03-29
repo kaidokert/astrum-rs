@@ -3227,6 +3227,7 @@ mod tests {
     mod events;
     mod last_error;
     mod message;
+    mod pcb_roundtrip;
     mod restart;
     mod scheduler;
     mod sleep;
