@@ -412,14 +412,17 @@ fn main() -> ! {
     };
 
     // Set up HW UART backend with software loopback
-    let regs = UartRegs::new(0x4000_D000);
+    // SAFETY: 0x4000_D000 is the UART1 base address on LM3S6965; the
+    // peripheral region is mapped and we have exclusive access before
+    // interrupts are enabled.
+    let regs = unsafe { UartRegs::from_base(0x4000_D000) };
     regs.init(115_200, 12_000_000);
     let mut hw_backend = HwUartBackend::new(HW_UART_DEV as u8, regs);
     hw_backend.set_loopback(true);
     kern.set_hw_uart(hw_backend);
 
     // Store kernel and register device backends
-    store_kernel(kern);
+    store_kernel(&mut kern);
 
     with_kernel_mut(|k| {
         // SAFETY: Kernel state is stored in a 'static global

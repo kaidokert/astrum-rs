@@ -106,7 +106,7 @@ fn main() -> ! {
     if k.queuing_mut().connect_ports(src, dst).is_err() { loop { kexit!(failure); } }
     SRC_PORT.store(src as u32, Ordering::Release);
     DST_PORT.store(dst as u32, Ordering::Release);
-    store_kernel(k);
+    store_kernel(&mut k);
     // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
     match unsafe { boot::boot_preconfigured::<Cfg>(p) } {
         Ok(never) => match never {},

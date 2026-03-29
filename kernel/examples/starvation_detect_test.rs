@@ -134,7 +134,7 @@ fn main() -> ! {
         .add(Semaphore::new(0, 1))
         .expect("add semaphore");
 
-    store_kernel(k);
+    store_kernel(&mut k);
 
     match boot(p).expect("boot") {}
 }

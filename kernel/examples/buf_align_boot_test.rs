@@ -121,7 +121,7 @@ fn main() -> ! {
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
-    let k = init_kernel(sched, &parts).expect("kernel init");
-    store_kernel(k);
+    let mut k = init_kernel(sched, &parts).expect("kernel init");
+    store_kernel(&mut k);
     match boot(p).expect("boot") {}
 }

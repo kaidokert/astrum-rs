@@ -127,7 +127,7 @@ fn main() -> ! {
         .create_port(PortDirection::Source, 10)
         .expect("create port");
 
-    store_kernel(k);
+    store_kernel(&mut k);
 
     hprintln!(
         "  null={:#x} wrap={:#x}+{} expect={:#x}",

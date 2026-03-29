@@ -112,7 +112,7 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched 1");
-    let k = {
+    let mut k = {
         let stacks = kernel::partition_stacks!(TestConfig, TestConfig::N);
         let [ref mut s0, ref mut s1] = *stacks;
         let memories = [
@@ -142,7 +142,7 @@ fn main() -> ! {
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
-    store_kernel(k);
+    store_kernel(&mut k);
     // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
     match unsafe { boot::boot_preconfigured::<TestConfig>(p) }.expect("boot") {}
 }

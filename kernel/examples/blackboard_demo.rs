@@ -266,7 +266,7 @@ fn main() -> ! {
     for (i, &h) in hints.iter().enumerate() {
         k.partitions_mut().get_mut(i).expect("pcb").set_r0_hint(h);
     }
-    store_kernel(k);
+    store_kernel(&mut k);
     // SAFETY: PCBs populated by Kernel::new() with valid stacks.
     match unsafe { kernel::boot::boot_preconfigured::<DemoConfig>(p) }
         .expect("blackboard_demo: boot") {}

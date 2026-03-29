@@ -172,7 +172,7 @@ fn main() -> ! {
     hprintln!("debug_boot: next_partition = {}", pid);
 
     // Store kernel via store_kernel() from define_unified_kernel!
-    store_kernel(k);
+    store_kernel(&mut k);
     hprintln!("debug_boot: kernel stored");
 
     // Initialize stacks AFTER storing kernel (so set_partition_sp can access it)

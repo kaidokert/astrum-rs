@@ -214,7 +214,7 @@ fn main() -> ! {
     DISPLAY_DST.store(d1 as u32, Ordering::Release);
 
     // TODO: reviewer flagged as unrelated — required by store_kernel signature change in dff1322
-    store_kernel(k);
+    store_kernel(&mut k);
     // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
     match unsafe { boot::boot_preconfigured::<DemoConfig>(p) }.expect("boot") {}
 }

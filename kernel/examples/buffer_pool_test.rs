@@ -333,8 +333,8 @@ fn main() -> ! {
     ];
 
     // Create the unified kernel with new()
-    let k = Kernel::<TestConfig>::new(sched, &memories).expect("kernel creation");
-    store_kernel(k);
+    let mut k = Kernel::<TestConfig>::new(sched, &memories).expect("kernel creation");
+    store_kernel(&mut k);
 
     // Seal the MPU cache so cached_dynamic_region() returns valid data.
     with_kernel_mut(|k| {

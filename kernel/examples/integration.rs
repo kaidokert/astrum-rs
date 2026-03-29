@@ -110,7 +110,7 @@ fn main() -> ! {
     let _ = k
         .messages_mut()
         .add(kernel::message::MessageQueue::<4, 4, 4>::new());
-    store_kernel(k);
+    store_kernel(&mut k);
     // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
     match unsafe { boot::boot_preconfigured::<IntegrationConfig>(p) }.unwrap() {}
 }

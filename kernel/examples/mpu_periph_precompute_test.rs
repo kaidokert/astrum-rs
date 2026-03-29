@@ -114,7 +114,7 @@ fn main() -> ! {
         [MpuRegion::new(0x4000_4000, 4096, 0)],
         [MpuRegion::new(0x4000_5000, 4096, 0)],
     ];
-    let k = {
+    let mut k = {
         let stacks = kernel::partition_stacks!(TestConfig, NP);
         let stacks_ptr = stacks.as_mut_ptr();
         let memories: [_; NP] = core::array::from_fn(|i| {
@@ -133,7 +133,7 @@ fn main() -> ! {
         });
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
-    store_kernel(k);
+    store_kernel(&mut k);
     // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
     match unsafe { boot::boot_preconfigured::<TestConfig>(p) }.expect("boot") {}
 }

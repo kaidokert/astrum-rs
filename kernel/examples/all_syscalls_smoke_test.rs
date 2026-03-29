@@ -109,7 +109,8 @@ fn main() -> ! {
     hprintln!("all_syscalls_smoke_test: start");
     let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("round_robin");
     let parts: [PartitionSpec; Cfg::N] = [PartitionSpec::new(partition_main as PartitionEntry, 0)];
-    store_kernel(init_kernel(sched, &parts).expect("Kernel::create"));
+    let mut k = init_kernel(sched, &parts).expect("Kernel::create");
+    store_kernel(&mut k);
     with_kernel_mut(|k| {
         k.semaphores_mut().add(Semaphore::new(0, 1)).expect("sem");
         let s = k

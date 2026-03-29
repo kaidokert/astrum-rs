@@ -488,7 +488,7 @@ pub fn set_dispatch_hook(hook: SvcDispatchFn) {
 ///
 /// This macro generates:
 /// - `unsafe extern "C" fn dispatch_hook(f: &mut ExceptionFrame)` — the SVC dispatch hook
-/// - `fn store_kernel(k: Kernel<$Config>)` — stores the kernel and installs the hook (logs via `klog!` on failure)
+/// - `fn store_kernel(k: &mut Kernel<$Config>)` — moves kernel to aligned storage, publishes pointer, installs hook
 /// - PendSV accessors: `get_partition_sp_ptr`, `get_partition_sp`, `set_partition_sp`
 ///
 /// # Where Bounds
@@ -750,19 +750,27 @@ macro_rules! define_unified_kernel {
             });
         }
 
-        /// Store the kernel instance and install the SVC dispatch hook.
+        /// Store the kernel and install the SVC dispatch hook.
         ///
         /// This function:
-        /// 1. Stores the provided `Kernel` instance in the global unified kernel storage
-        /// 2. Installs `dispatch_hook` as the SVC exception handler
+        /// 1. Moves the kernel into aligned static storage (`UNIFIED_KERNEL_STORAGE`)
+        ///    which provides the 4096-byte alignment required by MPU configuration
+        /// 2. Publishes the static storage address via `store_kernel_ptr`
+        /// 3. Installs `dispatch_hook` as the SVC exception handler
         ///
-        /// On failure, logs the error via `klog!` before panicking.
-        ///
-        /// Must be called exactly once during initialization, before enabling
-        /// interrupts or starting the scheduler.
-        fn store_kernel(k: $crate::svc::Kernel<'static, $Config>) {
+        /// Takes `&mut` so the caller retains the binding (the value is moved
+        /// out via `core::ptr::read`). Must be called exactly once during
+        /// initialization, before enabling interrupts or starting the scheduler.
+        fn store_kernel(k: &mut $crate::svc::Kernel<'static, $Config>) {
+            // Move the kernel out of the caller's reference into aligned
+            // static storage. We use ptr::read to move without requiring
+            // the caller to give up ownership syntactically; after this
+            // call the caller's binding is logically consumed.
             // SAFETY: Called once during init before interrupts enabled.
-            if let Err(e) = unsafe { $crate::state::init_kernel_state(k) } {
+            // `k` is a valid, initialized Kernel. After ptr::read the
+            // caller must not use the original binding.
+            let owned = unsafe { core::ptr::read(k) };
+            if let Err(e) = unsafe { $crate::state::init_kernel_state(owned) } {
                 $crate::klog!("store_kernel failed: {:?}", e);
                 panic!("{}", e);
             }

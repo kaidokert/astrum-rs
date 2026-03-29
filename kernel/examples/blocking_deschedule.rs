@@ -190,7 +190,7 @@ fn main() -> ! {
     k.set_next_partition(first_pid);
     hprintln!("blocking_deschedule: first_pid={}", first_pid);
 
-    store_kernel(k);
+    store_kernel(&mut k);
     hprintln!("blocking_deschedule: kernel stored");
 
     // Initialize partition stack

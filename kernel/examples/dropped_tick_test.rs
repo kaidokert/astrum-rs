@@ -84,7 +84,8 @@ fn main() -> ! {
 
     let parts: [PartitionSpec; TestConfig::N] =
         [PartitionSpec::new(partition_main as PartitionEntry, 0)];
-    store_kernel(init_kernel(sched, &parts).expect("dropped_tick_test: init_kernel"));
+    let mut k = init_kernel(sched, &parts).expect("dropped_tick_test: init_kernel");
+    store_kernel(&mut k);
 
     match boot(p).expect("dropped_tick_test: boot") {}
 }

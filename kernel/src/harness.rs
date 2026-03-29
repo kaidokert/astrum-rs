@@ -490,8 +490,7 @@ macro_rules! define_unified_harness {
             // SAFETY: boot() -> ! never returns, so `k` lives forever on
             // this stack frame. store_kernel publishes its address for
             // ISR handlers and installs the SVC dispatch hook.
-            // TODO: reviewer flagged as unrelated — required by store_kernel signature change in dff1322
-            store_kernel(k);
+            store_kernel(&mut k);
             unsafe {
                 $crate::boot::boot_preconfigured::<$Config>(peripherals)
             }

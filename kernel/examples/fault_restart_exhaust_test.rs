@@ -246,7 +246,7 @@ fn main() -> ! {
         .expect("pcb_mut(0)")
         .set_fault_policy(FaultPolicy::WarmRestart { max: 2 });
 
-    store_kernel(k);
+    store_kernel(&mut k);
 
     match boot(p).expect("boot") {}
 }

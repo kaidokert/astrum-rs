@@ -79,7 +79,7 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(0, 2)).expect("sched entry 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched entry 1");
 
-    let k = {
+    let mut k = {
         // SAFETY: called once from main before any interrupt handler runs.
         let ptr = &raw mut STACKS;
         let stacks = unsafe { &mut *ptr };
@@ -99,7 +99,7 @@ fn main() -> ! {
         });
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel creation")
     };
-    store_kernel(k);
+    store_kernel(&mut k);
 
     // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
     match unsafe { boot::boot_preconfigured::<TestConfig>(p) }.expect("boot failed") {}

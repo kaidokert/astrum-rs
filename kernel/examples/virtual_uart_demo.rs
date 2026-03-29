@@ -210,7 +210,7 @@ fn main() -> ! {
         k.registry.add(b).expect("register UART-B");
     }
 
-    store_kernel(k);
+    store_kernel(&mut k);
 
     match boot(p).expect("virtual_uart_demo: boot failed") {}
 }

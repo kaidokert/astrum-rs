@@ -78,6 +78,6 @@ fn main() -> ! {
         .create_port(PortDirection::Destination)
         .expect("dst port");
     k.queuing_mut().connect_ports(src, dst).expect("connect");
-    store_kernel(k);
+    store_kernel(&mut k);
     match boot(p).expect("boot") {}
 }

@@ -133,7 +133,7 @@ fn main() -> ! {
         .create_port(PortDirection::Source, 10)
         .expect("create port");
 
-    store_kernel(k);
+    store_kernel(&mut k);
 
     hprintln!("  port_id: {}", port_id);
     hprintln!("  kernel_addr (r3): {:#010x}", KERNEL_ADDR);

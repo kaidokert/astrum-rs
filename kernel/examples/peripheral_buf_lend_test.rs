@@ -121,7 +121,7 @@ fn main() -> ! {
     sched.add_system_window(1).expect("sys1");
 
     // Build partition descriptors with P0 having a UART0 peripheral region.
-    let k = {
+    let mut k = {
         // SAFETY: called once from main before any interrupt handler runs.
         let ptr = (&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NP]>();
         let stacks = unsafe { &mut *ptr };
@@ -146,6 +146,6 @@ fn main() -> ! {
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
-    store_kernel(k);
+    store_kernel(&mut k);
     match boot(p).expect("boot") {}
 }

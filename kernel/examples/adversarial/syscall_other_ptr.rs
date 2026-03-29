@@ -150,7 +150,7 @@ fn main() -> ! {
     let p0_base = stack0.0.as_ptr() as u32;
     let p1_base = stack1.0.as_ptr() as u32;
 
-    store_kernel(k);
+    store_kernel(&mut k);
 
     hprintln!("  port_id: {}", port_id);
     hprintln!(

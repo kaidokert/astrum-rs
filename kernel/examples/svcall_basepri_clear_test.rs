@@ -162,8 +162,8 @@ fn main() -> ! {
         1,
     )
     .expect("ext mem");
-    let k = Kernel::<Config>::new(sched, &[mem0, mem1]).expect("basepri: kernel");
-    store_kernel(k);
+    let mut k = Kernel::<Config>::new(sched, &[mem0, mem1]).expect("basepri: kernel");
+    store_kernel(&mut k);
     // Override dispatch with our verifying wrapper that reads BASEPRI
     // from Handler mode before delegating.
     kernel::svc::set_dispatch_hook(verifying_dispatch_hook);

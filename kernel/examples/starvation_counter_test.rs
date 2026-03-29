@@ -115,7 +115,8 @@ fn main() -> ! {
         PartitionSpec::new(p1_main as PartitionEntry, 0),
         PartitionSpec::new(p2_main as PartitionEntry, 0),
     ];
-    store_kernel(init_kernel(sched, &parts).expect("Kernel::create"));
+    let mut k = init_kernel(sched, &parts).expect("Kernel::create");
+    store_kernel(&mut k);
     with_kernel_mut(|k| {
         k.semaphores_mut()
             .add(Semaphore::new(0, 1))

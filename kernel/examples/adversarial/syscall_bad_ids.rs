@@ -124,9 +124,9 @@ fn main() -> ! {
     let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0];
 
     // Create kernel (no ports needed - we're testing invalid IDs).
-    let k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");
+    let mut k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");
 
-    store_kernel(k);
+    store_kernel(&mut k);
 
     hprintln!(
         "  invalid_partition_id={} expected={:#x}",

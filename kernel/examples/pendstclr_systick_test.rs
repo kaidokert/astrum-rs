@@ -142,6 +142,7 @@ fn main() -> ! {
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
-    store_kernel(init_kernel(sched, &parts).expect("pendstclr_systick: Kernel::create"));
+    let mut k = init_kernel(sched, &parts).expect("pendstclr_systick: Kernel::create");
+    store_kernel(&mut k);
     match boot(p).expect("pendstclr_systick: boot") {}
 }

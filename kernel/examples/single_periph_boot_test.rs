@@ -136,7 +136,7 @@ fn main() -> ! {
 
     // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by
     // `define_unified_harness!` macro expansion at module scope; no extern block needed.
-    let k = {
+    let mut k = {
         // SAFETY: `__PARTITION_STACKS` is a `static mut [AlignedStack1K; NP]` defined
         // by `define_unified_harness!` at module scope.  `AlignedStack1K` is 1024 bytes
         // (256 × u32) with 1024-byte alignment, so casting to `[[u32; STACK_WORDS]; NP]`
@@ -168,6 +168,6 @@ fn main() -> ! {
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
-    store_kernel(k);
+    store_kernel(&mut k);
     match boot(p).expect("boot") {}
 }

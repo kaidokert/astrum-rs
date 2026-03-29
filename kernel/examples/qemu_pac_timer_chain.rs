@@ -243,7 +243,7 @@ fn main() -> ! {
         MpuRegion::new(TIMER0_BASE, TIMER_SIZE, 0),
         MpuRegion::new(TIMER1_BASE, TIMER_SIZE, 0),
     ];
-    let k = {
+    let mut k = {
         let stacks = kernel::partition_stacks!(TestConfig, NP);
         let stacks_ptr = stacks.as_mut_ptr();
         let memories: [_; NP] = core::array::from_fn(|i| {
@@ -273,7 +273,7 @@ fn main() -> ! {
             Err(_) => fatal_halt(),
         }
     };
-    store_kernel(k);
+    store_kernel(&mut k);
     // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
     match unsafe { boot::boot_preconfigured::<TestConfig>(p) } {
         Ok(n) => match n {},

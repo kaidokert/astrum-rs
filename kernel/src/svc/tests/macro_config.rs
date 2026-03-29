@@ -67,7 +67,7 @@ fn unpack_packed_r2_round_trip() {
 ///
 /// The macro generates:
 /// - `unsafe extern "C" fn dispatch_hook(f: &mut ExceptionFrame)`
-/// - `fn store_kernel(k: Kernel<$Config>)`
+/// - `fn store_kernel(k: &mut Kernel<$Config>)`
 ///
 /// Since these involve cortex-m intrinsics (interrupt::free, extern statics),
 /// these tests can only run on ARM targets. Full runtime testing is done

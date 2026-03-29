@@ -117,7 +117,7 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 2)).expect("sched 1");
     sched.add_system_window(1).expect("syswin 1");
     hprintln!("  schedule built ({} entries)", 4);
-    let k = {
+    let mut k = {
         let stacks = kernel::partition_stacks!(TestConfig, NP);
         let stacks_ptr = stacks.as_mut_ptr();
         let memories: [_; NP] = core::array::from_fn(|i| {
@@ -135,7 +135,7 @@ fn main() -> ! {
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
     hprintln!("  kernel created");
-    store_kernel(k);
+    store_kernel(&mut k);
     hprintln!("  kernel stored");
     // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
     hprintln!("  calling boot::boot_preconfigured");

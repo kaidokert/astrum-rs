@@ -114,7 +114,7 @@ fn main() -> ! {
     cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
     cfgs[1].entry_point = EntryAddr::from_entry(p1_main as PartitionEntry);
 
-    let k = Kernel::<Config>::with_config(
+    let mut k = Kernel::<Config>::with_config(
         sched,
         &cfgs,
         kernel::virtual_device::DeviceRegistry::new(),
@@ -122,7 +122,7 @@ fn main() -> ! {
     )
     .expect("tick_fairness: Kernel::create");
 
-    store_kernel(k);
+    store_kernel(&mut k);
 
     match boot(p).expect("tick_fairness: boot") {}
 }

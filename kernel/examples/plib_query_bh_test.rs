@@ -135,14 +135,14 @@ fn main() -> ! {
 
     let mut cfgs = PartitionConfig::sentinel_array::<1>();
     cfgs[0].entry_point = EntryAddr::from_entry(partition_main as PartitionEntry);
-    let k = Kernel::<TestConfig>::with_config(
+    let mut k = Kernel::<TestConfig>::with_config(
         sched,
         &cfgs,
         kernel::virtual_device::DeviceRegistry::new(),
         &[],
     )
     .expect("kernel");
-    store_kernel(k);
+    store_kernel(&mut k);
 
     match boot(p).expect("boot") {}
 }

@@ -126,7 +126,7 @@ fn main() -> ! {
         .create_port(PortDirection::Destination, 0)
         .expect("dst port");
     k.sampling_mut().connect_ports(src, dst).expect("connect");
-    store_kernel(k);
+    store_kernel(&mut k);
 
     match boot(p).expect("plib_sampling_test: boot") {}
 }

@@ -135,7 +135,7 @@ fn main() -> ! {
     sched.add_system_window(1).expect("syswin 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched 1");
     sched.add_system_window(1).expect("syswin 1");
-    let k = {
+    let mut k = {
         let stacks = kernel::partition_stacks!(TestConfig, NP);
         let stacks_ptr = stacks.as_mut_ptr();
         let memories: [_; NP] = core::array::from_fn(|i| {
@@ -152,7 +152,7 @@ fn main() -> ! {
         });
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };
-    store_kernel(k);
+    store_kernel(&mut k);
     // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
     match unsafe { boot::boot_preconfigured::<TestConfig>(p) }.expect("boot") {}
 }

@@ -210,7 +210,7 @@ fn main() -> ! {
     // stack_base/stack_size point at the actual partition stacks (STACKS
     // array), not the data regions. mpu_region carries the data-region
     // descriptor that DynamicStrategy programs into MPU R4.
-    let k = {
+    let mut k = {
         // SAFETY: before interrupts; single-core exclusive.
         let ptr = &raw mut STACKS;
         let stacks: &mut [AlignedStack; NP] = unsafe { &mut *ptr };
@@ -233,7 +233,7 @@ fn main() -> ! {
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel creation")
     };
-    store_kernel(k);
+    store_kernel(&mut k);
 
     // Seal the MPU cache so cached_dynamic_region() returns valid data.
     with_kernel_mut(|k| {

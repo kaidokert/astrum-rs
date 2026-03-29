@@ -129,7 +129,7 @@ fn main() -> ! {
     k.semaphores_mut()
         .add(Semaphore::new(0, 1))
         .expect("qemu_smoke: add semaphore");
-    store_kernel(k);
+    store_kernel(&mut k);
 
     match boot(p).expect("qemu_smoke: boot") {}
 }

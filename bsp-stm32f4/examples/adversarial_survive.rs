@@ -187,8 +187,8 @@ fn main() -> ! {
     ];
     // TODO(panic-free): init_kernel() fails on mis-sized partition tables;
     // structural guarantee from TestConfig::N but could propagate error.
-    let k = init_kernel(sched, &parts).expect("init_kernel");
-    store_kernel(k);
+    let mut k = init_kernel(sched, &parts).expect("init_kernel");
+    store_kernel(&mut k);
 
     // Log after init_kernel so RTT is initialized (init_rtt is called inside init_kernel).
     klog!("adversarial_survive: start");

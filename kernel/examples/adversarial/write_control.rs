@@ -122,9 +122,9 @@ fn main() -> ! {
     .expect("ext mem");
     let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0];
 
-    let k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");
+    let mut k = Kernel::<TestConfig>::new(sched, &mems).expect("kernel creation");
 
-    store_kernel(k);
+    store_kernel(&mut k);
 
     match boot(p).expect("write_control: boot failed") {}
 }
