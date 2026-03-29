@@ -603,6 +603,9 @@ health-partition = []
 # Mock HAL register bank for host-mode tests.
 mock-hal = ["rtos-traits/mock-hal"]
 
+# Loom concurrency model-checking (host-mode only).
+loom = ["dep:loom"]
+
 # SEGGER SystemView tracing via rtos-trace.
 trace = ["dep:rtos-trace", "dep:systemview-target", "dep:rtt-target", "dep:critical-section"]
 
@@ -617,6 +620,9 @@ kernel-16k = []
 # Escape hatch: suppresses the mutual-exclusivity guard so `--all-features`
 # can compile (kernel-16k wins). Not intended for direct use.
 _kernel-size-any = []
+
+[target.'cfg(not(target_arch = "arm"))'.dependencies]
+loom = { version = "0.7", optional = true }
 
 [target.'cfg(target_arch = "arm")'.dependencies]
 systemview-target = { version = "0.3", default-features = false, features = ["cortex-m", "callbacks-os", "ext-rtt-channels-2"], optional = true } # TODO: reviewer false positive – v0.3.0 only provides ext-rtt-channels-2, not ext-rtt-channels-1

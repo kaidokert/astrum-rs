@@ -124,7 +124,7 @@ pub mod waitqueue;
 
 #[cfg(test)]
 pub mod ipc_integrity_tests;
-#[cfg(test)]
+#[cfg(any(test, loom))]
 pub mod loom_compat;
 #[cfg(test)]
 pub mod test_harness;
