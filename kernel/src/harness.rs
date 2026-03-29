@@ -424,14 +424,11 @@ macro_rules! define_unified_harness {
         /// [`PartitionSpec`]($crate::partition::PartitionSpec) entries and
         /// store it into global kernel state.
         ///
-        /// Each entry in `entries` is a `PartitionSpec` — an
-        /// `(entry_point_fn, r0_hint)` pair.  The function pointer is
-        /// converted to a `u32` address and written into the corresponding
-        /// partition memory descriptor.  `r0_hint` is forwarded via
-        /// `with_r0_hint` so that `boot_preconfigured` can pass it to
-        /// `init_stack_frame` as `r0`.  MPU regions use sentinel values
-        /// `(base=0, size=0, attrs=0)` because the harness does not configure
-        /// per-partition MPU regions.
+        /// Each entry in `entries` is a `PartitionSpec` carrying an entry
+        /// point, `r0` hint, and optional MPU / fault-policy / error-handler
+        /// configuration.  All fields are forwarded to the corresponding
+        /// `ExternalPartitionMemory` builder methods.  When `data_mpu` is
+        /// `None`, a sentinel `MpuRegion(0,0,0)` is used.
         fn init_kernel(
             sched: $crate::scheduler::ScheduleTable<
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
@@ -444,17 +441,36 @@ macro_rules! define_unified_harness {
             // exactly once from `boot()` before interrupts are enabled, so there are
             // no concurrent accesses.
             let stacks = unsafe { &mut *(&raw mut __PARTITION_STACKS) };
-            let sentinel_mpu = MpuRegion::new(0, 0, 0);
             let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
-                let mem = ExternalPartitionMemory::from_aligned_stack(
-                    stk, spec.entry_point(), sentinel_mpu, i as u8)
+                let data_mpu = spec.data_mpu()
+                    .unwrap_or(MpuRegion::new(0, 0, 0));
+                let mut mem = ExternalPartitionMemory::from_aligned_stack(
+                    stk, spec.entry_point(), data_mpu, i as u8)
                     .map_err(|e| {
                         $crate::klog!("init_kernel failed: {:?}", e);
                         $crate::harness::BootError::KernelInit(e)
                     })?
-                    .with_r0_hint(spec.r0());
+                    .with_r0_hint(spec.r0())
+                    .with_fault_policy(spec.fault_policy());
+                if let Some(code_region) = spec.code_mpu() {
+                    mem = mem.with_code_mpu_region(code_region)
+                        .map_err(|e| {
+                            $crate::klog!("init_kernel failed: {:?}", e);
+                            $crate::harness::BootError::KernelInit(e)
+                        })?;
+                }
+                if !spec.peripherals().is_empty() {
+                    mem = mem.with_peripheral_regions(spec.peripherals())
+                        .map_err(|e| {
+                            $crate::klog!("init_kernel failed: {:?}", e);
+                            $crate::harness::BootError::KernelInit(e)
+                        })?;
+                }
+                if let Some(handler) = spec.error_handler() {
+                    mem = mem.with_error_handler(handler);
+                }
                 memories.push(mem)
                     .map_err(|_| {
                         $crate::klog!("init_kernel failed: partition table full");
@@ -548,17 +564,36 @@ macro_rules! define_unified_harness {
             // exactly once from `main()` before interrupts are enabled, so there are
             // no concurrent accesses.
             let stacks = unsafe { &mut *(&raw mut __PARTITION_STACKS) };
-            let sentinel_mpu = MpuRegion::new(0, 0, 0);
             let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
-                let mem = ExternalPartitionMemory::from_aligned_stack(
-                    stk, spec.entry_point(), sentinel_mpu, i as u8)
+                let data_mpu = spec.data_mpu()
+                    .unwrap_or(MpuRegion::new(0, 0, 0));
+                let mut mem = ExternalPartitionMemory::from_aligned_stack(
+                    stk, spec.entry_point(), data_mpu, i as u8)
                     .map_err(|e| {
                         $crate::klog!("init_kernel failed: {:?}", e);
                         $crate::harness::BootError::KernelInit(e)
                     })?
-                    .with_r0_hint(spec.r0());
+                    .with_r0_hint(spec.r0())
+                    .with_fault_policy(spec.fault_policy());
+                if let Some(code_region) = spec.code_mpu() {
+                    mem = mem.with_code_mpu_region(code_region)
+                        .map_err(|e| {
+                            $crate::klog!("init_kernel failed: {:?}", e);
+                            $crate::harness::BootError::KernelInit(e)
+                        })?;
+                }
+                if !spec.peripherals().is_empty() {
+                    mem = mem.with_peripheral_regions(spec.peripherals())
+                        .map_err(|e| {
+                            $crate::klog!("init_kernel failed: {:?}", e);
+                            $crate::harness::BootError::KernelInit(e)
+                        })?;
+                }
+                if let Some(handler) = spec.error_handler() {
+                    mem = mem.with_error_handler(handler);
+                }
                 memories.push(mem)
                     .map_err(|_| {
                         $crate::klog!("init_kernel failed: partition table full");
