@@ -627,3 +627,6 @@ plib = { path = "../plib" }
 [target.'cfg(not(target_arch = "arm"))'.dev-dependencies]
 rtos-traits = { path = "../rtos-traits", features = ["mock-hal"] }
 trybuild = "1"
+
+[target.'cfg(not(target_arch = "arm"))'.dev-dependencies.loom]
+version = "0.7"

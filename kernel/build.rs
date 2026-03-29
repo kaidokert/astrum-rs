@@ -140,6 +140,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "cargo::rustc-check-cfg=cfg(panic_backend, values(\"semihosting\", \"rtt\", \"halt\"))"
     );
 
+    // The `loom` crate sets `--cfg loom` when enabled; declare it for check-cfg.
+    println!("cargo::rustc-check-cfg=cfg(loom)");
+
     let target = env::var("TARGET").unwrap_or_default();
     if !target.contains("thumb") {
         return Ok(());
