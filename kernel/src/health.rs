@@ -1,5 +1,18 @@
 //! Health monitoring types for partition liveness and schedule integrity.
 
+/// Check a syscall return code. Returns the value on success.
+/// If the high bit is set (error), enters an infinite loop to halt the
+/// partition — this is the only safe response in a `no_std` health monitor
+/// where we cannot propagate errors.
+#[inline]
+fn check_svc(rc: u32) -> u32 {
+    if rc & 0x8000_0000 != 0 {
+        #[allow(clippy::empty_loop)]
+        loop {}
+    }
+    rc
+}
+
 /// Overall health status of the system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealthStatus {
@@ -379,6 +392,7 @@ impl HealthState {
 
 /// Configuration for the system health monitor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(unpredictable_function_pointer_comparisons)]
 // TODO: reviewer false positive — partition_liveness_frames field and its validation already exist in the committed base
 pub struct SystemHealthConfig {
     /// Maximum ticks allowed for one major frame before an overrun is raised.
@@ -389,6 +403,14 @@ pub struct SystemHealthConfig {
     pub tick_drift_ppm: u16,
     /// Action to take when a violation is detected.
     pub on_violation: HealthAction,
+    /// Sampling port ID for health status reporting.
+    pub sampling_port_id: u32,
+    /// Number of partitions to monitor for liveness.
+    pub num_partitions: u8,
+    /// Optional hardware watchdog kick function.
+    /// Called each iteration when all health checks pass (`HealthStatus::Ok`).
+    /// Configurable from static data via `health_entry`'s `r0` config pointer.
+    pub watchdog_kick: Option<fn()>,
 }
 
 impl Default for SystemHealthConfig {
@@ -398,6 +420,9 @@ impl Default for SystemHealthConfig {
             partition_liveness_frames: 3,
             tick_drift_ppm: 100,
             on_violation: HealthAction::Log,
+            sampling_port_id: 0,
+            num_partitions: MAX_PARTITIONS as u8,
+            watchdog_kick: None,
         }
     }
 }
@@ -414,7 +439,189 @@ impl SystemHealthConfig {
         if self.tick_drift_ppm == 0 {
             return Err("tick_drift_ppm must be non-zero");
         }
+        if self.num_partitions == 0 || self.num_partitions as usize > MAX_PARTITIONS {
+            return Err("num_partitions must be 1..=MAX_PARTITIONS");
+        }
         Ok(())
+    }
+}
+
+/// Trait for optional hardware watchdog integration.
+/// Called only when all health checks pass (`HealthStatus::Ok`).
+pub trait WatchdogKick {
+    fn kick(&mut self);
+}
+
+/// Health partition: holds state + config, provides `run()` loop.
+pub struct SystemHealthPartition<'a, W: WatchdogKick> {
+    state: HealthState,
+    config: &'a SystemHealthConfig,
+    watchdog: Option<&'a mut W>,
+}
+
+impl<'a, W: WatchdogKick> SystemHealthPartition<'a, W> {
+    pub fn new(
+        config: &'a SystemHealthConfig,
+        watchdog: Option<&'a mut W>,
+        initial_tick: u64,
+        initial_frame: u32,
+    ) -> Self {
+        Self {
+            state: HealthState::new(initial_tick, initial_frame),
+            config,
+            watchdog,
+        }
+    }
+
+    /// Execute one iteration of the health check loop. Returns merged status.
+    pub fn run_once(
+        &mut self,
+        current_tick: u64,
+        current_frame_count: u32,
+        run_counts: &[u32],
+    ) -> HealthStatus {
+        let (sched_status, sched_violation) = self.state.check_schedule_health(
+            current_tick,
+            current_frame_count,
+            self.config.major_frame_deadline_ticks,
+        );
+
+        let (live_status, live_violations) = self
+            .state
+            .check_partition_liveness(run_counts, self.config.partition_liveness_frames);
+
+        let merged = sched_status.merge(live_status);
+
+        let mut all_violations = [None; MAX_PARTITIONS + 1];
+        all_violations[0] = sched_violation;
+        for (i, v) in live_violations.iter().enumerate() {
+            if let Some(slot) = all_violations.get_mut(i + 1) {
+                *slot = *v;
+            }
+        }
+
+        let rc = report_status(self.config.sampling_port_id, merged, &all_violations);
+        check_svc(rc);
+
+        if merged == HealthStatus::Ok {
+            if let Some(ref mut wd) = self.watchdog {
+                wd.kick();
+            }
+        }
+
+        merged
+    }
+
+    /// Execute the health check loop forever, yielding between iterations.
+    pub fn run(&mut self) -> ! {
+        loop {
+            let rc = rtos_traits::svc!(rtos_traits::syscall::SYS_GET_TIME, 0u32, 0u32, 0u32);
+            let current_tick = check_svc(rc) as u64;
+
+            let rc = rtos_traits::svc!(
+                rtos_traits::syscall::SYS_GET_MAJOR_FRAME_COUNT,
+                0u32,
+                0u32,
+                0u32
+            );
+            let current_frame_count = check_svc(rc);
+
+            let mut run_counts = [0u32; MAX_PARTITIONS];
+            let n = (self.config.num_partitions as usize).min(MAX_PARTITIONS);
+            for i in 0..n {
+                if let Some(slot) = run_counts.get_mut(i) {
+                    let rc = rtos_traits::svc!(
+                        rtos_traits::syscall::SYS_GET_PARTITION_RUN_COUNT,
+                        i as u32,
+                        0u32,
+                        0u32
+                    );
+                    *slot = check_svc(rc);
+                }
+            }
+            let status = self.run_once(current_tick, current_frame_count, &run_counts[..n]);
+
+            // Act on the configured violation action when health is not Ok.
+            if status != HealthStatus::Ok {
+                match self.config.on_violation {
+                    HealthAction::Log => { /* already reported via sampling port */ }
+                    HealthAction::Halt => {
+                        let rc = rtos_traits::svc!(
+                            rtos_traits::syscall::SYS_REQUEST_STOP,
+                            0u32,
+                            0u32,
+                            0u32
+                        );
+                        check_svc(rc);
+                    }
+                    HealthAction::Restart(pid) => {
+                        let rc = rtos_traits::svc!(
+                            rtos_traits::syscall::SYS_REQUEST_RESTART,
+                            pid as u32,
+                            0u32,
+                            0u32
+                        );
+                        check_svc(rc);
+                    }
+                }
+            }
+
+            let rc = rtos_traits::svc!(rtos_traits::syscall::SYS_YIELD, 0u32, 0u32, 0u32);
+            check_svc(rc);
+        }
+    }
+
+    pub fn state(&self) -> &HealthState {
+        &self.state
+    }
+}
+
+/// Partition entry point for the health monitor.
+///
+/// `r0` must contain a pointer to a `&'static SystemHealthConfig` provided by the
+/// partition spec.  The entry point reads the current tick and frame count via
+/// syscalls so that the initial `HealthState` does not trigger false violations.
+/// Initial syscall failures are treated as fatal (halts the partition).
+pub extern "C" fn health_entry(r0: u32) -> ! {
+    // SAFETY: The caller (kernel partition loader) places a valid
+    // `*const SystemHealthConfig` in r0 via PartitionSpec::body().
+    let config: &'static SystemHealthConfig = unsafe { &*(r0 as *const SystemHealthConfig) };
+
+    /// Adapts `Option<fn()>` from config into a `WatchdogKick` implementation.
+    struct FnWatchdog(fn());
+    impl WatchdogKick for FnWatchdog {
+        fn kick(&mut self) {
+            (self.0)();
+        }
+    }
+
+    let initial_tick = {
+        let rc = rtos_traits::svc!(rtos_traits::syscall::SYS_GET_TIME, 0u32, 0u32, 0u32);
+        check_svc(rc) as u64
+    };
+
+    let initial_frame = {
+        let rc = rtos_traits::svc!(
+            rtos_traits::syscall::SYS_GET_MAJOR_FRAME_COUNT,
+            0u32,
+            0u32,
+            0u32
+        );
+        check_svc(rc)
+    };
+
+    match config.watchdog_kick {
+        Some(f) => {
+            let mut wd = FnWatchdog(f);
+            let mut partition =
+                SystemHealthPartition::new(config, Some(&mut wd), initial_tick, initial_frame);
+            partition.run()
+        }
+        None => {
+            let mut partition =
+                SystemHealthPartition::<FnWatchdog>::new(config, None, initial_tick, initial_frame);
+            partition.run()
+        }
     }
 }
 
@@ -488,6 +695,8 @@ mod tests {
         assert_eq!(cfg.partition_liveness_frames, 3);
         assert_eq!(cfg.tick_drift_ppm, 100);
         assert_eq!(cfg.on_violation, HealthAction::Log);
+        assert_eq!(cfg.sampling_port_id, 0);
+        assert_eq!(cfg.num_partitions, MAX_PARTITIONS as u8);
     }
 
     #[test]
@@ -537,6 +746,9 @@ mod tests {
             partition_liveness_frames: 10,
             tick_drift_ppm: 50,
             on_violation: HealthAction::Halt,
+            sampling_port_id: 1,
+            num_partitions: 2,
+            watchdog_kick: None,
         };
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.on_violation, HealthAction::Halt);
@@ -555,6 +767,9 @@ mod tests {
             partition_liveness_frames: 1,
             tick_drift_ppm: 500,
             on_violation: HealthAction::Restart(2),
+            sampling_port_id: 0,
+            num_partitions: 1,
+            watchdog_kick: None,
         };
         assert!(cfg3.validate().is_ok());
         assert_eq!(cfg3.on_violation, HealthAction::Restart(2));
@@ -567,6 +782,9 @@ mod tests {
             partition_liveness_frames: 0,
             tick_drift_ppm: 0,
             on_violation: HealthAction::Log,
+            sampling_port_id: 0,
+            num_partitions: 0,
+            watchdog_kick: None,
         };
         assert_eq!(
             cfg.validate(),
@@ -581,6 +799,9 @@ mod tests {
             partition_liveness_frames: u16::MAX,
             tick_drift_ppm: u16::MAX,
             on_violation: HealthAction::Log,
+            sampling_port_id: u32::MAX,
+            num_partitions: MAX_PARTITIONS as u8,
+            watchdog_kick: None,
         };
         assert!(cfg.validate().is_ok());
     }
@@ -964,5 +1185,99 @@ mod tests {
         let violations = [Some(HealthViolation::ScheduleOverrun), None];
         assert_eq!(report_status(0, HealthStatus::Degraded, &violations), 0);
         assert_eq!(report_status(0, HealthStatus::Ok, &[]), 0);
+    }
+
+    #[test]
+    fn config_num_partitions_validation() {
+        let err = "num_partitions must be 1..=MAX_PARTITIONS";
+        let c0 = SystemHealthConfig {
+            num_partitions: 0,
+            ..SystemHealthConfig::default()
+        };
+        assert_eq!(c0.validate(), Err(err));
+        let c5 = SystemHealthConfig {
+            num_partitions: MAX_PARTITIONS as u8 + 1,
+            ..SystemHealthConfig::default()
+        };
+        assert_eq!(c5.validate(), Err(err));
+    }
+
+    struct MockWatchdog {
+        kick_count: u32,
+    }
+    impl WatchdogKick for MockWatchdog {
+        fn kick(&mut self) {
+            self.kick_count += 1;
+        }
+    }
+
+    fn run_once_with_wd(
+        cfg: &SystemHealthConfig,
+        tick: u64,
+        frame: u32,
+        counts: &[u32],
+    ) -> (HealthStatus, u32) {
+        let mut wd = MockWatchdog { kick_count: 0 };
+        let s = {
+            let mut p = SystemHealthPartition::new(cfg, Some(&mut wd), 0, 0);
+            p.run_once(tick, frame, counts)
+        };
+        (s, wd.kick_count)
+    }
+
+    #[test]
+    fn partition_run_once_watchdog_behavior() {
+        let cfg2 = SystemHealthConfig {
+            num_partitions: 2,
+            ..SystemHealthConfig::default()
+        };
+        // Ok kicks watchdog.
+        let (s, k) = run_once_with_wd(&cfg2, 100, 1, &[1, 1]);
+        assert_eq!(s, HealthStatus::Ok);
+        assert_eq!(k, 1);
+        // Critical (overrun) does not kick.
+        let cfg_ov = SystemHealthConfig {
+            major_frame_deadline_ticks: 100,
+            num_partitions: 2,
+            ..SystemHealthConfig::default()
+        };
+        let (s, k) = run_once_with_wd(&cfg_ov, 200, 0, &[1, 1]);
+        assert_eq!(s, HealthStatus::Critical);
+        assert_eq!(k, 0);
+        // Degraded (stall) does not kick.
+        let cfg_st = SystemHealthConfig {
+            partition_liveness_frames: 1,
+            num_partitions: 2,
+            ..SystemHealthConfig::default()
+        };
+        let (s, k) = run_once_with_wd(&cfg_st, 50, 1, &[1, 0]);
+        assert_eq!(s, HealthStatus::Degraded);
+        assert_eq!(k, 0);
+    }
+
+    #[test]
+    fn partition_no_watchdog_and_state_accessor() {
+        let config = SystemHealthConfig::default();
+        let mut p = SystemHealthPartition::<MockWatchdog>::new(&config, None, 42, 3);
+        assert_eq!(p.state().last_major_frame_tick(), 42);
+        assert_eq!(p.state().last_major_frame_count(), 3);
+        let s = p.run_once(100, 4, &[1, 1, 1, 1]);
+        assert_eq!(s, HealthStatus::Ok);
+        assert_eq!(p.state().last_major_frame_tick(), 100);
+        assert_eq!(p.state().last_major_frame_count(), 4);
+    }
+
+    #[test]
+    fn partition_multi_cycle_and_entry_signature() {
+        let cfg = SystemHealthConfig {
+            num_partitions: 1,
+            ..SystemHealthConfig::default()
+        };
+        let mut p = SystemHealthPartition::<MockWatchdog>::new(&cfg, None, 0, 0);
+        for i in 1..=3u64 {
+            assert_eq!(p.run_once(i * 100, i as u32, &[i as u32]), HealthStatus::Ok);
+        }
+        assert_eq!(p.run_once(5000, 3, &[4]), HealthStatus::Critical);
+        let _: extern "C" fn(u32) -> ! = health_entry; // PartitionBody signature check
     }
 }
