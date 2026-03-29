@@ -1126,7 +1126,7 @@ where
     /// Validates that: schedule is non-empty, all schedule entries reference
     /// valid partitions, and all partition configs pass MPU/stack validation.
     /// Use this when explicitly supplying a `KernelConfig` type parameter.
-    pub fn with_config(
+    pub(crate) fn with_config(
         schedule: ScheduleTable<{ C::SCHED }>,
         configs: &[PartitionConfig],
         registry: crate::virtual_device::DeviceRegistry<'static, { C::DR }>,

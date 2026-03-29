@@ -618,34 +618,35 @@ impl PartitionControlBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct PartitionConfig {
-    pub id: u8,
-    pub entry_point: EntryAddr,
-    pub mpu_region: MpuRegion,
+pub(crate) struct PartitionConfig {
+    pub(crate) id: u8,
+    pub(crate) entry_point: EntryAddr,
+    pub(crate) mpu_region: MpuRegion,
     /// Optional peripheral register block regions for user-space drivers.
     /// Supports up to 3 peripheral regions (MAX_PERIPHERAL_REGIONS).
-    pub peripheral_regions: PeripheralRegionVec,
+    pub(crate) peripheral_regions: PeripheralRegionVec,
     /// Initial r0 value passed to the partition entry point.
-    pub r0_hint: u32,
+    pub(crate) r0_hint: u32,
     /// Optional MPU region for the partition's code (text + rodata).
-    pub code_mpu_region: Option<MpuRegion>,
+    pub(crate) code_mpu_region: Option<MpuRegion>,
     /// Stack base address. Zero means sentinel (patched later by boot).
-    pub stack_base: u32,
+    pub(crate) stack_base: u32,
     /// Stack size in bytes. Zero means sentinel (patched later by boot).
-    pub stack_size: u32,
+    pub(crate) stack_size: u32,
     /// Fault handling policy for this partition.
-    pub fault_policy: FaultPolicy,
+    pub(crate) fault_policy: FaultPolicy,
     /// Entry point address for the partition's error handler.
-    pub error_handler: Option<u32>,
+    pub(crate) error_handler: Option<u32>,
 }
 
+#[allow(dead_code)] // Methods used in #[cfg(test)] within this crate
 impl PartitionConfig {
     /// Create a fully specified partition config with no peripheral regions.
     ///
     /// Use this when the partition has real MPU regions known at build time.
     /// `peripheral_regions` defaults to empty; chain field assignment if
     /// peripherals are needed.
-    pub fn new(id: u8, entry_point: impl Into<EntryAddr>, mpu_region: MpuRegion) -> Self {
+    pub(crate) fn new(id: u8, entry_point: impl Into<EntryAddr>, mpu_region: MpuRegion) -> Self {
         Self {
             id,
             entry_point: entry_point.into(),
@@ -664,7 +665,7 @@ impl PartitionConfig {
     ///
     /// Sets `entry_point` and `mpu_region` to zero sentinels, with an empty
     /// `peripheral_regions` vector.  Only `id` is caller-supplied.
-    pub fn sentinel(id: u8) -> Self {
+    pub(crate) fn sentinel(id: u8) -> Self {
         Self {
             id,
             entry_point: EntryAddr::from(0u32),
@@ -686,7 +687,7 @@ impl PartitionConfig {
     /// # Panics
     ///
     /// Panics if `N > 256` (partition ID is `u8`).
-    pub fn sentinel_array<const N: usize>() -> [PartitionConfig; N] {
+    pub(crate) fn sentinel_array<const N: usize>() -> [PartitionConfig; N] {
         assert!(
             N <= 256,
             "sentinel_array: N must be <= 256 (partition ID is u8)"
@@ -695,7 +696,7 @@ impl PartitionConfig {
     }
 
     /// Builder: set the error handler entry point address.
-    pub fn with_error_handler(mut self, addr: u32) -> Self {
+    pub(crate) fn with_error_handler(mut self, addr: u32) -> Self {
         self.error_handler = Some(addr);
         self
     }
@@ -708,7 +709,7 @@ impl PartitionConfig {
     /// 3. Each peripheral region `(base, size)` must pass [`validate_mpu_region`].
     /// 4. If present, the code MPU region `(base, size)` must pass [`validate_mpu_region`].
     /// 5. If a code MPU region is present, the entry point must fall within it.
-    pub fn validate(&self) -> Result<(), ConfigError> {
+    pub(crate) fn validate(&self) -> Result<(), ConfigError> {
         // All valid Cortex-M function pointers must have the Thumb bit
         // (bit[0]) set, since the processor only supports Thumb state.
         if (self.entry_point.raw() & 1) == 0 {
