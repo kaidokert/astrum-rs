@@ -30,6 +30,79 @@ pub trait RegisterBank {
 // moving `modify` to a separate `RegisterBankExt` extension trait or using a non-generic
 // signature (e.g. `fn modify(&mut self, offset: usize, f: &dyn FnOnce(u32) -> u32)`).
 
+/// Mock register bank for testing, backed by BTreeMap with write logging.
+///
+/// Provides pre-loading via `set()`, write log recording, and assertion
+/// helpers (`assert_wrote`, `assert_sequence`) for verifying register access
+/// patterns in unit tests.
+#[cfg(any(test, feature = "mock-hal"))]
+pub struct MockRegisterBank {
+    regs: std::collections::BTreeMap<usize, u32>,
+    log: Vec<(usize, u32)>,
+}
+
+#[cfg(any(test, feature = "mock-hal"))]
+impl MockRegisterBank {
+    /// Create an empty mock register bank. All reads return 0 by default.
+    pub fn new() -> Self {
+        Self {
+            regs: std::collections::BTreeMap::new(),
+            log: Vec::new(),
+        }
+    }
+
+    /// Pre-load a register value before test execution.
+    pub fn set(&mut self, offset: usize, value: u32) {
+        self.regs.insert(offset, value);
+    }
+
+    /// Assert that a specific (offset, value) pair appears in the write log.
+    ///
+    /// # Panics
+    /// Panics if the write was not recorded.
+    pub fn assert_wrote(&self, offset: usize, value: u32) {
+        assert!(
+            self.log.contains(&(offset, value)),
+            "expected write({:#x}, {:#010x}) not found in log: {:?}",
+            offset,
+            value,
+            self.log
+        );
+    }
+
+    /// Assert that the entire write log matches `expected` exactly.
+    ///
+    /// # Panics
+    /// Panics if the log differs from `expected`.
+    pub fn assert_sequence(&self, expected: &[(usize, u32)]) {
+        assert_eq!(self.log.as_slice(), expected, "write log mismatch");
+    }
+
+    /// Return a reference to the write log.
+    pub fn write_log(&self) -> &[(usize, u32)] {
+        &self.log
+    }
+}
+
+#[cfg(any(test, feature = "mock-hal"))]
+impl Default for MockRegisterBank {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(any(test, feature = "mock-hal"))]
+impl RegisterBank for MockRegisterBank {
+    fn read(&self, offset: usize) -> u32 {
+        self.regs.get(&offset).copied().unwrap_or(0)
+    }
+
+    fn write(&mut self, offset: usize, value: u32) {
+        self.regs.insert(offset, value);
+        self.log.push((offset, value));
+    }
+}
+
 /// MMIO-backed register bank using volatile pointer access.
 ///
 /// Wraps a raw `*mut u32` base pointer. Each offset is a byte offset
@@ -92,82 +165,101 @@ impl RegisterBank for MmioRegisterBank {
 mod tests {
     use super::*;
 
-    /// Minimal mock register bank backed by a fixed-size array.
-    struct MockRegisterBank {
-        regs: [u32; 4],
-    }
-
-    impl MockRegisterBank {
-        fn new() -> Self {
-            Self { regs: [0; 4] }
-        }
-    }
-
-    impl RegisterBank for MockRegisterBank {
-        fn read(&self, offset: usize) -> u32 {
-            assert!(
-                offset.is_multiple_of(4),
-                "mock read offset must be word-aligned"
-            );
-            *self
-                .regs
-                .get(offset / 4)
-                .expect("mock read offset out of range")
-        }
-
-        fn write(&mut self, offset: usize, value: u32) {
-            assert!(
-                offset.is_multiple_of(4),
-                "mock write offset must be word-aligned"
-            );
-            *self
-                .regs
-                .get_mut(offset / 4)
-                .expect("mock write offset out of range") = value;
-        }
+    #[test]
+    fn read_default_zero() {
+        let bank = MockRegisterBank::new();
+        assert_eq!(bank.read(0), 0);
+        assert_eq!(bank.read(0x100), 0);
+        assert_eq!(bank.read(0xFFFC), 0);
     }
 
     #[test]
-    fn read_write_roundtrip() {
+    fn write_read_roundtrip() {
         let mut bank = MockRegisterBank::new();
         bank.write(0, 0xDEAD_BEEF);
         assert_eq!(bank.read(0), 0xDEAD_BEEF);
 
         bank.write(4, 0x1234_5678);
         assert_eq!(bank.read(4), 0x1234_5678);
-        // First register unchanged
         assert_eq!(bank.read(0), 0xDEAD_BEEF);
     }
 
     #[test]
-    fn modify_reads_then_writes_transformed_value() {
+    fn write_log_records_all_writes() {
         let mut bank = MockRegisterBank::new();
-        bank.write(0, 0x0000_00FF);
+        bank.write(0, 0xAA);
+        bank.write(4, 0xBB);
+        bank.write(0, 0xCC);
 
-        // modify should read 0xFF, apply the OR, write back 0xFF0F
-        bank.modify(0, |v| v | 0x0000_0F00);
-        assert_eq!(bank.read(0), 0x0000_0FFF);
+        assert_eq!(bank.write_log(), &[(0, 0xAA), (4, 0xBB), (0, 0xCC)]);
     }
 
     #[test]
-    fn modify_on_different_offsets() {
+    fn modify_logs_the_write() {
         let mut bank = MockRegisterBank::new();
-        bank.write(0, 0x0001);
-        bank.write(8, 0x0010);
-
-        bank.modify(0, |v| v << 4);
-        bank.modify(8, |v| v | 0xFF00);
-
-        assert_eq!(bank.read(0), 0x0010);
-        assert_eq!(bank.read(8), 0xFF10);
+        bank.write(0, 0x00FF);
+        bank.modify(0, |v| v | 0x0F00);
+        assert_eq!(bank.read(0), 0x0FFF);
+        // Log: initial write + modify's write
+        assert_eq!(bank.write_log(), &[(0, 0x00FF), (0, 0x0FFF)]);
     }
 
     #[test]
-    fn modify_clear_bits() {
+    fn assert_wrote_passes_on_match() {
         let mut bank = MockRegisterBank::new();
-        bank.write(4, 0xFFFF_FFFF);
+        bank.write(8, 0x42);
+        bank.assert_wrote(8, 0x42);
+    }
 
-        bank.modify(4, |v| v & 0x0000_FFFF);
-        assert_eq!(bank.read(4), 0x0000_FFFF);
+    #[test]
+    #[should_panic(expected = "not found in log")]
+    fn assert_wrote_fails_on_mismatch() {
+        let mut bank = MockRegisterBank::new();
+        bank.write(8, 0x42);
+        bank.assert_wrote(8, 0x99);
+    }
+
+    #[test]
+    fn assert_sequence_passes_on_match() {
+        let mut bank = MockRegisterBank::new();
+        bank.write(0, 1);
+        bank.write(4, 2);
+        bank.write(8, 3);
+        bank.assert_sequence(&[(0, 1), (4, 2), (8, 3)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "write log mismatch")]
+    fn assert_sequence_fails_on_mismatch() {
+        let mut bank = MockRegisterBank::new();
+        bank.write(0, 1);
+        bank.write(4, 2);
+        bank.assert_sequence(&[(4, 2), (0, 1)]);
+    }
+
+    #[test]
+    fn set_preloads_value() {
+        let mut bank = MockRegisterBank::new();
+        bank.set(0x10, 0xBEEF);
+        assert_eq!(bank.read(0x10), 0xBEEF);
+        // set() should not appear in write log
+        assert!(bank.write_log().is_empty());
+    }
+
+    #[test]
+    fn set_then_modify() {
+        let mut bank = MockRegisterBank::new();
+        bank.set(0, 0xFF00);
+        bank.modify(0, |v| v | 0x00FF);
+        assert_eq!(bank.read(0), 0xFFFF);
+        // Only modify's write in the log
+        assert_eq!(bank.write_log(), &[(0, 0xFFFF)]);
+    }
+
+    #[test]
+    fn default_trait() {
+        let bank = MockRegisterBank::default();
+        assert_eq!(bank.read(0), 0);
+        assert!(bank.write_log().is_empty());
     }
 }
