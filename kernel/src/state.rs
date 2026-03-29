@@ -1007,4 +1007,90 @@ mod tests {
             "ticks_dropped must be zero after init"
         );
     }
+
+    /// Verifies that per-partition run_count survives the struct move into
+    /// aligned storage via `init_kernel_state_at` (ptr.write), mirroring
+    /// the production path that moves the kernel into UNIFIED_KERNEL_STORAGE.
+    #[test]
+    fn run_count_survives_struct_move_via_init_kernel_state_at() {
+        use crate::partition::{ExternalPartitionMemory, MpuRegion, PartitionState};
+        use crate::partition_core::AlignedStack1K;
+        use crate::scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable};
+        use crate::svc::scheduler as svc_scheduler;
+
+        // (1) Build a 2-partition kernel with round-robin schedule.
+        let mut schedule = ScheduleTable::<4>::new();
+        schedule.add(ScheduleEntry::new(0, 2)).unwrap();
+        schedule.add(ScheduleEntry::new(1, 2)).unwrap();
+        schedule.add_system_window(1).unwrap();
+        schedule.start();
+
+        let mut stk0 = AlignedStack1K::default();
+        let mut stk1 = AlignedStack1K::default();
+        let mems = [
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk0,
+                0x0800_0001,
+                MpuRegion::new(0x2000_0000, 4096, 0),
+                0,
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut stk1,
+                0x0800_1001,
+                MpuRegion::new(0x2000_1000, 4096, 0),
+                1,
+            )
+            .unwrap(),
+        ];
+        let mut kernel =
+            Kernel::<TestConfig>::new(schedule, &mems).expect("kernel construction must succeed");
+        // Set P0 as Running/active so the scheduler can switch away from it.
+        kernel
+            .partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        kernel.active_partition = Some(0);
+
+        // (2) Advance ticks to trigger a partition switch to P1, incrementing its run_count.
+        svc_scheduler::advance_schedule_tick(&mut kernel); // tick 1: interior P0
+        let event = svc_scheduler::advance_schedule_tick(&mut kernel); // tick 2: switch to P1
+        assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
+        assert_eq!(
+            kernel.partitions().get(1).unwrap().run_count(),
+            1,
+            "P1 run_count must be 1 before move"
+        );
+        assert_eq!(
+            kernel.partitions().get(0).unwrap().run_count(),
+            0,
+            "P0 run_count must be 0 before move"
+        );
+
+        // (3) Move kernel into aligned storage via init_kernel_state_at (ptr.write).
+        #[repr(C, align(4096))]
+        struct Aligned(MaybeUninit<[u8; MAX_KERNEL_SIZE]>);
+        let mut storage = Aligned(MaybeUninit::uninit());
+        let ptr = storage.0.as_mut_ptr() as *mut Kernel<'static, TestConfig>;
+        // SAFETY: ptr is aligned and storage is large enough for Kernel<'static, TestConfig>.
+        let result = unsafe { init_kernel_state_at(ptr, kernel) };
+        assert!(result.is_ok(), "init_kernel_state_at must succeed");
+
+        // (4) Read kernel back from storage and verify run_count is preserved.
+        let mu_ptr = storage.0.as_ptr() as *const MaybeUninit<Kernel<'static, TestConfig>>;
+        // SAFETY: init_kernel_state_at wrote a valid Kernel<'static, TestConfig> above.
+        let recovered = unsafe { (*mu_ptr).assume_init_ref() };
+        assert_eq!(
+            recovered.partitions().get(1).unwrap().run_count(),
+            1,
+            "P1 run_count must survive struct move"
+        );
+        assert_eq!(
+            recovered.partitions().get(0).unwrap().run_count(),
+            0,
+            "P0 run_count must remain 0 after struct move"
+        );
+    }
 }
