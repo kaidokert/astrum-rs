@@ -936,6 +936,29 @@ pub fn dispatch_syscall<const N: usize>(
         Some(SyscallId::GetErrorStatus) => SvcError::InvalidSyscall.to_u32(),
         Some(SyscallId::RequestRestart) => SvcError::InvalidSyscall.to_u32(),
         Some(SyscallId::RequestStop) => SvcError::InvalidSyscall.to_u32(),
+        // Bug 38-iguana: PCB identity divergence analysis.
+        //
+        // Root cause of the class of bug: `init_kernel_state_at` moves the
+        // Kernel via `ptr.write(kernel)`, invalidating any absolute address
+        // captured from the stack-allocated original.  This is why
+        // `fix_mpu_data_region()` exists — MpuRegion.base stores an
+        // absolute address computed at construction time, which becomes
+        // stale after the move and must be patched.
+        //
+        // Why no fix_run_count() / fix_pcb() is needed: unlike MpuRegion,
+        // neither the Scheduler nor this handler caches a `*mut PCB` or
+        // absolute address.  The Scheduler calls `kernel.pcb_mut(pid)`
+        // (accessors.rs:54), which resolves through `self.core.partitions_mut()
+        // .get_mut(pid)` — a chain of field offsets relative to `&mut self`.
+        // Similarly, `partitions.get(pid)` here is a borrow passed by the
+        // caller from the placed Kernel.  Both paths compute PCB addresses
+        // as struct-relative offsets, so they automatically track the
+        // post-move location without patching.
+        //
+        // Invariant: no component may cache a `*mut PartitionControlBlock`
+        // across the init_kernel_state_at move boundary.  The address-
+        // comparison test `run_count_identity_survives_struct_move` in this
+        // module verifies this property.
         Some(SyscallId::GetPartitionRunCount) => {
             let pid = frame.r1 as usize;
             match partitions.get(pid) {
@@ -2483,6 +2506,10 @@ where
                 }
                 0
             }
+            // Bug 38-iguana: no fix_pcb() needed — `self.partitions().get(pid)`
+            // resolves via struct-relative offsets from the placed Kernel,
+            // not a cached absolute pointer.  See dispatch_syscall comment
+            // for full root cause analysis.
             Some(SyscallId::GetPartitionRunCount) => {
                 let pid = arg1 as usize;
                 match self.partitions().get(pid) {
@@ -4140,6 +4167,227 @@ mod tests {
         let mut t = tbl();
         dispatch_syscall(&mut ef, &mut t, 0);
         assert_eq!(ef.r0, SvcError::InvalidResource.to_u32());
+    }
+
+    // ---- GetPartitionRunCount: cross-component identity (bug 38-iguana) ----
+    //
+    // These tests verify that the Scheduler's increment_run_count (via
+    // pcb_mut) and the SVC handler's read (via Kernel::dispatch /
+    // partitions().get()) resolve to the same PCB instance — the core
+    // invariant that bug 38-iguana identified as at-risk after the
+    // struct-move in init_kernel_state_at.
+
+    #[test]
+    fn get_partition_run_count_returns_zero_before_any_switch() {
+        use crate::syscall::SYS_GET_PARTITION_RUN_COUNT;
+        let mut k = kernel_with_schedule();
+        k.active_partition = Some(0);
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        // Query run_count for P0 via Kernel::dispatch (the production path).
+        let mut ef = frame(SYS_GET_PARTITION_RUN_COUNT, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "fresh PCB run_count must be zero");
+    }
+
+    /// Scheduler increments P1's run_count via advance_schedule_tick;
+    /// Kernel::dispatch must read the same value — proving that pcb_mut()
+    /// (Scheduler side) and partitions().get() (SVC side) resolve to the
+    /// same PCB within a single Kernel instance.
+    #[test]
+    fn get_partition_run_count_reflects_scheduler_increments() {
+        use crate::syscall::SYS_GET_PARTITION_RUN_COUNT;
+
+        let mut k = kernel_with_schedule();
+        // Set P0 as initial Running/active so the scheduler can switch.
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        k.active_partition = Some(0);
+
+        // Advance through P0's 5-tick slot to trigger PartitionSwitch(1),
+        // which calls pcb_mut(1).increment_run_count() inside the scheduler.
+        for _ in 0..4 {
+            svc_scheduler::advance_schedule_tick(&mut k);
+        }
+        let event = svc_scheduler::advance_schedule_tick(&mut k);
+        assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
+
+        // Now read P1's run_count through Kernel::dispatch (the SVC path).
+        // If PCB identity diverged, this would return 0 instead of 1.
+        let mut ef = frame(SYS_GET_PARTITION_RUN_COUNT, 1, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(
+            ef.r0, 1,
+            "SVC handler must see the same run_count that the Scheduler incremented"
+        );
+
+        // P0 was never switched *to*, so its run_count must still be 0.
+        let mut ef = frame(SYS_GET_PARTITION_RUN_COUNT, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, 0, "P0 run_count must remain 0");
+    }
+
+    #[test]
+    fn get_partition_run_count_invalid_pid() {
+        use crate::syscall::SYS_GET_PARTITION_RUN_COUNT;
+        let mut k = kernel_with_schedule();
+        k.active_partition = Some(0);
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        let mut ef = frame(SYS_GET_PARTITION_RUN_COUNT, 99, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        assert_eq!(ef.r0, SvcError::InvalidPartition.to_u32());
+    }
+
+    /// Verify that `pcb_mut(i)` and `partitions().get(i)` resolve to the
+    /// same memory address — the core identity invariant (bug 38-iguana).
+    #[test]
+    fn pcb_mut_and_partitions_get_resolve_to_same_address() {
+        let mut k = kernel_with_schedule();
+        // Obtain the address via partitions().get() (immutable path).
+        let addr_via_partitions =
+            k.partitions().get(0).unwrap() as *const PartitionControlBlock as usize;
+        // Obtain the address via pcb_mut() (mutable/Scheduler path).
+        let addr_via_pcb_mut = k.pcb_mut(0).unwrap() as *mut PartitionControlBlock as usize;
+        assert_eq!(
+            addr_via_partitions, addr_via_pcb_mut,
+            "pcb_mut() and partitions().get() must resolve to the same PCB address"
+        );
+        // Same check for P1.
+        let addr_p1_parts = k.partitions().get(1).unwrap() as *const PartitionControlBlock as usize;
+        let addr_p1_pcb = k.pcb_mut(1).unwrap() as *mut PartitionControlBlock as usize;
+        assert_eq!(addr_p1_parts, addr_p1_pcb);
+    }
+
+    /// Simulate the production path: build kernel on stack, move it via
+    /// `ptr::write` (as `init_kernel_state_at` does), then verify that
+    /// the Scheduler's increment (via `pcb_mut`) is visible through
+    /// `Kernel::dispatch` (via `partitions().get()`) on the *moved*
+    /// instance.  This is the test that would fail if any component
+    /// cached a pre-move `*mut PCB`.
+    #[test]
+    fn run_count_identity_survives_struct_move() {
+        use crate::state::{init_kernel_state_at, MAX_KERNEL_SIZE};
+        use crate::syscall::SYS_GET_PARTITION_RUN_COUNT;
+        use core::mem::MaybeUninit;
+
+        // (1) Build kernel on the stack (same as kernel_with_schedule but
+        //     we need ownership for the move).
+        let mut k = kernel_with_schedule();
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        k.active_partition = Some(0);
+
+        // Record pre-move PCB address for P1.
+        let pre_move_addr = k.partitions().get(1).unwrap() as *const PartitionControlBlock as usize;
+
+        // (2) Move kernel into aligned storage via ptr::write, exactly as
+        //     init_kernel_state_at does in production.
+        #[repr(C, align(4096))]
+        struct AlignedStorage(MaybeUninit<[u8; MAX_KERNEL_SIZE]>);
+        let mut storage = AlignedStorage(MaybeUninit::uninit());
+        let ptr = storage.0.as_mut_ptr() as *mut Kernel<'static, TestConfig>;
+        // SAFETY: ptr is aligned (4096) and storage is MAX_KERNEL_SIZE bytes.
+        let result = unsafe { init_kernel_state_at(ptr, k) };
+        assert!(result.is_ok(), "init_kernel_state_at must succeed");
+
+        // (3) Borrow the moved kernel from storage.
+        let placed: &mut Kernel<'static, TestConfig> = unsafe { &mut *ptr };
+
+        // Verify the move actually changed the address (not a no-op).
+        let post_move_addr =
+            placed.partitions().get(1).unwrap() as *const PartitionControlBlock as usize;
+        assert_ne!(
+            pre_move_addr, post_move_addr,
+            "ptr::write must have moved the kernel to a different address"
+        );
+
+        // (4) Advance scheduler on the *placed* kernel to increment P1's
+        //     run_count via pcb_mut() (the Scheduler path).
+        for _ in 0..4 {
+            svc_scheduler::advance_schedule_tick(placed);
+        }
+        let event = svc_scheduler::advance_schedule_tick(placed);
+        assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
+
+        // (5) Read P1's run_count through Kernel::dispatch (the SVC path).
+        //     If PCB identity diverged after the move, this would return 0.
+        let mut ef = frame(SYS_GET_PARTITION_RUN_COUNT, 1, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { placed.dispatch(&mut ef) };
+        assert_eq!(
+            ef.r0, 1,
+            "after ptr::write move, SVC handler must see the run_count \
+             incremented by the Scheduler on the placed kernel"
+        );
+
+        // (6) Verify address identity on the placed kernel: both accessor
+        //     paths still resolve to the same PCB.
+        let addr_parts =
+            placed.partitions().get(1).unwrap() as *const PartitionControlBlock as usize;
+        let addr_pcb = placed.pcb_mut(1).unwrap() as *mut PartitionControlBlock as usize;
+        assert_eq!(
+            addr_parts, addr_pcb,
+            "pcb_mut() and partitions().get() must resolve to the same \
+             address on the placed (post-move) kernel"
+        );
+    }
+
+    // ---- GetMajorFrameCount / GetScheduleInfo via Kernel::dispatch ----
+
+    #[test]
+    fn dispatch_get_major_frame_count() {
+        use crate::syscall::SYS_GET_MAJOR_FRAME_COUNT;
+        let mut k = kernel_with_schedule();
+        k.active_partition = Some(0);
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        let mut ef = frame(SYS_GET_MAJOR_FRAME_COUNT, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        // kernel_with_schedule creates: P0(5) + P1(3) + sys(1) = 9 ticks.
+        // major_frame_count starts at 0 before any full cycle.
+        assert_eq!(
+            ef.r0, 0,
+            "major_frame_count must be 0 before any full cycle"
+        );
+    }
+
+    #[test]
+    fn dispatch_get_schedule_info() {
+        use crate::syscall::SYS_GET_SCHEDULE_INFO;
+        let mut k = kernel_with_schedule();
+        k.active_partition = Some(0);
+        k.partitions_mut()
+            .get_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        let mut ef = frame(SYS_GET_SCHEDULE_INFO, 0, 0);
+        // SAFETY: See module-level SAFETY docs for test dispatch justification.
+        unsafe { k.dispatch(&mut ef) };
+        // r0 = major_frame_ticks, r1 = partition_count
+        assert_eq!(ef.r0, 9, "major_frame_ticks for 5+3+1 schedule");
+        assert_eq!(ef.r1, 2, "partition_count must be 2");
     }
 
     // ---- set_dispatch_hook / Mutex-based hook tests ----
