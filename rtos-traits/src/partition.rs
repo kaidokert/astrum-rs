@@ -64,6 +64,55 @@ impl From<PartitionBody> for PartitionSpec {
     }
 }
 
+/// A peripheral MPU region descriptor: base address, size, and RASR
+/// permission/attribute bits.
+///
+/// The struct is `Copy` so it can live inside stack-allocated partition
+/// configuration arrays without heap allocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MpuRegion {
+    base: u32,
+    size: u32,
+    permissions: u32,
+}
+
+impl MpuRegion {
+    pub const fn new(base: u32, size: u32, permissions: u32) -> Self {
+        Self {
+            base,
+            size,
+            permissions,
+        }
+    }
+
+    pub fn base(&self) -> u32 {
+        self.base
+    }
+
+    pub fn size(&self) -> u32 {
+        self.size
+    }
+
+    pub fn permissions(&self) -> u32 {
+        self.permissions
+    }
+
+    /// Returns `true` when the region's base and size satisfy all ARMv7-M
+    /// MPU constraints:
+    /// 1. `size >= 32` (minimum MPU region size)
+    /// 2. `size` is a power of two
+    /// 3. `base` is aligned to `size` (`base & (size - 1) == 0`)
+    /// 4. `base + size` does not overflow `u32`
+    pub fn is_mappable(&self) -> bool {
+        let base = self.base;
+        let size = self.size;
+        size >= 32
+            && size.is_power_of_two()
+            && (base & (size - 1)) == 0
+            && base.checked_add(size).is_some()
+    }
+}
+
 mod sealed {
     pub trait Sealed {}
     impl Sealed for super::PartitionEntry {}
@@ -395,6 +444,59 @@ mod tests {
     fn spec_new_body_catches_truncation_on_64bit() {
         let body: PartitionBody = _dummy_body;
         let _ = PartitionSpec::new(body, 0);
+    }
+
+    // --- MpuRegion::is_mappable tests ---
+
+    #[test]
+    fn is_mappable_valid_region() {
+        // 4 KiB at aligned base — typical peripheral region
+        let r = MpuRegion::new(0x4000_C000, 4096, 0x0300_0000);
+        assert!(r.is_mappable());
+    }
+
+    #[test]
+    fn is_mappable_minimum_size() {
+        // 32 bytes is the minimum valid MPU region
+        let r = MpuRegion::new(0, 32, 0);
+        assert!(r.is_mappable());
+    }
+
+    #[test]
+    fn is_mappable_rejects_size_too_small() {
+        let r = MpuRegion::new(0, 16, 0);
+        assert!(!r.is_mappable());
+        let r = MpuRegion::new(0, 0, 0);
+        assert!(!r.is_mappable());
+    }
+
+    #[test]
+    fn is_mappable_rejects_non_power_of_two() {
+        let r = MpuRegion::new(0, 48, 0);
+        assert!(!r.is_mappable());
+        let r = MpuRegion::new(0, 100, 0);
+        assert!(!r.is_mappable());
+    }
+
+    #[test]
+    fn is_mappable_rejects_misaligned_base() {
+        // base 0x100 not aligned to size 4096
+        let r = MpuRegion::new(0x0000_0100, 4096, 0);
+        assert!(!r.is_mappable());
+    }
+
+    #[test]
+    fn is_mappable_rejects_address_overflow() {
+        let r = MpuRegion::new(0xFFFF_FF00, 256, 0);
+        assert!(!r.is_mappable());
+    }
+
+    #[test]
+    fn mpu_region_accessors() {
+        let r = MpuRegion::new(0x2000_0000, 256, 0x0300_0000);
+        assert_eq!(r.base(), 0x2000_0000);
+        assert_eq!(r.size(), 256);
+        assert_eq!(r.permissions(), 0x0300_0000);
     }
 
     // --- check_entry_sig! tests ---

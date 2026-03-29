@@ -21,7 +21,7 @@ const _: () = assert!(
 
 use crate::partition_core::StackStorage;
 pub use rtos_traits::partition::{
-    EntryAddr, EntryPointFn, IsrHandler, PartitionBody, PartitionEntry, PartitionSpec,
+    EntryAddr, EntryPointFn, IsrHandler, MpuRegion, PartitionBody, PartitionEntry, PartitionSpec,
 };
 
 /// Default data-region RASR attributes: full read-write access with
@@ -113,41 +113,6 @@ pub enum RestartError {
     NotFaulted,
     StackInitFailed,
     TransitionFailed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MpuRegion {
-    base: u32,
-    size: u32,
-    permissions: u32,
-}
-
-impl MpuRegion {
-    pub const fn new(base: u32, size: u32, permissions: u32) -> Self {
-        Self {
-            base,
-            size,
-            permissions,
-        }
-    }
-
-    pub fn base(&self) -> u32 {
-        self.base
-    }
-
-    pub fn size(&self) -> u32 {
-        self.size
-    }
-
-    pub fn permissions(&self) -> u32 {
-        self.permissions
-    }
-
-    /// Returns `true` when the region's base and size satisfy all ARMv7-M
-    /// MPU constraints (minimum 32 bytes, power-of-two size, aligned base).
-    pub fn is_mappable(&self) -> bool {
-        validate_mpu_region(self.base, self.size).is_ok()
-    }
 }
 
 /// # Safety invariant — PCB identity across moves
