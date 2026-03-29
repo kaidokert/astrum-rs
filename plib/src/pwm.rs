@@ -4,7 +4,10 @@
 //! (QEMU `lm3s6965evb`). Each channel corresponds to one PWM generator
 //! (0–2) using output A with CMPA-based duty control.
 
+use core::cell::RefCell;
+
 use embedded_hal::PwmPin;
+use rtos_traits::register::{MmioRegisterBank, RegisterBank};
 
 // ── Register offsets (LM3S6965 PWM0) ────────────────────────────────
 const ENABLE_OFF: usize = 0x008;
@@ -38,16 +41,20 @@ const GENA_HIGH_ON_LOAD_LOW_ON_CMPA: u32 = (0b11 << 2) | (0b10 << 6);
 ///
 /// `Duty` type is `u16`, matching the 16-bit LOAD / CMP registers.
 /// Duty semantics: `set_duty(0)` → 0 %, `set_duty(get_max_duty())` → 100 %.
-pub struct Pwm0Channel {
-    base: *mut u8,
+pub struct Pwm0Channel<R: RegisterBank> {
+    base_addr: usize,
+    regs: RefCell<R>,
     channel: u8,
 }
+
+/// Production type alias using MMIO-backed registers.
+pub type HwPwm0Channel = Pwm0Channel<MmioRegisterBank>;
 
 // SAFETY: Each `Pwm0Channel` owns exclusive access to its generator's registers.
 // The shared ENABLE register is modified via Cortex-M3 bit-band aliases, which
 // provide atomic single-bit set/clear without read-modify-write races.
 // The caller of `new` guarantees no aliasing of the same channel.
-unsafe impl Send for Pwm0Channel {}
+unsafe impl<R: RegisterBank> Send for Pwm0Channel<R> {}
 
 /// Errors returned by [`Pwm0Channel::new`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,20 +65,14 @@ pub enum Pwm0Error {
     InvalidChannel,
 }
 
-impl Pwm0Channel {
+impl<R: RegisterBank> Pwm0Channel<R> {
     /// Create a new PWM0 channel wrapper.
-    ///
-    /// # Safety
-    ///
-    /// * `base_addr` must point to a valid, mapped PWM0 register block
-    ///   in the Cortex-M3 peripheral bit-band region (`0x4000_0000..0x400F_FFFF`).
-    /// * The caller guarantees no other `Pwm0Channel` aliases the same channel.
     ///
     /// # Errors
     ///
     /// Returns [`Pwm0Error::UnalignedBase`] if `base_addr` is not 4-byte aligned.
     /// Returns [`Pwm0Error::InvalidChannel`] if `channel >= 3`.
-    pub unsafe fn new(base_addr: usize, channel: u8) -> Result<Self, Pwm0Error> {
+    pub fn with_backend(base_addr: usize, backend: R, channel: u8) -> Result<Self, Pwm0Error> {
         if base_addr & 0x3 != 0 {
             return Err(Pwm0Error::UnalignedBase);
         }
@@ -79,7 +80,8 @@ impl Pwm0Channel {
             return Err(Pwm0Error::InvalidChannel);
         }
         Ok(Self {
-            base: base_addr as *mut u8,
+            base_addr,
+            regs: RefCell::new(backend),
             channel,
         })
     }
@@ -92,16 +94,12 @@ impl Pwm0Channel {
 
     #[inline]
     fn read_reg(&self, off: usize) -> u32 {
-        // SAFETY: `self.base` is a valid, 4-byte-aligned PWM0 register block
-        // pointer (guaranteed by `new`), and all register offsets used are
-        // 4-byte-aligned multiples within the PWM0 address space.
-        unsafe { core::ptr::read_volatile(self.base.add(off) as *const u32) }
+        self.regs.borrow().read(off)
     }
 
     #[inline]
     fn write_reg(&self, off: usize, val: u32) {
-        // SAFETY: Same alignment and validity invariants as `read_reg`.
-        unsafe { core::ptr::write_volatile(self.base.add(off) as *mut u32, val) }
+        self.regs.borrow_mut().write(off, val);
     }
 
     /// Bit mask for this channel's output-A in the ENABLE register.
@@ -111,30 +109,19 @@ impl Pwm0Channel {
         1u32 << (2 * self.channel as u32)
     }
 
-    /// Bit index of this channel's output-A in the ENABLE register.
-    #[cfg(not(test))]
-    #[inline]
-    fn enable_bit(&self) -> u32 {
-        2 * self.channel as u32
-    }
-
     /// Atomically set or clear this channel's ENABLE bit via bit-band alias.
-    ///
-    /// `val` must be 0 (clear) or 1 (set). The Cortex-M3 bit-band alias
-    /// performs a single atomic write — no read-modify-write race.
     #[cfg(not(test))]
     #[inline]
     fn bb_write_enable(&self, val: u32) {
-        let enable_addr = self.base as usize + ENABLE_OFF;
-        let bb = periph_bb_addr(enable_addr, self.enable_bit());
-        // SAFETY: `self.base` is in the peripheral region (guaranteed by
+        let enable_addr = self.base_addr + ENABLE_OFF;
+        let bit = 2 * self.channel as u32;
+        let bb = periph_bb_addr(enable_addr, bit);
+        // SAFETY: `self.base_addr` is in the peripheral region (guaranteed by
         // caller of `new`), so the bit-band alias address is valid.
         unsafe { core::ptr::write_volatile(bb, val) }
     }
 
-    /// Test-only fallback: bit-band aliases are not available on the host,
-    /// so we use a plain read-modify-write. Tests are single-threaded so
-    /// no race condition exists in this context.
+    /// Test fallback: read-modify-write (no bit-band on host).
     #[cfg(test)]
     #[inline]
     fn bb_write_enable(&self, val: u32) {
@@ -148,7 +135,21 @@ impl Pwm0Channel {
     }
 }
 
-impl PwmPin for Pwm0Channel {
+impl HwPwm0Channel {
+    /// Create a new PWM0 channel backed by MMIO registers.
+    ///
+    /// # Safety
+    /// Same as [`Pwm0Channel::with_backend`], plus `base_addr` must be valid MMIO.
+    pub unsafe fn new(base_addr: usize, channel: u8) -> Result<Self, Pwm0Error> {
+        Self::with_backend(
+            base_addr,
+            MmioRegisterBank::new(base_addr as *mut u32),
+            channel,
+        )
+    }
+}
+
+impl<R: RegisterBank> PwmPin for Pwm0Channel<R> {
     type Duty = u16;
 
     fn enable(&mut self) {
@@ -207,12 +208,17 @@ mod tests {
         unsafe { core::ptr::read_volatile(base.add(off) as *const u32) }
     }
 
+    /// Create an HwPwm0Channel backed by a heap-allocated mock block.
+    fn hw_channel(base: *mut u8, channel: u8) -> HwPwm0Channel {
+        unsafe { HwPwm0Channel::new(base as usize, channel) }.unwrap()
+    }
+
     #[test]
     fn new_stores_base_and_channel() {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as usize;
-        let ch = unsafe { Pwm0Channel::new(base, 2) }.unwrap();
-        assert_eq!(ch.base as usize, base);
+        let ch = hw_channel(base as *mut u8, 2);
+        assert_eq!(ch.base_addr, base);
         assert_eq!(ch.channel, 2);
     }
 
@@ -221,7 +227,7 @@ mod tests {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as *mut u8;
         write_at(base, 0x050, 4999);
-        let ch = unsafe { Pwm0Channel::new(base as usize, 0) }.unwrap();
+        let ch = hw_channel(base, 0);
         assert_eq!(ch.get_max_duty(), 4999);
     }
 
@@ -230,7 +236,7 @@ mod tests {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as *mut u8;
         write_at(base, 0x090, 7999);
-        let ch = unsafe { Pwm0Channel::new(base as usize, 1) }.unwrap();
+        let ch = hw_channel(base, 1);
         assert_eq!(ch.get_max_duty(), 7999);
     }
 
@@ -239,7 +245,7 @@ mod tests {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as *mut u8;
         write_at(base, 0x050, 999); // LOAD
-        let mut ch = unsafe { Pwm0Channel::new(base as usize, 0) }.unwrap();
+        let mut ch = hw_channel(base, 0);
         ch.set_duty(500);
         // CMPA = LOAD - duty = 999 - 500 = 499
         assert_eq!(read_at(base, 0x058), 499);
@@ -251,7 +257,7 @@ mod tests {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as *mut u8;
         write_at(base, 0x050, 999);
-        let mut ch = unsafe { Pwm0Channel::new(base as usize, 0) }.unwrap();
+        let mut ch = hw_channel(base, 0);
         ch.set_duty(999);
         assert_eq!(read_at(base, 0x058), 0);
         assert_eq!(ch.get_duty(), 999);
@@ -262,7 +268,7 @@ mod tests {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as *mut u8;
         write_at(base, 0x050, 999);
-        let mut ch = unsafe { Pwm0Channel::new(base as usize, 0) }.unwrap();
+        let mut ch = hw_channel(base, 0);
         ch.set_duty(0);
         assert_eq!(read_at(base, 0x058), 999);
         assert_eq!(ch.get_duty(), 0);
@@ -274,7 +280,7 @@ mod tests {
         let base = blk.as_mut_ptr() as *mut u8;
         // Gen 2: LOAD at 0x0D0, CMPA at 0x0D8
         write_at(base, 0x0D0, 3000);
-        let mut ch = unsafe { Pwm0Channel::new(base as usize, 2) }.unwrap();
+        let mut ch = hw_channel(base, 2);
         assert_eq!(ch.get_max_duty(), 3000);
         ch.set_duty(750);
         assert_eq!(read_at(base, 0x0D8), 2250);
@@ -285,7 +291,7 @@ mod tests {
     fn enable_sets_ctl_gena_and_enable_bits() {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as *mut u8;
-        let mut ch = unsafe { Pwm0Channel::new(base as usize, 0) }.unwrap();
+        let mut ch = hw_channel(base, 0);
         ch.enable();
         assert_eq!(
             read_at(base, 0x060),
@@ -302,7 +308,7 @@ mod tests {
         let base = blk.as_mut_ptr() as *mut u8;
         write_at(base, 0x040, 0xFF);
         write_at(base, 0x008, 0xFF);
-        let mut ch = unsafe { Pwm0Channel::new(base as usize, 0) }.unwrap();
+        let mut ch = hw_channel(base, 0);
         ch.disable();
         assert_eq!(read_at(base, 0x040) & 1, 0, "CTL enable cleared");
         assert_eq!(read_at(base, 0x008) & 1, 0, "ENABLE output cleared");
@@ -312,7 +318,7 @@ mod tests {
     fn enable_gen1_uses_correct_mask() {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as *mut u8;
-        let mut ch = unsafe { Pwm0Channel::new(base as usize, 1) }.unwrap();
+        let mut ch = hw_channel(base, 1);
         ch.enable();
         assert_eq!(read_at(base, 0x080) & 1, 1, "Gen1 CTL enable");
         assert_eq!(read_at(base, 0x008) & 0b100, 0b100, "Gen1 ENABLE bit 2");
@@ -323,7 +329,7 @@ mod tests {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as *mut u8;
         write_at(base, 0x008, 0b100); // Gen 1 already enabled
-        let mut ch = unsafe { Pwm0Channel::new(base as usize, 0) }.unwrap();
+        let mut ch = hw_channel(base, 0);
         ch.enable();
         assert_eq!(read_at(base, 0x008), 0b101, "both gen0 and gen1");
     }
@@ -333,7 +339,7 @@ mod tests {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as *mut u8;
         write_at(base, 0x008, 0b101); // Gen 0 + Gen 1
-        let mut ch = unsafe { Pwm0Channel::new(base as usize, 0) }.unwrap();
+        let mut ch = hw_channel(base, 0);
         ch.disable();
         assert_eq!(read_at(base, 0x008), 0b100, "gen1 preserved");
     }
@@ -343,7 +349,7 @@ mod tests {
         let mut blk = mock_block();
         let base = blk.as_mut_ptr() as *mut u8;
         write_at(base, 0x050, 100);
-        let mut ch = unsafe { Pwm0Channel::new(base as usize, 0) }.unwrap();
+        let mut ch = hw_channel(base, 0);
         ch.set_duty(200); // > LOAD
                           // saturating_sub: CMPA = 0
         assert_eq!(read_at(base, 0x058), 0);
