@@ -1,5 +1,6 @@
 use super::*;
 use crate::partition_core::AlignedStack1K;
+use crate::syscall::SYS_GET_PARTITION_RUN_COUNT;
 
 /// Build a 2-partition kernel (P0, P1) with round-robin schedule (2 ticks each).
 /// Both partitions start in `Ready` state.  The schedule is already started and
@@ -271,4 +272,37 @@ fn run_count_not_incremented_for_skipped_partition() {
     let event = svc_scheduler::advance_schedule_tick(&mut k);
     assert_eq!(event, ScheduleEvent::None); // skipped
     assert_eq!(k.partitions().get(1).unwrap().run_count(), 0); // not incremented
+}
+
+#[test]
+fn dispatch_get_partition_run_count_matches_pcb() {
+    let mut k = kernel_2p();
+    // (1) P0 is Running+active, P1 is Ready.  Neither has been switched to yet.
+    assert_eq!(k.active_partition(), Some(0));
+
+    // (2) Advance ticks until P1 switch.
+    // Schedule: P0(2 ticks), P1(2 ticks), SW(1 tick).
+    // tick 1: interior of P0
+    svc_scheduler::advance_schedule_tick(&mut k);
+    // tick 2: boundary -> P1 switch
+    let event = svc_scheduler::advance_schedule_tick(&mut k);
+    assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
+    assert_eq!(k.active_partition(), Some(1));
+
+    // Verify PCB run_count directly.
+    assert_eq!(k.partitions().get(1).unwrap().run_count(), 1);
+    assert_eq!(k.partitions().get(0).unwrap().run_count(), 0);
+
+    // (3) Dispatch GetPartitionRunCount for P1 and assert r0 == 1.
+    let mut ef = frame(SYS_GET_PARTITION_RUN_COUNT, 1, 0);
+    // SAFETY: `ef` is a valid stack-allocated ExceptionFrame; `k` is a properly
+    // initialized test Kernel with valid partition tables.
+    unsafe { k.dispatch(&mut ef) };
+    assert_eq!(ef.r0, 1, "dispatch run_count for P1 must be 1");
+
+    // (4) Dispatch GetPartitionRunCount for P0 and assert r0 == 0.
+    let mut ef = frame(SYS_GET_PARTITION_RUN_COUNT, 0, 0);
+    // SAFETY: See above.
+    unsafe { k.dispatch(&mut ef) };
+    assert_eq!(ef.r0, 0, "dispatch run_count for P0 must be 0");
 }
