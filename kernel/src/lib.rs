@@ -128,6 +128,8 @@ pub mod ipc_integrity_tests;
 pub mod test_harness;
 #[cfg(test)]
 pub mod test_mmap;
+#[cfg(test)]
+pub mod test_register;
 
 #[cfg(test)]
 #[allow(deprecated)]

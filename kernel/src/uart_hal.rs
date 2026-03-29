@@ -4,6 +4,10 @@
 //! exposes raw volatile register accessors, plus a pure-function
 //! baud-rate divisor calculation suitable for any clock frequency.
 
+use core::cell::RefCell;
+
+use rtos_traits::register::{MmioRegisterBank, RegisterBank};
+
 // ---------------------------------------------------------------------------
 // Register offsets (LM3S6965 datasheet, Table 12-3)
 // ---------------------------------------------------------------------------
@@ -76,40 +80,38 @@ pub const RIS_RTRIS: u32 = 1 << 6;
 // UartRegs — volatile register accessor
 // ---------------------------------------------------------------------------
 
-/// Number of 32-bit register slots in the mock backing store.
-/// Covers offsets 0x000..=0x044 (i.e. ICR) → 18 words.
-#[cfg(test)]
-const MOCK_REG_COUNT: usize = 18;
-
 /// Thin wrapper around a UART peripheral base address.
 ///
 /// All accesses go through raw volatile reads/writes so the compiler
 /// cannot reorder or elide them.  The caller is responsible for
 /// ensuring the base address is valid and the UART clock is enabled.
-///
-/// In test builds the struct carries a `Cell`-based mock register file
-/// so that higher-level methods can be unit-tested without hardware.
-pub struct UartRegs {
+pub struct UartRegs<R: RegisterBank> {
     base: u32,
-    #[cfg(test)]
-    mock_regs: [core::cell::Cell<u32>; MOCK_REG_COUNT],
+    regs: RefCell<R>,
 }
 
-impl UartRegs {
-    /// Create a new `UartRegs` handle for the given MMIO base address.
-    #[cfg(not(test))]
-    pub const fn new(base: u32) -> Self {
-        Self { base }
-    }
+pub type HwUartRegs = UartRegs<MmioRegisterBank>;
 
-    /// Create a new `UartRegs` handle with a mock register file (test only).
-    #[cfg(test)]
+impl HwUartRegs {
+    /// # Safety
+    /// `base` must point to a valid, mapped UART peripheral region.
+    pub unsafe fn from_base(base: u32) -> Self {
+        Self::with_backend(base, MmioRegisterBank::new(base as *mut u32))
+    }
+}
+
+#[cfg(test)]
+impl UartRegs<crate::test_register::ArrayRegisterBank> {
     pub fn new(base: u32) -> Self {
-        #[allow(clippy::declare_interior_mutable_const)]
-        const ZERO: core::cell::Cell<u32> = core::cell::Cell::new(0);
+        Self::with_backend(base, crate::test_register::ArrayRegisterBank::new())
+    }
+}
+
+impl<R: RegisterBank> UartRegs<R> {
+    pub fn with_backend(base: u32, regs: R) -> Self {
         Self {
             base,
-            mock_regs: [ZERO; MOCK_REG_COUNT],
+            regs: RefCell::new(regs),
         }
     }
 
@@ -119,74 +121,24 @@ impl UartRegs {
     }
 
     /// Read a 32-bit register at `offset` from the base address.
-    ///
-    /// # Safety
-    ///
-    /// `offset` must be a valid register offset for this UART block and
-    /// the base address must point to a mapped UART peripheral.
     #[inline]
-    #[cfg(not(test))]
-    pub unsafe fn read(&self, offset: u32) -> u32 {
-        core::ptr::read_volatile((self.base + offset) as *const u32)
-    }
-
-    #[inline]
-    #[cfg(test)]
     pub fn read(&self, offset: u32) -> u32 {
-        self.mock_regs[(offset / 4) as usize].get()
+        self.regs.borrow().read(offset as usize)
     }
 
     /// Write a 32-bit value to a register at `offset` from the base.
-    ///
-    /// # Safety
-    ///
-    /// `offset` must be a valid register offset for this UART block and
-    /// the base address must point to a mapped UART peripheral.
     #[inline]
-    #[cfg(not(test))]
-    pub unsafe fn write(&self, offset: u32, val: u32) {
-        core::ptr::write_volatile((self.base + offset) as *mut u32, val)
-    }
-
-    #[inline]
-    #[cfg(test)]
     pub fn write(&self, offset: u32, val: u32) {
-        self.mock_regs[(offset / 4) as usize].set(val);
+        self.regs.borrow_mut().write(offset as usize, val);
     }
 
-    /// Safe wrapper around `read` for use by higher-level methods.
-    ///
-    /// In production this calls the unsafe volatile read (the caller of the
-    /// higher-level method is responsible for guaranteeing the base address is
-    /// valid).  In test builds it delegates to the safe mock implementation.
     #[inline]
     fn read_reg(&self, offset: u32) -> u32 {
-        #[cfg(not(test))]
-        // SAFETY: The caller of the public method (e.g., `is_tx_full`, `init`)
-        // guarantees that `self.base` points to a valid, mapped UART peripheral
-        // as documented in the `UartRegs` struct-level safety requirements.
-        // The offset is a compile-time constant from this module's register
-        // definitions, ensuring a valid register within the UART block.
-        unsafe {
-            self.read(offset)
-        }
-        #[cfg(test)]
         self.read(offset)
     }
 
-    /// Safe wrapper around `write` for use by higher-level methods.
     #[inline]
     fn write_reg(&self, offset: u32, val: u32) {
-        #[cfg(not(test))]
-        // SAFETY: The caller of the public method (e.g., `init`, `write_byte`)
-        // guarantees that `self.base` points to a valid, mapped UART peripheral
-        // as documented in the `UartRegs` struct-level safety requirements.
-        // The offset is a compile-time constant from this module's register
-        // definitions, ensuring a valid register within the UART block.
-        unsafe {
-            self.write(offset, val)
-        }
-        #[cfg(test)]
         self.write(offset, val)
     }
 }
@@ -200,8 +152,11 @@ pub struct InitValues {
     pub ctl: u32,
 }
 
-impl UartRegs {
-    /// Compute the register values that `init` would program (pure, no HW).
+pub fn rx_ris_mask() -> u32 {
+    RIS_RXRIS | RIS_RTRIS
+}
+
+impl<R: RegisterBank> UartRegs<R> {
     pub fn compute_init_values(baud: u32, clock_hz: u32) -> InitValues {
         let (ibrd, fbrd) = compute_baud_divisors(clock_hz, baud);
         InitValues {
@@ -286,11 +241,6 @@ impl UartRegs {
     pub fn read_ris(&self) -> u32 {
         self.read_reg(RIS)
     }
-
-    /// Bit mask for RX-related raw interrupt status (RXRIS | RTRIS).
-    pub fn rx_ris_mask() -> u32 {
-        RIS_RXRIS | RIS_RTRIS
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +293,7 @@ pub fn compute_baud_divisors(clock_hz: u32, baud: u32) -> (u16, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    type T = UartRegs<crate::test_register::ArrayRegisterBank>;
 
     // -- Register offset constants ------------------------------------------
 
@@ -453,7 +404,7 @@ mod tests {
 
     #[test]
     fn init_values_115200_at_12mhz() {
-        let vals = UartRegs::compute_init_values(115_200, 12_000_000);
+        let vals = T::compute_init_values(115_200, 12_000_000);
         assert_eq!(vals.ibrd, 6);
         assert_eq!(vals.fbrd, 33);
         assert_eq!(vals.lcrh, LCRH_8N1_FIFO);
@@ -462,7 +413,7 @@ mod tests {
 
     #[test]
     fn init_values_9600_at_12mhz() {
-        let vals = UartRegs::compute_init_values(9600, 12_000_000);
+        let vals = T::compute_init_values(9600, 12_000_000);
         assert_eq!(vals.ibrd, 78);
         assert_eq!(vals.fbrd, 8);
     }
@@ -487,7 +438,7 @@ mod tests {
 
     #[test]
     fn rx_interrupt_mask_has_rxim_and_rtim() {
-        let mask = UartRegs::rx_interrupt_mask();
+        let mask = T::rx_interrupt_mask();
         assert_ne!(mask & IM_RXIM, 0, "RXIM bit must be set");
         assert_ne!(mask & IM_RTIM, 0, "RTIM bit must be set");
         assert_eq!(mask, IM_RXIM | IM_RTIM);
@@ -511,7 +462,7 @@ mod tests {
     fn ris_bits_correct() {
         assert_eq!(RIS_RXRIS, 1 << 4); // bit 4
         assert_eq!(RIS_RTRIS, 1 << 6); // bit 6
-        assert_eq!(UartRegs::rx_ris_mask(), RIS_RXRIS | RIS_RTRIS);
+        assert_eq!(rx_ris_mask(), RIS_RXRIS | RIS_RTRIS);
     }
 
     // -- Mock-backed method tests ---------------------------------------------
