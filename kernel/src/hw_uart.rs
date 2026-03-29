@@ -10,6 +10,11 @@ use crate::split_isr::IsrRingBuffer;
 use crate::uart_hal::UartRegs;
 use crate::virtual_device::{DeviceError, VirtualDevice};
 
+#[cfg(test)]
+use crate::test_register::ArrayRegisterBank as RegBank;
+#[cfg(not(test))]
+use rtos_traits::register::MmioRegisterBank as RegBank;
+
 /// UART1 interrupt number on the LM3S6965 (NVIC IRQ 6).
 pub const UART1_IRQ: u8 = 6;
 
@@ -39,7 +44,7 @@ const CAPACITY: usize = 64;
 /// Generic `N` specifies the max partitions (use `KernelConfig::N`).
 pub struct HwUartBackend<const N: usize = 8> {
     device_id: u8,
-    regs: UartRegs,
+    regs: UartRegs<RegBank>,
     tx: Deque<u8, CAPACITY>,
     rx: Deque<u8, CAPACITY>,
     /// Tracks which partitions have opened this device; `open_partitions[i]`
@@ -52,7 +57,7 @@ pub struct HwUartBackend<const N: usize = 8> {
 
 impl<const N: usize> HwUartBackend<N> {
     /// Create a new hardware UART backend.
-    pub fn new(device_id: u8, regs: UartRegs) -> Self {
+    pub fn new(device_id: u8, regs: UartRegs<RegBank>) -> Self {
         Self {
             device_id,
             regs,
@@ -64,7 +69,7 @@ impl<const N: usize> HwUartBackend<N> {
     }
 
     /// Return a reference to the underlying UART registers.
-    pub fn regs(&self) -> &UartRegs {
+    pub fn regs(&self) -> &UartRegs<RegBank> {
         &self.regs
     }
 
@@ -227,7 +232,7 @@ pub fn uart1_isr_top_half<const N: usize, const D: usize, const M: usize>(
     isr_ring: &mut IsrRingBuffer<D, M>,
 ) -> bool {
     let ris = backend.regs.read_ris();
-    let rx_mask = UartRegs::rx_ris_mask();
+    let rx_mask = crate::uart_hal::rx_ris_mask();
 
     // No RX-related interrupt pending — nothing to do.
     if ris & rx_mask == 0 {
@@ -356,7 +361,6 @@ impl<const N: usize> VirtualDevice for HwUartBackend<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn make_backend(id: u8) -> HwUartBackend {
         HwUartBackend::new(id, UartRegs::new(0x4000_C000))
     }

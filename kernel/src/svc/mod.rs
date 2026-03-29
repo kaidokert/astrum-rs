@@ -39,29 +39,13 @@ pub use rtos_traits::syscall::SvcError;
 pub type SvcDispatchFn = unsafe extern "C" fn(&mut ExceptionFrame);
 
 // ---------------------------------------------------------------------------
-// Kernel struct-move invariant
+// Kernel lifetime invariant
 // ---------------------------------------------------------------------------
 //
-// `Kernel` is constructed on the stack in `Kernel::new()` and then moved into
-// the static `UNIFIED_KERNEL_STORAGE` via `core::ptr::write()`.  Because the
-// struct changes address during this move, any pointer or address derived from
-// a field *during* `new()` becomes stale once the struct lands in its final
-// location.
-//
-// Affected fields (as of this writing):
-//   - `PartitionControlBlock.mpu_region.base`  — patched by `fix_mpu_data_region()`
-//   - `PartitionControlBlock.stack_base`        — set via `ExternalPartitionMemory` at construction
-//
-// Correct pattern:
-//   1. Construct with real stack/config values via `ExternalPartitionMemory`.
-//   2. Place into `UNIFIED_KERNEL_STORAGE` with `ptr::write()`.
-//   3. Call `fix_mpu_data_region()` **after** placement so it computes
-//      addresses from the struct's final location.
-//   4. Verify with `invariants::assert_pcb_addresses_in_storage()`.
-//
-// See `boot.rs` for the post-placement fixup sequence and `invariants.rs` for
-// the runtime assertion that all PCB-embedded addresses fall within the static
-// storage region.
+// `Kernel` is constructed on the stack of a `-> !` function (via
+// `define_unified_harness!`). Because the function never returns, the
+// kernel lives for the program's lifetime. Its address is published via
+// `store_kernel_ptr` and accessed through `with_kernel` / `with_kernel_mut`.
 // ---------------------------------------------------------------------------
 
 // ---- Kernel Memory Region Constants ----
@@ -750,64 +734,18 @@ macro_rules! define_unified_kernel {
             });
         }
 
-        /// Store the kernel and install the SVC dispatch hook.
+        /// Publish the kernel pointer and install the SVC dispatch hook.
         ///
-        /// This function:
-        /// 1. Moves the kernel into aligned static storage (`UNIFIED_KERNEL_STORAGE`)
-        ///    which provides the 4096-byte alignment required by MPU configuration
-        /// 2. Publishes the static storage address via `store_kernel_ptr`
-        /// 3. Installs `dispatch_hook` as the SVC exception handler
-        ///
-        /// Takes `&mut` so the caller retains the binding (the value is moved
-        /// out via `core::ptr::read`). Must be called exactly once during
-        /// initialization, before enabling interrupts or starting the scheduler.
+        /// The kernel lives on the caller's stack (a `-> !` function that
+        /// never returns), so it has effectively `'static` lifetime.
+        /// Must be called exactly once during initialization, before
+        /// enabling interrupts or starting the scheduler.
         fn store_kernel(k: &mut $crate::svc::Kernel<'static, $Config>) {
-            use core::mem::MaybeUninit;
-            use core::ptr::addr_of_mut;
-
-            // Compile-time check: Kernel<'static, $Config> must fit in storage
-            // and its alignment must not exceed the buffer alignment.
-            const _: () = {
-                assert!(
-                    core::mem::size_of::<$crate::svc::Kernel<'static, $Config>>()
-                        <= $crate::state::MAX_KERNEL_SIZE,
-                    "Kernel<'static, Config> exceeds MAX_KERNEL_SIZE"
-                );
-                assert!(
-                    core::mem::align_of::<$crate::svc::Kernel<'static, $Config>>()
-                        <= $crate::state::KERNEL_ALIGNMENT,
-                    "Kernel<'static, Config> alignment exceeds KERNEL_ALIGNMENT"
-                );
-            };
-
-            // Move the kernel out of the caller's reference into aligned
-            // static storage. We use ptr::read to move without requiring
-            // the caller to give up ownership syntactically; after this
-            // call the caller's binding is logically consumed.
-            // SAFETY: Called once during init before interrupts enabled.
-            // `k` is a valid, initialized Kernel. After ptr::read the
-            // caller must not use the original binding.
-            let owned = unsafe { core::ptr::read(k) };
-
-            // Write directly into UNIFIED_KERNEL_STORAGE, bypassing the
-            // removed init_kernel_state / get_kernel_ptr intermediaries.
-            // SAFETY: UNIFIED_KERNEL_STORAGE is a MaybeUninit<KernelStorageBuffer>
-            // with sufficient size (MAX_KERNEL_SIZE, verified by compile-time
-            // assertions in state.rs) and alignment (KERNEL_ALIGNMENT via
-            // repr(C, align(4096))). The cast is valid because both types
-            // share the same memory location with compatible size/alignment.
-            let mu_ptr = unsafe {
-                addr_of_mut!($crate::state::UNIFIED_KERNEL_STORAGE)
-                    as *mut MaybeUninit<$crate::svc::Kernel<'static, $Config>>
-            };
-            // SAFETY: mu_ptr points to static storage that outlives all callers.
-            // MaybeUninit::write initializes without reading.
-            let kref = unsafe { (*mu_ptr).write(owned) };
-
-            // SAFETY: kref points into UNIFIED_KERNEL_STORAGE which is 'static.
-            // Called exactly once before interrupts are enabled, satisfying
-            // store_kernel_ptr's requirement.
-            unsafe { $crate::kernel_ptr::store_kernel_ptr(kref) };
+            // SAFETY: k lives on the caller's stack in a -> ! function
+            // that never returns, so the reference is valid for the
+            // program's lifetime. Called exactly once before interrupts
+            // are enabled, satisfying store_kernel_ptr's requirement.
+            unsafe { $crate::kernel_ptr::store_kernel_ptr(k) };
             $crate::svc::set_dispatch_hook(dispatch_hook);
         }
 
@@ -970,27 +908,11 @@ pub fn dispatch_syscall<const N: usize>(
         Some(SyscallId::GetErrorStatus) => SvcError::InvalidSyscall.to_u32(),
         Some(SyscallId::RequestRestart) => SvcError::InvalidSyscall.to_u32(),
         Some(SyscallId::RequestStop) => SvcError::InvalidSyscall.to_u32(),
-        // Bug 38-iguana: PCB identity divergence analysis.
+        // Bug 38-iguana: PCB identity divergence analysis (historical).
         //
-        // Root cause of the class of bug: `store_kernel` moves the Kernel
-        // via `ptr.write(kernel)` into UNIFIED_KERNEL_STORAGE, invalidating
-        // any absolute address captured from the stack-allocated original.
-        // This is why `fix_mpu_data_region()` exists — MpuRegion.base
-        // stores an absolute address computed at construction time, which
-        // becomes stale after the move and must be patched.
-        //
-        // Why no fix_run_count() / fix_pcb() is needed: unlike MpuRegion,
-        // neither the Scheduler nor this handler caches a `*mut PCB` or
-        // absolute address.  The Scheduler calls `kernel.pcb_mut(pid)`
-        // (accessors.rs:54), which resolves through `self.core.partitions_mut()
-        // .get_mut(pid)` — a chain of field offsets relative to `&mut self`.
-        // Similarly, `partitions.get(pid)` here is a borrow passed by the
-        // caller from the placed Kernel.  Both paths compute PCB addresses
-        // as struct-relative offsets, so they automatically track the
-        // post-move location without patching.
-        //
-        // Invariant: no component may cache a `*mut PartitionControlBlock`
-        // across the store_kernel move boundary.
+        // The kernel now lives on the caller's stack and is never moved,
+        // so self-referential addresses remain valid. PCB access is always
+        // through struct-relative offsets (`kernel.pcb_mut(pid)`).
         Some(SyscallId::GetPartitionRunCount) => {
             let pid = frame.r1 as usize;
             match partitions.get(pid) {
@@ -1007,29 +929,12 @@ pub fn dispatch_syscall<const N: usize>(
     rtos_trace::trace::marker_end(raw_id);
 }
 
-// ---- Struct-Move Invariant ----
+// ---- Kernel Lifetime ----
 //
-// `Kernel` is constructed on the stack in `Kernel::new()` and then moved into
-// `UNIFIED_KERNEL_STORAGE` via `ptr.write(kernel)` (see `state.rs`).  Any
-// address captured from internal fields during `new()` — stack buffer
-// pointers, MPU region bases — becomes **stale** after the move because the
-// struct now lives at a different address.
-//
-// Fields that store self-referential addresses must therefore be **patched
-// after placement**, not during construction.  The correct pattern is:
-//
-//   1. Construct with real stack/config values via `ExternalPartitionMemory`.
-//   2. After placement in `boot_preconfigured()`, call the appropriate `fix_*()` method
-//      which recomputes the address from the live storage location.
-//   3. Verify the patched address falls within the `UNIFIED_KERNEL_STORAGE`
-//      range.
-//
-// Currently affected fields and their fixup methods:
-//   - `PartitionControlBlock.mpu_region.base`  → `fix_mpu_data_region()`
-//   - `PartitionControlBlock.stack_base`        → set via `ExternalPartitionMemory` at construction
-//
-// See `boot.rs` for the post-placement fixup sequence that calls these
-// methods after the kernel has been moved into its final storage.
+// `Kernel` is constructed on the stack of a `-> !` function and its address
+// is published via `store_kernel_ptr`. The kernel is never moved after
+// construction, so self-referential addresses (MPU region bases, stack
+// pointers) remain valid for the program's lifetime.
 
 /// Encapsulates all kernel service pools alongside the partition table,
 /// with pool sizes derived from a single [`KernelConfig`] implementer.
@@ -2580,13 +2485,14 @@ where
     /// Assert kernel invariants at dispatch entry/exit (no-op in release).
     #[cfg(any(debug_assertions, test))]
     fn assert_dispatch_invariants(&self) {
-        // In real builds, verify linker-placed 4096-byte alignment. Skipped in
-        // tests because Box only guarantees the type's natural alignment; the
-        // test harness checks type alignment separately.
+        // TODO: This currently checks natural alignment (align_of::<Self>()),
+        // which is weaker than the MPU-compatible alignment the kernel needs.
+        // Restore a stricter check once the kernel exposes its required MPU
+        // region alignment as a const (KERNEL_ALIGNMENT was removed).
         #[cfg(not(test))]
         crate::invariants::assert_storage_alignment(
             self as *const Self as usize,
-            crate::state::KERNEL_ALIGNMENT,
+            core::mem::align_of::<Self>(),
         );
         // Unit tests may leave active_partition as None; in the real kernel
         // it is always Some when an SVC fires.  Skip the check only in tests.

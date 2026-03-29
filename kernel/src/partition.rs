@@ -108,7 +108,7 @@ pub enum RestartError {
 /// # Safety invariant — PCB identity across moves
 ///
 /// No component may cache a `*mut PartitionControlBlock` across the
-/// `init_kernel_state_at` move boundary — see bug 38-iguana.
+/// `store_kernel` move boundary — see bug 38-iguana.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartitionControlBlock {
     id: u8,

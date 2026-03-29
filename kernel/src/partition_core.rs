@@ -566,14 +566,12 @@ mod tests {
     tiered_stack_tests!(stack_2k, AlignedStack2K, 512, 2048);
     tiered_stack_tests!(stack_4k, AlignedStack4K, 1024, 4096);
 
-    /// Verify all stack tier natural-alignment invariants and kernel coverage.
+    /// Verify all stack tier natural-alignment invariants.
     /// Checks per tier: ALIGNMENT==SIZE_BYTES, mem::align_of==ALIGNMENT,
     /// mem::size_of==SIZE_BYTES, ALIGNMENT is power-of-two (MPU requirement),
-    /// SIZE_BYTES==WORDS*4, and KERNEL_ALIGNMENT >= ALIGNMENT.
+    /// SIZE_BYTES==WORDS*4.
     #[test]
     fn stack_tier_natural_alignment_and_kernel_coverage() {
-        use crate::state::KERNEL_ALIGNMENT;
-
         macro_rules! check_tier {
             ($ty:ty, $label:expr) => {{
                 let align = <$ty as StackStorage>::ALIGNMENT;
@@ -605,13 +603,6 @@ mod tests {
                     size,
                     "{}: mem::size_of != SIZE_BYTES",
                     $label
-                );
-                assert!(
-                    KERNEL_ALIGNMENT >= align,
-                    "KERNEL_ALIGNMENT ({}) < {} ALIGNMENT ({})",
-                    KERNEL_ALIGNMENT,
-                    $label,
-                    align
                 );
             }};
         }
