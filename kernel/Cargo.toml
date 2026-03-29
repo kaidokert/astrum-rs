@@ -600,6 +600,9 @@ fpu-context = []
 # Health monitoring for partition liveness and schedule integrity.
 health-partition = []
 
+# Mock HAL register bank for host-mode tests.
+mock-hal = ["rtos-traits/mock-hal"]
+
 # SEGGER SystemView tracing via rtos-trace.
 trace = ["dep:rtos-trace", "dep:systemview-target", "dep:rtt-target", "dep:critical-section"]
 
@@ -622,4 +625,5 @@ systemview-target = { version = "0.3", default-features = false, features = ["co
 plib = { path = "../plib" }
 
 [target.'cfg(not(target_arch = "arm"))'.dev-dependencies]
+rtos-traits = { path = "../rtos-traits", features = ["mock-hal"] }
 trybuild = "1"

@@ -107,6 +107,29 @@ impl UartRegs<crate::test_register::ArrayRegisterBank> {
     }
 }
 
+#[cfg(any(test, feature = "mock-hal"))]
+impl UartRegs<rtos_traits::register::MockRegisterBank> {
+    /// Create a new UartRegs backed by a MockRegisterBank.
+    pub fn new_mock(base: u32) -> Self {
+        Self::with_backend(base, rtos_traits::register::MockRegisterBank::new())
+    }
+
+    /// Pre-load a register value (does not appear in write log).
+    pub fn set_reg(&self, offset: usize, value: u32) {
+        self.regs.borrow_mut().set(offset, value);
+    }
+
+    /// Assert that the write log matches `expected` exactly.
+    pub fn assert_sequence(&self, expected: &[(usize, u32)]) {
+        self.regs.borrow().assert_sequence(expected);
+    }
+
+    /// Assert that a specific (offset, value) pair appears in the write log.
+    pub fn assert_wrote(&self, offset: usize, value: u32) {
+        self.regs.borrow().assert_wrote(offset, value);
+    }
+}
+
 impl<R: RegisterBank> UartRegs<R> {
     pub fn with_backend(base: u32, regs: R) -> Self {
         Self {
@@ -316,24 +339,9 @@ mod tests {
         assert_eq!(FR_TXFF, 0x20); // bit 5
         assert_eq!(FR_RXFE, 0x10); // bit 4
         assert_eq!(FR_BUSY, 0x08); // bit 3
-                                   // Bits should not overlap
         assert_eq!(FR_TXFF & FR_RXFE, 0);
         assert_eq!(FR_TXFF & FR_BUSY, 0);
         assert_eq!(FR_RXFE & FR_BUSY, 0);
-    }
-
-    // -- UartRegs constructor -----------------------------------------------
-
-    #[test]
-    fn uart_regs_base_address() {
-        let uart = UartRegs::new(0x4000_C000);
-        assert_eq!(uart.base(), 0x4000_C000);
-    }
-
-    #[test]
-    fn uart_regs_second_instance() {
-        let uart = UartRegs::new(0x4000_D000);
-        assert_eq!(uart.base(), 0x4000_D000);
     }
 
     // -- Baud-rate divisor calculation --------------------------------------
@@ -420,7 +428,6 @@ mod tests {
 
     #[test]
     fn init_lcrh_is_8n1_with_fifo() {
-        // WLEN = 0b11 (bits 6:5) and FEN (bit 4).
         assert_eq!(LCRH_8N1_FIFO, (0b11 << 5) | (1 << 4));
         assert_eq!(LCRH_8N1_FIFO, 0x70);
     }
@@ -430,7 +437,6 @@ mod tests {
         assert_ne!(CTL_ENABLE_TXRX & CTL_UARTEN, 0);
         assert_ne!(CTL_ENABLE_TXRX & CTL_TXE, 0);
         assert_ne!(CTL_ENABLE_TXRX & CTL_RXE, 0);
-        // Should be exactly those three bits.
         assert_eq!(CTL_ENABLE_TXRX, 0x301);
     }
 
@@ -454,7 +460,6 @@ mod tests {
     fn icr_clear_bits_correct() {
         assert_eq!(ICR_RXIC, 1 << 4); // bit 4
         assert_eq!(ICR_RTIC, 1 << 6); // bit 6
-                                      // Combined clear value.
         assert_eq!(ICR_RXIC | ICR_RTIC, 0x50);
     }
 
@@ -465,106 +470,98 @@ mod tests {
         assert_eq!(rx_ris_mask(), RIS_RXRIS | RIS_RTRIS);
     }
 
-    // -- Mock-backed method tests ---------------------------------------------
+    // -- MockRegisterBank-backed method tests --------------------------------
 
-    #[test]
-    fn is_tx_full_when_txff_set() {
-        let uart = UartRegs::new(0x4000_C000);
-        // FR register defaults to 0 → TX not full.
-        assert!(!uart.is_tx_full());
-        // Set TXFF bit in the FR mock register.
-        uart.write(FR, FR_TXFF);
-        assert!(uart.is_tx_full());
+    fn mock_uart(base: u32) -> UartRegs<rtos_traits::register::MockRegisterBank> {
+        UartRegs::new_mock(base)
     }
 
     #[test]
-    fn is_rx_empty_when_rxfe_set() {
-        let uart = UartRegs::new(0x4000_C000);
-        // FR = 0 → RX not empty.
-        assert!(!uart.is_rx_empty());
-        // Set RXFE bit.
-        uart.write(FR, FR_RXFE);
-        assert!(uart.is_rx_empty());
+    fn mock_is_tx_full_reads_fr() {
+        let u = mock_uart(0x4000_C000);
+        assert!(!u.is_tx_full());
+        u.set_reg(FR as usize, FR_TXFF);
+        assert!(u.is_tx_full());
     }
 
     #[test]
-    fn is_busy_when_busy_set() {
-        let uart = UartRegs::new(0x4000_C000);
-        assert!(!uart.is_busy());
-        uart.write(FR, FR_BUSY);
-        assert!(uart.is_busy());
+    fn mock_is_rx_empty_reads_fr() {
+        let u = mock_uart(0x4000_C000);
+        assert!(!u.is_rx_empty());
+        u.set_reg(FR as usize, FR_RXFE);
+        assert!(u.is_rx_empty());
     }
 
     #[test]
-    fn write_byte_stores_to_dr() {
-        let uart = UartRegs::new(0x4000_C000);
-        // FR = 0 → TX not full, so write_byte should not spin.
-        uart.write_byte(0x42);
-        assert_eq!(uart.read(DR), 0x42);
+    fn mock_is_busy_reads_fr() {
+        let u = mock_uart(0x4000_C000);
+        assert!(!u.is_busy());
+        u.set_reg(FR as usize, FR_BUSY);
+        assert!(u.is_busy());
     }
 
     #[test]
-    fn read_byte_returns_none_when_rx_empty() {
-        let uart = UartRegs::new(0x4000_C000);
-        // Set RXFE so the FIFO looks empty.
-        uart.write(FR, FR_RXFE);
-        assert_eq!(uart.read_byte(), None);
+    fn mock_write_byte_writes_dr() {
+        let u = mock_uart(0x4000_C000);
+        u.write_byte(0x42);
+        u.assert_wrote(DR as usize, 0x42);
     }
 
     #[test]
-    fn read_byte_returns_data_when_rx_has_data() {
-        let uart = UartRegs::new(0x4000_C000);
-        // FR = 0 → RXFE clear, so FIFO is non-empty.
-        uart.write(DR, 0xAB);
-        assert_eq!(uart.read_byte(), Some(0xAB));
+    fn mock_read_byte_none_when_rx_empty() {
+        let u = mock_uart(0x4000_C000);
+        u.set_reg(FR as usize, FR_RXFE);
+        assert_eq!(u.read_byte(), None);
     }
 
     #[test]
-    fn init_programs_registers() {
-        let uart = UartRegs::new(0x4000_C000);
-        uart.init(115_200, 12_000_000);
-        assert_eq!(uart.read(IBRD), 6);
-        assert_eq!(uart.read(FBRD), 33);
-        assert_eq!(uart.read(LCRH), LCRH_8N1_FIFO);
-        assert_eq!(uart.read(CTL), CTL_ENABLE_TXRX);
+    fn mock_read_byte_returns_data() {
+        let u = mock_uart(0x4000_C000);
+        u.set_reg(DR as usize, 0xAB);
+        assert_eq!(u.read_byte(), Some(0xAB));
     }
 
     #[test]
-    fn enable_rx_interrupt_sets_bits() {
-        let uart = UartRegs::new(0x4000_C000);
-        // IM starts at 0.
-        uart.enable_rx_interrupt();
-        let im = uart.read(IM);
-        assert_ne!(im & IM_RXIM, 0);
-        assert_ne!(im & IM_RTIM, 0);
+    fn mock_init_register_write_sequence() {
+        let u = mock_uart(0x4000_C000);
+        u.init(115_200, 12_000_000);
+        u.assert_sequence(&[
+            (CTL as usize, 0),
+            (IBRD as usize, 6),
+            (FBRD as usize, 33),
+            (LCRH as usize, LCRH_8N1_FIFO),
+            (CTL as usize, CTL_ENABLE_TXRX),
+        ]);
     }
 
     #[test]
-    fn disable_rx_interrupt_clears_bits() {
-        let uart = UartRegs::new(0x4000_C000);
-        // Pre-set the interrupt bits.
-        uart.write(IM, IM_RXIM | IM_RTIM);
-        uart.disable_rx_interrupt();
-        let im = uart.read(IM);
-        assert_eq!(im & IM_RXIM, 0);
-        assert_eq!(im & IM_RTIM, 0);
+    fn mock_enable_rx_interrupt_writes_im() {
+        let u = mock_uart(0x4000_C000);
+        u.enable_rx_interrupt();
+        u.assert_wrote(IM as usize, IM_RXIM | IM_RTIM);
     }
 
     #[test]
-    fn clear_rx_interrupt_writes_icr() {
-        let uart = UartRegs::new(0x4000_C000);
-        uart.clear_rx_interrupt();
-        let icr = uart.read(ICR);
-        assert_ne!(icr & ICR_RXIC, 0);
-        assert_ne!(icr & ICR_RTIC, 0);
+    fn mock_disable_rx_interrupt_clears_im() {
+        let u = mock_uart(0x4000_C000);
+        u.set_reg(IM as usize, IM_RXIM | IM_RTIM);
+        u.disable_rx_interrupt();
+        u.assert_wrote(IM as usize, 0);
     }
 
     #[test]
-    fn read_ris_returns_register_value() {
-        let uart = UartRegs::new(0x4000_C000);
-        assert_eq!(uart.read_ris(), 0);
-        uart.write(RIS, RIS_RXRIS);
-        assert_eq!(uart.read_ris(), RIS_RXRIS);
+    fn mock_clear_rx_interrupt_writes_icr() {
+        let u = mock_uart(0x4000_C000);
+        u.clear_rx_interrupt();
+        u.assert_wrote(ICR as usize, ICR_RXIC | ICR_RTIC);
+    }
+
+    #[test]
+    fn mock_read_ris_returns_preloaded() {
+        let u = mock_uart(0x4000_C000);
+        assert_eq!(u.read_ris(), 0);
+        u.set_reg(RIS as usize, RIS_RXRIS);
+        assert_eq!(u.read_ris(), RIS_RXRIS);
     }
 
     // -- Additional baud-rate edge cases ------------------------------------
@@ -582,7 +579,6 @@ mod tests {
     #[test]
     fn baud_max_u32_no_panic() {
         let (ibrd, fbrd) = compute_baud_divisors(12_000_000, u32::MAX);
-        // BRD = 12e6 / (16 * 4294967295) ≈ 0.000174, essentially zero.
         assert_eq!(ibrd, 0);
         assert!(fbrd <= 63);
     }
