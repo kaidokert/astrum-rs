@@ -113,6 +113,18 @@ impl MpuRegion {
     }
 }
 
+/// Policy controlling what happens when a partition faults.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum FaultPolicy {
+    /// Partition stays in Faulted state permanently.
+    #[default]
+    StayDead,
+    /// Partition is warm-restarted (state preserved) up to `max` times.
+    WarmRestart { max: u32 },
+    /// Partition is cold-restarted (full reset) up to `max` times.
+    ColdRestart { max: u32 },
+}
+
 mod sealed {
     pub trait Sealed {}
     impl Sealed for super::PartitionEntry {}
@@ -576,5 +588,22 @@ mod tests {
         // trigger the debug_assert!; the function is never actually called.
         let fake: PartitionBody = unsafe { core::mem::transmute(0x1_0000_0001_usize) };
         let _ = PartitionSpec::body(fake, 0);
+    }
+
+    #[test]
+    fn fault_policy_default_is_stay_dead() {
+        assert_eq!(FaultPolicy::default(), FaultPolicy::StayDead);
+    }
+
+    #[test]
+    fn fault_policy_variants_are_distinct() {
+        let stay = FaultPolicy::StayDead;
+        let warm = FaultPolicy::WarmRestart { max: 3 };
+        let cold = FaultPolicy::ColdRestart { max: 5 };
+        assert_ne!(stay, warm);
+        assert_ne!(stay, cold);
+        assert_ne!(warm, cold);
+        assert_eq!(warm, FaultPolicy::WarmRestart { max: 3 });
+        assert_eq!(cold, FaultPolicy::ColdRestart { max: 5 });
     }
 }

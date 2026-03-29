@@ -21,7 +21,8 @@ const _: () = assert!(
 
 use crate::partition_core::StackStorage;
 pub use rtos_traits::partition::{
-    EntryAddr, EntryPointFn, IsrHandler, MpuRegion, PartitionBody, PartitionEntry, PartitionSpec,
+    EntryAddr, EntryPointFn, FaultPolicy, IsrHandler, MpuRegion, PartitionBody, PartitionEntry,
+    PartitionSpec,
 };
 
 /// Default data-region RASR attributes: full read-write access with
@@ -72,17 +73,6 @@ impl PartialEq for DebugBufferRef {
 
 #[cfg(feature = "partition-debug")]
 impl Eq for DebugBufferRef {}
-
-/// Policy controlling what happens when a partition faults.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FaultPolicy {
-    /// Partition stays in Faulted state permanently.
-    StayDead,
-    /// Partition is warm-restarted (state preserved) up to `max` times.
-    WarmRestart { max: u32 },
-    /// Partition is cold-restarted (full reset) up to `max` times.
-    ColdRestart { max: u32 },
-}
 
 /// Describes how a partition was most recently started.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
