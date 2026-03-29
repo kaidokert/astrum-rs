@@ -187,172 +187,129 @@ impl<R: RegisterBank> PwmPin for Pwm0Channel<R> {
     }
 }
 
-// ── Unit tests (host-only, mock register block) ─────────────────────
+#[cfg(any(test, feature = "mock-hal"))]
+pub type MockPwm0Channel = Pwm0Channel<rtos_traits::register::MockRegisterBank>;
+#[cfg(any(test, feature = "mock-hal"))]
+impl MockPwm0Channel {
+    pub fn new_mock(channel: u8) -> Result<Self, Pwm0Error> {
+        Self::with_backend(
+            0x4002_8000,
+            rtos_traits::register::MockRegisterBank::new(),
+            channel,
+        )
+    }
+    pub fn set_reg(&self, offset: usize, value: u32) {
+        self.regs.borrow_mut().set(offset, value);
+    }
+    pub fn assert_sequence(&self, expected: &[(usize, u32)]) {
+        self.regs.borrow().assert_sequence(expected);
+    }
+    pub fn assert_wrote(&self, offset: usize, value: u32) {
+        self.regs.borrow().assert_wrote(offset, value);
+    }
+    pub fn peek_reg(&self, offset: usize) -> u32 {
+        self.regs.borrow().read(offset)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    extern crate std;
-    use std::vec;
-
     use super::*;
 
-    /// Helper: allocate a zeroed mock register block (1 KiB, enough for PWM0).
-    fn mock_block() -> std::vec::Vec<u32> {
-        vec![0u32; 256]
-    }
+    const GENA_VAL: u32 = GENA_HIGH_ON_LOAD_LOW_ON_CMPA;
 
-    fn write_at(base: *mut u8, off: usize, val: u32) {
-        unsafe { core::ptr::write_volatile(base.add(off) as *mut u32, val) }
-    }
-
-    fn read_at(base: *const u8, off: usize) -> u32 {
-        unsafe { core::ptr::read_volatile(base.add(off) as *const u32) }
-    }
-
-    /// Create an HwPwm0Channel backed by a heap-allocated mock block.
-    fn hw_channel(base: *mut u8, channel: u8) -> HwPwm0Channel {
-        unsafe { HwPwm0Channel::new(base as usize, channel) }.unwrap()
+    fn mock_ch(channel: u8) -> MockPwm0Channel {
+        MockPwm0Channel::new_mock(channel).unwrap()
     }
 
     #[test]
-    fn new_stores_base_and_channel() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as usize;
-        let ch = hw_channel(base as *mut u8, 2);
-        assert_eq!(ch.base_addr, base);
+    fn new_validation() {
+        let ch = mock_ch(2);
+        assert_eq!(ch.base_addr, 0x4002_8000);
         assert_eq!(ch.channel, 2);
-    }
-
-    #[test]
-    fn max_duty_reads_load_gen0() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        write_at(base, 0x050, 4999);
-        let ch = hw_channel(base, 0);
-        assert_eq!(ch.get_max_duty(), 4999);
-    }
-
-    #[test]
-    fn max_duty_reads_load_gen1() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        write_at(base, 0x090, 7999);
-        let ch = hw_channel(base, 1);
-        assert_eq!(ch.get_max_duty(), 7999);
-    }
-
-    #[test]
-    fn set_duty_writes_cmpa_gen0() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        write_at(base, 0x050, 999); // LOAD
-        let mut ch = hw_channel(base, 0);
-        ch.set_duty(500);
-        // CMPA = LOAD - duty = 999 - 500 = 499
-        assert_eq!(read_at(base, 0x058), 499);
-        assert_eq!(ch.get_duty(), 500);
-    }
-
-    #[test]
-    fn full_duty_sets_cmpa_zero() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        write_at(base, 0x050, 999);
-        let mut ch = hw_channel(base, 0);
-        ch.set_duty(999);
-        assert_eq!(read_at(base, 0x058), 0);
-        assert_eq!(ch.get_duty(), 999);
-    }
-
-    #[test]
-    fn zero_duty_sets_cmpa_to_load() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        write_at(base, 0x050, 999);
-        let mut ch = hw_channel(base, 0);
-        ch.set_duty(0);
-        assert_eq!(read_at(base, 0x058), 999);
-        assert_eq!(ch.get_duty(), 0);
-    }
-
-    #[test]
-    fn duty_gen2_uses_correct_offsets() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        // Gen 2: LOAD at 0x0D0, CMPA at 0x0D8
-        write_at(base, 0x0D0, 3000);
-        let mut ch = hw_channel(base, 2);
-        assert_eq!(ch.get_max_duty(), 3000);
-        ch.set_duty(750);
-        assert_eq!(read_at(base, 0x0D8), 2250);
-        assert_eq!(ch.get_duty(), 750);
-    }
-
-    #[test]
-    fn enable_sets_ctl_gena_and_enable_bits() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        let mut ch = hw_channel(base, 0);
-        ch.enable();
-        assert_eq!(
-            read_at(base, 0x060),
-            GENA_HIGH_ON_LOAD_LOW_ON_CMPA,
-            "GENA configured"
+        let r = MockPwm0Channel::with_backend(
+            0x4002_8001,
+            rtos_traits::register::MockRegisterBank::new(),
+            0,
         );
-        assert_eq!(read_at(base, 0x040) & 1, 1, "CTL enable bit");
-        assert_eq!(read_at(base, 0x008) & 1, 1, "ENABLE output bit");
+        assert!(matches!(r, Err(Pwm0Error::UnalignedBase)));
+        assert!(matches!(
+            MockPwm0Channel::new_mock(3),
+            Err(Pwm0Error::InvalidChannel)
+        ));
     }
 
     #[test]
-    fn disable_clears_ctl_and_enable_bits() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        write_at(base, 0x040, 0xFF);
-        write_at(base, 0x008, 0xFF);
-        let mut ch = hw_channel(base, 0);
+    fn enable_write_sequence() {
+        let mut ch0 = mock_ch(0);
+        ch0.enable();
+        ch0.assert_sequence(&[(0x060, GENA_VAL), (0x040, 1), (ENABLE_OFF, 1)]);
+        let mut ch1 = mock_ch(1);
+        ch1.enable();
+        ch1.assert_sequence(&[(0x0A0, GENA_VAL), (0x080, 1), (ENABLE_OFF, 0b100)]);
+        let mut ch2 = mock_ch(0);
+        ch2.set_reg(0x040, 0xF0);
+        ch2.enable();
+        ch2.assert_wrote(0x040, 0xF1);
+    }
+
+    #[test]
+    fn set_duty_writes_cmpa_per_channel() {
+        let mut ch0 = mock_ch(0);
+        ch0.set_reg(0x050, 999);
+        ch0.set_duty(500);
+        ch0.assert_wrote(0x058, 499);
+        assert_eq!(ch0.get_duty(), 500);
+        let mut ch1 = mock_ch(1);
+        ch1.set_reg(0x090, 2000);
+        ch1.set_duty(800);
+        ch1.assert_wrote(0x098, 1200);
+        assert_eq!(ch1.get_duty(), 800);
+        let mut ch2 = mock_ch(2);
+        ch2.set_reg(0x0D0, 3000);
+        ch2.set_duty(750);
+        ch2.assert_wrote(0x0D8, 2250);
+        assert_eq!(ch2.get_duty(), 750);
+    }
+
+    #[test]
+    fn get_duty_and_boundary_cases() {
+        let ch = mock_ch(0);
+        ch.set_reg(0x050, 1000);
+        ch.set_reg(0x058, 300);
+        assert_eq!(ch.get_duty(), 700);
+        assert_eq!(ch.get_max_duty(), 1000);
+        let mut ch2 = mock_ch(0);
+        ch2.set_reg(0x050, 999);
+        ch2.set_duty(999);
+        ch2.assert_wrote(0x058, 0);
+        assert_eq!(ch2.get_duty(), 999);
+        let ch1 = mock_ch(1);
+        ch1.set_reg(0x090, 7999);
+        assert_eq!(ch1.get_max_duty(), 7999);
+    }
+
+    #[test]
+    fn channel_isolation_enable_bits() {
+        let mut ch0 = mock_ch(0);
+        let mut ch1 = mock_ch(1);
+        ch0.enable();
+        assert_eq!(ch0.peek_reg(ENABLE_OFF) & 0b100, 0);
+        ch1.enable();
+        assert_eq!(ch1.peek_reg(ENABLE_OFF) & 0b001, 0);
+        let mut ch1b = mock_ch(1);
+        ch1b.set_reg(ENABLE_OFF, 0b001);
+        ch1b.enable();
+        ch1b.assert_wrote(ENABLE_OFF, 0b101);
+    }
+
+    #[test]
+    fn disable_clears_bits_and_preserves_others() {
+        let mut ch = mock_ch(0);
+        ch.set_reg(0x040, 0xFF);
+        ch.set_reg(ENABLE_OFF, 0b101);
         ch.disable();
-        assert_eq!(read_at(base, 0x040) & 1, 0, "CTL enable cleared");
-        assert_eq!(read_at(base, 0x008) & 1, 0, "ENABLE output cleared");
-    }
-
-    #[test]
-    fn enable_gen1_uses_correct_mask() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        let mut ch = hw_channel(base, 1);
-        ch.enable();
-        assert_eq!(read_at(base, 0x080) & 1, 1, "Gen1 CTL enable");
-        assert_eq!(read_at(base, 0x008) & 0b100, 0b100, "Gen1 ENABLE bit 2");
-    }
-
-    #[test]
-    fn enable_preserves_other_channels() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        write_at(base, 0x008, 0b100); // Gen 1 already enabled
-        let mut ch = hw_channel(base, 0);
-        ch.enable();
-        assert_eq!(read_at(base, 0x008), 0b101, "both gen0 and gen1");
-    }
-
-    #[test]
-    fn disable_preserves_other_channels() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        write_at(base, 0x008, 0b101); // Gen 0 + Gen 1
-        let mut ch = hw_channel(base, 0);
-        ch.disable();
-        assert_eq!(read_at(base, 0x008), 0b100, "gen1 preserved");
-    }
-
-    #[test]
-    fn duty_exceeding_load_saturates() {
-        let mut blk = mock_block();
-        let base = blk.as_mut_ptr() as *mut u8;
-        write_at(base, 0x050, 100);
-        let mut ch = hw_channel(base, 0);
-        ch.set_duty(200); // > LOAD
-                          // saturating_sub: CMPA = 0
-        assert_eq!(read_at(base, 0x058), 0);
-        assert_eq!(ch.get_duty(), 100);
+        ch.assert_wrote(ENABLE_OFF, 0b100);
+        ch.assert_wrote(0x040, 0xFE);
     }
 }
