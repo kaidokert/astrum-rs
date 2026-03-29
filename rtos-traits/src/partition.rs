@@ -98,6 +98,24 @@ impl PartitionSpec {
         self.error_handler = Some(addr);
         self
     }
+
+    /// Construct a `PartitionSpec` from a raw `u32` entry-point address.
+    ///
+    /// This bypasses the `EntryPointFn` trait so that host-mode tests (64-bit)
+    /// can build specs without triggering the `debug_assert!` inside
+    /// `EntryAddr::from_entry`.
+    #[doc(hidden)]
+    pub fn from_raw_entry(entry_point: u32, r0: u32) -> Self {
+        Self {
+            entry_point: EntryAddr::from(entry_point),
+            r0,
+            data_mpu: None,
+            code_mpu: None,
+            peripherals: &[],
+            fault_policy: FaultPolicy::StayDead,
+            error_handler: None,
+        }
+    }
 }
 
 impl From<(PartitionEntry, u32)> for PartitionSpec {

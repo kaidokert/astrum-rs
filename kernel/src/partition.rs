@@ -1239,6 +1239,30 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         self
     }
 
+    /// Build an `ExternalPartitionMemory` from a [`PartitionSpec`], applying
+    /// all builder fields from the spec.
+    pub fn from_spec<S: StackStorage>(
+        storage: &'mem mut S,
+        spec: &PartitionSpec,
+        partition_id: u8,
+    ) -> Result<Self, ConfigError> {
+        let data_mpu = spec.data_mpu().unwrap_or(MpuRegion::new(0, 0, 0));
+        let mut mem =
+            Self::from_aligned_stack(storage, spec.entry_point(), data_mpu, partition_id)?
+                .with_r0_hint(spec.r0())
+                .with_fault_policy(spec.fault_policy());
+        if let Some(code_region) = spec.code_mpu() {
+            mem = mem.with_code_mpu_region(code_region)?;
+        }
+        if !spec.peripherals().is_empty() {
+            mem = mem.with_peripheral_regions(spec.peripherals())?;
+        }
+        if let Some(handler) = spec.error_handler() {
+            mem = mem.with_error_handler(handler);
+        }
+        Ok(mem)
+    }
+
     pub fn entry_point(&self) -> EntryAddr {
         self.entry_point
     }

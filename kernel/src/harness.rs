@@ -434,7 +434,7 @@ macro_rules! define_unified_harness {
                 { <$Config as $crate::config::KernelConfig>::SCHED }>,
             entries: &[$crate::partition::PartitionSpec],
         ) -> Result<$crate::svc::Kernel<'static, $Config>, $crate::harness::BootError> {
-            use $crate::partition::{ExternalPartitionMemory, MpuRegion};
+            use $crate::partition::ExternalPartitionMemory;
             // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
             // by this macro arm, which is invoked at most once per binary (enforced
             // by the linker via duplicate symbol errors).  `init_kernel()` is called
@@ -444,33 +444,11 @@ macro_rules! define_unified_harness {
             let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
-                let data_mpu = spec.data_mpu()
-                    .unwrap_or(MpuRegion::new(0, 0, 0));
-                let mut mem = ExternalPartitionMemory::from_aligned_stack(
-                    stk, spec.entry_point(), data_mpu, i as u8)
+                let mem = ExternalPartitionMemory::from_spec(stk, spec, i as u8)
                     .map_err(|e| {
                         $crate::klog!("init_kernel failed: {:?}", e);
                         $crate::harness::BootError::KernelInit(e)
-                    })?
-                    .with_r0_hint(spec.r0())
-                    .with_fault_policy(spec.fault_policy());
-                if let Some(code_region) = spec.code_mpu() {
-                    mem = mem.with_code_mpu_region(code_region)
-                        .map_err(|e| {
-                            $crate::klog!("init_kernel failed: {:?}", e);
-                            $crate::harness::BootError::KernelInit(e)
-                        })?;
-                }
-                if !spec.peripherals().is_empty() {
-                    mem = mem.with_peripheral_regions(spec.peripherals())
-                        .map_err(|e| {
-                            $crate::klog!("init_kernel failed: {:?}", e);
-                            $crate::harness::BootError::KernelInit(e)
-                        })?;
-                }
-                if let Some(handler) = spec.error_handler() {
-                    mem = mem.with_error_handler(handler);
-                }
+                    })?;
                 memories.push(mem)
                     .map_err(|_| {
                         $crate::klog!("init_kernel failed: partition table full");
@@ -557,7 +535,7 @@ macro_rules! define_unified_harness {
                 $crate::klog!("boot failed: {}", e);
                 e
             })?;
-            use $crate::partition::{ExternalPartitionMemory, MpuRegion};
+            use $crate::partition::ExternalPartitionMemory;
             // SAFETY: `__PARTITION_STACKS` is a module-level static mut defined
             // by this macro arm, which is invoked at most once per binary (enforced
             // by the linker via duplicate symbol errors).  `init_kernel()` is called
@@ -567,33 +545,11 @@ macro_rules! define_unified_harness {
             let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
-                let data_mpu = spec.data_mpu()
-                    .unwrap_or(MpuRegion::new(0, 0, 0));
-                let mut mem = ExternalPartitionMemory::from_aligned_stack(
-                    stk, spec.entry_point(), data_mpu, i as u8)
+                let mem = ExternalPartitionMemory::from_spec(stk, spec, i as u8)
                     .map_err(|e| {
                         $crate::klog!("init_kernel failed: {:?}", e);
                         $crate::harness::BootError::KernelInit(e)
-                    })?
-                    .with_r0_hint(spec.r0())
-                    .with_fault_policy(spec.fault_policy());
-                if let Some(code_region) = spec.code_mpu() {
-                    mem = mem.with_code_mpu_region(code_region)
-                        .map_err(|e| {
-                            $crate::klog!("init_kernel failed: {:?}", e);
-                            $crate::harness::BootError::KernelInit(e)
-                        })?;
-                }
-                if !spec.peripherals().is_empty() {
-                    mem = mem.with_peripheral_regions(spec.peripherals())
-                        .map_err(|e| {
-                            $crate::klog!("init_kernel failed: {:?}", e);
-                            $crate::harness::BootError::KernelInit(e)
-                        })?;
-                }
-                if let Some(handler) = spec.error_handler() {
-                    mem = mem.with_error_handler(handler);
-                }
+                    })?;
                 memories.push(mem)
                     .map_err(|_| {
                         $crate::klog!("init_kernel failed: partition table full");
@@ -1009,5 +965,120 @@ mod tests {
             msg.contains("bit[0]"),
             "must explain which bit to set, got: {msg}"
         );
+    }
+
+    // ============ PartitionSpec builder field passthrough tests ============
+
+    /// Define a KernelConfig struct and build a ScheduleTable for N partitions.
+    macro_rules! test_kernel_setup {
+        ($cfg_name:ident, $sched:ident, $n:expr, $partition_ids:expr) => {
+            struct $cfg_name;
+            impl KernelConfig for $cfg_name {
+                const N: usize = $n;
+                const SCHED: usize = 4;
+                kernel_config_types!();
+            }
+
+            #[allow(unused_mut)]
+            let mut $sched = {
+                use crate::scheduler::{ScheduleEntry, ScheduleTable};
+                let mut s = ScheduleTable::<4>::new();
+                for &pid in $partition_ids.iter() {
+                    s.add(ScheduleEntry::new(pid, 10)).unwrap();
+                }
+                s.add_system_window(1).unwrap();
+                s
+            };
+        };
+    }
+
+    /// Verify that non-default fault_policy, data MPU region, and error_handler
+    /// set on `PartitionSpec` builders reach the resulting PCB after
+    /// `ExternalPartitionMemory::from_spec` (the same path used by the
+    /// production `define_unified_harness!` macro).
+    #[test]
+    fn partition_spec_builder_fields_reach_pcb() {
+        use crate::partition::{ExternalPartitionMemory, FaultPolicy, MpuRegion, PartitionSpec};
+        use crate::partition_core::AlignedStack256B;
+        use crate::svc::Kernel;
+
+        test_kernel_setup!(Cfg, sched, 2, [0u8, 1]);
+
+        // Build PartitionSpecs using the builder API.
+        let spec0 = PartitionSpec::from_raw_entry(0x0800_0001, 0)
+            .with_data_mpu(MpuRegion::new(0x2000_0000, 4096, 0x03))
+            .with_fault_policy(FaultPolicy::WarmRestart { max: 3 })
+            .with_error_handler(0x0800_F001);
+
+        let spec1 = PartitionSpec::from_raw_entry(0x0800_1001, 0)
+            .with_data_mpu(MpuRegion::new(0x2001_0000, 4096, 0x01))
+            .with_fault_policy(FaultPolicy::ColdRestart { max: 5 });
+
+        let mut stack0 = AlignedStack256B::default();
+        let mut stack1 = AlignedStack256B::default();
+        let mem0 =
+            ExternalPartitionMemory::from_spec(&mut stack0, &spec0, 0).expect("from_spec P0");
+        let mem1 =
+            ExternalPartitionMemory::from_spec(&mut stack1, &spec1, 1).expect("from_spec P1");
+
+        let k = Kernel::<Cfg>::new(sched, &[mem0, mem1]).expect("kernel init");
+
+        // Verify partition 0: WarmRestart{max:3}, data MPU, and error handler.
+        let pcb0 = k.partitions().get(0).unwrap();
+        assert_eq!(
+            pcb0.fault_policy(),
+            FaultPolicy::WarmRestart { max: 3 },
+            "P0 fault_policy must be WarmRestart{{max:3}}"
+        );
+        assert_eq!(pcb0.mpu_region().base(), 0x2000_0000);
+        assert_eq!(pcb0.mpu_region().size(), 4096);
+        assert_eq!(pcb0.mpu_region().permissions(), 0x03);
+        assert_eq!(pcb0.error_handler(), Some(0x0800_F001));
+
+        // Verify partition 1: ColdRestart{max:5} and data MPU region.
+        let pcb1 = k.partitions().get(1).unwrap();
+        assert_eq!(
+            pcb1.fault_policy(),
+            FaultPolicy::ColdRestart { max: 5 },
+            "P1 fault_policy must be ColdRestart{{max:5}}"
+        );
+        assert_eq!(pcb1.mpu_region().base(), 0x2001_0000);
+        assert_eq!(pcb1.mpu_region().size(), 4096);
+        assert_eq!(pcb1.mpu_region().permissions(), 0x01);
+        assert_eq!(pcb1.error_handler(), None);
+    }
+
+    /// Verify that a default `PartitionSpec` (no builder calls beyond the
+    /// constructor) produces `StayDead` policy and the sentinel MPU region
+    /// after `ExternalPartitionMemory::from_spec`.
+    #[test]
+    fn partition_spec_default_fields_are_correct() {
+        use crate::partition::{ExternalPartitionMemory, FaultPolicy, PartitionSpec};
+        use crate::partition_core::AlignedStack256B;
+        use crate::svc::Kernel;
+
+        test_kernel_setup!(Cfg2, sched, 1, [0u8]);
+
+        // Default spec: no data_mpu, no fault_policy, no error_handler.
+        let spec = PartitionSpec::from_raw_entry(0x0800_0001, 0);
+
+        let mut stack = AlignedStack256B::default();
+        let mem =
+            ExternalPartitionMemory::from_spec(&mut stack, &spec, 0).expect("from_spec default");
+
+        let k = Kernel::<Cfg2>::new(sched, core::slice::from_ref(&mem))
+            .expect("kernel init with defaults");
+
+        let pcb = k.partitions().get(0).unwrap();
+        assert_eq!(
+            pcb.fault_policy(),
+            FaultPolicy::StayDead,
+            "default fault_policy must be StayDead"
+        );
+        // data_mpu was None → sentinel (0, 0, 0) per from_spec logic.
+        assert_eq!(pcb.mpu_region().base(), 0);
+        assert_eq!(pcb.mpu_region().size(), 0);
+        assert_eq!(pcb.mpu_region().permissions(), 0);
+        assert_eq!(pcb.error_handler(), None);
     }
 }
