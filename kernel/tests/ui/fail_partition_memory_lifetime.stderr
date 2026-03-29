@@ -1,0 +1,14 @@
+error[E0597]: `stack` does not live long enough
+  --> tests/ui/fail_partition_memory_lifetime.rs:31:13
+   |
+29 |         let mut stack = AlignedStack256B::default();
+   |             --------- binding `stack` declared here
+30 |         mem = ExternalPartitionMemory::from_aligned_stack(
+31 |             &mut stack,
+   |             ^^^^^^^^^^ borrowed value does not live long enough
+...
+37 |     }
+   |     - `stack` dropped here while still borrowed
+...
+46 |     let k = Kernel::<DefaultConfig>::new(sched, &[mem]).unwrap();
+   |                                                   --- borrow later used here
