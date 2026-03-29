@@ -11,7 +11,31 @@ pub enum HealthStatus {
     Critical,
 }
 
+/// Wire-format byte values for `HealthStatus`.
 impl HealthStatus {
+    const WIRE_OK: u8 = 0;
+    const WIRE_DEGRADED: u8 = 1;
+    const WIRE_CRITICAL: u8 = 2;
+
+    /// Convert from a wire byte, returning `None` for unknown values.
+    pub fn from_wire(b: u8) -> Option<Self> {
+        match b {
+            Self::WIRE_OK => Some(HealthStatus::Ok),
+            Self::WIRE_DEGRADED => Some(HealthStatus::Degraded),
+            Self::WIRE_CRITICAL => Some(HealthStatus::Critical),
+            _ => None,
+        }
+    }
+
+    /// Convert to wire byte.
+    pub fn to_wire(self) -> u8 {
+        match self {
+            HealthStatus::Ok => Self::WIRE_OK,
+            HealthStatus::Degraded => Self::WIRE_DEGRADED,
+            HealthStatus::Critical => Self::WIRE_CRITICAL,
+        }
+    }
+
     /// Merge two statuses, returning the more severe one.
     ///
     /// Severity order: `Ok` < `Degraded` < `Critical`.
@@ -49,8 +73,180 @@ pub enum HealthViolation {
     HeartbeatTimeout,
 }
 
+/// Wire-format byte values for `HealthViolation` type tags.
+impl HealthViolation {
+    const WIRE_SCHEDULE_OVERRUN: u8 = 0x00;
+    const WIRE_PARTITION_STALL: u8 = 0x01;
+    const WIRE_TICK_DRIFT: u8 = 0x02;
+    const WIRE_HEARTBEAT_TIMEOUT: u8 = 0x03;
+}
+
 /// Maximum number of partitions tracked for liveness.
 const MAX_PARTITIONS: usize = 4;
+
+const REPORT_BUF_SIZE: usize = 16;
+const MAX_REPORT_VIOLATIONS: usize = 7;
+
+/// Compact health report for sampling-port transmission (16-byte wire format).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HealthReport {
+    status: HealthStatus,
+    violations: [Option<HealthViolation>; MAX_REPORT_VIOLATIONS],
+    violation_count: u8,
+}
+
+impl HealthReport {
+    /// Returns the overall health status.
+    pub fn status(&self) -> HealthStatus {
+        self.status
+    }
+
+    /// Returns the number of violations stored.
+    pub fn violation_count(&self) -> u8 {
+        self.violation_count
+    }
+
+    /// Returns the violation at the given index, if present.
+    pub fn violation(&self, index: usize) -> Option<HealthViolation> {
+        self.violations.get(index).copied().flatten()
+    }
+
+    pub fn new(status: HealthStatus) -> Self {
+        Self {
+            status,
+            violations: [None; MAX_REPORT_VIOLATIONS],
+            violation_count: 0,
+        }
+    }
+
+    pub fn push_violation(&mut self, v: HealthViolation) -> bool {
+        let idx = self.violation_count as usize;
+        match self.violations.get_mut(idx) {
+            Some(slot) => {
+                *slot = Some(v);
+                self.violation_count += 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn to_bytes(&self) -> [u8; REPORT_BUF_SIZE] {
+        let mut buf = [0u8; REPORT_BUF_SIZE];
+        if let Some(b) = buf.get_mut(0) {
+            *b = self.status.to_wire();
+        }
+        if let Some(b) = buf.get_mut(1) {
+            *b = self.violation_count;
+        }
+        let mut pos = 2;
+        for i in 0..self.violation_count as usize {
+            if pos >= REPORT_BUF_SIZE {
+                break;
+            }
+            if let Some(v) = self.violations.get(i).copied().flatten() {
+                match v {
+                    HealthViolation::ScheduleOverrun => {
+                        if let Some(b) = buf.get_mut(pos) {
+                            *b = HealthViolation::WIRE_SCHEDULE_OVERRUN;
+                        }
+                        pos += 1;
+                    }
+                    HealthViolation::PartitionStall(pid) => {
+                        if let Some(b) = buf.get_mut(pos) {
+                            *b = HealthViolation::WIRE_PARTITION_STALL;
+                        }
+                        pos += 1;
+                        if let Some(b) = buf.get_mut(pos) {
+                            *b = pid;
+                        }
+                        pos += 1;
+                    }
+                    HealthViolation::TickDrift => {
+                        if let Some(b) = buf.get_mut(pos) {
+                            *b = HealthViolation::WIRE_TICK_DRIFT;
+                        }
+                        pos += 1;
+                    }
+                    HealthViolation::HeartbeatTimeout => {
+                        if let Some(b) = buf.get_mut(pos) {
+                            *b = HealthViolation::WIRE_HEARTBEAT_TIMEOUT;
+                        }
+                        pos += 1;
+                    }
+                }
+            }
+        }
+        buf
+    }
+
+    pub fn from_bytes(buf: &[u8; REPORT_BUF_SIZE]) -> Option<Self> {
+        let status = HealthStatus::from_wire(*buf.first()?)?;
+        let count = *buf.get(1)?;
+        if count as usize > MAX_REPORT_VIOLATIONS {
+            return None;
+        }
+        let mut report = HealthReport::new(status);
+        let mut pos = 2;
+        for _ in 0..count {
+            let tag = *buf.get(pos)?;
+            let v = match tag {
+                HealthViolation::WIRE_SCHEDULE_OVERRUN => {
+                    pos += 1;
+                    HealthViolation::ScheduleOverrun
+                }
+                HealthViolation::WIRE_PARTITION_STALL => {
+                    pos += 1;
+                    let pid = *buf.get(pos)?;
+                    pos += 1;
+                    HealthViolation::PartitionStall(pid)
+                }
+                HealthViolation::WIRE_TICK_DRIFT => {
+                    pos += 1;
+                    HealthViolation::TickDrift
+                }
+                HealthViolation::WIRE_HEARTBEAT_TIMEOUT => {
+                    pos += 1;
+                    HealthViolation::HeartbeatTimeout
+                }
+                _ => return None,
+            };
+            report.push_violation(v);
+        }
+        Some(report)
+    }
+}
+
+/// Serialize health status + violations and write to sampling port via SYS_SAMPLING_WRITE.
+// TODO: report_status uses svc! (supervisor call instruction) but lives in kernel/src.
+// If this code runs in supervisor mode, it should call internal port/IPC APIs directly
+// rather than issuing an SVC which triggers a redundant exception round-trip.
+// Consider moving this function to plib or providing a kernel-internal write path.
+pub fn report_status(
+    port_id: u32,
+    status: HealthStatus,
+    violations: &[Option<HealthViolation>],
+) -> u32 {
+    let mut report = HealthReport::new(status);
+    for v in violations.iter().filter_map(|v| *v) {
+        if !report.push_violation(v) {
+            break;
+        }
+    }
+    let buf = report.to_bytes();
+    let len = REPORT_BUF_SIZE as u32;
+    // SAFETY: `buf` is a stack-allocated `[u8; REPORT_BUF_SIZE]` that remains valid
+    // for the duration of the SVC call. `buf.as_ptr()` yields a valid, aligned pointer
+    // to `REPORT_BUF_SIZE` bytes. The kernel's SVC handler reads at most `len` bytes
+    // from the provided pointer within the same synchronous call context, so no
+    // use-after-free or aliasing violation is possible.
+    rtos_traits::svc!(
+        rtos_traits::syscall::SYS_SAMPLING_WRITE,
+        port_id,
+        len,
+        buf.as_ptr() as u32
+    )
+}
 
 /// Mutable state maintained by the health partition for schedule monitoring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -695,5 +891,78 @@ mod tests {
         let (status, _) = state.check_partition_liveness(&[5, 1, 1, 1], 1);
         assert_eq!(state.frames_since_run[0], u32::MAX);
         assert_eq!(status, HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn report_roundtrip_each_status() {
+        for (status, byte) in [
+            (HealthStatus::Ok, 0u8),
+            (HealthStatus::Degraded, 1),
+            (HealthStatus::Critical, 2),
+        ] {
+            let r = HealthReport::new(status);
+            let buf = r.to_bytes();
+            assert_eq!(buf[0], byte);
+            assert_eq!(buf[1], 0);
+            assert_eq!(HealthReport::from_bytes(&buf).unwrap(), r);
+        }
+    }
+
+    #[test]
+    fn report_roundtrip_each_violation() {
+        let cases: &[(HealthViolation, u8)] = &[
+            (HealthViolation::ScheduleOverrun, 0x00),
+            (HealthViolation::PartitionStall(3), 0x01),
+            (HealthViolation::TickDrift, 0x02),
+            (HealthViolation::HeartbeatTimeout, 0x03),
+        ];
+        for &(v, type_byte) in cases {
+            let mut r = HealthReport::new(HealthStatus::Degraded);
+            r.push_violation(v);
+            let buf = r.to_bytes();
+            assert_eq!(buf[2], type_byte);
+            let decoded = HealthReport::from_bytes(&buf).unwrap();
+            assert_eq!(decoded, r);
+        }
+    }
+
+    #[test]
+    fn report_roundtrip_mixed_and_stall_layout() {
+        // Verify PartitionStall wire layout: type byte + pid payload.
+        let mut r = HealthReport::new(HealthStatus::Degraded);
+        r.push_violation(HealthViolation::PartitionStall(3));
+        let buf = r.to_bytes();
+        assert_eq!(buf[2], 0x01);
+        assert_eq!(buf[3], 3);
+        assert_eq!(HealthReport::from_bytes(&buf).unwrap(), r);
+        // Mixed violations round-trip.
+        let mut r = HealthReport::new(HealthStatus::Critical);
+        r.push_violation(HealthViolation::ScheduleOverrun);
+        r.push_violation(HealthViolation::PartitionStall(0));
+        r.push_violation(HealthViolation::PartitionStall(2));
+        r.push_violation(HealthViolation::TickDrift);
+        r.push_violation(HealthViolation::HeartbeatTimeout);
+        assert_eq!(r.violation_count(), 5);
+        assert_eq!(HealthReport::from_bytes(&r.to_bytes()).unwrap(), r);
+    }
+
+    #[test]
+    fn report_from_bytes_rejects_invalid() {
+        let mut buf = [0u8; 16];
+        buf[0] = 3; // invalid status
+        assert_eq!(HealthReport::from_bytes(&buf), None);
+        buf[0] = 0;
+        buf[1] = 1;
+        buf[2] = 0xFF; // invalid violation type
+        assert_eq!(HealthReport::from_bytes(&buf), None);
+        buf[1] = 8; // > MAX_REPORT_VIOLATIONS
+        assert_eq!(HealthReport::from_bytes(&buf), None);
+    }
+
+    #[test]
+    fn report_status_host_mode() {
+        let violations = [Some(HealthViolation::ScheduleOverrun), None];
+        assert_eq!(report_status(0, HealthStatus::Degraded, &violations), 0);
+        assert_eq!(report_status(0, HealthStatus::Ok, &[]), 0);
     }
 }
