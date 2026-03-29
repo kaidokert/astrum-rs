@@ -35,6 +35,74 @@ pub enum HealthViolation {
     HeartbeatTimeout,
 }
 
+/// Mutable state maintained by the health partition for schedule monitoring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HealthState {
+    /// Tick value at the start of the last observed major frame.
+    last_major_frame_tick: u64,
+    /// Major frame count when `last_major_frame_tick` was recorded.
+    last_major_frame_count: u32,
+}
+
+impl HealthState {
+    /// Create a new `HealthState` seeded with the current tick and frame count.
+    pub fn new(current_tick: u64, current_frame_count: u32) -> Self {
+        Self {
+            last_major_frame_tick: current_tick,
+            last_major_frame_count: current_frame_count,
+        }
+    }
+
+    /// Returns the tick value at the start of the last observed major frame.
+    pub fn last_major_frame_tick(&self) -> u64 {
+        self.last_major_frame_tick
+    }
+
+    /// Returns the major frame count when the tick baseline was recorded.
+    pub fn last_major_frame_count(&self) -> u32 {
+        self.last_major_frame_count
+    }
+
+    /// Check whether the current major frame has exceeded its deadline.
+    ///
+    /// If the major frame count has advanced since the last check, the tick
+    /// baseline is reset to `current_tick` (the frame completed in time).
+    /// Otherwise, elapsed ticks since the frame started are compared against
+    /// `deadline_ticks`.
+    ///
+    /// Returns `(HealthStatus::Ok, None)` when within the deadline, or
+    /// `(HealthStatus::Critical, Some(HealthViolation::ScheduleOverrun))`
+    /// when the deadline is exceeded.
+    // TODO: baseline uses observation time (`current_tick`) rather than actual
+    // frame start time, which introduces sampling drift equal to monitor jitter.
+    // Consider accepting a `frame_start_tick` parameter for precise detection.
+    pub fn check_schedule_health(
+        &mut self,
+        current_tick: u64,
+        current_frame_count: u32,
+        deadline_ticks: u32,
+    ) -> (HealthStatus, Option<HealthViolation>) {
+        // Compute elapsed BEFORE resetting baseline so that overruns during
+        // frame transitions are not masked.
+        let elapsed = current_tick.saturating_sub(self.last_major_frame_tick);
+
+        // A new major frame started — reset the baseline.
+        if current_frame_count != self.last_major_frame_count {
+            self.last_major_frame_tick = current_tick;
+            self.last_major_frame_count = current_frame_count;
+        }
+
+        if elapsed > deadline_ticks as u64 {
+            (
+                HealthStatus::Critical,
+                Some(HealthViolation::ScheduleOverrun),
+            )
+        } else {
+            (HealthStatus::Ok, None)
+        }
+    }
+}
+
 /// Configuration for the system health monitor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SystemHealthConfig {
@@ -240,5 +308,139 @@ mod tests {
             on_violation: HealthAction::Log,
         };
         assert!(cfg.validate().is_ok());
+    }
+
+    // --- HealthState construction ---
+
+    #[test]
+    fn health_state_new() {
+        let state = HealthState::new(100, 5);
+        assert_eq!(state.last_major_frame_tick(), 100);
+        assert_eq!(state.last_major_frame_count(), 5);
+    }
+
+    // --- check_schedule_health: normal operation ---
+
+    #[test]
+    fn schedule_health_ok_within_deadline() {
+        let mut state = HealthState::new(1000, 3);
+        // 500 ticks elapsed, deadline is 1000 — well within bounds.
+        let (status, violation) = state.check_schedule_health(1500, 3, 1000);
+        assert_eq!(status, HealthStatus::Ok);
+        assert_eq!(violation, None);
+    }
+
+    #[test]
+    fn schedule_health_ok_no_elapsed() {
+        let mut state = HealthState::new(500, 1);
+        let (status, violation) = state.check_schedule_health(500, 1, 1000);
+        assert_eq!(status, HealthStatus::Ok);
+        assert_eq!(violation, None);
+    }
+
+    // --- check_schedule_health: exact deadline boundary ---
+
+    #[test]
+    fn schedule_health_ok_at_exact_deadline() {
+        let mut state = HealthState::new(0, 0);
+        // Exactly at deadline — not exceeded, should be Ok.
+        let (status, violation) = state.check_schedule_health(1000, 0, 1000);
+        assert_eq!(status, HealthStatus::Ok);
+        assert_eq!(violation, None);
+    }
+
+    // --- check_schedule_health: overrun detection ---
+
+    #[test]
+    fn schedule_health_critical_on_overrun() {
+        let mut state = HealthState::new(0, 0);
+        // 1001 ticks elapsed, deadline is 1000 — overrun by 1.
+        let (status, violation) = state.check_schedule_health(1001, 0, 1000);
+        assert_eq!(status, HealthStatus::Critical);
+        assert_eq!(violation, Some(HealthViolation::ScheduleOverrun));
+    }
+
+    #[test]
+    fn schedule_health_critical_large_overrun() {
+        let mut state = HealthState::new(100, 2);
+        let (status, violation) = state.check_schedule_health(5100, 2, 500);
+        assert_eq!(status, HealthStatus::Critical);
+        assert_eq!(violation, Some(HealthViolation::ScheduleOverrun));
+    }
+
+    // --- check_schedule_health: frame advancement resets baseline ---
+
+    #[test]
+    fn schedule_health_resets_on_new_frame() {
+        let mut state = HealthState::new(0, 0);
+        // Frame advanced within deadline — elapsed (800) <= 1000, baseline resets.
+        let (status, violation) = state.check_schedule_health(800, 1, 1000);
+        assert_eq!(status, HealthStatus::Ok);
+        assert_eq!(violation, None);
+        assert_eq!(state.last_major_frame_tick(), 800);
+        assert_eq!(state.last_major_frame_count(), 1);
+    }
+
+    #[test]
+    fn schedule_health_detects_overrun_on_frame_transition() {
+        let mut state = HealthState::new(0, 0);
+        // Frame advanced but previous frame overran: elapsed (5000) > 1000.
+        let (status, violation) = state.check_schedule_health(5000, 1, 1000);
+        assert_eq!(status, HealthStatus::Critical);
+        assert_eq!(violation, Some(HealthViolation::ScheduleOverrun));
+        // Baseline still resets for the new frame.
+        assert_eq!(state.last_major_frame_tick(), 5000);
+        assert_eq!(state.last_major_frame_count(), 1);
+    }
+
+    #[test]
+    fn schedule_health_overrun_after_frame_reset() {
+        let mut state = HealthState::new(0, 0);
+        // Frame advances at tick 400 (within 500-tick deadline).
+        let (status, _) = state.check_schedule_health(400, 1, 500);
+        assert_eq!(status, HealthStatus::Ok);
+        // Same frame, 501 ticks later — overrun.
+        let (status, violation) = state.check_schedule_health(901, 1, 500);
+        assert_eq!(status, HealthStatus::Critical);
+        assert_eq!(violation, Some(HealthViolation::ScheduleOverrun));
+    }
+
+    #[test]
+    fn schedule_health_multiple_frame_advances() {
+        let mut state = HealthState::new(0, 0);
+        // Simulate several frames completing on time.
+        for frame in 1..=5 {
+            let tick = frame as u64 * 800;
+            let (status, violation) = state.check_schedule_health(tick, frame, 1000);
+            assert_eq!(status, HealthStatus::Ok);
+            assert_eq!(violation, None);
+            assert_eq!(state.last_major_frame_count(), frame);
+        }
+    }
+
+    #[test]
+    fn schedule_health_skipped_frames_reset() {
+        let mut state = HealthState::new(0, 0);
+        // Frame count jumps from 0 to 5 (frames were completed while we
+        // weren't checking). Elapsed since last baseline is checked first,
+        // so this correctly detects the overrun even though frames advanced.
+        let (status, violation) = state.check_schedule_health(10000, 5, 1000);
+        assert_eq!(status, HealthStatus::Critical);
+        assert_eq!(violation, Some(HealthViolation::ScheduleOverrun));
+        // Baseline still resets for the new frame.
+        assert_eq!(state.last_major_frame_count(), 5);
+        assert_eq!(state.last_major_frame_tick(), 10000);
+    }
+
+    #[test]
+    fn schedule_health_deadline_one_tick() {
+        let mut state = HealthState::new(0, 0);
+        // Deadline of 1 tick — exactly 1 elapsed is ok.
+        let (status, _) = state.check_schedule_health(1, 0, 1);
+        assert_eq!(status, HealthStatus::Ok);
+        // 2 elapsed is overrun.
+        let (status, violation) = state.check_schedule_health(2, 0, 1);
+        assert_eq!(status, HealthStatus::Critical);
+        assert_eq!(violation, Some(HealthViolation::ScheduleOverrun));
     }
 }
