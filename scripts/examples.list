@@ -39,6 +39,7 @@ EXAMPLES=(
     fault_restart_exhaust_test
     error_handler_test
     run_count_test
+    builder_periph_test
 )
 
 CUSTOM_IVT_EXAMPLES=(

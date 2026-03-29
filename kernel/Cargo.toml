@@ -518,6 +518,10 @@ name = "health_stall_detect_test"
 required-features = ["qemu", "log-semihosting", "health-partition"]
 
 [[example]]
+name = "builder_periph_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "qemu_pac_uart0"
 required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
 
