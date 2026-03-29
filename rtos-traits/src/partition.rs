@@ -13,10 +13,15 @@ pub type IsrHandler = unsafe extern "C" fn();
 /// a function pointer, so that both `PartitionEntry` and `PartitionBody`
 /// signatures can be represented without `transmute`.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct PartitionSpec {
     entry_point: EntryAddr,
     r0: u32,
+    data_mpu: Option<MpuRegion>,
+    code_mpu: Option<MpuRegion>,
+    peripherals: &'static [MpuRegion],
+    fault_policy: FaultPolicy,
+    error_handler: Option<u32>,
 }
 
 impl PartitionSpec {
@@ -24,6 +29,11 @@ impl PartitionSpec {
         Self {
             entry_point: EntryAddr::from_entry(entry_point),
             r0,
+            data_mpu: None,
+            code_mpu: None,
+            peripherals: &[],
+            fault_policy: FaultPolicy::StayDead,
+            error_handler: None,
         }
     }
     /// Create a spec from a [`PartitionEntry`] fn pointer with `r0 = 0`.
@@ -45,6 +55,48 @@ impl PartitionSpec {
     }
     pub const fn r0(&self) -> u32 {
         self.r0
+    }
+    pub const fn data_mpu(&self) -> Option<MpuRegion> {
+        self.data_mpu
+    }
+    pub const fn code_mpu(&self) -> Option<MpuRegion> {
+        self.code_mpu
+    }
+    pub const fn peripherals(&self) -> &'static [MpuRegion] {
+        self.peripherals
+    }
+    pub const fn fault_policy(&self) -> FaultPolicy {
+        self.fault_policy
+    }
+    pub const fn error_handler(&self) -> Option<u32> {
+        self.error_handler
+    }
+
+    // -- builder methods --
+
+    pub const fn with_r0(mut self, r0: u32) -> Self {
+        self.r0 = r0;
+        self
+    }
+    pub const fn with_data_mpu(mut self, region: MpuRegion) -> Self {
+        self.data_mpu = Some(region);
+        self
+    }
+    pub const fn with_code_mpu(mut self, region: MpuRegion) -> Self {
+        self.code_mpu = Some(region);
+        self
+    }
+    pub const fn with_peripherals(mut self, regions: &'static [MpuRegion]) -> Self {
+        self.peripherals = regions;
+        self
+    }
+    pub const fn with_fault_policy(mut self, policy: FaultPolicy) -> Self {
+        self.fault_policy = policy;
+        self
+    }
+    pub const fn with_error_handler(mut self, addr: u32) -> Self {
+        self.error_handler = Some(addr);
+        self
     }
 }
 
@@ -605,5 +657,111 @@ mod tests {
         assert_ne!(warm, cold);
         assert_eq!(warm, FaultPolicy::WarmRestart { max: 3 });
         assert_eq!(cold, FaultPolicy::ColdRestart { max: 5 });
+    }
+
+    // --- PartitionSpec builder & default tests ---
+
+    /// Helper: build a default PartitionSpec without going through
+    /// `EntryPointFn` (works on 64-bit hosts too).
+    fn base_spec() -> PartitionSpec {
+        PartitionSpec {
+            entry_point: EntryAddr::from(0x0800_0000u32),
+            r0: 0,
+            data_mpu: None,
+            code_mpu: None,
+            peripherals: &[],
+            fault_policy: FaultPolicy::StayDead,
+            error_handler: None,
+        }
+    }
+
+    /// Verify the *production* `PartitionSpec::new` constructor defaults all
+    /// optional fields (only runnable on 32-bit targets where EntryAddr
+    /// construction from function pointers does not panic).
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn spec_new_production_defaults_all_optional_fields() {
+        let spec = PartitionSpec::new(_dummy_entry as PartitionEntry, 0);
+        assert!(spec.data_mpu().is_none());
+        assert!(spec.code_mpu().is_none());
+        assert!(spec.peripherals().is_empty());
+        assert_eq!(spec.fault_policy(), FaultPolicy::StayDead);
+        assert!(spec.error_handler().is_none());
+    }
+
+    /// Verify that `PartitionSpec::entry()` also defaults the new fields.
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn spec_entry_defaults_all_optional_fields() {
+        let spec = PartitionSpec::entry(_dummy_entry);
+        assert!(spec.data_mpu().is_none());
+        assert!(spec.code_mpu().is_none());
+        assert!(spec.peripherals().is_empty());
+        assert_eq!(spec.fault_policy(), FaultPolicy::StayDead);
+        assert!(spec.error_handler().is_none());
+    }
+
+    #[test]
+    fn spec_with_data_mpu() {
+        let region = MpuRegion::new(0x2000_0000, 4096, 0x03);
+        let spec = base_spec().with_data_mpu(region);
+        assert_eq!(spec.data_mpu(), Some(region));
+    }
+
+    #[test]
+    fn spec_with_code_mpu() {
+        let region = MpuRegion::new(0x0800_0000, 8192, 0x06);
+        let spec = base_spec().with_code_mpu(region);
+        assert_eq!(spec.code_mpu(), Some(region));
+    }
+
+    static TEST_PERIPHERALS: [MpuRegion; 2] = [
+        MpuRegion::new(0x4000_C000, 4096, 0x03),
+        MpuRegion::new(0x4002_0000, 4096, 0x03),
+    ];
+
+    #[test]
+    fn spec_with_peripherals() {
+        let spec = base_spec().with_peripherals(&TEST_PERIPHERALS);
+        assert_eq!(spec.peripherals().len(), 2);
+        assert_eq!(spec.peripherals()[0], TEST_PERIPHERALS[0]);
+        assert_eq!(spec.peripherals()[1], TEST_PERIPHERALS[1]);
+    }
+
+    #[test]
+    fn spec_with_fault_policy() {
+        let spec = base_spec().with_fault_policy(FaultPolicy::WarmRestart { max: 3 });
+        assert_eq!(spec.fault_policy(), FaultPolicy::WarmRestart { max: 3 });
+    }
+
+    #[test]
+    fn spec_with_error_handler() {
+        let spec = base_spec().with_error_handler(0x0800_2000);
+        assert_eq!(spec.error_handler(), Some(0x0800_2000));
+    }
+
+    #[test]
+    fn spec_with_r0() {
+        let spec = base_spec().with_r0(42);
+        assert_eq!(spec.r0(), 42);
+    }
+
+    #[test]
+    fn spec_builder_chaining() {
+        let data = MpuRegion::new(0x2000_0000, 4096, 0x03);
+        let code = MpuRegion::new(0x0800_0000, 8192, 0x06);
+        let spec = base_spec()
+            .with_r0(99)
+            .with_data_mpu(data)
+            .with_code_mpu(code)
+            .with_peripherals(&TEST_PERIPHERALS)
+            .with_fault_policy(FaultPolicy::ColdRestart { max: 5 })
+            .with_error_handler(0x0800_3000);
+        assert_eq!(spec.r0(), 99);
+        assert_eq!(spec.data_mpu(), Some(data));
+        assert_eq!(spec.code_mpu(), Some(code));
+        assert_eq!(spec.peripherals().len(), 2);
+        assert_eq!(spec.fault_policy(), FaultPolicy::ColdRestart { max: 5 });
+        assert_eq!(spec.error_handler(), Some(0x0800_3000));
     }
 }
