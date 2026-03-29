@@ -291,6 +291,7 @@ pub fn deny_all_regions() -> [(u32, u32); 4] {
 pub(crate) fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> [(u32, u32); 4] {
     match partition_mpu_regions(pcb) {
         Ok(regions) => regions,
+        #[allow(unused_variables)]
         Err(e) => {
             klog!("MPU DENY-ALL partition {}: {:?}", pcb.id(), e);
             deny_all_regions()

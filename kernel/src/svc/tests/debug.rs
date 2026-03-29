@@ -1,8 +1,9 @@
-use super::*;
-
 // -------------------------------------------------------------------------
 // Debug dispatch and drain tests
 // -------------------------------------------------------------------------
+
+#[cfg(feature = "partition-debug")]
+use super::*;
 
 #[cfg(feature = "partition-debug")]
 #[test]
