@@ -762,6 +762,24 @@ macro_rules! define_unified_kernel {
         /// out via `core::ptr::read`). Must be called exactly once during
         /// initialization, before enabling interrupts or starting the scheduler.
         fn store_kernel(k: &mut $crate::svc::Kernel<'static, $Config>) {
+            use core::mem::MaybeUninit;
+            use core::ptr::addr_of_mut;
+
+            // Compile-time check: Kernel<'static, $Config> must fit in storage
+            // and its alignment must not exceed the buffer alignment.
+            const _: () = {
+                assert!(
+                    core::mem::size_of::<$crate::svc::Kernel<'static, $Config>>()
+                        <= $crate::state::MAX_KERNEL_SIZE,
+                    "Kernel<'static, Config> exceeds MAX_KERNEL_SIZE"
+                );
+                assert!(
+                    core::mem::align_of::<$crate::svc::Kernel<'static, $Config>>()
+                        <= $crate::state::KERNEL_ALIGNMENT,
+                    "Kernel<'static, Config> alignment exceeds KERNEL_ALIGNMENT"
+                );
+            };
+
             // Move the kernel out of the caller's reference into aligned
             // static storage. We use ptr::read to move without requiring
             // the caller to give up ownership syntactically; after this
@@ -770,18 +788,26 @@ macro_rules! define_unified_kernel {
             // `k` is a valid, initialized Kernel. After ptr::read the
             // caller must not use the original binding.
             let owned = unsafe { core::ptr::read(k) };
-            if let Err(e) = unsafe { $crate::state::init_kernel_state(owned) } {
-                $crate::klog!("store_kernel failed: {:?}", e);
-                panic!("{}", e);
-            }
-            // SAFETY: init_kernel_state succeeded so UNIFIED_KERNEL_STORAGE
-            // contains a valid Kernel<'static, $Config>. Called exactly once
-            // before interrupts are enabled, satisfying store_kernel_ptr's
-            // requirement that the kernel outlives all load_kernel_ptr callers.
-            unsafe {
-                let kp = $crate::state::get_kernel_ptr::<$Config>();
-                $crate::kernel_ptr::store_kernel_ptr(&mut *kp);
-            }
+
+            // Write directly into UNIFIED_KERNEL_STORAGE, bypassing the
+            // removed init_kernel_state / get_kernel_ptr intermediaries.
+            // SAFETY: UNIFIED_KERNEL_STORAGE is a MaybeUninit<KernelStorageBuffer>
+            // with sufficient size (MAX_KERNEL_SIZE, verified by compile-time
+            // assertions in state.rs) and alignment (KERNEL_ALIGNMENT via
+            // repr(C, align(4096))). The cast is valid because both types
+            // share the same memory location with compatible size/alignment.
+            let mu_ptr = unsafe {
+                addr_of_mut!($crate::state::UNIFIED_KERNEL_STORAGE)
+                    as *mut MaybeUninit<$crate::svc::Kernel<'static, $Config>>
+            };
+            // SAFETY: mu_ptr points to static storage that outlives all callers.
+            // MaybeUninit::write initializes without reading.
+            let kref = unsafe { (*mu_ptr).write(owned) };
+
+            // SAFETY: kref points into UNIFIED_KERNEL_STORAGE which is 'static.
+            // Called exactly once before interrupts are enabled, satisfying
+            // store_kernel_ptr's requirement.
+            unsafe { $crate::kernel_ptr::store_kernel_ptr(kref) };
             $crate::svc::set_dispatch_hook(dispatch_hook);
         }
 
@@ -946,12 +972,12 @@ pub fn dispatch_syscall<const N: usize>(
         Some(SyscallId::RequestStop) => SvcError::InvalidSyscall.to_u32(),
         // Bug 38-iguana: PCB identity divergence analysis.
         //
-        // Root cause of the class of bug: `init_kernel_state_at` moves the
-        // Kernel via `ptr.write(kernel)`, invalidating any absolute address
-        // captured from the stack-allocated original.  This is why
-        // `fix_mpu_data_region()` exists — MpuRegion.base stores an
-        // absolute address computed at construction time, which becomes
-        // stale after the move and must be patched.
+        // Root cause of the class of bug: `store_kernel` moves the Kernel
+        // via `ptr.write(kernel)` into UNIFIED_KERNEL_STORAGE, invalidating
+        // any absolute address captured from the stack-allocated original.
+        // This is why `fix_mpu_data_region()` exists — MpuRegion.base
+        // stores an absolute address computed at construction time, which
+        // becomes stale after the move and must be patched.
         //
         // Why no fix_run_count() / fix_pcb() is needed: unlike MpuRegion,
         // neither the Scheduler nor this handler caches a `*mut PCB` or
@@ -964,9 +990,7 @@ pub fn dispatch_syscall<const N: usize>(
         // post-move location without patching.
         //
         // Invariant: no component may cache a `*mut PartitionControlBlock`
-        // across the init_kernel_state_at move boundary.  The address-
-        // comparison test `run_count_identity_survives_struct_move` in this
-        // module verifies this property.
+        // across the store_kernel move boundary.
         Some(SyscallId::GetPartitionRunCount) => {
             let pid = frame.r1 as usize;
             match partitions.get(pid) {
@@ -4183,7 +4207,7 @@ mod tests {
     // pcb_mut) and the SVC handler's read (via Kernel::dispatch /
     // partitions().get()) resolve to the same PCB instance — the core
     // invariant that bug 38-iguana identified as at-risk after the
-    // struct-move in init_kernel_state_at.
+    // struct-move in store_kernel.
 
     #[test]
     fn get_partition_run_count_returns_zero_before_any_switch() {
@@ -4278,83 +4302,6 @@ mod tests {
         let addr_p1_parts = k.partitions().get(1).unwrap() as *const PartitionControlBlock as usize;
         let addr_p1_pcb = k.pcb_mut(1).unwrap() as *mut PartitionControlBlock as usize;
         assert_eq!(addr_p1_parts, addr_p1_pcb);
-    }
-
-    /// Simulate the production path: build kernel on stack, move it via
-    /// `ptr::write` (as `init_kernel_state_at` does), then verify that
-    /// the Scheduler's increment (via `pcb_mut`) is visible through
-    /// `Kernel::dispatch` (via `partitions().get()`) on the *moved*
-    /// instance.  This is the test that would fail if any component
-    /// cached a pre-move `*mut PCB`.
-    #[test]
-    fn run_count_identity_survives_struct_move() {
-        use crate::state::{init_kernel_state_at, MAX_KERNEL_SIZE};
-        use crate::syscall::SYS_GET_PARTITION_RUN_COUNT;
-        use core::mem::MaybeUninit;
-
-        // (1) Build kernel on the stack (same as kernel_with_schedule but
-        //     we need ownership for the move).
-        let mut k = kernel_with_schedule();
-        k.partitions_mut()
-            .get_mut(0)
-            .unwrap()
-            .transition(PartitionState::Running)
-            .unwrap();
-        k.active_partition = Some(0);
-
-        // Record pre-move PCB address for P1.
-        let pre_move_addr = k.partitions().get(1).unwrap() as *const PartitionControlBlock as usize;
-
-        // (2) Move kernel into aligned storage via ptr::write, exactly as
-        //     init_kernel_state_at does in production.
-        #[repr(C, align(4096))]
-        struct AlignedStorage(MaybeUninit<[u8; MAX_KERNEL_SIZE]>);
-        let mut storage = AlignedStorage(MaybeUninit::uninit());
-        let ptr = storage.0.as_mut_ptr() as *mut Kernel<'static, TestConfig>;
-        // SAFETY: ptr is aligned (4096) and storage is MAX_KERNEL_SIZE bytes.
-        let result = unsafe { init_kernel_state_at(ptr, k) };
-        assert!(result.is_ok(), "init_kernel_state_at must succeed");
-
-        // (3) Borrow the moved kernel from storage.
-        let placed: &mut Kernel<'static, TestConfig> = unsafe { &mut *ptr };
-
-        // Verify the move actually changed the address (not a no-op).
-        let post_move_addr =
-            placed.partitions().get(1).unwrap() as *const PartitionControlBlock as usize;
-        assert_ne!(
-            pre_move_addr, post_move_addr,
-            "ptr::write must have moved the kernel to a different address"
-        );
-
-        // (4) Advance scheduler on the *placed* kernel to increment P1's
-        //     run_count via pcb_mut() (the Scheduler path).
-        for _ in 0..4 {
-            svc_scheduler::advance_schedule_tick(placed);
-        }
-        let event = svc_scheduler::advance_schedule_tick(placed);
-        assert_eq!(event, ScheduleEvent::PartitionSwitch(1));
-
-        // (5) Read P1's run_count through Kernel::dispatch (the SVC path).
-        //     If PCB identity diverged after the move, this would return 0.
-        let mut ef = frame(SYS_GET_PARTITION_RUN_COUNT, 1, 0);
-        // SAFETY: See module-level SAFETY docs for test dispatch justification.
-        unsafe { placed.dispatch(&mut ef) };
-        assert_eq!(
-            ef.r0, 1,
-            "after ptr::write move, SVC handler must see the run_count \
-             incremented by the Scheduler on the placed kernel"
-        );
-
-        // (6) Verify address identity on the placed kernel: both accessor
-        //     paths still resolve to the same PCB.
-        let addr_parts =
-            placed.partitions().get(1).unwrap() as *const PartitionControlBlock as usize;
-        let addr_pcb = placed.pcb_mut(1).unwrap() as *mut PartitionControlBlock as usize;
-        assert_eq!(
-            addr_parts, addr_pcb,
-            "pcb_mut() and partitions().get() must resolve to the same \
-             address on the placed (post-move) kernel"
-        );
     }
 
     // ---- GetMajorFrameCount / GetScheduleInfo via Kernel::dispatch ----
