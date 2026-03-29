@@ -425,12 +425,11 @@ fn main() -> ! {
     store_kernel(&mut kern);
 
     with_kernel_mut(|k| {
-        // SAFETY: Kernel state is stored in a 'static global
-        // (UNIFIED_KERNEL_STORAGE). The backends live inside the kernel
-        // (uart_pair and hw_uart fields). with_kernel_mut runs inside
-        // interrupt::free, guaranteeing exclusive access on single-core
-        // Cortex-M. The 'static lifetime is valid because the storage
-        // is 'static.
+        // SAFETY: Kernel state lives on the caller's stack in a -> !
+        // function, so it is effectively 'static. The backends live inside
+        // the kernel (uart_pair and hw_uart fields). with_kernel_mut runs
+        // inside interrupt::free, guaranteeing exclusive access on
+        // single-core Cortex-M.
         unsafe {
             let a: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.a as *mut _);
             let b: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.b as *mut _);

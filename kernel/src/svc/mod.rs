@@ -73,9 +73,14 @@ const LEGACY_TEST_FRAME_R3_SENTINEL: u32 = 0xCC;
 
 /// Return the runtime end-address of the kernel data region.
 ///
-/// On ARM targets the linker defines `__kernel_state_end` marking where kernel
-/// state ends in SRAM. On host/test builds the compile-time constant
+/// On ARM targets the linker-provided `__kernel_state_end` symbol marks where
+/// kernel state ends in SRAM. On host/test builds the compile-time constant
 /// `KERNEL_DATA_END` (0x2000_0000) is returned, keeping the check disabled.
+///
+// TODO: The `.kernel_state` linker section has been removed. This function
+// still references `__kernel_state_end` which must be provided by an
+// alternative mechanism (e.g. a linker symbol derived from stack placement)
+// or replaced with a runtime approach using the kernel pointer + size.
 #[cfg(target_arch = "arm")]
 #[inline]
 fn kernel_data_end() -> u32 {
@@ -625,8 +630,9 @@ macro_rules! define_unified_kernel {
         //
         // These constants are computed at compile time using offset_of!
         // and exported as #[no_mangle] symbols. PendSV assembly loads
-        // __kernel_state_start and adds these offsets to access fields
-        // directly, avoiding function call overhead during context switch.
+        // the kernel base address from KERNEL_PTR (AtomicPtr) and adds
+        // these offsets to access fields directly, avoiding function
+        // call overhead during context switch.
         // ============================================================
 
         /// Offset of `current_partition` field in `Kernel<'mem, C>`.
@@ -942,10 +948,10 @@ pub fn dispatch_syscall<const N: usize>(
 /// # Representation
 ///
 /// This struct uses `#[repr(C)]` to ensure deterministic field layout for
-/// direct memory access from PendSV assembly. The assembly loads
-/// `__kernel_state_start` and uses compile-time field offsets to access
-/// `current_partition`, `core.next_partition`, and `core.partition_sp[]`
-/// without calling Rust shim functions.
+/// direct memory access from PendSV assembly. The assembly loads the kernel
+/// base address from `KERNEL_PTR` (AtomicPtr) and uses compile-time field
+/// offsets to access `current_partition`, `core.next_partition`, and
+/// `core.partition_sp[]` without calling Rust shim functions.
 #[repr(C)]
 pub struct Kernel<'mem, C: KernelConfig>
 where

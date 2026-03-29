@@ -119,11 +119,11 @@ fn main() -> ! {
     // TODO: the 'static lifetime cast is architecturally suspect; replace with
     //       a safe kernel device-registration API when one exists.
     with_kernel_mut(|k| {
-        // SAFETY: Kernel state lives in UNIFIED_KERNEL_STORAGE which is
-        // 'static. The UART-A backend lives inside the kernel struct, so
-        // its true lifetime is also 'static once stored. with_kernel_mut
-        // runs inside interrupt::free, guaranteeing exclusive access on
-        // single-core Cortex-M.
+        // SAFETY: Kernel state lives on the caller's stack in a -> !
+        // function, so it is effectively 'static. The UART-A backend lives
+        // inside the kernel struct. with_kernel_mut runs inside
+        // interrupt::free, guaranteeing exclusive access on single-core
+        // Cortex-M.
         unsafe {
             let a: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.a as *mut _);
             k.registry.add(a).expect("register UART-A");

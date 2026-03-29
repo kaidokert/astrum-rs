@@ -1,44 +1,23 @@
 //! Kernel state access via [`with_kernel`] / [`with_kernel_mut`].
 //!
+//! # Architecture: `kernel_ptr`-based access
+//!
 //! The kernel is constructed on the caller's stack (in a `-> !` function
-//! that never returns) and its address is published via
-//! [`store_kernel_ptr`](crate::kernel_ptr::store_kernel_ptr).
-//! All runtime access goes through [`with_kernel`] / [`with_kernel_mut`],
-//! which wrap the closure in a critical section.
-
-// ---- Kernel-size feature selection: mutual exclusivity guards ----
-//
-// Pairwise checks ensure that any combination of two or three kernel-size
-// features is a compile error. Users must select exactly one.
-// The `_kernel-size-any` escape hatch suppresses these guards so that
-// `--all-features` can compile (kernel-16k wins in that case).
-
-#[cfg(all(
-    feature = "kernel-4k",
-    feature = "kernel-8k",
-    not(feature = "_kernel-size-any")
-))]
-compile_error!(
-    "Features `kernel-4k` and `kernel-8k` are mutually exclusive. Select only one kernel size."
-);
-
-#[cfg(all(
-    feature = "kernel-4k",
-    feature = "kernel-16k",
-    not(feature = "_kernel-size-any")
-))]
-compile_error!(
-    "Features `kernel-4k` and `kernel-16k` are mutually exclusive. Select only one kernel size."
-);
-
-#[cfg(all(
-    feature = "kernel-8k",
-    feature = "kernel-16k",
-    not(feature = "_kernel-size-any")
-))]
-compile_error!(
-    "Features `kernel-8k` and `kernel-16k` are mutually exclusive. Select only one kernel size."
-);
+//! that never returns) and its address is published once via
+//! [`store_kernel_ptr`](crate::kernel_ptr::store_kernel_ptr) into a global
+//! [`AtomicPtr`](core::sync::atomic::AtomicPtr).
+//!
+//! All runtime access — from SVC handlers, SysTick, and PendSV — goes through
+//! [`with_kernel`] / [`with_kernel_mut`], which load the pointer with Acquire
+//! ordering and wrap the closure in a critical section
+//! (`cortex_m::interrupt::free`).
+//!
+//! There is **no** linker section, static buffer, or `#[link_section]`
+//! annotation involved. The previous `.kernel_state` section and
+//! `UNIFIED_KERNEL_STORAGE` / `init_kernel_state_at` APIs have been removed.
+//! PendSV assembly loads the kernel address from the `KERNEL_PTR` symbol
+//! (the `AtomicPtr` global) and uses compile-time field offsets to access
+//! `current_partition`, `next_partition`, and `partition_sp[]` directly.
 
 use crate::config::KernelConfig;
 use crate::svc::Kernel;

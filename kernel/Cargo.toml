@@ -612,14 +612,6 @@ trace = ["dep:rtos-trace", "dep:systemview-target", "dep:rtt-target", "dep:criti
 # Write panic diagnostics into a .noinit tombstone before the panic backend runs.
 panic-tombstone = []
 
-# Kernel storage size ladder — selects static buffer sizes at compile time.
-# Mutually exclusive: enabling more than one is a compile error.
-kernel-4k = []
-kernel-8k = []
-kernel-16k = []
-# Escape hatch: suppresses the mutual-exclusivity guard so `--all-features`
-# can compile (kernel-16k wins). Not intended for direct use.
-_kernel-size-any = []
 
 [target.'cfg(not(target_arch = "arm"))'.dependencies]
 loom = { version = "0.7", optional = true }

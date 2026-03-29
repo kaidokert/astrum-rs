@@ -4,7 +4,6 @@
 //!
 //! | File             | When                        | Purpose                                 |
 //! |------------------|-----------------------------|-----------------------------------------|
-//! | `kernel_state.x` | Always (thumb targets)      | `.kernel_state` SECTIONS / INSERT AFTER  |
 //! | `tombstone.x`    | Always (thumb targets)      | `.noinit` NOLOAD section for tombstone   |
 //! | `device.x`       | Always (thumb targets)      | Minimal device.x for cortex-m-rt        |
 //! | `memory.x`       | `qemu` feature only         | MEMORY{} block for QEMU LM3S6965EVB     |
@@ -17,39 +16,6 @@ use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
-
-/// Linker fragment for .kernel_state SECTIONS block.
-///
-/// Kernel state section — reserves a fixed address for assembly access.
-/// NOLOAD: not initialized by the C runtime (kernel initializes it).
-/// ALIGN(4096): must match repr(C, align(4096)) on KernelStorageBuffer so
-///   the linker-placed section satisfies the Rust type's alignment requirement.
-///
-/// Symbols defined:
-///   __kernel_state_start — start address of kernel state region
-///   __kernel_state_end   — end address of kernel state region
-///
-/// Usage: Assembly can load the kernel pointer directly via:
-///   ldr r0, =__kernel_state_start
-///
-/// The `{output_region}` placeholder is replaced at emit time:
-///   - QEMU targets: `> RAM` (matching the MEMORY block we provide)
-///   - Other targets: empty (inherits the region from INSERT AFTER .bss)
-const KERNEL_STATE_X_TEMPLATE: &str = "\
-/* Kernel state section — ALIGN(4096) must match KernelStorageBuffer alignment.
- * Symbols __kernel_state_start / __kernel_state_end are used by assembly
- * (ldr r0, =__kernel_state_start) for direct pointer access. */
-SECTIONS
-{
-  .kernel_state (NOLOAD) : ALIGN(4096)
-  {
-    __kernel_state_start = .;
-    KEEP(*(.kernel_state .kernel_state.*))
-    . = ALIGN(4);
-    __kernel_state_end = .;
-  }{output_region}
-} INSERT AFTER .bss;
-";
 
 /// Linker fragment for .noinit section (PanicTombstone).
 ///
@@ -156,10 +122,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // INSERT AFTER .bss, avoiding a hard dependency on a region named "RAM".
     let output_region = if is_qemu { " > RAM" } else { "" };
 
-    // Emit kernel_state.x for the .kernel_state SECTIONS block.
-    let kernel_state_x = KERNEL_STATE_X_TEMPLATE.replace("{output_region}", output_region);
-    File::create(out.join("kernel_state.x"))?.write_all(kernel_state_x.as_bytes())?;
-
     // Emit tombstone.x for the .noinit SECTIONS block (PanicTombstone).
     let tombstone_x = TOMBSTONE_X_TEMPLATE.replace("{output_region}", output_region);
     File::create(out.join("tombstone.x"))?.write_all(tombstone_x.as_bytes())?;
@@ -171,7 +133,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rustc-link-arg=-Tdevice.x");
-    println!("cargo:rustc-link-arg=-Tkernel_state.x");
     println!("cargo:rustc-link-arg=-Ttombstone.x");
 
     // Only emit memory.x (QEMU memory map) and -Tlink.x when the qemu feature is active.
