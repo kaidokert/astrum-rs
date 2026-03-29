@@ -11,10 +11,12 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::{EntryAddr, PartitionConfig};
+use kernel::partition::{EntryAddr, ExternalPartitionMemory, MpuRegion};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
+
+const STACK_WORDS: usize = 256;
 
 // Fast SysTick: 12 MHz * 83 µs / 1e6 ≈ 996 cycles per tick.
 kernel::compose_kernel_config!(
@@ -110,17 +112,24 @@ fn main() -> ! {
     let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("tick_fairness: sched");
 
-    let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
-    cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
-    cfgs[1].entry_point = EntryAddr::from_entry(p1_main as PartitionEntry);
-
-    let mut k = Kernel::<Config>::with_config(
-        sched,
-        &cfgs,
-        kernel::virtual_device::DeviceRegistry::new(),
-        &[],
-    )
-    .expect("tick_fairness: Kernel::create");
+    // SAFETY: called once from main before any interrupt handler runs.
+    // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by
+    // `define_unified_harness!(@impl_compat)` as a module-level `static mut`.
+    let stacks = unsafe {
+        &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NUM_PARTITIONS]>()
+    };
+    // TODO: array destructuring is compile-time checked against NUM_PARTITIONS;
+    // a mismatch causes a compilation error, not a runtime panic.
+    // TODO: uses NUM_PARTITIONS (not NP) to match the existing convention in
+    // this file where NUM_PARTITIONS is referenced by round_robin(), COUNTS, etc.
+    let [ref mut s0, ref mut s1] = *stacks;
+    let mpu = MpuRegion::new(0, 0, 0);
+    let e = EntryAddr::from_entry;
+    let memories = [
+        ExternalPartitionMemory::new(s0, e(p0_main as PartitionEntry), mpu, 0).expect("mem 0"),
+        ExternalPartitionMemory::new(s1, e(p1_main as PartitionEntry), mpu, 1).expect("mem 1"),
+    ];
+    let mut k = Kernel::<Config>::new(sched, &memories).expect("tick_fairness: Kernel::create");
 
     store_kernel(&mut k);
 
