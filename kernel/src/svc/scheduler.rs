@@ -63,6 +63,11 @@ where
 /// Calls `kernel.schedule_mut().start()` to initialize the schedule table's
 /// internal state (resetting to the first slot). Returns the partition
 /// ID of the first schedule entry, or `None` if the schedule is empty.
+///
+/// The first partition's `run_count` is incremented here so that
+/// `sys_get_partition_run_count` returns ≥ 1 during the partition's
+/// very first execution window — matching the invariant that every
+/// scheduled execution is counted (see `advance_schedule_tick`).
 pub fn start_schedule<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>) -> Option<u8>
 where
     [(); C::N]:,
@@ -89,6 +94,9 @@ where
     let first_pid = kernel.schedule().current_partition();
     if let Some(pid) = first_pid {
         kernel.active_partition = Some(pid);
+        if let Some(pcb) = kernel.pcb_mut(pid as usize) {
+            pcb.increment_run_count();
+        }
     }
     first_pid
 }

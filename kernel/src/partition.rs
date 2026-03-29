@@ -150,6 +150,10 @@ impl MpuRegion {
     }
 }
 
+/// # Safety invariant — PCB identity across moves
+///
+/// No component may cache a `*mut PartitionControlBlock` across the
+/// `init_kernel_state_at` move boundary — see bug 38-iguana.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartitionControlBlock {
     id: u8,
@@ -200,6 +204,11 @@ pub struct PartitionControlBlock {
     /// Flag indicating the error handler is currently executing.
     in_error_handler: bool,
     /// Number of times this partition has been switched to by the scheduler.
+    ///
+    /// Incremented both in `start_schedule` (for the first partition) and in
+    /// `advance_schedule_tick` (on every subsequent `PartitionSwitch`).
+    /// Invariant: `run_count ≥ 1` once the partition has executed at least
+    /// one tick.
     run_count: u32,
 }
 
