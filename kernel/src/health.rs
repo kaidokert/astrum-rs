@@ -1,4 +1,27 @@
 //! Health monitoring types for partition liveness and schedule integrity.
+//!
+//! # Configuration
+//!
+//! Create a [`SystemHealthConfig`] to tune thresholds, then add a health
+//! partition to your schedule that uses [`health_entry`] as its entry point.
+//! The kernel passes a pointer to the config struct via `r0`.
+//!
+//! ```rust,no_run
+//! use kernel::health::{SystemHealthConfig, HealthAction, health_entry};
+//!
+//! static HEALTH_CFG: SystemHealthConfig = SystemHealthConfig {
+//!     major_frame_deadline_ticks: 500,
+//!     partition_liveness_frames: 5,
+//!     tick_drift_ppm: 100,
+//!     on_violation: HealthAction::Log,
+//!     sampling_port_id: 0,
+//!     num_partitions: 2,
+//!     watchdog_kick: None,
+//! };
+//!
+//! // In your schedule definition, add a partition whose body is
+//! // `health_entry` and whose `r0` argument is `&HEALTH_CFG as *const _ as u32`.
+//! ```
 
 /// Check a syscall return code. Returns the value on success.
 /// If the high bit is set (error), enters an infinite loop to halt the

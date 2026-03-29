@@ -88,3 +88,10 @@ QEMU_PERIPHERAL_EXAMPLES=(
     qemu_pac_timer0_capture
     qemu_pac_timer_chain
 )
+
+# Health partition examples exercise the health monitoring subsystem
+# which tracks partition liveness and schedule integrity.
+HEALTH_PARTITION_EXAMPLES=(
+    health_partition_test
+    health_stall_detect_test
+)
