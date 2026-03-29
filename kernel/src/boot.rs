@@ -177,13 +177,6 @@ pub enum BootError {
     StackSizeError { partition_index: usize, size: u32 },
     /// Stack size arithmetic overflow.
     StackSizeOverflow { partition_index: usize },
-    /// Kernel storage buffer misaligned (requires KERNEL_ALIGNMENT-byte alignment).
-    StorageMisaligned {
-        /// Actual address of the storage buffer.
-        address: u32,
-        /// Required alignment in bytes.
-        required: u32,
-    },
     /// Failed to update PCB stack region fields.
     StackRegionError { partition_index: usize },
     /// Failed to update PCB MPU data region base.
@@ -245,7 +238,6 @@ impl BootError {
             Self::StackAlignmentError { .. } => 3,
             Self::StackSizeError { .. } => 4,
             Self::StackSizeOverflow { .. } => 5,
-            Self::StorageMisaligned { .. } => 6,
             Self::StackRegionError { .. } => 7,
             Self::MpuDataRegionError { .. } => 8,
             Self::SentinelMpuWithEnforce { .. } => 9,
@@ -291,12 +283,6 @@ impl core::fmt::Display for BootError {
                 write!(
                     f,
                     "stack size arithmetic overflow: partition {partition_index}"
-                )
-            }
-            Self::StorageMisaligned { address, required } => {
-                write!(
-                    f,
-                    "kernel storage misaligned: address=0x{address:08x}, required={required}-byte alignment"
                 )
             }
             Self::StackRegionError { partition_index } => {
@@ -422,18 +408,6 @@ pub fn check_stack_mpu_alignment(
     Ok(())
 }
 
-/// Check if the kernel storage buffer is properly aligned.
-///
-/// Returns `Ok(())` if aligned to [`crate::state::KERNEL_ALIGNMENT`], or
-/// `Err(BootError::StorageMisaligned)` with address and required alignment.
-#[inline]
-pub fn check_storage_alignment(address: u32, required: u32) -> Result<(), BootError> {
-    if address & (required - 1) != 0 {
-        return Err(BootError::StorageMisaligned { address, required });
-    }
-    Ok(())
-}
-
 /// Reject sentinel partitions (mpu_region size==0) when MPU enforcement is active.
 /// Sentinel partitions produce deny-all MPU regions that would immediately fault.
 #[inline]
@@ -528,7 +502,6 @@ where
         BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     >,
 {
-    use core::ptr::addr_of;
     use cortex_m::peripheral::{
         scb::{Exception, SystemHandler},
         syst::SystClkSource,
@@ -544,13 +517,6 @@ where
 
     #[cfg(feature = "trace")]
     crate::trace::init_trace(C::TICK_PERIOD_US, C::CORE_CLOCK_HZ);
-
-    let storage_addr = addr_of!(crate::state::UNIFIED_KERNEL_STORAGE) as u32;
-    #[allow(clippy::manual_inspect)]
-    check_storage_alignment(storage_addr, crate::state::KERNEL_ALIGNMENT as u32).map_err(|e| {
-        crate::klog!("boot: {}", e);
-        e
-    })?;
 
     crate::state::with_kernel_mut::<C, _, _>(|k| {
         let n = k.partitions().len();
@@ -763,16 +729,6 @@ mod tests {
             "stack size arithmetic overflow: partition 3"
         );
 
-        // Test StorageMisaligned display
-        let err = BootError::StorageMisaligned {
-            address: 0x2000_0200,
-            required: 1024,
-        };
-        assert_eq!(
-            std::format!("{err}"),
-            "kernel storage misaligned: address=0x20000200, required=1024-byte alignment"
-        );
-
         // Test StackRegionError display
         let err = BootError::StackRegionError { partition_index: 5 };
         assert_eq!(
@@ -902,68 +858,6 @@ mod tests {
                 size: 512,
             })
         );
-    }
-
-    #[test]
-    fn check_storage_alignment_accepts_aligned_address() {
-        // 1024-byte aligned addresses should pass
-        assert!(check_storage_alignment(0x2000_0000, 1024).is_ok());
-        assert!(check_storage_alignment(0x2000_0400, 1024).is_ok());
-        assert!(check_storage_alignment(0x2000_0800, 1024).is_ok());
-    }
-
-    #[test]
-    fn check_storage_alignment_rejects_misaligned_address() {
-        // 512-byte aligned but 1024 required
-        let result = check_storage_alignment(0x2000_0200, 1024);
-        assert_eq!(
-            result,
-            Err(BootError::StorageMisaligned {
-                address: 0x2000_0200,
-                required: 1024,
-            })
-        );
-        // 256-byte aligned but 1024 required
-        let result = check_storage_alignment(0x2000_0100, 1024);
-        assert_eq!(
-            result,
-            Err(BootError::StorageMisaligned {
-                address: 0x2000_0100,
-                required: 1024,
-            })
-        );
-    }
-
-    // TODO: boot() is #[cfg(not(test))] so we cannot directly test that
-    // boot() returns Err(StorageMisaligned). This test covers the helper;
-    // an integration test on a real target would be needed to verify boot().
-    #[test]
-    fn check_storage_alignment_returns_misaligned_for_kernel_alignment() {
-        use crate::state::KERNEL_ALIGNMENT;
-        let required = KERNEL_ALIGNMENT as u32;
-        // Address offset by 1 byte from alignment boundary.
-        let addr = required + 1;
-        let result = check_storage_alignment(addr, required);
-        assert_eq!(
-            result,
-            Err(BootError::StorageMisaligned {
-                address: addr,
-                required,
-            })
-        );
-        // Address at half the alignment (e.g., 2048 for 4096 alignment).
-        let half = required / 2;
-        let result = check_storage_alignment(half, required);
-        assert_eq!(
-            result,
-            Err(BootError::StorageMisaligned {
-                address: half,
-                required,
-            })
-        );
-        // Properly aligned address succeeds.
-        assert!(check_storage_alignment(required, required).is_ok());
-        assert!(check_storage_alignment(required * 3, required).is_ok());
     }
 
     #[test]
@@ -1853,14 +1747,6 @@ mod tests {
             5
         );
         assert_eq!(
-            BootError::StorageMisaligned {
-                address: 0,
-                required: 0
-            }
-            .discriminant(),
-            6
-        );
-        assert_eq!(
             BootError::StackRegionError { partition_index: 0 }.discriminant(),
             7
         );
@@ -1929,7 +1815,7 @@ mod tests {
     fn boot_error_discriminants_nonzero_and_unique() {
         use crate::mpu::MpuError;
         // Collect one discriminant per variant (representative inner values).
-        let d: [u32; 17] = [
+        let d: [u32; 16] = [
             BootError::StackInitFailed { partition_index: 0 }.discriminant(),
             BootError::NoReadyPartition.discriminant(),
             BootError::StackAlignmentError {
@@ -1944,11 +1830,6 @@ mod tests {
             }
             .discriminant(),
             BootError::StackSizeOverflow { partition_index: 0 }.discriminant(),
-            BootError::StorageMisaligned {
-                address: 0,
-                required: 0,
-            }
-            .discriminant(),
             BootError::StackRegionError { partition_index: 0 }.discriminant(),
             BootError::MpuDataRegionError { partition_index: 0 }.discriminant(),
             BootError::SentinelMpuWithEnforce { partition_index: 0 }.discriminant(),
@@ -2024,13 +1905,6 @@ mod tests {
             &["4", "overflow"],
         );
         has(
-            &BootError::StorageMisaligned {
-                address: 0x2000_0100,
-                required: 512,
-            },
-            &["20000100", "512"],
-        );
-        has(
             &BootError::StackRegionError { partition_index: 5 },
             &["5", "stack region"],
         );
@@ -2088,7 +1962,6 @@ mod tests {
             | BootError::StackAlignmentError { .. }
             | BootError::StackSizeError { .. }
             | BootError::StackSizeOverflow { .. }
-            | BootError::StorageMisaligned { .. }
             | BootError::StackRegionError { .. }
             | BootError::MpuDataRegionError { .. }
             | BootError::SentinelMpuWithEnforce { .. }
