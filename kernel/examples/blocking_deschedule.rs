@@ -21,7 +21,7 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    partition::{EntryAddr, MpuRegion, PartitionConfig, PartitionState},
+    partition::{EntryAddr, ExternalPartitionMemory, MpuRegion, PartitionState},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::{try_transition, Kernel},
@@ -155,25 +155,22 @@ fn main() -> ! {
         }
     }
 
-    // Build partition config
+    // Build partition memory descriptors
     // SAFETY: single-core Cortex-M, interrupts not yet enabled — exclusive
     // access to all static-mut variables (STACKS, PARTITION_SP). Exception
     // priorities are configured before SysTick is enabled.
-    let cfgs: [PartitionConfig; Cfg::N] = unsafe {
-        [{
-            let b = STACKS[0].0.as_ptr() as u32;
-            PartitionConfig::new(0, 0, MpuRegion::new(b, (STACK_WORDS * 4) as u32, 0))
-        }]
+    let memories: [ExternalPartitionMemory; Cfg::N] = unsafe {
+        [ExternalPartitionMemory::new(
+            &mut STACKS[0].0,
+            EntryAddr::from_entry(partition_main as PartitionEntry),
+            MpuRegion::new(0, 0, 0),
+            0,
+        )
+        .expect("partition memory 0")]
     };
 
     // Create unified kernel with schedule and partitions
-    let mut k = Kernel::<Cfg>::with_config(
-        sched,
-        &cfgs,
-        kernel::virtual_device::DeviceRegistry::new(),
-        &[],
-    )
-    .expect("kernel creation");
+    let mut k = Kernel::<Cfg>::new(sched, &memories).expect("kernel creation");
 
     // Create queuing port for the test
     let dst = k

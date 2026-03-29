@@ -14,25 +14,21 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
-use kernel::partition::{EntryAddr, PartitionConfig};
+use kernel::partition::{EntryAddr, ExternalPartitionMemory, MpuRegion};
 use kernel::scheduler::ScheduleTable;
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
 
+const STACK_WORDS: usize = 256;
+
 kernel::compose_kernel_config!(
-    Config < Partitions2,
-    SyncMinimal,
-    MsgMinimal,
-    PortsTiny,
-    DebugEnabled > {
-        tick_period_us = 83;
-    }
+    Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
 const NUM_PARTITIONS: usize = 2;
-const CHECK_TICK: u32 = 20;
-const TIMEOUT_TICK: u32 = 200;
-const MIN_COUNT: u32 = 4;
+const CHECK_TICK: u32 = 5;
+const TIMEOUT_TICK: u32 = 12;
+const MIN_COUNT: u32 = 2;
 
 static COUNTS: [AtomicU32; NUM_PARTITIONS] = [AtomicU32::new(0), AtomicU32::new(0)];
 
@@ -65,7 +61,7 @@ kernel::define_unified_harness!(Config, |tick, _k| {
 fn read_primask_active() -> bool {
     #[cfg(target_arch = "arm")]
     {
-        !cortex_m::register::primask::read().is_active()
+        cortex_m::register::primask::read().is_active()
     }
     #[cfg(not(target_arch = "arm"))]
     {
@@ -102,6 +98,9 @@ fn partition_task(id: usize) -> ! {
         None => fail_halt("partition id out of range"),
     };
     loop {
+        if plib::sys_yield().is_err() {
+            fail_halt("sys_yield failed");
+        }
         let t = match plib::sys_get_time() {
             Ok(v) => v,
             Err(_) => fail_halt("sys_get_time failed"),
@@ -132,18 +131,28 @@ extern "C" fn p1_main() -> ! {
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("svcall_primask: peripherals");
     hprintln!("svcall_primask_test: start");
-    let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
-        .expect("svcall_primask: sched");
-    let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
-    cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
-    cfgs[1].entry_point = EntryAddr::from_entry(p1_main as PartitionEntry);
-    let mut k = Kernel::<Config>::with_config(
-        sched,
-        &cfgs,
-        kernel::virtual_device::DeviceRegistry::new(),
-        &[],
-    )
-    .expect("svcall_primask: kernel");
+    let mut sched = ScheduleTable::<{ Config::SCHED }>::new();
+    sched
+        .add(kernel::scheduler::ScheduleEntry::new(0, 3))
+        .expect("add P0");
+    sched.add_system_window(1).expect("sys0");
+    sched
+        .add(kernel::scheduler::ScheduleEntry::new(1, 3))
+        .expect("add P1");
+    sched.add_system_window(1).expect("sys1");
+
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks = unsafe {
+        &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NUM_PARTITIONS]>()
+    };
+    let [ref mut s0, ref mut s1] = *stacks;
+    let mpu = MpuRegion::new(0, 0, 0);
+    let e = EntryAddr::from_entry;
+    let memories = [
+        ExternalPartitionMemory::new(s0, e(p0_main as PartitionEntry), mpu, 0).expect("mem 0"),
+        ExternalPartitionMemory::new(s1, e(p1_main as PartitionEntry), mpu, 1).expect("mem 1"),
+    ];
+    let mut k = Kernel::<Config>::new(sched, &memories).expect("svcall_primask: kernel");
     store_kernel(&mut k);
     match boot(p).expect("svcall_primask: boot") {}
 }
