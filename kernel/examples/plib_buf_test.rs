@@ -13,10 +13,13 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::{EntryAddr, PartitionConfig};
+use kernel::partition::{EntryAddr, ExternalPartitionMemory, MpuRegion};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
+
+const NP: usize = 2;
+const STACK_WORDS: usize = 256;
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
@@ -151,16 +154,16 @@ fn main() -> ! {
         .add(ScheduleEntry::new(1, 3))
         .expect("plib_buf_test: add P1");
     sched.add_system_window(1).expect("plib_buf_test: sys1");
-    let mut cfgs = PartitionConfig::sentinel_array::<2>();
-    cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
-    cfgs[1].entry_point = EntryAddr::from_entry(p1_idle as PartitionEntry);
-    let mut k = Kernel::<TestConfig>::with_config(
-        sched,
-        &cfgs,
-        kernel::virtual_device::DeviceRegistry::new(),
-        &[],
-    )
-    .expect("plib_buf_test: kernel");
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks = unsafe { &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NP]>() };
+    let [ref mut s0, ref mut s1] = *stacks;
+    let mpu = MpuRegion::new(0, 0, 0);
+    let e = EntryAddr::from_entry;
+    let memories = [
+        ExternalPartitionMemory::new(s0, e(p0_main as PartitionEntry), mpu, 0).expect("mem 0"),
+        ExternalPartitionMemory::new(s1, e(p1_idle as PartitionEntry), mpu, 1).expect("mem 1"),
+    ];
+    let mut k = Kernel::<TestConfig>::new(sched, &memories).expect("plib_buf_test: kernel");
     store_kernel(&mut k);
 
     match boot(p).expect("plib_buf_test: boot") {}

@@ -9,9 +9,9 @@ use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    partition::{EntryAddr, PartitionConfig},
+    partition::{EntryAddr, ExternalPartitionMemory, MpuRegion},
     sampling::PortDirection,
-    scheduler::ScheduleTable,
+    scheduler::{ScheduleEntry, ScheduleTable},
 };
 use kernel::{
     svc::Kernel, DebugEnabled, MsgSmall, PartitionEntry, Partitions1, PortsSmall, SyncMinimal,
@@ -19,6 +19,9 @@ use kernel::{
 kernel::compose_kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgSmall, PortsSmall, DebugEnabled>
 );
+
+const NP: usize = 1;
+const STACK_WORDS: usize = 256;
 const NOT_YET: u32 = 0xDEAD_C0DE;
 static SEND_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static STATUS_RC: AtomicU32 = AtomicU32::new(NOT_YET);
@@ -59,16 +62,17 @@ extern "C" fn p0_main() -> ! {
 #[entry]
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("peripherals");
-    let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3).expect("sched");
-    let mut cfgs = PartitionConfig::sentinel_array::<{ TestConfig::N }>();
-    cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
-    let mut k = Kernel::<TestConfig>::with_config(
-        sched,
-        &cfgs,
-        kernel::virtual_device::DeviceRegistry::new(),
-        &[],
-    )
-    .expect("kernel");
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
+    sched.add(ScheduleEntry::new(0, 3)).expect("sched P0");
+    sched.add_system_window(1).expect("sys0");
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks = unsafe { &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NP]>() };
+    let [ref mut s0] = *stacks;
+    let mpu = MpuRegion::new(0, 0, 0);
+    let e = EntryAddr::from_entry;
+    let memories =
+        [ExternalPartitionMemory::new(s0, e(p0_main as PartitionEntry), mpu, 0).expect("mem 0")];
+    let mut k = Kernel::<TestConfig>::new(sched, &memories).expect("kernel");
     let src = k
         .queuing_mut()
         .create_port(PortDirection::Source)

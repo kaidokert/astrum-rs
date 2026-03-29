@@ -10,17 +10,19 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-use kernel::partition::{EntryAddr, PartitionConfig};
+use kernel::partition::{EntryAddr, ExternalPartitionMemory, MpuRegion};
 use kernel::sampling::PortDirection;
-use kernel::scheduler::ScheduleTable;
+use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::{DebugEnabled, MsgSmall, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
+
+const NP: usize = 2;
+const STACK_WORDS: usize = 256;
 
 kernel::compose_kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>
 );
 
-const NUM_PARTITIONS: usize = TestConfig::N;
 const TIMEOUT_TICKS: u32 = 50;
 
 const PAYLOAD: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
@@ -103,18 +105,21 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("cortex_m::Peripherals");
     hprintln!("plib_queuing_test: start");
 
-    let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 3)
-        .expect("plib_queuing_test: round_robin");
-    let mut cfgs = PartitionConfig::sentinel_array::<NUM_PARTITIONS>();
-    cfgs[0].entry_point = EntryAddr::from_entry(p0_main as PartitionEntry);
-    cfgs[1].entry_point = EntryAddr::from_entry(p1_main as PartitionEntry);
-    let mut k = Kernel::<TestConfig>::with_config(
-        sched,
-        &cfgs,
-        kernel::virtual_device::DeviceRegistry::new(),
-        &[],
-    )
-    .expect("plib_queuing_test: kernel");
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
+    sched.add(ScheduleEntry::new(0, 3)).expect("sched P0");
+    sched.add_system_window(1).expect("sys0");
+    sched.add(ScheduleEntry::new(1, 3)).expect("sched P1");
+    sched.add_system_window(1).expect("sys1");
+    // SAFETY: called once from main before any interrupt handler runs.
+    let stacks = unsafe { &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NP]>() };
+    let [ref mut s0, ref mut s1] = *stacks;
+    let mpu = MpuRegion::new(0, 0, 0);
+    let e = EntryAddr::from_entry;
+    let memories = [
+        ExternalPartitionMemory::new(s0, e(p0_main as PartitionEntry), mpu, 0).expect("mem 0"),
+        ExternalPartitionMemory::new(s1, e(p1_main as PartitionEntry), mpu, 1).expect("mem 1"),
+    ];
+    let mut k = Kernel::<TestConfig>::new(sched, &memories).expect("plib_queuing_test: kernel");
 
     // Create source port (id=0) on P0 and destination port (id=1) on P1, then connect.
     let src = k
