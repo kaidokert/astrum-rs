@@ -26,7 +26,9 @@ use crate::blackboard::BlackboardPool;
 use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
 
-use rtos_traits::ids::{BlackboardId, MutexId, QueuingPortId, SamplingPortId, SemaphoreId};
+use rtos_traits::ids::{
+    BlackboardId, BufferSlotId, MutexId, QueuingPortId, SamplingPortId, SemaphoreId,
+};
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
 
@@ -1983,11 +1985,9 @@ where
                 r0
             }
             Some(SyscallId::BufferRelease) => {
-                let (r0, r1_ov) = buf::handle_buf_release(
-                    &mut self.buffers,
-                    frame.r1 as usize,
-                    self.current_partition,
-                );
+                let slot_id = BufferSlotId::new(frame.r1 as u8);
+                let (r0, r1_ov) =
+                    buf::handle_buf_release(&mut self.buffers, slot_id, self.current_partition);
                 if let Some(v) = r1_ov {
                     frame.r1 = v;
                 }
@@ -1996,13 +1996,14 @@ where
             Some(SyscallId::BufferLend) => {
                 let pc = self.partition_count();
                 let tick = self.tick.get();
+                let slot_id = BufferSlotId::new(frame.r1 as u8);
                 let (r0, r1_ov) = buffer::handle_buffer_lend(
                     &mut self.buffers,
                     &self.dynamic_strategy,
                     self.current_partition,
                     pc,
                     tick,
-                    frame.r1,
+                    slot_id,
                     frame.r2,
                     frame.r3,
                     LEGACY_TEST_FRAME_R3_SENTINEL,
@@ -2013,7 +2014,7 @@ where
                 r0
             }
             Some(SyscallId::BufferRevoke) => {
-                let slot = frame.r1 as usize;
+                let slot = BufferSlotId::new(frame.r1 as u8).as_raw() as usize;
                 let target_raw = frame.r2 as usize;
                 if target_raw >= self.partition_count() {
                     SvcError::InvalidPartition.to_u32()
@@ -2034,7 +2035,7 @@ where
                 }
             }
             Some(SyscallId::BufferTransfer) => {
-                let slot = frame.r1 as usize;
+                let slot = BufferSlotId::new(frame.r1 as u8).as_raw() as usize;
                 let new_owner_raw = frame.r2 as usize;
                 match u8::try_from(new_owner_raw) {
                     Ok(new_owner) if (new_owner as usize) < self.partition_count() => {
@@ -2054,6 +2055,7 @@ where
                 }
             }
             Some(SyscallId::BufferWrite) => {
+                let slot_id = BufferSlotId::new(frame.r1 as u8);
                 match self.check_user_ptr_dynamic(frame.r3, frame.r2 as usize) {
                     Err(e) => e,
                     Ok(()) => {
@@ -2061,7 +2063,7 @@ where
                         let (r0, r1_ov) = unsafe {
                             buf::handle_buf_write(
                                 &mut self.buffers,
-                                frame.r1 as usize,
+                                slot_id,
                                 self.current_partition,
                                 frame.r3 as *const u8,
                                 frame.r2 as usize,
@@ -2075,6 +2077,7 @@ where
                 }
             }
             Some(SyscallId::BufferRead) => {
+                let slot_id = BufferSlotId::new(frame.r1 as u8);
                 match self.check_user_ptr_dynamic(frame.r3, frame.r2 as usize) {
                     Err(e) => e,
                     Ok(()) => {
@@ -2082,7 +2085,7 @@ where
                         let (r0, r1_ov) = unsafe {
                             buf::handle_buf_read(
                                 &mut self.buffers,
-                                frame.r1 as usize,
+                                slot_id,
                                 self.current_partition,
                                 frame.r3 as *mut u8,
                                 frame.r2 as usize,

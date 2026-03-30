@@ -1,4 +1,5 @@
 use crate::{buffer_pool::BufferPool, mpu_strategy::DynamicStrategy, svc::SvcError};
+use rtos_traits::ids::BufferSlotId;
 #[allow(clippy::too_many_arguments)]
 pub fn handle_buffer_lend<const S: usize, const Z: usize>(
     buffers: &mut BufferPool<S, Z>,
@@ -6,12 +7,12 @@ pub fn handle_buffer_lend<const S: usize, const Z: usize>(
     current_partition: u8,
     partition_count: usize,
     tick: u64,
-    r1: u32,
+    slot_id: BufferSlotId,
     r2: u32,
     r3: u32,
     legacy_sentinel: u32,
 ) -> (u32, Option<u32>) {
-    let slot = r1 as usize;
+    let slot = slot_id.as_raw() as usize;
     if r2 & 0xFE00 != 0 {
         return (SvcError::OperationFailed.to_u32(), Some(0xFE));
     }
@@ -53,18 +54,22 @@ mod tests {
         let (mut p, d) = (BufferPool::<4, 32>::new(), DynamicStrategy::new());
         let eop = SvcError::OperationFailed.to_u32();
         let eip = SvcError::InvalidPartition.to_u32();
-        let f = |p: &mut BufferPool<4, 32>, r1, r2, r3| {
-            handle_buffer_lend(p, &d, 0, 2, 100, r1, r2, r3, 0xCC)
+        let f = |p: &mut BufferPool<4, 32>, slot: BufferSlotId, r2, r3| {
+            handle_buffer_lend(p, &d, 0, 2, 100, slot, r2, r3, 0xCC)
         };
-        assert_eq!(f(&mut p, 0, 0x0200, 0), (eop, Some(0xFE)));
-        assert_eq!(f(&mut p, 0, 5, 0), (eip, Some(0xFD)));
-        let s = p.alloc(0, BorrowMode::Write).unwrap() as u32;
-        let (r0, r1) = f(&mut p, s, 1, 50);
-        assert_eq!(r0, p.slot_base_address(s as usize).unwrap());
+        assert_eq!(
+            f(&mut p, BufferSlotId::new(0), 0x0200, 0),
+            (eop, Some(0xFE))
+        );
+        assert_eq!(f(&mut p, BufferSlotId::new(0), 5, 0), (eip, Some(0xFD)));
+        let s = p.alloc(0, BorrowMode::Write).unwrap();
+        let sid = BufferSlotId::new(s as u8);
+        let (r0, r1) = f(&mut p, sid, 1, 50);
+        assert_eq!(r0, p.slot_base_address(s).unwrap());
         assert!(r1.is_some());
         // Self-lend (partition 0 → partition 0) must return SelfLend discriminant
         use crate::buffer_pool::BufferError;
-        let (r0, r1) = handle_buffer_lend(&mut p, &d, 0, 2, 100, s, 0, 0, 0xCC);
+        let (r0, r1) = handle_buffer_lend(&mut p, &d, 0, 2, 100, sid, 0, 0, 0xCC);
         assert_eq!(r0, SvcError::OperationFailed.to_u32());
         assert_eq!(r1, Some(BufferError::SelfLend.discriminant()));
     }
