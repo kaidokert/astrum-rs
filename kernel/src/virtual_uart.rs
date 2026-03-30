@@ -6,6 +6,7 @@
 use heapless::Deque;
 
 use crate::virtual_device::{DeviceError, VirtualDevice};
+use crate::PartitionId;
 
 /// IOCTL command: drain all bytes from the TX ring buffer.
 pub const IOCTL_FLUSH: u32 = 0x01;
@@ -49,19 +50,19 @@ impl VirtualUartBackend {
     }
 
     /// Mark a partition (0..7) as having opened this device.
-    pub fn open(&mut self, partition_id: u8) {
-        debug_assert!(partition_id < 8);
-        self.open_partitions |= 1 << partition_id;
+    pub fn open(&mut self, partition_id: PartitionId) {
+        debug_assert!(partition_id.as_raw() < 8);
+        self.open_partitions |= 1 << partition_id.as_raw();
     }
 
     /// Mark a partition as having closed this device.
-    pub fn close(&mut self, partition_id: u8) {
-        debug_assert!(partition_id < 8);
-        self.open_partitions &= !(1 << partition_id);
+    pub fn close(&mut self, partition_id: PartitionId) {
+        debug_assert!(partition_id.as_raw() < 8);
+        self.open_partitions &= !(1 << partition_id.as_raw());
     }
 
-    pub fn is_open(&self, partition_id: u8) -> bool {
-        (self.open_partitions & (1 << partition_id)) != 0
+    pub fn is_open(&self, partition_id: PartitionId) -> bool {
+        (self.open_partitions & (1 << partition_id.as_raw())) != 0
     }
 
     pub fn set_loopback_peer(&mut self, peer_id: u8) {
@@ -139,8 +140,8 @@ impl VirtualUartBackend {
 impl VirtualUartBackend {
     /// Validate partition_id range and check that the partition has opened
     /// this device. Consolidates the repeated open-check boilerplate.
-    fn require_open(&self, partition_id: u8) -> Result<(), DeviceError> {
-        if partition_id >= 8 {
+    fn require_open(&self, partition_id: PartitionId) -> Result<(), DeviceError> {
+        if partition_id.as_raw() >= 8 {
             return Err(DeviceError::InvalidPartition);
         }
         if !self.is_open(partition_id) {
@@ -155,33 +156,33 @@ impl VirtualDevice for VirtualUartBackend {
         self.device_id
     }
 
-    fn open(&mut self, partition_id: u8) -> Result<(), DeviceError> {
-        if partition_id >= 8 {
+    fn open(&mut self, partition_id: PartitionId) -> Result<(), DeviceError> {
+        if partition_id.as_raw() >= 8 {
             return Err(DeviceError::InvalidPartition);
         }
-        self.open_partitions |= 1 << partition_id;
+        self.open_partitions |= 1 << partition_id.as_raw();
         Ok(())
     }
 
-    fn close(&mut self, partition_id: u8) -> Result<(), DeviceError> {
-        if partition_id >= 8 {
+    fn close(&mut self, partition_id: PartitionId) -> Result<(), DeviceError> {
+        if partition_id.as_raw() >= 8 {
             return Err(DeviceError::InvalidPartition);
         }
-        self.open_partitions &= !(1 << partition_id);
+        self.open_partitions &= !(1 << partition_id.as_raw());
         Ok(())
     }
 
-    fn read(&mut self, partition_id: u8, buf: &mut [u8]) -> Result<usize, DeviceError> {
+    fn read(&mut self, partition_id: PartitionId, buf: &mut [u8]) -> Result<usize, DeviceError> {
         self.require_open(partition_id)?;
         Ok(self.pop_rx(buf))
     }
 
-    fn write(&mut self, partition_id: u8, data: &[u8]) -> Result<usize, DeviceError> {
+    fn write(&mut self, partition_id: PartitionId, data: &[u8]) -> Result<usize, DeviceError> {
         self.require_open(partition_id)?;
         Ok(self.push_tx(data))
     }
 
-    fn ioctl(&mut self, partition_id: u8, cmd: u32, arg: u32) -> Result<u32, DeviceError> {
+    fn ioctl(&mut self, partition_id: PartitionId, cmd: u32, arg: u32) -> Result<u32, DeviceError> {
         self.require_open(partition_id)?;
         match cmd {
             IOCTL_FLUSH => {

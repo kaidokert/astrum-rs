@@ -1,10 +1,11 @@
 use crate::irq_dispatch::IrqBinding;
+use crate::PartitionId;
 
 /// Handle an `IrqAck` syscall: validate the binding and unmask the IRQ.
 ///
 /// Returns `0` on success, or an `SvcError` code on failure.
 #[must_use]
-pub fn handle_irq_ack(bindings: &[IrqBinding], caller: u8, irq_num: u8) -> u32 {
+pub fn handle_irq_ack(bindings: &[IrqBinding], caller: PartitionId, irq_num: u8) -> u32 {
     let result = crate::irq_ack::irq_ack_inner(bindings, caller, irq_num);
     #[cfg(target_arch = "arm")]
     if result == 0 {

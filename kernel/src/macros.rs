@@ -290,18 +290,23 @@ macro_rules! partition_trampoline {
 #[doc(hidden)]
 macro_rules! __make_irq_binding {
     ($irq:expr, ($pid:expr, $evt:expr)) => {
-        $crate::irq_dispatch::IrqBinding::new($irq, $pid, $evt)
+        $crate::irq_dispatch::IrqBinding::new($irq, $crate::PartitionId::new($pid as u32), $evt)
     };
     ($irq:expr, ($pid:expr, $evt:expr, handler: $handler:path)) => {
-        $crate::irq_dispatch::IrqBinding::new($irq, $pid, $evt)
+        $crate::irq_dispatch::IrqBinding::new($irq, $crate::PartitionId::new($pid as u32), $evt)
     };
     ($irq:expr, ($pid:expr, $evt:expr, $clear:expr)) => {
-        $crate::irq_dispatch::IrqBinding::with_clear_model($irq, $pid, $evt, $clear)
+        $crate::irq_dispatch::IrqBinding::with_clear_model(
+            $irq,
+            $crate::PartitionId::new($pid as u32),
+            $evt,
+            $clear,
+        )
     };
     ($irq:expr, ($pid:expr, $evt:expr, clear: WriteRegister($addr:expr, $value:expr))) => {
         $crate::irq_dispatch::IrqBinding::with_clear_model(
             $irq,
-            $pid,
+            $crate::PartitionId::new($pid as u32),
             $evt,
             $crate::irq_dispatch::IrqClearModel::KernelClears(
                 $crate::irq_dispatch::ClearStrategy::WriteRegister {
@@ -314,7 +319,7 @@ macro_rules! __make_irq_binding {
     ($irq:expr, ($pid:expr, $evt:expr, clear: ClearBit($addr:expr, $bit:expr))) => {
         $crate::irq_dispatch::IrqBinding::with_clear_model(
             $irq,
-            $pid,
+            $crate::PartitionId::new($pid as u32),
             $evt,
             $crate::irq_dispatch::IrqClearModel::KernelClears(
                 $crate::irq_dispatch::ClearStrategy::ClearBit {

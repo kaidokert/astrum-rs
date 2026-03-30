@@ -4,6 +4,7 @@
 //! hardware interaction for testability.
 
 use crate::irq_dispatch::{lookup_binding, IrqBinding, IrqClearModel};
+use crate::PartitionId;
 use rtos_traits::syscall::SvcError;
 
 /// Validate an IRQ acknowledge request.
@@ -13,7 +14,7 @@ use rtos_traits::syscall::SvcError;
 /// - `caller` does not own the binding → [`SvcError::PermissionDenied`]
 /// - The binding uses [`IrqClearModel::KernelClears`] → [`SvcError::OperationFailed`]
 #[must_use = "error code must be forwarded to the caller"]
-pub fn irq_ack_inner(bindings: &[IrqBinding], caller: u8, irq_num: u8) -> u32 {
+pub fn irq_ack_inner(bindings: &[IrqBinding], caller: PartitionId, irq_num: u8) -> u32 {
     let idx = match lookup_binding(bindings, irq_num) {
         Some(i) => i,
         None => return SvcError::InvalidResource.to_u32(),
@@ -26,7 +27,7 @@ pub fn irq_ack_inner(bindings: &[IrqBinding], caller: u8, irq_num: u8) -> u32 {
         return SvcError::PermissionDenied.to_u32();
     }
     if matches!(binding.clear_model, IrqClearModel::KernelClears(_)) {
-        crate::klog!("irq_ack: KernelClears irq={} caller={}", irq_num, caller);
+        crate::klog!("irq_ack: KernelClears irq={} caller={:?}", irq_num, caller);
         return SvcError::OperationFailed.to_u32();
     }
     0

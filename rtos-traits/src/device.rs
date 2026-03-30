@@ -23,11 +23,24 @@ pub enum DeviceError {
 /// Partition-aware virtual device trait.
 pub trait VirtualDevice: Send {
     fn device_id(&self) -> u8;
-    fn open(&mut self, partition_id: u8) -> Result<(), DeviceError>;
-    fn close(&mut self, partition_id: u8) -> Result<(), DeviceError>;
-    fn read(&mut self, partition_id: u8, buf: &mut [u8]) -> Result<usize, DeviceError>;
-    fn write(&mut self, partition_id: u8, data: &[u8]) -> Result<usize, DeviceError>;
-    fn ioctl(&mut self, partition_id: u8, cmd: u32, arg: u32) -> Result<u32, DeviceError>;
+    fn open(&mut self, partition_id: crate::ids::PartitionId) -> Result<(), DeviceError>;
+    fn close(&mut self, partition_id: crate::ids::PartitionId) -> Result<(), DeviceError>;
+    fn read(
+        &mut self,
+        partition_id: crate::ids::PartitionId,
+        buf: &mut [u8],
+    ) -> Result<usize, DeviceError>;
+    fn write(
+        &mut self,
+        partition_id: crate::ids::PartitionId,
+        data: &[u8],
+    ) -> Result<usize, DeviceError>;
+    fn ioctl(
+        &mut self,
+        partition_id: crate::ids::PartitionId,
+        cmd: u32,
+        arg: u32,
+    ) -> Result<u32, DeviceError>;
 }
 
 /// Fixed-capacity registry of virtual devices looked up by device ID.

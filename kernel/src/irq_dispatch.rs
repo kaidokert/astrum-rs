@@ -7,6 +7,7 @@
 use crate::config::KernelConfig;
 use crate::events;
 use crate::partition::{PartitionState, PartitionTable};
+use crate::PartitionId;
 
 /// Signal a partition with event bits, returning `true` if it was woken
 /// (transitioned from `Waiting` to `Ready`).
@@ -42,7 +43,7 @@ pub fn signal_partition_inner<const N: usize>(
 /// - `C`: The kernel configuration type, which determines partition table size
 ///   and other kernel parameters.
 #[cfg(not(test))]
-pub fn signal_partition_from_isr<C: KernelConfig>(partition_id: u8, event_bits: u32)
+pub fn signal_partition_from_isr<C: KernelConfig>(partition_id: PartitionId, event_bits: u32)
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -68,8 +69,11 @@ where
 {
     let _ = crate::state::with_kernel_mut::<C, _, _>(|kernel| {
         // TODO: partitions_mut() required here — signal_partition_inner needs the full table, not a single pcb_mut()
-        let woken =
-            signal_partition_inner(kernel.partitions_mut(), partition_id as usize, event_bits);
+        let woken = signal_partition_inner(
+            kernel.partitions_mut(),
+            partition_id.as_raw() as usize,
+            event_bits,
+        );
         if woken {
             // SAFETY: SCB::set_pendsv() sets the PendSV pending bit in the
             // ICSR register. This is always safe on Cortex-M — it merely
@@ -103,7 +107,7 @@ pub struct IrqBinding {
     /// Hardware IRQ number this binding maps.
     pub irq_num: u8,
     /// Target partition to signal when the IRQ fires.
-    pub partition_id: u8,
+    pub partition_id: PartitionId,
     /// Event-flag bits OR'd into the target partition's event word.
     pub event_bits: u32,
     /// How the interrupt source is acknowledged after dispatch.
@@ -112,7 +116,7 @@ pub struct IrqBinding {
 
 impl IrqBinding {
     /// Create a new IRQ binding (defaults to `IrqClearModel::PartitionAcks`).
-    pub const fn new(irq_num: u8, partition_id: u8, event_bits: u32) -> Self {
+    pub const fn new(irq_num: u8, partition_id: PartitionId, event_bits: u32) -> Self {
         Self {
             irq_num,
             partition_id,
@@ -124,7 +128,7 @@ impl IrqBinding {
     /// Create a new IRQ binding with an explicit clear model.
     pub const fn with_clear_model(
         irq_num: u8,
-        partition_id: u8,
+        partition_id: PartitionId,
         event_bits: u32,
         clear_model: IrqClearModel,
     ) -> Self {
@@ -243,7 +247,7 @@ pub const fn has_invalid_partition_id(bindings: &[IrqBinding], max_partitions: u
     let mut i = 0;
     while i < bindings.len() {
         if let Some(b) = bindings.get(i) {
-            if (b.partition_id as usize) >= max_partitions {
+            if (b.partition_id.as_raw() as usize) >= max_partitions {
                 return true;
             }
         }
@@ -276,6 +280,10 @@ mod tests {
     use super::*;
     use crate::events;
     use crate::partition::{MpuRegion, PartitionControlBlock, PartitionState};
+
+    const fn p(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
 
     fn pcb(id: u8) -> PartitionControlBlock {
         let o = (id as u32) * 0x1000;
