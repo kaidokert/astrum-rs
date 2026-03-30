@@ -2,14 +2,15 @@ use crate::mutex::{MutexError, MutexPool};
 use crate::partition::PartitionTable;
 use crate::semaphore::{SemaphoreError, SemaphorePool};
 use crate::svc::SvcError;
+use rtos_traits::ids::{MutexId, SemaphoreId};
 
 pub fn handle_sem_wait<const N: usize, const S: usize, const W: usize>(
     sem: &mut SemaphorePool<S, W>,
     pt: &mut PartitionTable<N>,
-    id: usize,
+    id: SemaphoreId,
     caller: usize,
 ) -> (u32, bool) {
-    match sem.wait(pt, id, caller) {
+    match sem.wait(pt, id.as_raw() as usize, caller) {
         Ok(true) => (1, false),
         Ok(false) => (0, true),
         Err(e) => (sem_error_to_svc(e), false),
@@ -19,18 +20,19 @@ pub fn handle_sem_wait<const N: usize, const S: usize, const W: usize>(
 pub fn handle_sem_signal<const N: usize, const S: usize, const W: usize>(
     sem: &mut SemaphorePool<S, W>,
     pt: &mut PartitionTable<N>,
-    id: usize,
+    id: SemaphoreId,
 ) -> u32 {
-    sem.signal(pt, id).map_or_else(sem_error_to_svc, |()| 0)
+    sem.signal(pt, id.as_raw() as usize)
+        .map_or_else(sem_error_to_svc, |()| 0)
 }
 
 pub fn handle_mtx_lock<const N: usize, const S: usize, const W: usize>(
     mtx: &mut MutexPool<S, W>,
     pt: &mut PartitionTable<N>,
-    id: usize,
+    id: MutexId,
     caller: usize,
 ) -> (u32, bool) {
-    match mtx.lock(pt, id, caller) {
+    match mtx.lock(pt, id.as_raw() as usize, caller) {
         Ok(true) => (1, false),
         Ok(false) => (0, true),
         Err(e) => (mtx_error_to_svc(e), false),
@@ -40,10 +42,10 @@ pub fn handle_mtx_lock<const N: usize, const S: usize, const W: usize>(
 pub fn handle_mtx_unlock<const N: usize, const S: usize, const W: usize>(
     mtx: &mut MutexPool<S, W>,
     pt: &mut PartitionTable<N>,
-    id: usize,
+    id: MutexId,
     caller: usize,
 ) -> u32 {
-    mtx.unlock(pt, id, caller)
+    mtx.unlock(pt, id.as_raw() as usize, caller)
         .map_or_else(mtx_error_to_svc, |()| 0)
 }
 
@@ -106,20 +108,29 @@ mod tests {
     fn sem() {
         let (mut p, mut s) = (pt(), SemaphorePool::<4, 4>::new());
         s.add(Semaphore::new(1, 2)).unwrap();
-        assert_eq!(handle_sem_wait(&mut s, &mut p, 0, 0), (1, false));
-        assert_eq!(handle_sem_wait(&mut s, &mut p, 0, 1), (0, true));
         assert_eq!(
-            handle_sem_wait(&mut s, &mut p, 99, 0).0,
+            handle_sem_wait(&mut s, &mut p, SemaphoreId::new(0), 0),
+            (1, false)
+        );
+        assert_eq!(
+            handle_sem_wait(&mut s, &mut p, SemaphoreId::new(0), 1),
+            (0, true)
+        );
+        assert_eq!(
+            handle_sem_wait(&mut s, &mut p, SemaphoreId::new(99), 0).0,
             SvcError::InvalidResource.to_u32()
         );
         assert_eq!(
-            handle_sem_signal(&mut s, &mut p, 99),
+            handle_sem_signal(&mut s, &mut p, SemaphoreId::new(99)),
             SvcError::InvalidResource.to_u32()
         );
         let (mut q, mut t) = (pt(), SemaphorePool::<4, 4>::new());
         t.add(Semaphore::new(0, 2)).unwrap();
-        assert_eq!(handle_sem_signal(&mut t, &mut q, 0), 0);
-        assert_eq!(handle_sem_wait(&mut t, &mut q, 0, 0), (1, false));
+        assert_eq!(handle_sem_signal(&mut t, &mut q, SemaphoreId::new(0)), 0);
+        assert_eq!(
+            handle_sem_wait(&mut t, &mut q, SemaphoreId::new(0), 0),
+            (1, false)
+        );
         assert_eq!(
             sem_error_to_svc(SemaphoreError::InvalidPartition),
             SvcError::InvalidPartition.to_u32()
@@ -142,23 +153,29 @@ mod tests {
     #[test]
     fn mtx() {
         let (mut p, mut m) = (pt(), MutexPool::<4, 4>::new(4));
-        assert_eq!(handle_mtx_lock(&mut m, &mut p, 0, 0), (1, false));
-        assert_eq!(handle_mtx_lock(&mut m, &mut p, 0, 1), (0, true));
         assert_eq!(
-            handle_mtx_lock(&mut m, &mut p, 99, 0).0,
+            handle_mtx_lock(&mut m, &mut p, MutexId::new(0), 0),
+            (1, false)
+        );
+        assert_eq!(
+            handle_mtx_lock(&mut m, &mut p, MutexId::new(0), 1),
+            (0, true)
+        );
+        assert_eq!(
+            handle_mtx_lock(&mut m, &mut p, MutexId::new(99), 0).0,
             SvcError::InvalidResource.to_u32()
         );
         assert_eq!(
-            handle_mtx_lock(&mut m, &mut p, 0, 0).0,
+            handle_mtx_lock(&mut m, &mut p, MutexId::new(0), 0).0,
             SvcError::OperationFailed.to_u32()
         );
         assert_eq!(
-            handle_mtx_unlock(&mut m, &mut p, 0, 1),
+            handle_mtx_unlock(&mut m, &mut p, MutexId::new(0), 1),
             SvcError::OperationFailed.to_u32()
         );
-        assert_eq!(handle_mtx_unlock(&mut m, &mut p, 0, 0), 0);
+        assert_eq!(handle_mtx_unlock(&mut m, &mut p, MutexId::new(0), 0), 0);
         assert_eq!(
-            handle_mtx_unlock(&mut m, &mut p, 99, 0),
+            handle_mtx_unlock(&mut m, &mut p, MutexId::new(99), 0),
             SvcError::InvalidResource.to_u32()
         );
         assert_eq!(

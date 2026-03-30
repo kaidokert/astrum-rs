@@ -26,6 +26,7 @@ use crate::blackboard::BlackboardPool;
 use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
 
+use rtos_traits::ids::{MutexId, SemaphoreId};
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
 
@@ -1682,8 +1683,9 @@ where
             }
             Some(SyscallId::SemWait) => {
                 let pt = self.core.partitions_mut();
+                let sem_id = SemaphoreId::new(arg1);
                 let (r, block) =
-                    sync::handle_sem_wait(self.sync.semaphores_mut(), pt, arg1 as usize, caller);
+                    sync::handle_sem_wait(self.sync.semaphores_mut(), pt, sem_id, caller);
                 if block {
                     self.trigger_deschedule();
                 }
@@ -1691,12 +1693,13 @@ where
             }
             Some(SyscallId::SemSignal) => {
                 let pt = self.core.partitions_mut();
-                sync::handle_sem_signal(self.sync.semaphores_mut(), pt, frame.r1 as usize)
+                let sem_id = SemaphoreId::new(arg1);
+                sync::handle_sem_signal(self.sync.semaphores_mut(), pt, sem_id)
             }
             Some(SyscallId::MutexLock) => {
                 let pt = self.core.partitions_mut();
-                let (r, block) =
-                    sync::handle_mtx_lock(self.sync.mutexes_mut(), pt, arg1 as usize, caller);
+                let mtx_id = MutexId::new(arg1);
+                let (r, block) = sync::handle_mtx_lock(self.sync.mutexes_mut(), pt, mtx_id, caller);
                 if block {
                     self.trigger_deschedule();
                 }
@@ -1704,7 +1707,8 @@ where
             }
             Some(SyscallId::MutexUnlock) => {
                 let pt = self.core.partitions_mut();
-                sync::handle_mtx_unlock(self.sync.mutexes_mut(), pt, frame.r1 as usize, caller)
+                let mtx_id = MutexId::new(arg1);
+                sync::handle_mtx_unlock(self.sync.mutexes_mut(), pt, mtx_id, caller)
             }
             #[cfg(feature = "ipc-message")]
             Some(SyscallId::MsgSend) => match self.check_user_ptr(arg3, C::QM) {
