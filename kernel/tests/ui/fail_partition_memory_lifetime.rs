@@ -31,7 +31,7 @@ fn main() {
             &mut stack,
             0x0800_0001,
             rtos_traits::partition::MpuRegion::new(0x2000_0000, 256, 0x03),
-            0,
+            kernel::PartitionId::new(0),
         )
         .unwrap();
     }

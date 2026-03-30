@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn event_wait_dispatches_to_events_module() {
     let mut t = tbl();
-    ev_data::event_set(&mut t, 0, 0b1010);
+    ev_data::event_set(&mut t, PartitionId::new(0), 0b1010);
     let mut ef = frame(SYS_EVT_WAIT, 0xDEADBEEF, 0b1110);
     dispatch_syscall(&mut ef, &mut t, 0);
     assert_eq!(ef.r0, 0b1010);
@@ -26,7 +26,7 @@ fn event_set_dispatches_to_events_module() {
 #[test]
 fn event_clear_dispatches_to_events_module() {
     let mut t = tbl();
-    ev_data::event_set(&mut t, 0, 0b1111);
+    ev_data::event_set(&mut t, PartitionId::new(0), 0b1111);
     let mut ef = frame(SYS_EVT_CLEAR, 0xDEADBEEF, 0b0101);
     dispatch_syscall(&mut ef, &mut t, 0);
     assert_eq!(ef.r0, 0b1111, "event_clear must return previous flags");
@@ -71,7 +71,7 @@ fn dispatch_event_wait_blocking_triggers_deschedule() {
 fn dispatch_event_wait_immediate_no_deschedule() {
     let mut k = kernel(0, 0, 0);
     // Pre-set bits so event_wait returns immediately with matched bits.
-    ev_data::event_set(k.partitions_mut(), 0, 0b1010);
+    ev_data::event_set(k.partitions_mut(), PartitionId::new(0), 0b1010);
     let mut ef = frame(SYS_EVT_WAIT, 0, 0b1110);
     // SAFETY: See module-level SAFETY docs for test dispatch justification.
     unsafe { k.dispatch(&mut ef) };
@@ -133,8 +133,8 @@ fn event_wait_uses_current_partition_not_r1() {
 fn event_clear_uses_current_partition_not_r1() {
     let mut k = kernel(0, 0, 0);
     // Pre-set bits on both partitions
-    ev_data::event_set(k.partitions_mut(), 0, 0b1111);
-    ev_data::event_set(k.partitions_mut(), 1, 0b1111);
+    ev_data::event_set(k.partitions_mut(), PartitionId::new(0), 0b1111);
+    ev_data::event_set(k.partitions_mut(), PartitionId::new(1), 0b1111);
     // r1=1 (attacker tries to clear partition 1's flags), mask in r2
     let mut ef = frame(SYS_EVT_CLEAR, 1, 0b0101);
     // SAFETY: See module-level SAFETY docs for test dispatch justification.
