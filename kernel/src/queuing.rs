@@ -1,5 +1,6 @@
 use crate::sampling::PortDirection;
 use crate::waitqueue::TimedWaitQueue;
+use rtos_traits::ids::PartitionId;
 
 /// Status information for a queuing port, returned by the `QueuingStatus` syscall.
 /// `#[repr(C)]` ensures a stable layout for writing directly to user-provided pointers.
@@ -26,7 +27,7 @@ pub enum QueuingError {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SendQueuingOutcome {
-    Delivered { wake_receiver: Option<u8> },
+    Delivered { wake_receiver: Option<PartitionId> },
     SenderBlocked { expiry_tick: u64 },
 }
 
@@ -34,7 +35,7 @@ pub enum SendQueuingOutcome {
 pub enum RecvQueuingOutcome {
     Received {
         msg_len: usize,
-        wake_sender: Option<u8>,
+        wake_sender: Option<PartitionId>,
     },
     ReceiverBlocked {
         expiry_tick: u64,
@@ -106,7 +107,11 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
     /// Enqueue a message. Only allowed on Source ports.
     /// Returns `Ok(wake_receiver)` — if a receiver was blocked, its partition
     /// ID is returned so the kernel can wake it.
-    pub fn send(&mut self, caller: u8, data: &[u8]) -> Result<Option<u8>, QueuingError> {
+    pub fn send(
+        &mut self,
+        caller: PartitionId,
+        data: &[u8],
+    ) -> Result<Option<PartitionId>, QueuingError> {
         if self.direction != PortDirection::Source {
             return Err(QueuingError::DirectionViolation);
         }
@@ -129,7 +134,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
 
     pub fn send_queuing_message(
         &mut self,
-        caller: u8,
+        caller: PartitionId,
         data: &[u8],
         timeout_ticks: u64,
         current_tick: u64,
@@ -172,9 +177,9 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
     /// truncation (`msg_len > buf.len()`).
     pub fn recv(
         &mut self,
-        caller: u8,
+        caller: PartitionId,
         buf: &mut [u8],
-    ) -> Result<(usize, Option<u8>), QueuingError> {
+    ) -> Result<(usize, Option<PartitionId>), QueuingError> {
         if self.direction != PortDirection::Destination {
             return Err(QueuingError::DirectionViolation);
         }
@@ -192,7 +197,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
 
     pub fn receive_queuing_message(
         &mut self,
-        caller: u8,
+        caller: PartitionId,
         buf: &mut [u8],
         timeout_ticks: u64,
         current_tick: u64,
@@ -224,7 +229,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
     /// Remove `pid` from both sender and receiver wait queues.
     ///
     /// Used during partition restart to clean up IPC state.
-    pub fn remove_from_waitqueues(&mut self, pid: u8) {
+    pub fn remove_from_waitqueues(&mut self, pid: PartitionId) {
         self.sender_wq.remove_by_id(pid);
         self.receiver_wq.remove_by_id(pid);
     }
@@ -235,7 +240,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
     pub fn drain_expired_senders<const E: usize>(
         &mut self,
         current_tick: u64,
-        out: &mut heapless::Vec<u8, E>,
+        out: &mut heapless::Vec<PartitionId, E>,
     ) {
         self.sender_wq.drain_expired(current_tick, out);
     }
@@ -245,7 +250,7 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
     pub fn drain_expired_receivers<const E: usize>(
         &mut self,
         current_tick: u64,
-        out: &mut heapless::Vec<u8, E>,
+        out: &mut heapless::Vec<PartitionId, E>,
     ) {
         self.receiver_wq.drain_expired(current_tick, out);
     }

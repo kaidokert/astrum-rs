@@ -2,17 +2,19 @@
 //! primitives (semaphores, mutexes, message queues) that do not need
 //! timeout support. `W` is the compile-time maximum number of waiters.
 
+use rtos_traits::ids::PartitionId;
+
 /// Error returned when a [`WaitQueue`] is full and cannot accept another entry.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct WaitQueueFull;
 
-/// Fixed-capacity FIFO wait queue storing partition IDs (`u8`).
+/// Fixed-capacity FIFO wait queue storing [`PartitionId`] values.
 ///
 /// Wraps [`heapless::Deque`] and exposes only the subset of operations
 /// needed by kernel synchronization primitives.
 #[derive(Debug)]
 pub struct WaitQueue<const W: usize> {
-    inner: heapless::Deque<u8, W>,
+    inner: heapless::Deque<PartitionId, W>,
 }
 
 impl<const W: usize> Default for WaitQueue<W> {
@@ -32,14 +34,14 @@ impl<const W: usize> WaitQueue<W> {
     /// Enqueue a partition ID at the back of the queue.
     ///
     /// Returns `Err(WaitQueueFull)` if the queue has reached capacity.
-    pub fn push(&mut self, pid: u8) -> Result<(), WaitQueueFull> {
+    pub fn push(&mut self, pid: PartitionId) -> Result<(), WaitQueueFull> {
         self.inner.push_back(pid).map_err(|_| WaitQueueFull)
     }
 
     /// Dequeue the partition ID at the front (oldest entry).
     ///
     /// Returns `None` if the queue is empty.
-    pub fn pop_front(&mut self) -> Option<u8> {
+    pub fn pop_front(&mut self) -> Option<PartitionId> {
         self.inner.pop_front()
     }
 
@@ -62,7 +64,7 @@ impl<const W: usize> WaitQueue<W> {
     ///
     /// Returns `false` if no entry with that partition ID exists.
     /// Remaining entries preserve their original FIFO order.
-    pub fn remove_by_id(&mut self, pid: u8) -> bool {
+    pub fn remove_by_id(&mut self, pid: PartitionId) -> bool {
         let len = self.inner.len();
         let mut found = false;
         for _ in 0..len {
@@ -99,7 +101,7 @@ pub const fn safe_expiry(current_tick: u64, timeout_ticks: u64) -> u64 {
 /// waiters.
 #[derive(Debug)]
 pub struct TimedWaitQueue<const W: usize> {
-    inner: heapless::Deque<(u8, u64), W>,
+    inner: heapless::Deque<(PartitionId, u64), W>,
 }
 
 impl<const W: usize> Default for TimedWaitQueue<W> {
@@ -119,7 +121,7 @@ impl<const W: usize> TimedWaitQueue<W> {
     /// Enqueue a partition ID with an expiry tick at the back of the queue.
     ///
     /// Returns `Err(WaitQueueFull)` if the queue has reached capacity.
-    pub fn push(&mut self, pid: u8, expiry: u64) -> Result<(), WaitQueueFull> {
+    pub fn push(&mut self, pid: PartitionId, expiry: u64) -> Result<(), WaitQueueFull> {
         self.inner
             .push_back((pid, expiry))
             .map_err(|_| WaitQueueFull)
@@ -128,7 +130,7 @@ impl<const W: usize> TimedWaitQueue<W> {
     /// Dequeue the oldest `(pid, expiry)` pair from the front.
     ///
     /// Returns `None` if the queue is empty.
-    pub fn pop_front(&mut self) -> Option<(u8, u64)> {
+    pub fn pop_front(&mut self) -> Option<(PartitionId, u64)> {
         self.inner.pop_front()
     }
 
@@ -136,7 +138,7 @@ impl<const W: usize> TimedWaitQueue<W> {
     /// discarding the expiry tick.
     ///
     /// Returns `None` if the queue is empty.
-    pub fn pop_front_pid(&mut self) -> Option<u8> {
+    pub fn pop_front_pid(&mut self) -> Option<PartitionId> {
         self.inner.pop_front().map(|(pid, _)| pid)
     }
 
@@ -157,7 +159,7 @@ impl<const W: usize> TimedWaitQueue<W> {
     pub fn drain_expired<const E: usize>(
         &mut self,
         current_tick: u64,
-        out: &mut heapless::Vec<u8, E>,
+        out: &mut heapless::Vec<PartitionId, E>,
     ) {
         let len = self.inner.len();
         for _ in 0..len {
@@ -179,7 +181,7 @@ impl<const W: usize> TimedWaitQueue<W> {
     ///
     /// Used for wake-all semantics (e.g., blackboard display waking all
     /// blocked readers).
-    pub fn drain_all(&mut self) -> heapless::Vec<u8, W> {
+    pub fn drain_all(&mut self) -> heapless::Vec<PartitionId, W> {
         core::mem::take(&mut self.inner)
             .into_iter()
             .map(|(pid, _)| pid)
@@ -205,7 +207,7 @@ impl<const W: usize> TimedWaitQueue<W> {
     ///
     /// Returns `false` if no entry with that partition ID exists.
     /// Remaining entries preserve their original FIFO order.
-    pub fn remove_by_id(&mut self, pid: u8) -> bool {
+    pub fn remove_by_id(&mut self, pid: PartitionId) -> bool {
         let len = self.inner.len();
         let mut found = false;
         for _ in 0..len {

@@ -3,7 +3,7 @@ use crate::queuing::{
     QueuingError, QueuingPortPool, QueuingPortStatus, RecvQueuingOutcome, SendQueuingOutcome,
 };
 use crate::svc::{try_transition, SvcError};
-use rtos_traits::ids::QueuingPortId;
+use rtos_traits::ids::{PartitionId, QueuingPortId};
 
 // TODO: handle_queuing_send carries 5 generic parameters from QueuingPortPool.
 // Consider a trait or simplified pool view if this pattern repeats for other handlers.
@@ -16,7 +16,7 @@ pub fn handle_queuing_send<
 >(
     pool: &mut QueuingPortPool<S, D, M, W>,
     partitions: &mut PartitionTable<N>,
-    current_partition: u8,
+    current_partition: PartitionId,
     tick: u64,
     port_id: QueuingPortId,
     data: &[u8],
@@ -24,7 +24,7 @@ pub fn handle_queuing_send<
     match pool.send_routed(port_id.as_raw() as usize, current_partition, data, 0, tick) {
         Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
             if let Some(wpid) = w {
-                try_transition(partitions, wpid, PartitionState::Ready);
+                try_transition(partitions, wpid.as_raw() as u8, PartitionState::Ready);
             }
             0
         }
@@ -42,7 +42,7 @@ pub fn handle_queuing_receive<
 >(
     pool: &mut QueuingPortPool<S, D, M, W>,
     partitions: &mut PartitionTable<N>,
-    current_partition: u8,
+    current_partition: PartitionId,
     tick: u64,
     port_id: QueuingPortId,
     buf: &mut [u8],
@@ -53,7 +53,7 @@ pub fn handle_queuing_receive<
             wake_sender,
         }) => {
             if let Some(w) = wake_sender {
-                try_transition(partitions, w, PartitionState::Ready);
+                try_transition(partitions, w.as_raw() as u8, PartitionState::Ready);
             }
             msg_len as u32
         }
