@@ -26,7 +26,7 @@ use crate::blackboard::BlackboardPool;
 use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
 
-use rtos_traits::ids::{MutexId, QueuingPortId, SamplingPortId, SemaphoreId};
+use rtos_traits::ids::{BlackboardId, MutexId, QueuingPortId, SamplingPortId, SemaphoreId};
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
 
@@ -1886,25 +1886,19 @@ where
                         // the calling partition's MPU data region. (2) Slice length
                         // is user-provided but validated against MPU bounds.
                         // (3) The partition owns this memory as enforced by MPU.
+                        // SAFETY: see above — pointer and length validated by check_user_ptr.
                         let d = unsafe {
                             core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                         };
-                        match self
-                            .ports
-                            .blackboards_mut()
-                            .display_blackboard(frame.r1 as usize, d)
-                        {
-                            Ok(woken) => {
-                                for &wpid in woken.iter() {
-                                    try_transition(
-                                        self.core.partitions_mut(),
-                                        wpid,
-                                        PartitionState::Ready,
-                                    );
-                                }
-                                0
-                            }
-                            Err(_) => SvcError::InvalidResource.to_u32(),
+                        let bb_id = BlackboardId::new(frame.r1);
+                        match blackboard::handle_bb_display(
+                            self.ports.blackboards_mut(),
+                            self.core.partitions_mut(),
+                            bb_id,
+                            d,
+                        ) {
+                            Ok(()) => 0,
+                            Err(e) => blackboard::bb_error_to_svc(e),
                         }
                     }
                 }
@@ -1918,42 +1912,34 @@ where
                         // the calling partition's MPU data region. (2) Slice length is
                         // C::BM, a KernelConfig constant. (3) The partition owns this
                         // memory as enforced by MPU isolation.
+                        // SAFETY: see above — pointer and length validated by check_user_ptr.
                         let b =
                             unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
+                        let bb_id = BlackboardId::new(frame.r1);
                         let pid = self.current_partition;
                         let tick = self.tick.get();
-                        match self.ports.blackboards_mut().read_blackboard_timed(
-                            frame.r1 as usize,
+                        match blackboard::handle_bb_read(
+                            self.ports.blackboards_mut(),
+                            self.core.partitions_mut(),
+                            bb_id,
                             pid,
                             b,
                             frame.r2,
                             tick,
                         ) {
-                            Ok(crate::blackboard::ReadBlackboardOutcome::Read { msg_len }) => {
-                                msg_len as u32
-                            }
-                            Ok(crate::blackboard::ReadBlackboardOutcome::ReaderBlocked) => {
-                                try_transition(
-                                    self.core.partitions_mut(),
-                                    pid,
-                                    PartitionState::Waiting,
-                                );
-                                self.trigger_deschedule()
-                            }
-                            Err(_) => SvcError::InvalidResource.to_u32(),
+                            Ok(blackboard::BbReadOutcome::Read { msg_len }) => msg_len,
+                            Ok(blackboard::BbReadOutcome::Blocked) => self.trigger_deschedule(),
+                            Err(e) => blackboard::bb_error_to_svc(e),
                         }
                     }
                 }
             }
             #[cfg(feature = "ipc-blackboard")]
             Some(SyscallId::BbClear) => {
-                match self
-                    .ports
-                    .blackboards_mut()
-                    .clear_blackboard(frame.r1 as usize)
-                {
+                let bb_id = BlackboardId::new(frame.r1);
+                match blackboard::handle_bb_clear(self.ports.blackboards_mut(), bb_id) {
                     Ok(()) => 0,
-                    Err(_) => SvcError::InvalidResource.to_u32(),
+                    Err(e) => blackboard::bb_error_to_svc(e),
                 }
             }
             Some(SyscallId::GetTime) => self.tick.get() as u32,
