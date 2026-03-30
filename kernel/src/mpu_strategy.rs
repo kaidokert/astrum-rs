@@ -874,6 +874,11 @@ mod tests {
     };
     use crate::partition::{MpuRegion, PartitionControlBlock};
 
+    /// Shorthand for `PartitionId::new(v)` in tests.
+    fn pid(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
+
     /// Helper: build a PCB with the given entry, data base, and data size.
     fn make_pcb(entry: u32, data_base: u32, data_size: u32) -> PartitionControlBlock {
         PartitionControlBlock::new(
@@ -907,7 +912,7 @@ mod tests {
         let strategy = StaticStrategy;
 
         // Passing the 4 computed regions should succeed.
-        assert_eq!(strategy.configure_partition(0, &regions, 0), Ok(()));
+        assert_eq!(strategy.configure_partition(pid(0), &regions, 0), Ok(()));
     }
 
     #[test]
@@ -916,25 +921,25 @@ mod tests {
 
         // Too few regions.
         assert_eq!(
-            strategy.configure_partition(0, &[(0x0, 0x0)], 0),
+            strategy.configure_partition(pid(0), &[(0x0, 0x0)], 0),
             Err(MpuError::RegionCountMismatch),
         );
 
         // 3 regions is now too few (was the old count).
         assert_eq!(
-            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0)], 0),
+            strategy.configure_partition(pid(0), &[(0, 0), (0, 0), (0, 0)], 0),
             Err(MpuError::RegionCountMismatch),
         );
 
         // Too many regions.
         assert_eq!(
-            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0), (0, 0), (0, 0)], 0),
+            strategy.configure_partition(pid(0), &[(0, 0), (0, 0), (0, 0), (0, 0), (0, 0)], 0),
             Err(MpuError::RegionCountMismatch),
         );
 
         // Empty.
         assert_eq!(
-            strategy.configure_partition(0, &[], 0),
+            strategy.configure_partition(pid(0), &[], 0),
             Err(MpuError::RegionCountMismatch),
         );
     }
@@ -977,7 +982,7 @@ mod tests {
         );
 
         // And configure_partition accepts them.
-        assert_eq!(strategy.configure_partition(0, &regions, 0), Ok(()));
+        assert_eq!(strategy.configure_partition(pid(0), &regions, 0), Ok(()));
     }
 
     #[test]
@@ -986,11 +991,11 @@ mod tests {
 
         let pcb0 = make_pcb(0x0000_0000, 0x2000_0000, 1024);
         let r0 = partition_mpu_regions(&pcb0).unwrap();
-        assert_eq!(strategy.configure_partition(0, &r0, 0), Ok(()));
+        assert_eq!(strategy.configure_partition(pid(0), &r0, 0), Ok(()));
 
         let pcb1 = make_pcb(0x0000_0000, 0x2000_8000, 1024);
         let r1 = partition_mpu_regions(&pcb1).unwrap();
-        assert_eq!(strategy.configure_partition(1, &r1, 0), Ok(()));
+        assert_eq!(strategy.configure_partition(pid(1), &r1, 0), Ok(()));
     }
 
     // ------------------------------------------------------------------
@@ -1001,7 +1006,7 @@ mod tests {
     fn static_strategy_add_window_returns_slot_exhausted() {
         let strategy = StaticStrategy;
         assert_eq!(
-            strategy.add_window(0x2000_0000, 256, 0, 0),
+            strategy.add_window(0x2000_0000, 256, 0, pid(0)),
             Err(MpuError::SlotExhausted),
         );
     }
@@ -1022,11 +1027,11 @@ mod tests {
     fn static_strategy_satisfies_trait_object() {
         let strategy: &dyn MpuStrategy = &StaticStrategy;
         assert_eq!(
-            strategy.add_window(0, 0, 0, 0),
+            strategy.add_window(0, 0, 0, pid(0)),
             Err(MpuError::SlotExhausted)
         );
         assert_eq!(
-            strategy.configure_partition(0, &[(0, 0), (0, 0), (0, 0), (0, 0)], 0),
+            strategy.configure_partition(pid(0), &[(0, 0), (0, 0), (0, 0), (0, 0)], 0),
             Ok(()),
         );
     }
@@ -1056,13 +1061,13 @@ mod tests {
         let size_field = encode_size(4096).unwrap(); // 11
         let rasr = build_rasr(size_field, AP_FULL_ACCESS, true, (true, true, false));
         let rbar = build_rbar(0x2000_0000, 4).unwrap();
-        assert_eq!(ds.configure_partition(2, &[(rbar, rasr)], 0), Ok(()));
+        assert_eq!(ds.configure_partition(pid(2), &[(rbar, rasr)], 0), Ok(()));
 
         let desc = ds.slot(4).expect("R4 should be occupied");
         assert_eq!(desc.base, 0x2000_0000);
         assert_eq!(desc.size, 4096);
         assert_eq!(desc.permissions, rasr);
-        assert_eq!(desc.owner, 2);
+        assert_eq!(desc.owner, pid(2));
     }
 
     #[test]
@@ -1070,12 +1075,12 @@ mod tests {
         let ds = DynamicStrategy::new();
         // Empty.
         assert_eq!(
-            ds.configure_partition(0, &[], 0),
+            ds.configure_partition(pid(0), &[], 0),
             Err(MpuError::RegionCountMismatch),
         );
         // Multiple regions — only exactly one is accepted.
         assert_eq!(
-            ds.configure_partition(0, &[(0, 0), (0, 0)], 0),
+            ds.configure_partition(pid(0), &[(0, 0), (0, 0)], 0),
             Err(MpuError::RegionCountMismatch),
         );
     }
@@ -1083,13 +1088,13 @@ mod tests {
     #[test]
     fn dynamic_add_window_allocates_r5_r6_r7() {
         let ds = DynamicStrategy::new();
-        let r5 = ds.add_window(0x2001_0000, 256, 0xAA, 1);
+        let r5 = ds.add_window(0x2001_0000, 256, 0xAA, pid(1));
         assert_eq!(r5, Ok(5));
 
-        let r6 = ds.add_window(0x2002_0000, 512, 0xBB, 2);
+        let r6 = ds.add_window(0x2002_0000, 512, 0xBB, pid(2));
         assert_eq!(r6, Ok(6));
 
-        let r7 = ds.add_window(0x2003_0000, 1024, 0xCC, 3);
+        let r7 = ds.add_window(0x2003_0000, 1024, 0xCC, pid(3));
         assert_eq!(r7, Ok(7));
 
         // Verify stored descriptors.
@@ -1097,29 +1102,29 @@ mod tests {
         assert_eq!(d5.base, 0x2001_0000);
         assert_eq!(d5.size, 256);
         assert_eq!(d5.permissions, 0xAA);
-        assert_eq!(d5.owner, 1);
+        assert_eq!(d5.owner, pid(1));
 
         let d6 = ds.slot(6).unwrap();
         assert_eq!(d6.base, 0x2002_0000);
         assert_eq!(d6.size, 512);
-        assert_eq!(d6.owner, 2);
+        assert_eq!(d6.owner, pid(2));
 
         let d7 = ds.slot(7).unwrap();
         assert_eq!(d7.base, 0x2003_0000);
         assert_eq!(d7.size, 1024);
-        assert_eq!(d7.owner, 3);
+        assert_eq!(d7.owner, pid(3));
     }
 
     #[test]
     fn dynamic_add_window_exhaustion() {
         let ds = DynamicStrategy::new();
-        assert!(ds.add_window(0x2001_0000, 256, 0, 1).is_ok()); // R5
-        assert!(ds.add_window(0x2002_0000, 256, 0, 1).is_ok()); // R6
-        assert!(ds.add_window(0x2003_0000, 256, 0, 1).is_ok()); // R7
+        assert!(ds.add_window(0x2001_0000, 256, 0, pid(1)).is_ok()); // R5
+        assert!(ds.add_window(0x2002_0000, 256, 0, pid(1)).is_ok()); // R6
+        assert!(ds.add_window(0x2003_0000, 256, 0, pid(1)).is_ok()); // R7
 
         // Fourth dynamic window should fail — only 3 dynamic slots.
         assert_eq!(
-            ds.add_window(0x2004_0000, 256, 0, 1),
+            ds.add_window(0x2004_0000, 256, 0, pid(1)),
             Err(MpuError::SlotExhausted)
         );
     }
@@ -1127,7 +1132,7 @@ mod tests {
     #[test]
     fn dynamic_remove_window_clears_slot() {
         let ds = DynamicStrategy::new();
-        let rid = ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
+        let rid = ds.add_window(0x2001_0000, 256, 0, pid(1)).unwrap();
         assert_eq!(rid, 5);
         assert!(ds.slot(5).is_some());
 
@@ -1148,22 +1153,22 @@ mod tests {
     #[test]
     fn dynamic_reallocation_after_removal() {
         let ds = DynamicStrategy::new();
-        let r5 = ds.add_window(0x2001_0000, 256, 0x11, 1).unwrap();
-        let r6 = ds.add_window(0x2002_0000, 512, 0x22, 2).unwrap();
-        let r7 = ds.add_window(0x2003_0000, 1024, 0x33, 3).unwrap();
+        let r5 = ds.add_window(0x2001_0000, 256, 0x11, pid(1)).unwrap();
+        let r6 = ds.add_window(0x2002_0000, 512, 0x22, pid(2)).unwrap();
+        let r7 = ds.add_window(0x2003_0000, 1024, 0x33, pid(3)).unwrap();
         assert_eq!((r5, r6, r7), (5, 6, 7));
 
         // Remove R6, then a new add should reuse slot index 2 → R6.
         ds.remove_window(6);
         assert!(ds.slot(6).is_none());
 
-        let new = ds.add_window(0x2004_0000, 2048, 0x44, 4).unwrap();
+        let new = ds.add_window(0x2004_0000, 2048, 0x44, pid(4)).unwrap();
         assert_eq!(new, 6);
         let d = ds.slot(6).unwrap();
         assert_eq!(d.base, 0x2004_0000);
         assert_eq!(d.size, 2048);
         assert_eq!(d.permissions, 0x44);
-        assert_eq!(d.owner, 4);
+        assert_eq!(d.owner, pid(4));
     }
 
     #[test]
@@ -1178,14 +1183,14 @@ mod tests {
     fn dynamic_configure_partition_overwrites_r4() {
         let ds = DynamicStrategy::new();
         let r1 = data_region(0x2000_0000, 256, 4);
-        ds.configure_partition(1, &[r1], 0).unwrap();
-        assert_eq!(ds.slot(4).unwrap().owner, 1);
+        ds.configure_partition(pid(1), &[r1], 0).unwrap();
+        assert_eq!(ds.slot(4).unwrap().owner, pid(1));
 
         // Reconfigure with different partition.
         let r2 = data_region(0x2000_8000, 1024, 4);
-        ds.configure_partition(3, &[r2], 0).unwrap();
+        ds.configure_partition(pid(3), &[r2], 0).unwrap();
         let d = ds.slot(4).unwrap();
-        assert_eq!(d.owner, 3);
+        assert_eq!(d.owner, pid(3));
         assert_eq!(d.base, 0x2000_8000);
         assert_eq!(d.size, 1024);
     }
@@ -1194,26 +1199,26 @@ mod tests {
     fn dynamic_add_window_does_not_touch_r4() {
         let ds = DynamicStrategy::new();
         let r = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[r], 0).unwrap();
+        ds.configure_partition(pid(0), &[r], 0).unwrap();
 
         // Fill all dynamic slots.
-        ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
-        ds.add_window(0x2002_0000, 256, 0, 1).unwrap();
-        ds.add_window(0x2003_0000, 256, 0, 1).unwrap();
+        ds.add_window(0x2001_0000, 256, 0, pid(1)).unwrap();
+        ds.add_window(0x2002_0000, 256, 0, pid(1)).unwrap();
+        ds.add_window(0x2003_0000, 256, 0, pid(1)).unwrap();
 
         // R4 should still hold the partition descriptor.
         let d = ds.slot(4).unwrap();
         assert_eq!(d.base, 0x2000_0000);
-        assert_eq!(d.owner, 0);
+        assert_eq!(d.owner, pid(0));
     }
 
     #[test]
     fn dynamic_satisfies_trait_object() {
         let ds = DynamicStrategy::new();
         let strategy: &dyn MpuStrategy = &ds;
-        assert_eq!(strategy.add_window(0x2001_0000, 256, 0, 1), Ok(5));
+        assert_eq!(strategy.add_window(0x2001_0000, 256, 0, pid(1)), Ok(5));
         strategy.remove_window(5);
-        assert_eq!(strategy.add_window(0x2001_0000, 256, 0, 1), Ok(5));
+        assert_eq!(strategy.add_window(0x2001_0000, 256, 0, pid(1)), Ok(5));
     }
 
     #[test]
@@ -1221,10 +1226,10 @@ mod tests {
         // peripheral_reserved=3 places RAM at slot index 3.
         let ds = DynamicStrategy::new();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
-        assert_eq!(ds.configure_partition(0, &[(rbar, rasr)], 3), Ok(()));
+        assert_eq!(ds.configure_partition(pid(0), &[(rbar, rasr)], 3), Ok(()));
         let desc = ds.slot(7).expect("RAM should be in slot 7 (R4+3)");
         assert_eq!(desc.base, 0x2000_0000);
-        assert_eq!(desc.owner, 0);
+        assert_eq!(desc.owner, pid(0));
     }
 
     #[test]
@@ -1233,7 +1238,7 @@ mod tests {
         let ds = DynamicStrategy::new();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
         assert_eq!(
-            ds.configure_partition(0, &[(rbar, rasr)], 4),
+            ds.configure_partition(pid(0), &[(rbar, rasr)], 4),
             Err(MpuError::RegionCountMismatch),
         );
     }
@@ -1243,13 +1248,13 @@ mod tests {
         // Verify RAM slot placement for peripheral_reserved=1.
         let ds = DynamicStrategy::new();
         let (rbar, rasr) = data_region(0x2000_4000, 4096, 4);
-        ds.configure_partition(0, &[(rbar, rasr)], 1).unwrap();
+        ds.configure_partition(pid(0), &[(rbar, rasr)], 1).unwrap();
         // Slot 0 (R4) should be empty (reserved for peripheral).
         assert!(ds.slot(4).is_none(), "R4 reserved for peripheral");
         // Slot 1 (R5) should contain RAM.
         let desc = ds.slot(5).expect("RAM placed at index 1 (R5)");
         assert_eq!(desc.base, 0x2000_4000);
-        assert_eq!(desc.owner, 0);
+        assert_eq!(desc.owner, pid(0));
     }
 
     #[test]
@@ -1257,23 +1262,24 @@ mod tests {
         // Switching from peripheral_reserved=0 to 2 moves RAM from slot 0 to slot 2.
         let ds = DynamicStrategy::new();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rbar, rasr)], 0).unwrap();
+        ds.configure_partition(pid(0), &[(rbar, rasr)], 0).unwrap();
         assert!(ds.slot(4).is_some(), "RAM in R4 with reservation=0");
 
         // Reconfigure partition 1 with reservation=2.
         let (rbar2, rasr2) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rbar2, rasr2)], 2).unwrap();
+        ds.configure_partition(pid(1), &[(rbar2, rasr2)], 2)
+            .unwrap();
         // Raw slot 0 still holds partition 0's RAM; per-partition
         // filtering hides it from partition 1's view.
         let s4 = ds.slot(4).expect("partition 0 RAM persists in slot 4");
-        assert_eq!(s4.owner, 0, "slot 4 belongs to partition 0");
+        assert_eq!(s4.owner, pid(0), "slot 4 belongs to partition 0");
         let desc = ds.slot(6).expect("RAM should be in R6");
         assert_eq!(desc.base, 0x2000_8000);
-        assert_eq!(desc.owner, 1);
+        assert_eq!(desc.owner, pid(1));
 
         // Partition 1's view: R4-R5 disabled (reserved, no peripherals
         // cached), R6 holds its RAM.
-        let v = ds.partition_region_values(1);
+        let v = ds.partition_region_values(pid(1));
         assert_eq!(v[0].1, 0, "R4 disabled");
         assert_eq!(v[1].1, 0, "R5 disabled");
         assert_eq!(v[2].1, rasr2, "R6 holds partition RAM");
@@ -1286,31 +1292,35 @@ mod tests {
     #[test]
     fn peripheral_reserved_for_defaults_and_out_of_range() {
         let ds = DynamicStrategy::<2>::with_partition_count();
-        assert_eq!(ds.peripheral_reserved_for(0), 0);
-        assert_eq!(ds.peripheral_reserved_for(1), 0);
-        assert_eq!(ds.peripheral_reserved_for(5), 0, "out-of-range → 0");
-        assert_eq!(ds.peripheral_reserved_for(255), 0, "out-of-range → 0");
+        assert_eq!(ds.peripheral_reserved_for(pid(0)), 0);
+        assert_eq!(ds.peripheral_reserved_for(pid(1)), 0);
+        assert_eq!(ds.peripheral_reserved_for(pid(5)), 0, "out-of-range → 0");
+        assert_eq!(ds.peripheral_reserved_for(pid(255)), 0, "out-of-range → 0");
     }
 
     #[test]
     fn peripheral_reserved_for_tracks_per_partition() {
         let ds = DynamicStrategy::<4>::with_partition_count();
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
-        assert_eq!(ds.peripheral_reserved_for(0), 2);
-        assert_eq!(ds.peripheral_reserved_for(1), 0, "partition 1 untouched");
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 2).unwrap();
+        assert_eq!(ds.peripheral_reserved_for(pid(0)), 2);
+        assert_eq!(
+            ds.peripheral_reserved_for(pid(1)),
+            0,
+            "partition 1 untouched"
+        );
     }
 
     #[test]
     fn configure_partition_owner_check_prevents_cross_partition_clear() {
         let ds = DynamicStrategy::<4>::with_partition_count();
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rb0, rs0)], 0).unwrap();
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 0).unwrap();
         // Partition 1 with reserved=2 must NOT clear partition 0's slot 0.
         let (rb1, rs1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rb1, rs1)], 2).unwrap();
-        assert_eq!(ds.slot(4).expect("p0 RAM survives").owner, 0);
-        assert_eq!(ds.slot(6).expect("p1 RAM in R6").owner, 1);
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 2).unwrap();
+        assert_eq!(ds.slot(4).expect("p0 RAM survives").owner, pid(0));
+        assert_eq!(ds.slot(6).expect("p1 RAM in R6").owner, pid(1));
     }
 
     #[test]
@@ -1321,66 +1331,66 @@ mod tests {
         // --- Configure each partition ---
         // p0: reserved=2 → RAM lands in slot 2 (region 6).
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 2).unwrap();
 
         // p1: reserved=0 → RAM lands in slot 0 (region 4).
         let (rb1, rs1) = data_region(0x2000_4000, 4096, 4);
-        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 0).unwrap();
 
         // p2: reserved=2 → RAM lands in slot 2 (region 6).
         let (rb2, rs2) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(2, &[(rb2, rs2)], 2).unwrap();
+        ds.configure_partition(pid(2), &[(rb2, rs2)], 2).unwrap();
 
         // --- Verify peripheral_reserved_for returns correct per-partition values ---
-        assert_eq!(ds.peripheral_reserved_for(0), 2, "p0 reserved=2");
-        assert_eq!(ds.peripheral_reserved_for(1), 0, "p1 reserved=0");
-        assert_eq!(ds.peripheral_reserved_for(2), 2, "p2 reserved=2");
+        assert_eq!(ds.peripheral_reserved_for(pid(0)), 2, "p0 reserved=2");
+        assert_eq!(ds.peripheral_reserved_for(pid(1)), 0, "p1 reserved=0");
+        assert_eq!(ds.peripheral_reserved_for(pid(2)), 2, "p2 reserved=2");
 
         // --- Verify RAM slot placement per partition ---
         // p0: reserved=2, RAM must be in slot 2 (region 6), owned by partition 0.
         let s0 = ds.slot(6).expect("p0 or p2 RAM in R6");
         // After p2 configures, it overwrites region 6; verify p2 owns it now.
-        assert_eq!(s0.owner, 2, "p2 last wrote R6");
+        assert_eq!(s0.owner, pid(2), "p2 last wrote R6");
         assert_eq!(s0.base, 0x2000_8000, "p2 RAM base");
 
         // p1: reserved=0, RAM must be in slot 0 (region 4), owned by partition 1.
         let s1 = ds.slot(4).expect("p1 RAM in R4");
-        assert_eq!(s1.owner, 1, "p1 owns R4");
+        assert_eq!(s1.owner, pid(1), "p1 owns R4");
         assert_eq!(s1.base, 0x2000_4000, "p1 RAM base");
 
         // --- Verify cross-partition owner isolation ---
         // Reconfigure p0 with reserved=2 again; must NOT clear p1's slot 0.
         let (rb0b, rs0b) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb0b, rs0b)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb0b, rs0b)], 2).unwrap();
 
         // p1's RAM in R4 must survive p0's reconfiguration.
         let s1_after = ds.slot(4).expect("p1 RAM survives p0 reconfig");
-        assert_eq!(s1_after.owner, 1, "p1 still owns R4");
+        assert_eq!(s1_after.owner, pid(1), "p1 still owns R4");
         assert_eq!(s1_after.base, 0x2000_4000, "p1 RAM base unchanged");
 
         // p0 now owns R6 again.
         let s0_after = ds.slot(6).expect("p0 RAM in R6 after reconfig");
-        assert_eq!(s0_after.owner, 0, "p0 owns R6 after reconfig");
+        assert_eq!(s0_after.owner, pid(0), "p0 owns R6 after reconfig");
         assert_eq!(s0_after.base, 0x2000_0000, "p0 RAM base");
 
         // Reconfigure p2 with reserved=0; must NOT clear p0's slot 2 (R6)
         // because owner differs. p2 should land in slot 0 (R4) now.
         let (rb2b, rs2b) = data_region(0x2000_C000, 4096, 4);
-        ds.configure_partition(2, &[(rb2b, rs2b)], 0).unwrap();
+        ds.configure_partition(pid(2), &[(rb2b, rs2b)], 0).unwrap();
         assert_eq!(
-            ds.peripheral_reserved_for(2),
+            ds.peripheral_reserved_for(pid(2)),
             0,
             "p2 switched to reserved=0"
         );
 
         // p0's R6 must survive p2's switch.
         let s0_final = ds.slot(6).expect("p0 RAM survives p2 switch");
-        assert_eq!(s0_final.owner, 0, "p0 still owns R6");
+        assert_eq!(s0_final.owner, pid(0), "p0 still owns R6");
 
         // p2 now in R4; p1 was overwritten since both target slot 0.
         // (Both p1 and p2 with reserved=0 share slot 0 — last writer wins.)
         let s2_final = ds.slot(4).expect("p2 RAM in R4");
-        assert_eq!(s2_final.owner, 2, "p2 now owns R4");
+        assert_eq!(s2_final.owner, pid(2), "p2 now owns R4");
         assert_eq!(s2_final.base, 0x2000_C000, "p2 RAM base in R4");
     }
 
@@ -1392,9 +1402,9 @@ mod tests {
     fn one_peripheral_reserved_for_returns_one() {
         let ds = DynamicStrategy::<2>::with_partition_count();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 5);
-        ds.configure_partition(0, &[(rbar, rasr)], 1).unwrap();
+        ds.configure_partition(pid(0), &[(rbar, rasr)], 1).unwrap();
         assert_eq!(
-            ds.peripheral_reserved_for(0),
+            ds.peripheral_reserved_for(pid(0)),
             1,
             "1 peripheral → peripheral_reserved_for must return 1"
         );
@@ -1404,7 +1414,7 @@ mod tests {
     fn one_peripheral_ram_at_slot_index_one() {
         let ds = DynamicStrategy::<2>::with_partition_count();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 5);
-        ds.configure_partition(0, &[(rbar, rasr)], 1).unwrap();
+        ds.configure_partition(pid(0), &[(rbar, rasr)], 1).unwrap();
         // Slot 0 (R4) reserved for peripheral, should be None.
         assert!(
             ds.slot(4).is_none(),
@@ -1413,14 +1423,14 @@ mod tests {
         // Slot 1 (R5) should hold the RAM region.
         let desc = ds.slot(5).expect("RAM must be at slot index 1 (R5)");
         assert_eq!(desc.base, 0x2000_0000);
-        assert_eq!(desc.owner, 0);
+        assert_eq!(desc.owner, pid(0));
     }
 
     #[test]
     fn one_peripheral_slots_two_and_three_available() {
         let ds = DynamicStrategy::<2>::with_partition_count();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 5);
-        ds.configure_partition(0, &[(rbar, rasr)], 1).unwrap();
+        ds.configure_partition(pid(0), &[(rbar, rasr)], 1).unwrap();
         // Slots 2 and 3 (R6, R7) must remain None — available for
         // buffer lend windows.
         assert!(
@@ -1437,16 +1447,16 @@ mod tests {
     fn three_peripherals_ram_at_slot_three_peripherals_at_zero_to_two() {
         let ds = DynamicStrategy::<2>::with_partition_count();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 7);
-        ds.configure_partition(0, &[(rbar, rasr)], 3).unwrap();
+        ds.configure_partition(pid(0), &[(rbar, rasr)], 3).unwrap();
         assert_eq!(
-            ds.peripheral_reserved_for(0),
+            ds.peripheral_reserved_for(pid(0)),
             3,
             "3 peripherals → peripheral_reserved_for must return 3"
         );
         // RAM must be at slot 3 (R7).
         let desc = ds.slot(7).expect("RAM must be at slot index 3 (R7)");
         assert_eq!(desc.base, 0x2000_0000);
-        assert_eq!(desc.owner, 0);
+        assert_eq!(desc.owner, pid(0));
         // Slots 0-2 (R4-R6) reserved for peripherals, should be None.
         assert!(
             ds.slot(4).is_none(),
@@ -1468,7 +1478,7 @@ mod tests {
     #[test]
     fn boot_loop_configures_all_partitions_peripheral_reserved() {
         let ds = DynamicStrategy::<3>::with_partition_count();
-        let boot_pid: u8 = 0;
+        let boot_pid = pid(0);
 
         // Per-partition peripheral counts: p0 has 2, p1 has 0, p2 has 1.
         let periph_counts: [usize; 3] = [2, 0, 1];
@@ -1481,20 +1491,29 @@ mod tests {
             .unwrap();
 
         // Step 2: configure all remaining partitions (the new loop).
-        for i in 0..3u8 {
-            if i == boot_pid {
+        for i in 0u32..3 {
+            let p = PartitionId::new(i);
+            if p == boot_pid {
                 continue;
             }
             let pr = periph_counts[i as usize];
             let rn = DYNAMIC_REGION_BASE as u32 + pr as u32;
             let (rb_i, rs_i) = data_region(bases[i as usize], 4096, rn);
-            ds.configure_partition(i, &[(rb_i, rs_i)], pr).unwrap();
+            ds.configure_partition(p, &[(rb_i, rs_i)], pr).unwrap();
         }
 
         // Verify: all partitions have correct peripheral_reserved.
-        assert_eq!(ds.peripheral_reserved_for(0), 2, "p0 has 2 peripherals");
-        assert_eq!(ds.peripheral_reserved_for(1), 0, "p1 has no peripherals");
-        assert_eq!(ds.peripheral_reserved_for(2), 1, "p2 has 1 peripheral");
+        assert_eq!(
+            ds.peripheral_reserved_for(pid(0)),
+            2,
+            "p0 has 2 peripherals"
+        );
+        assert_eq!(
+            ds.peripheral_reserved_for(pid(1)),
+            0,
+            "p1 has no peripherals"
+        );
+        assert_eq!(ds.peripheral_reserved_for(pid(2)), 1, "p2 has 1 peripheral");
     }
 
     // ------------------------------------------------------------------
@@ -1504,12 +1523,12 @@ mod tests {
     #[test]
     fn partition_ram_for_returns_none_unconfigured() {
         let ds = DynamicStrategy::<3>::with_partition_count();
-        assert_eq!(ds.partition_ram_for(0), None);
-        assert_eq!(ds.partition_ram_for(1), None);
-        assert_eq!(ds.partition_ram_for(2), None);
+        assert_eq!(ds.partition_ram_for(pid(0)), None);
+        assert_eq!(ds.partition_ram_for(pid(1)), None);
+        assert_eq!(ds.partition_ram_for(pid(2)), None);
         // Out-of-range returns None.
-        assert_eq!(ds.partition_ram_for(3), None);
-        assert_eq!(ds.partition_ram_for(255), None);
+        assert_eq!(ds.partition_ram_for(pid(3)), None);
+        assert_eq!(ds.partition_ram_for(pid(255)), None);
     }
 
     #[test]
@@ -1518,17 +1537,17 @@ mod tests {
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 4);
         let (rb1, rs1) = data_region(0x2000_4000, 4096, 6);
 
-        ds.configure_partition(0, &[(rb0, rs0)], 0).unwrap();
-        ds.configure_partition(1, &[(rb1, rs1)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 0).unwrap();
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 2).unwrap();
 
-        let ram0 = ds.partition_ram_for(0).expect("p0 configured");
+        let ram0 = ds.partition_ram_for(pid(0)).expect("p0 configured");
         assert_eq!(ram0, (rb0, rs0));
 
-        let ram1 = ds.partition_ram_for(1).expect("p1 configured");
+        let ram1 = ds.partition_ram_for(pid(1)).expect("p1 configured");
         assert_eq!(ram1, (rb1, rs1));
 
         // p2 still unconfigured.
-        assert_eq!(ds.partition_ram_for(2), None);
+        assert_eq!(ds.partition_ram_for(pid(2)), None);
     }
 
     // ------------------------------------------------------------------
@@ -1538,26 +1557,32 @@ mod tests {
     #[test]
     fn dynamic_add_window_rejects_size_too_small() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0, 16, 0, 1), Err(MpuError::SizeTooSmall));
+        assert_eq!(ds.add_window(0, 16, 0, pid(1)), Err(MpuError::SizeTooSmall));
     }
 
     #[test]
     fn dynamic_add_window_rejects_non_power_of_two() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0, 48, 0, 1), Err(MpuError::SizeNotPowerOfTwo));
+        assert_eq!(
+            ds.add_window(0, 48, 0, pid(1)),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
     }
 
     #[test]
     fn dynamic_add_window_rejects_misaligned_base() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(64, 256, 0, 1), Err(MpuError::BaseNotAligned));
+        assert_eq!(
+            ds.add_window(64, 256, 0, pid(1)),
+            Err(MpuError::BaseNotAligned)
+        );
     }
 
     #[test]
     fn dynamic_add_window_rejects_overflow() {
         let ds = DynamicStrategy::new();
         assert_eq!(
-            ds.add_window(0xFFFF_FF00, 256, 0, 1),
+            ds.add_window(0xFFFF_FF00, 256, 0, pid(1)),
             Err(MpuError::AddressOverflow)
         );
     }
@@ -1566,27 +1591,33 @@ mod tests {
     fn dynamic_add_window_validation_before_slot_check() {
         let ds = DynamicStrategy::new();
         // Fill all dynamic slots with valid windows.
-        ds.add_window(0x2001_0000, 256, 0, 1).unwrap(); // R5
-        ds.add_window(0x2002_0000, 256, 0, 1).unwrap(); // R6
-        ds.add_window(0x2003_0000, 256, 0, 1).unwrap(); // R7
+        ds.add_window(0x2001_0000, 256, 0, pid(1)).unwrap(); // R5
+        ds.add_window(0x2002_0000, 256, 0, pid(1)).unwrap(); // R6
+        ds.add_window(0x2003_0000, 256, 0, pid(1)).unwrap(); // R7
 
         // Even with all slots full, invalid params yield validation
         // errors, not SlotExhausted.
-        assert_eq!(ds.add_window(0, 16, 0, 1), Err(MpuError::SizeTooSmall));
-        assert_eq!(ds.add_window(0, 48, 0, 1), Err(MpuError::SizeNotPowerOfTwo));
-        assert_eq!(ds.add_window(64, 256, 0, 1), Err(MpuError::BaseNotAligned));
+        assert_eq!(ds.add_window(0, 16, 0, pid(1)), Err(MpuError::SizeTooSmall));
+        assert_eq!(
+            ds.add_window(0, 48, 0, pid(1)),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
+        assert_eq!(
+            ds.add_window(64, 256, 0, pid(1)),
+            Err(MpuError::BaseNotAligned)
+        );
     }
 
     #[test]
     fn dynamic_add_window_valid_params_still_succeed() {
         let ds = DynamicStrategy::new();
         // Valid aligned pair should succeed and return region ID.
-        assert_eq!(ds.add_window(0x2001_0000, 256, 0xAA, 1), Ok(5));
+        assert_eq!(ds.add_window(0x2001_0000, 256, 0xAA, pid(1)), Ok(5));
         let d = ds.slot(5).unwrap();
         assert_eq!(d.base, 0x2001_0000);
         assert_eq!(d.size, 256);
         assert_eq!(d.permissions, 0xAA);
-        assert_eq!(d.owner, 1);
+        assert_eq!(d.owner, pid(1));
     }
 
     // ------------------------------------------------------------------
@@ -1596,26 +1627,29 @@ mod tests {
     #[test]
     fn add_window_size_zero_returns_size_too_small() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0, 0, 0, 0), Err(MpuError::SizeTooSmall));
+        assert_eq!(ds.add_window(0, 0, 0, pid(0)), Err(MpuError::SizeTooSmall));
     }
 
     #[test]
     fn add_window_size_16_returns_size_too_small() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0, 16, 0, 0), Err(MpuError::SizeTooSmall));
+        assert_eq!(ds.add_window(0, 16, 0, pid(0)), Err(MpuError::SizeTooSmall));
     }
 
     #[test]
     fn add_window_size_48_returns_not_power_of_two() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0, 48, 0, 0), Err(MpuError::SizeNotPowerOfTwo));
+        assert_eq!(
+            ds.add_window(0, 48, 0, pid(0)),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
     }
 
     #[test]
     fn add_window_size_100_returns_not_power_of_two() {
         let ds = DynamicStrategy::new();
         assert_eq!(
-            ds.add_window(0, 100, 0, 0),
+            ds.add_window(0, 100, 0, pid(0)),
             Err(MpuError::SizeNotPowerOfTwo)
         );
     }
@@ -1625,7 +1659,7 @@ mod tests {
         let ds = DynamicStrategy::new();
         // 0x2000_0001 is 1 byte past a 256-byte boundary.
         assert_eq!(
-            ds.add_window(0x2000_0001, 256, 0, 1),
+            ds.add_window(0x2000_0001, 256, 0, pid(1)),
             Err(MpuError::BaseNotAligned)
         );
     }
@@ -1635,7 +1669,7 @@ mod tests {
         let ds = DynamicStrategy::new();
         // 0x2000_0080 is 128-aligned but not 256-aligned.
         assert_eq!(
-            ds.add_window(0x2000_0080, 256, 0, 1),
+            ds.add_window(0x2000_0080, 256, 0, pid(1)),
             Err(MpuError::BaseNotAligned)
         );
     }
@@ -1645,7 +1679,7 @@ mod tests {
         let ds = DynamicStrategy::new();
         // base near u32::MAX with small valid size overflows.
         assert_eq!(
-            ds.add_window(0xFFFF_FFE0, 32, 0, 0),
+            ds.add_window(0xFFFF_FFE0, 32, 0, pid(0)),
             Err(MpuError::AddressOverflow)
         );
     }
@@ -1655,7 +1689,7 @@ mod tests {
         let ds = DynamicStrategy::new();
         // 0xFFFF_FF00 + 256 = 0x1_0000_0000 which overflows u32.
         assert_eq!(
-            ds.add_window(0xFFFF_FF00, 256, 0, 0),
+            ds.add_window(0xFFFF_FF00, 256, 0, pid(0)),
             Err(MpuError::AddressOverflow)
         );
     }
@@ -1663,67 +1697,70 @@ mod tests {
     #[test]
     fn add_window_size_32_succeeds() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0x2000_0000, 32, 0, 0), Ok(5));
+        assert_eq!(ds.add_window(0x2000_0000, 32, 0, pid(0)), Ok(5));
     }
 
     #[test]
     fn add_window_size_64_succeeds() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0x2000_0040, 64, 0, 0), Ok(5));
+        assert_eq!(ds.add_window(0x2000_0040, 64, 0, pid(0)), Ok(5));
     }
 
     #[test]
     fn add_window_size_4096_succeeds() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0x2001_0000, 4096, 0, 0), Ok(5));
+        assert_eq!(ds.add_window(0x2001_0000, 4096, 0, pid(0)), Ok(5));
     }
 
     #[test]
     fn add_window_base_zero_size_32_succeeds() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0, 32, 0, 0), Ok(5));
+        assert_eq!(ds.add_window(0, 32, 0, pid(0)), Ok(5));
     }
 
     #[test]
     fn add_window_base_zero_size_64_succeeds() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0, 64, 0, 0), Ok(5));
+        assert_eq!(ds.add_window(0, 64, 0, pid(0)), Ok(5));
     }
 
     #[test]
     fn add_window_base_zero_size_4096_succeeds() {
         let ds = DynamicStrategy::new();
-        assert_eq!(ds.add_window(0, 4096, 0, 0), Ok(5));
+        assert_eq!(ds.add_window(0, 4096, 0, pid(0)), Ok(5));
     }
 
     #[test]
     fn add_window_validation_precedes_slot_exhaustion_all_variants() {
         let ds = DynamicStrategy::new();
         // Fill all 3 dynamic slots.
-        ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
-        ds.add_window(0x2002_0000, 256, 0, 1).unwrap();
-        ds.add_window(0x2003_0000, 256, 0, 1).unwrap();
+        ds.add_window(0x2001_0000, 256, 0, pid(1)).unwrap();
+        ds.add_window(0x2002_0000, 256, 0, pid(1)).unwrap();
+        ds.add_window(0x2003_0000, 256, 0, pid(1)).unwrap();
 
         // Every validation error is returned instead of SlotExhausted.
-        assert_eq!(ds.add_window(0, 0, 0, 0), Err(MpuError::SizeTooSmall));
-        assert_eq!(ds.add_window(0, 16, 0, 0), Err(MpuError::SizeTooSmall));
-        assert_eq!(ds.add_window(0, 48, 0, 0), Err(MpuError::SizeNotPowerOfTwo));
+        assert_eq!(ds.add_window(0, 0, 0, pid(0)), Err(MpuError::SizeTooSmall));
+        assert_eq!(ds.add_window(0, 16, 0, pid(0)), Err(MpuError::SizeTooSmall));
         assert_eq!(
-            ds.add_window(0, 100, 0, 0),
+            ds.add_window(0, 48, 0, pid(0)),
             Err(MpuError::SizeNotPowerOfTwo)
         );
         assert_eq!(
-            ds.add_window(0x2000_0001, 256, 0, 0),
+            ds.add_window(0, 100, 0, pid(0)),
+            Err(MpuError::SizeNotPowerOfTwo)
+        );
+        assert_eq!(
+            ds.add_window(0x2000_0001, 256, 0, pid(0)),
             Err(MpuError::BaseNotAligned)
         );
         assert_eq!(
-            ds.add_window(0xFFFF_FF00, 256, 0, 0),
+            ds.add_window(0xFFFF_FF00, 256, 0, pid(0)),
             Err(MpuError::AddressOverflow)
         );
 
         // But a valid request on full slots gives SlotExhausted.
         assert_eq!(
-            ds.add_window(0x2004_0000, 256, 0, 1),
+            ds.add_window(0x2004_0000, 256, 0, pid(1)),
             Err(MpuError::SlotExhausted)
         );
     }
@@ -1736,16 +1773,16 @@ mod tests {
         let ds = DynamicStrategy::<3>::with_partition_count();
 
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 2).unwrap();
 
         let (rb1, rs1) = data_region(0x2001_0000, 4096, 4);
-        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 0).unwrap();
 
         // owner=1 has reserved=0, so first_window=1 → slot 1 → region 5.
-        assert_eq!(ds.add_window(0x2002_0000, 256, 0, 1), Ok(5));
+        assert_eq!(ds.add_window(0x2002_0000, 256, 0, pid(1)), Ok(5));
 
         // owner=0 has reserved=2, so first_window=3 → slot 3 → region 7.
-        assert_eq!(ds.add_window(0x2003_0000, 256, 0, 0), Ok(7));
+        assert_eq!(ds.add_window(0x2003_0000, 256, 0, pid(0)), Ok(7));
     }
 
     // ------------------------------------------------------------------
@@ -1756,11 +1793,11 @@ mod tests {
     fn accessible_regions_multiple_slots_same_owner() {
         let ds = DynamicStrategy::new();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(1, &[(rbar, rasr)], 0).unwrap();
-        ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
-        ds.add_window(0x2002_0000, 512, 0, 1).unwrap();
+        ds.configure_partition(pid(1), &[(rbar, rasr)], 0).unwrap();
+        ds.add_window(0x2001_0000, 256, 0, pid(1)).unwrap();
+        ds.add_window(0x2002_0000, 512, 0, pid(1)).unwrap();
 
-        let result = ds.accessible_regions(1);
+        let result = ds.accessible_regions(pid(1));
         assert_eq!(result.len(), 3);
         assert!(result.contains(&(0x2000_0000, 4096)));
         assert!(result.contains(&(0x2001_0000, 256)));
@@ -1771,31 +1808,31 @@ mod tests {
     fn accessible_regions_mixed_owners() {
         let ds = DynamicStrategy::new();
         let (rbar, rasr) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rbar, rasr)], 0).unwrap();
-        ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
-        ds.add_window(0x2002_0000, 512, 0, 0).unwrap();
-        ds.add_window(0x2003_0000, 1024, 0, 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar, rasr)], 0).unwrap();
+        ds.add_window(0x2001_0000, 256, 0, pid(1)).unwrap();
+        ds.add_window(0x2002_0000, 512, 0, pid(0)).unwrap();
+        ds.add_window(0x2003_0000, 1024, 0, pid(2)).unwrap();
 
-        let p0 = ds.accessible_regions(0);
+        let p0 = ds.accessible_regions(pid(0));
         assert_eq!(p0.len(), 2);
         assert!(p0.contains(&(0x2000_0000, 4096)));
         assert!(p0.contains(&(0x2002_0000, 512)));
 
-        assert_eq!(ds.accessible_regions(1).len(), 1);
-        assert_eq!(ds.accessible_regions(2).len(), 1);
+        assert_eq!(ds.accessible_regions(pid(1)).len(), 1);
+        assert_eq!(ds.accessible_regions(pid(2)).len(), 1);
     }
 
     #[test]
     fn accessible_regions_no_owners_returns_empty() {
         let ds = DynamicStrategy::new();
         // Empty strategy returns empty for any partition.
-        assert!(ds.accessible_regions(0).is_empty());
-        assert!(ds.accessible_regions(255).is_empty());
+        assert!(ds.accessible_regions(pid(0)).is_empty());
+        assert!(ds.accessible_regions(pid(255)).is_empty());
 
         // With windows present but different owner.
-        ds.add_window(0x2001_0000, 256, 0, 1).unwrap();
-        assert!(ds.accessible_regions(0).is_empty());
-        assert!(ds.accessible_regions(2).is_empty());
+        ds.add_window(0x2001_0000, 256, 0, pid(1)).unwrap();
+        assert!(ds.accessible_regions(pid(0)).is_empty());
+        assert!(ds.accessible_regions(pid(2)).is_empty());
     }
 
     fn periph(base: u32, size: u32) -> MpuRegion {
@@ -1821,12 +1858,13 @@ mod tests {
 
         // ---- Phase 1: peripheral partition (reserved=2) active ----
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_r6, rasr_r6)], 2)
+            .unwrap();
         let pcb =
             make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
         assert_eq!(ds.wire_boot_peripherals(&[pcb]), 1);
 
-        let v1 = ds.partition_region_values(0);
+        let v1 = ds.partition_region_values(pid(0));
         assert_eq!(
             v1[0].0,
             build_rbar(0x4000_0000, 4).unwrap(),
@@ -1846,9 +1884,10 @@ mod tests {
         // No inject_slot calls — we verify configure_partition's actual
         // transition logic displaces the old peripheral descriptor.
         let (rbar_r4, rasr_r4) = data_region(0x2000_8000, 4096, 4);
-        ds.configure_partition(1, &[(rbar_r4, rasr_r4)], 0).unwrap();
+        ds.configure_partition(pid(1), &[(rbar_r4, rasr_r4)], 0)
+            .unwrap();
 
-        let v2 = ds.partition_region_values(1);
+        let v2 = ds.partition_region_values(pid(1));
         assert_eq!(
             v2[0].0,
             build_rbar(0x2000_8000, 4).unwrap(),
@@ -1867,9 +1906,10 @@ mod tests {
         // placing RAM back in slot[2] (R6).  The peripheral cache from
         // phase 1 persists, so partition 0's view still shows R4 as the
         // cached peripheral (not empty).
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_r6, rasr_r6)], 2)
+            .unwrap();
 
-        let v3_pre = ds.partition_region_values(0);
+        let v3_pre = ds.partition_region_values(pid(0));
         assert_ne!(
             v3_pre[0].1, 0,
             "R4 shows cached peripheral from phase 1 wiring"
@@ -1887,7 +1927,7 @@ mod tests {
             make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]);
         assert_eq!(ds.wire_boot_peripherals(&[pcb2]), 1);
 
-        let v3 = ds.partition_region_values(0);
+        let v3 = ds.partition_region_values(pid(0));
         assert_eq!(
             v3[0].0,
             build_rbar(0x4000_0000, 4).unwrap(),
@@ -1904,7 +1944,7 @@ mod tests {
     fn wire_boot_peripherals_correctness() {
         let ds = DynamicStrategy::new();
         let (rb, rs) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rb, rs)], 0).unwrap();
+        ds.configure_partition(pid(0), &[(rb, rs)], 0).unwrap();
         let pcbs = [
             make_pcb(0x0, 0x2000_0000, 4096).with_peripheral_regions(&[periph(0x4000_0000, 4096)]),
             make_pcb(0x0, 0x2000_8000, 4096).with_peripheral_regions(&[periph(0x4001_0000, 256)]),
@@ -1967,19 +2007,19 @@ mod tests {
         //         partition_region_values returns non-zero RASR for them ---
         let ds = DynamicStrategy::new();
         let (rbar_r6_0, rasr_r6_0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6_0, rasr_r6_0)], 2)
+        ds.configure_partition(pid(0), &[(rbar_r6_0, rasr_r6_0)], 2)
             .unwrap();
         let (rbar_r6_1, rasr_r6_1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rbar_r6_1, rasr_r6_1)], 2)
+        ds.configure_partition(pid(1), &[(rbar_r6_1, rasr_r6_1)], 2)
             .unwrap();
         let wired = ds.wire_boot_peripherals(&[pcb0.clone(), pcb1.clone()]);
         assert_eq!(wired, 2, "both peripherals must be wired");
         // Partition 0's view: R4 = UART0, R5 disabled.
-        let vals_p0 = ds.partition_region_values(0);
+        let vals_p0 = ds.partition_region_values(pid(0));
         assert_ne!(vals_p0[0].1, 0, "R4 RASR must be non-zero (UART0)");
         assert_eq!(vals_p0[1].1, 0, "R5 RASR disabled (no second peripheral)");
         // Partition 1's view: R4 = GPIO, R5 disabled.
-        let vals_p1 = ds.partition_region_values(1);
+        let vals_p1 = ds.partition_region_values(pid(1));
         assert_ne!(vals_p1[0].1, 0, "R4 RASR must be non-zero (GPIO)");
         assert_eq!(vals_p1[1].1, 0, "R5 RASR disabled (no second peripheral)");
 
@@ -2047,19 +2087,19 @@ mod tests {
                 base: 0x4000_0000,
                 size: 4096,
                 permissions: 0xAB,
-                owner: 0,
+                owner: pid(0),
                 rbar: 0,
             }),
             Some(WindowDescriptor {
                 base: 0x4001_0000,
                 size: 256,
                 permissions: 0xCD,
-                owner: 0,
+                owner: pid(0),
                 rbar: 0,
             }),
         ];
-        ds.cache_peripherals(0, descs);
-        let got = ds.cached_peripheral_regions(0);
+        ds.cache_peripherals(pid(0), descs);
+        let got = ds.cached_peripheral_regions(pid(0));
         assert_eq!(got[0], (build_rbar(0x4000_0000, 4).unwrap(), 0xAB));
         assert_eq!(got[1], (build_rbar(0x4001_0000, 5).unwrap(), 0xCD));
     }
@@ -2070,10 +2110,10 @@ mod tests {
         let disabled_r4 = disabled_pair(DYNAMIC_REGION_BASE);
         let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
         let disabled = [disabled_r4, disabled_r5];
-        assert_eq!(ds.cached_peripheral_regions(0), disabled);
-        assert_eq!(ds.cached_peripheral_regions(3), disabled);
+        assert_eq!(ds.cached_peripheral_regions(pid(0)), disabled);
+        assert_eq!(ds.cached_peripheral_regions(pid(3)), disabled);
         // Out-of-range partition IDs also return disabled pairs.
-        assert_eq!(ds.cached_peripheral_regions(255), disabled);
+        assert_eq!(ds.cached_peripheral_regions(pid(255)), disabled);
     }
 
     #[test]
@@ -2084,13 +2124,13 @@ mod tests {
                 base: 0x4000_0000,
                 size: 4096,
                 permissions: 0x11,
-                owner: 1,
+                owner: pid(1),
                 rbar: 0,
             }),
             None,
         ];
-        ds.cache_peripherals(1, first);
-        let got1 = ds.cached_peripheral_regions(1);
+        ds.cache_peripherals(pid(1), first);
+        let got1 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(got1[0], (build_rbar(0x4000_0000, 4).unwrap(), 0x11));
         assert_eq!(got1[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
 
@@ -2099,19 +2139,19 @@ mod tests {
                 base: 0x4002_0000,
                 size: 512,
                 permissions: 0x22,
-                owner: 1,
+                owner: pid(1),
                 rbar: 0,
             }),
             Some(WindowDescriptor {
                 base: 0x4003_0000,
                 size: 1024,
                 permissions: 0x33,
-                owner: 1,
+                owner: pid(1),
                 rbar: 0,
             }),
         ];
-        ds.cache_peripherals(1, second);
-        let got2 = ds.cached_peripheral_regions(1);
+        ds.cache_peripherals(pid(1), second);
+        let got2 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(got2[0], (build_rbar(0x4002_0000, 4).unwrap(), 0x22));
         assert_eq!(got2[1], (build_rbar(0x4003_0000, 5).unwrap(), 0x33));
     }
@@ -2124,9 +2164,11 @@ mod tests {
     fn wire_boot_peripherals_populates_cache() {
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_r6, rasr_r6)], 2)
+            .unwrap();
         let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
+        ds.configure_partition(pid(1), &[(rbar_p1, rasr_p1)], 2)
+            .unwrap();
         // Two partitions with distinct IDs and one peripheral each.
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -2160,7 +2202,7 @@ mod tests {
             (true, false, true),
         );
 
-        let cached0 = ds.cached_peripheral_regions(0);
+        let cached0 = ds.cached_peripheral_regions(pid(0));
         assert_eq!(
             cached0[0],
             (build_rbar(0x4000_0000, 4).unwrap(), rasr_4k),
@@ -2172,7 +2214,7 @@ mod tests {
             "partition 0 R5 must be disabled"
         );
 
-        let cached1 = ds.cached_peripheral_regions(1);
+        let cached1 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(
             cached1[0],
             (build_rbar(0x4001_0000, 4).unwrap(), rasr_256),
@@ -2190,7 +2232,7 @@ mod tests {
         let ds = DynamicStrategy::new();
         let pcb = make_pcb(0x0, 0x2000_0000, 4096); // no peripheral regions
         ds.wire_boot_peripherals(&[pcb]);
-        let cached = ds.cached_peripheral_regions(0);
+        let cached = ds.cached_peripheral_regions(pid(0));
         assert_eq!(cached[0], disabled_pair(DYNAMIC_REGION_BASE));
         assert_eq!(cached[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
     }
@@ -2199,9 +2241,11 @@ mod tests {
     fn wire_boot_peripherals_shared_peripheral_cached_for_both() {
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_r6, rasr_r6)], 2)
+            .unwrap();
         let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
+        ds.configure_partition(pid(1), &[(rbar_p1, rasr_p1)], 2)
+            .unwrap();
         // Both partitions share the same peripheral at 0x4000_0000.
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -2232,14 +2276,14 @@ mod tests {
         let expected_r4 = (build_rbar(0x4000_0000, 4).unwrap(), rasr);
         let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
 
-        let cached0 = ds.cached_peripheral_regions(0);
+        let cached0 = ds.cached_peripheral_regions(pid(0));
         assert_eq!(
             cached0[0], expected_r4,
             "partition 0 R4 must hold shared peripheral"
         );
         assert_eq!(cached0[1], disabled_r5, "partition 0 R5 must be disabled");
 
-        let cached1 = ds.cached_peripheral_regions(1);
+        let cached1 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(
             cached1[0], expected_r4,
             "partition 1 R4 must hold shared peripheral"
@@ -2254,9 +2298,11 @@ mod tests {
         // two partitions each with one valid peripheral region.
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_r6, rasr_r6)], 2)
+            .unwrap();
         let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
+        ds.configure_partition(pid(1), &[(rbar_p1, rasr_p1)], 2)
+            .unwrap();
         let pcb0 = PartitionControlBlock::new(
             0,
             0x0,
@@ -2279,7 +2325,7 @@ mod tests {
         assert_eq!(wired, 2);
 
         // Verify cached (RBAR, RASR) pairs encode correct base addresses.
-        let cached0 = ds.cached_peripheral_regions(0);
+        let cached0 = ds.cached_peripheral_regions(pid(0));
         assert_eq!(
             cached0[0].0,
             build_rbar(0x4000_0000, 4).unwrap(),
@@ -2287,7 +2333,7 @@ mod tests {
         );
         assert_ne!(cached0[0].1, 0, "partition 0 R4 must be enabled");
 
-        let cached1 = ds.cached_peripheral_regions(1);
+        let cached1 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(
             cached1[0].0,
             build_rbar(0x4001_0000, 4).unwrap(),
@@ -2301,7 +2347,8 @@ mod tests {
     fn debug_verify_cache_consistency_detects_rbar_mismatch() {
         let ds = DynamicStrategy::<2>::with_partition_count();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_r6, rasr_r6)], 2)
+            .unwrap();
         let pcb = PartitionControlBlock::new(
             0,
             0x0,
@@ -2318,15 +2365,15 @@ mod tests {
         // overwrite with an RBAR encoding a different base address.
         // TODO(panic-free): unwrap acceptable in test-only code
         let bad_rbar = build_rbar(0x4001_0000, DYNAMIC_REGION_BASE as u32).unwrap();
-        let good_rasr = ds.cached_peripheral_regions(0)[0].1;
+        let good_rasr = ds.cached_peripheral_regions(pid(0))[0].1;
         ds.cache_peripherals(
-            0,
+            pid(0),
             [
                 Some(WindowDescriptor {
                     base: 0x4001_0000,
                     size: 4096,
                     permissions: good_rasr,
-                    owner: 0,
+                    owner: pid(0),
                     rbar: bad_rbar,
                 }),
                 None,
@@ -2354,22 +2401,22 @@ mod tests {
         let sf = encode_size(4096).unwrap();
         let rasr = build_rasr(sf, AP_FULL_ACCESS, true, (true, true, false));
         let rbar = build_rbar(0x2000_0000, 6).unwrap();
-        ds.configure_partition(0, &[(rbar, rasr)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar, rasr)], 2).unwrap();
 
         // Wire normally so the cache is populated with correct values.
         ds.wire_boot_peripherals(std::slice::from_ref(&pcb));
 
         // Corrupt the cached RASR to zero for partition 0, descriptor 0.
         // Keep the correct base so the RBAR check passes first.
-        let good_rbar = ds.cached_peripheral_regions(0)[0].0;
+        let good_rbar = ds.cached_peripheral_regions(pid(0))[0].0;
         ds.cache_peripherals(
-            0,
+            pid(0),
             [
                 Some(WindowDescriptor {
                     base: 0x4000_0000,
                     size: 4096,
                     permissions: 0, // RASR = 0: should trigger the assertion
-                    owner: 0,
+                    owner: pid(0),
                     rbar: good_rbar,
                 }),
                 None,
@@ -2395,7 +2442,7 @@ mod tests {
     }
 
     /// Helper: build a peripheral WindowDescriptor.
-    fn periph_desc(base: u32, size: u32, owner: u8) -> WindowDescriptor {
+    fn periph_desc(base: u32, size: u32, owner: PartitionId) -> WindowDescriptor {
         WindowDescriptor {
             base,
             size,
@@ -2408,8 +2455,8 @@ mod tests {
     #[test]
     fn cached_peripheral_regions_one_cached() {
         let ds = DynamicStrategy::new();
-        ds.cache_peripherals(0, [Some(periph_desc(0x4000_0000, 4096, 0)), None]);
-        let r = ds.cached_peripheral_regions(0);
+        ds.cache_peripherals(pid(0), [Some(periph_desc(0x4000_0000, 4096, pid(0))), None]);
+        let r = ds.cached_peripheral_regions(pid(0));
         assert_eq!(
             r[0],
             (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096))
@@ -2421,13 +2468,13 @@ mod tests {
     fn cached_peripheral_regions_two_peripherals_both_enabled() {
         let ds = DynamicStrategy::new();
         ds.cache_peripherals(
-            2,
+            pid(2),
             [
-                Some(periph_desc(0x4000_0000, 4096, 2)),
-                Some(periph_desc(0x4001_0000, 256, 2)),
+                Some(periph_desc(0x4000_0000, 4096, pid(2))),
+                Some(periph_desc(0x4001_0000, 256, pid(2))),
             ],
         );
-        let r = ds.cached_peripheral_regions(2);
+        let r = ds.cached_peripheral_regions(pid(2));
         assert_eq!(
             r[0],
             (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096))
@@ -2447,8 +2494,8 @@ mod tests {
             disabled_pair(DYNAMIC_REGION_BASE),
             disabled_pair(DYNAMIC_REGION_BASE + 1),
         ];
-        assert_eq!(ds.cached_peripheral_regions(0), disabled);
-        assert_eq!(ds.cached_peripheral_regions(255), disabled);
+        assert_eq!(ds.cached_peripheral_regions(pid(0)), disabled);
+        assert_eq!(ds.cached_peripheral_regions(pid(255)), disabled);
     }
 
     /// Verify that the dynamic-mode cache path (`cached_peripheral_regions`)
@@ -2494,17 +2541,20 @@ mod tests {
         // Reserve 2 peripheral slots (R4-R5) so configure_partition
         // places RAM in R6.
         let (rbar_p0, rasr_p0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_p0, rasr_p0)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_p0, rasr_p0)], 2)
+            .unwrap();
         let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
+        ds.configure_partition(pid(1), &[(rbar_p1, rasr_p1)], 2)
+            .unwrap();
         let (rbar_p2, rasr_p2) = data_region(0x2001_0000, 4096, 6);
-        ds.configure_partition(2, &[(rbar_p2, rasr_p2)], 2).unwrap();
+        ds.configure_partition(pid(2), &[(rbar_p2, rasr_p2)], 2)
+            .unwrap();
 
         let wired = ds.wire_boot_peripherals(&[pcb0.clone(), pcb1.clone(), pcb_none.clone()]);
         assert_eq!(wired, 2, "both peripherals must be wired");
 
         // --- Partition 0: one peripheral ---
-        let cached_p0 = ds.cached_peripheral_regions(0);
+        let cached_p0 = ds.cached_peripheral_regions(pid(0));
         let static_p0 = peripheral_mpu_regions_or_disabled(&pcb0);
         for i in 0..2 {
             assert_eq!(
@@ -2516,7 +2566,7 @@ mod tests {
         }
 
         // --- Partition 1: one peripheral ---
-        let cached_p1 = ds.cached_peripheral_regions(1);
+        let cached_p1 = ds.cached_peripheral_regions(pid(1));
         let static_p1 = peripheral_mpu_regions_or_disabled(&pcb1);
         for i in 0..2 {
             assert_eq!(
@@ -2528,7 +2578,7 @@ mod tests {
         }
 
         // --- Partition 2: no peripherals — both paths must yield disabled ---
-        let cached_none = ds.cached_peripheral_regions(2);
+        let cached_none = ds.cached_peripheral_regions(pid(2));
         let static_none = peripheral_mpu_regions_or_disabled(&pcb_none);
         for i in 0..2 {
             assert_eq!(
@@ -2555,9 +2605,9 @@ mod tests {
                 .with_peripheral_regions(&[periph(base, sz)])
         };
         // peripheral_reserved=2 so wiring goes through reserved slots.
-        ds.configure_partition(0, &[data_region(0x2000_0000, 4096, 6)], 2)
+        ds.configure_partition(pid(0), &[data_region(0x2000_0000, 4096, 6)], 2)
             .unwrap();
-        ds.configure_partition(1, &[data_region(0x2000_8000, 4096, 6)], 2)
+        ds.configure_partition(pid(1), &[data_region(0x2000_8000, 4096, 6)], 2)
             .unwrap();
         assert_eq!(
             ds.wire_boot_peripherals(&[p(0, 0x2000_0000), p(1, 0x2000_8000)]),
@@ -2572,8 +2622,8 @@ mod tests {
                 .permissions
         });
         assert_eq!(slot_rasr, expected, "slot RASR mismatch");
-        let c0 = ds.cached_peripheral_regions(0);
-        let c1 = ds.cached_peripheral_regions(1);
+        let c0 = ds.cached_peripheral_regions(pid(0));
+        let c1 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(c0[0].1, expected, "partition 0 cached RASR mismatch");
         assert_eq!(c1[0].1, expected, "partition 1 cached RASR mismatch");
         assert_eq!(c0[0], c1[0], "shared peripheral cache must match");
@@ -2604,13 +2654,15 @@ mod tests {
         .with_peripheral_regions(&[MpuRegion::new(base, size, 0xDEAD_BEEF)]);
 
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_r6, rasr_r6)], 2)
+            .unwrap();
         let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
+        ds.configure_partition(pid(1), &[(rbar_p1, rasr_p1)], 2)
+            .unwrap();
         assert_eq!(ds.wire_boot_peripherals(&[pcb0, pcb1]), 1);
 
-        let cached0 = ds.cached_peripheral_regions(0);
-        let cached1 = ds.cached_peripheral_regions(1);
+        let cached0 = ds.cached_peripheral_regions(pid(0));
+        let cached1 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(
             cached0[0].1, cached1[0].1,
             "RASR must match despite different MpuRegion.permissions"
@@ -2635,11 +2687,14 @@ mod tests {
         // is consumed.
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_r6, rasr_r6)], 2)
+            .unwrap();
         let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
+        ds.configure_partition(pid(1), &[(rbar_p1, rasr_p1)], 2)
+            .unwrap();
         let (rbar_p2, rasr_p2) = data_region(0x2001_0000, 4096, 6);
-        ds.configure_partition(2, &[(rbar_p2, rasr_p2)], 2).unwrap();
+        ds.configure_partition(pid(2), &[(rbar_p2, rasr_p2)], 2)
+            .unwrap();
 
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -2678,7 +2733,7 @@ mod tests {
         let rasr_256 = periph_rasr(256);
 
         // Partition 0: peripheral cached at R4 (slot 0, discovery order).
-        let cached0 = ds.cached_peripheral_regions(0);
+        let cached0 = ds.cached_peripheral_regions(pid(0));
         assert_eq!(
             cached0[0],
             (build_rbar(0x4000_0000, 4).unwrap(), rasr_4k),
@@ -2686,7 +2741,7 @@ mod tests {
         );
         assert_eq!(cached0[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
 
-        let cached1 = ds.cached_peripheral_regions(1);
+        let cached1 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(
             cached1[0],
             (build_rbar(0x4001_0000, 4).unwrap(), rasr_256),
@@ -2694,7 +2749,7 @@ mod tests {
         );
         assert_eq!(cached1[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
 
-        let cached2 = ds.cached_peripheral_regions(2);
+        let cached2 = ds.cached_peripheral_regions(pid(2));
         assert_eq!(
             cached2[0],
             (build_rbar(0x4002_0000, 4).unwrap(), rasr_4k),
@@ -2704,7 +2759,7 @@ mod tests {
 
         // Dynamic window slots are still free.
         assert!(
-            ds.add_window(0x2002_0000, 4096, rasr_4k, 0).is_ok(),
+            ds.add_window(0x2002_0000, 4096, rasr_4k, pid(0)).is_ok(),
             "add_window must succeed — no dynamic slots consumed"
         );
     }
@@ -2716,7 +2771,7 @@ mod tests {
         // because cache[0] targets R4, which holds partition RAM.
         let ds = DynamicStrategy::new();
         let (rb, rs) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rb, rs)], 0).unwrap();
+        ds.configure_partition(pid(0), &[(rb, rs)], 0).unwrap();
 
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -2754,7 +2809,7 @@ mod tests {
         // When reserved=0, R4 holds partition RAM.  Caching peripherals
         // into cache[0] (which targets R4) would clobber RAM on context
         // switch, so the cache must remain disabled for both partitions.
-        let cached0 = ds.cached_peripheral_regions(0);
+        let cached0 = ds.cached_peripheral_regions(pid(0));
         assert_eq!(
             cached0[0],
             disabled_pair(DYNAMIC_REGION_BASE),
@@ -2762,7 +2817,7 @@ mod tests {
         );
         assert_eq!(cached0[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
 
-        let cached1 = ds.cached_peripheral_regions(1);
+        let cached1 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(
             cached1[0],
             disabled_pair(DYNAMIC_REGION_BASE),
@@ -2781,7 +2836,8 @@ mod tests {
         // add_window.  The debug_assert must fire.
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_r6, rasr_r6)], 2)
+            .unwrap();
 
         let pcb = PartitionControlBlock::new(
             0,
@@ -2813,7 +2869,7 @@ mod tests {
         let mut seen: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
         // Branch 1: reserved slot → delta=1, slot populated.
         assert_eq!(
-            ds.try_wire_region(&mut seen, 0, 0, 2, r(0x4000_0000), 0),
+            ds.try_wire_region(&mut seen, 0, 0, 2, r(0x4000_0000), pid(0)),
             Ok(1)
         );
         let s = ds.slot(4).expect("R4 occupied");
@@ -2821,25 +2877,25 @@ mod tests {
         // Reserved slot from a different partition (desc_idx=0 < reserved=2)
         // still wires with delta=1 (shared slot, context-switch restores).
         assert_eq!(
-            ds.try_wire_region(&mut seen, 2, 0, 2, r(0x4001_0000), 1),
+            ds.try_wire_region(&mut seen, 2, 0, 2, r(0x4001_0000), pid(1)),
             Ok(1)
         );
         // Branch 3: add_window fallback → delta=1.
         let ds2 = DynamicStrategy::<4>::new();
         let mut seen2: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
         assert_eq!(
-            ds2.try_wire_region(&mut seen2, 0, 0, 0, r(0x4000_0000), 0),
+            ds2.try_wire_region(&mut seen2, 0, 0, 0, r(0x4000_0000), pid(0)),
             Ok(1)
         );
         // Exhaust remaining slots → SlotExhausted.
         for i in 1u32..3 {
             let b = 0x4000_0000 + i * 0x1_0000;
             assert!(ds2
-                .try_wire_region(&mut seen2, i as usize, 0, 0, r(b), 0)
+                .try_wire_region(&mut seen2, i as usize, 0, 0, r(b), pid(0))
                 .is_ok());
         }
         assert_eq!(
-            ds2.try_wire_region(&mut seen2, 3, 0, 0, r(0x4003_0000), 0),
+            ds2.try_wire_region(&mut seen2, 3, 0, 0, r(0x4003_0000), pid(0)),
             Err(MpuError::SlotExhausted)
         );
     }
@@ -2883,13 +2939,13 @@ mod tests {
             rasr,
             0,
             2,
-            5,
+            pid(5),
         );
         let wd = result.expect("expected Some for desc_idx < reserved with matching seen entry");
         assert_eq!(wd.base, 0x4000_0000);
         assert_eq!(wd.size, 4096);
         assert_eq!(wd.permissions, rasr);
-        assert_eq!(wd.owner, 5);
+        assert_eq!(wd.owner, pid(5));
         assert_eq!(wd.rbar, slot_rbar(0x4000_0000, 1));
     }
 
@@ -2907,7 +2963,7 @@ mod tests {
             rasr,
             2,
             2,
-            0,
+            pid(0),
         );
         assert!(result.is_none(), "expected None when desc_idx >= reserved");
 
@@ -2919,7 +2975,7 @@ mod tests {
             rasr,
             0,
             0,
-            0,
+            pid(0),
         );
         assert!(result.is_none(), "expected None when reserved is 0");
     }
@@ -2932,13 +2988,17 @@ mod tests {
         // no dynamic slots (R6/R7) should be consumed.
         let ds = DynamicStrategy::new();
         let (rbar_r6, rasr_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rbar_r6, rasr_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rbar_r6, rasr_r6)], 2)
+            .unwrap();
         let (rbar_p1, rasr_p1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rbar_p1, rasr_p1)], 2).unwrap();
+        ds.configure_partition(pid(1), &[(rbar_p1, rasr_p1)], 2)
+            .unwrap();
         let (rbar_p2, rasr_p2) = data_region(0x2001_0000, 4096, 6);
-        ds.configure_partition(2, &[(rbar_p2, rasr_p2)], 2).unwrap();
+        ds.configure_partition(pid(2), &[(rbar_p2, rasr_p2)], 2)
+            .unwrap();
         let (rbar_p3, rasr_p3) = data_region(0x2001_8000, 4096, 6);
-        ds.configure_partition(3, &[(rbar_p3, rasr_p3)], 2).unwrap();
+        ds.configure_partition(pid(3), &[(rbar_p3, rasr_p3)], 2)
+            .unwrap();
 
         let shared_periphs = [periph(0x4000_0000, 4096), periph(0x4001_0000, 256)];
 
@@ -2991,15 +3051,15 @@ mod tests {
         let expected_r5 = (build_rbar(0x4001_0000, 5).unwrap(), rasr_256);
 
         // All 4 partition caches must hold the same pairs.
-        for pid in 0..4u8 {
-            let cached = ds.cached_peripheral_regions(pid);
+        for i in 0u32..4 {
+            let cached = ds.cached_peripheral_regions(PartitionId::new(i));
             assert_eq!(
                 cached[0], expected_r4,
-                "partition {pid} cache[0] must hold peripheral at 0x4000_0000"
+                "partition {i} cache[0] must hold peripheral at 0x4000_0000"
             );
             assert_eq!(
                 cached[1], expected_r5,
-                "partition {pid} cache[1] must hold peripheral at 0x4001_0000"
+                "partition {i} cache[1] must hold peripheral at 0x4001_0000"
             );
         }
 
@@ -3029,7 +3089,7 @@ mod tests {
             rasr,
             0,
             2,
-            0,
+            pid(0),
         );
         assert!(result.is_none(), "expected None when seen is empty");
     }
@@ -3045,25 +3105,25 @@ mod tests {
         let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
 
         // Cache a peripheral for each of the 6 partitions.
-        for pid in 0u8..6 {
-            let base = 0x4000_0000 + u32::from(pid) * 0x1_0000;
+        for pid in 0u32..6 {
+            let base = 0x4000_0000 + pid * 0x1_0000;
             let descs = [
                 Some(WindowDescriptor {
                     base,
                     size: 4096,
                     permissions: periph_rasr(4096),
-                    owner: pid,
+                    owner: PartitionId::new(pid),
                     rbar: 0,
                 }),
                 None,
             ];
-            ds.cache_peripherals(pid, descs);
+            ds.cache_peripherals(PartitionId::new(pid), descs);
         }
 
         // Verify each partition's cached entry.
-        for pid in 0u8..6 {
-            let base = 0x4000_0000 + u32::from(pid) * 0x1_0000;
-            let got = ds.cached_peripheral_regions(pid);
+        for pid in 0u32..6 {
+            let base = 0x4000_0000 + pid * 0x1_0000;
+            let got = ds.cached_peripheral_regions(PartitionId::new(pid));
             assert_eq!(
                 got[0],
                 (build_rbar(base, 4).unwrap(), periph_rasr(4096)),
@@ -3073,7 +3133,7 @@ mod tests {
         }
 
         // Specifically check partition_id=5 (highest valid index).
-        let got5 = ds.cached_peripheral_regions(5);
+        let got5 = ds.cached_peripheral_regions(pid(5));
         assert_eq!(
             got5[0],
             (build_rbar(0x4005_0000, 4).unwrap(), periph_rasr(4096)),
@@ -3082,7 +3142,7 @@ mod tests {
         assert_eq!(got5[1], disabled_r5);
 
         // Out-of-range: partition_id=6 must return disabled pairs.
-        let got6 = ds.cached_peripheral_regions(6);
+        let got6 = ds.cached_peripheral_regions(pid(6));
         assert_eq!(
             got6[0], disabled_r4,
             "partition 6 (OOB) R4 must be disabled"
@@ -3099,25 +3159,25 @@ mod tests {
         let rasr_4k = periph_rasr(4096);
 
         // Cache one peripheral per partition for 5 partitions.
-        for pid in 0u8..5 {
-            let base = 0x4000_0000 + u32::from(pid) * 0x1_0000;
+        for pid in 0u32..5 {
+            let base = 0x4000_0000 + pid * 0x1_0000;
             let descs = [
                 Some(WindowDescriptor {
                     base,
                     size: 4096,
                     permissions: rasr_4k,
-                    owner: pid,
+                    owner: PartitionId::new(pid),
                     rbar: 0,
                 }),
                 None,
             ];
-            ds.cache_peripherals(pid, descs);
+            ds.cache_peripherals(PartitionId::new(pid), descs);
         }
 
         // Verify each partition's cached entry is correct.
-        for pid in 0u8..5 {
-            let expected_base = 0x4000_0000 + u32::from(pid) * 0x1_0000;
-            let cached = ds.cached_peripheral_regions(pid);
+        for pid in 0u32..5 {
+            let expected_base = 0x4000_0000 + pid * 0x1_0000;
+            let cached = ds.cached_peripheral_regions(PartitionId::new(pid));
             assert_eq!(
                 cached[0],
                 (build_rbar(expected_base, 4).unwrap(), rasr_4k),
@@ -3131,7 +3191,7 @@ mod tests {
         }
 
         // Out-of-range: partition_id=5 with N=5 must return disabled.
-        let oob = ds.cached_peripheral_regions(5);
+        let oob = ds.cached_peripheral_regions(pid(5));
         assert_eq!(oob[0], disabled_pair(DYNAMIC_REGION_BASE));
         assert_eq!(oob[1], disabled_pair(DYNAMIC_REGION_BASE + 1));
     }
@@ -3174,7 +3234,7 @@ mod tests {
         //     entries are built, but cache_peripherals must still run).
         let disabled_r4 = disabled_pair(DYNAMIC_REGION_BASE);
         let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
-        let cache3 = ds.cached_peripheral_regions(3);
+        let cache3 = ds.cached_peripheral_regions(pid(3));
         assert_eq!(
             cache3[0], disabled_r4,
             "partition 3 cache[0] must be disabled (flushed on early return)"
@@ -3186,7 +3246,7 @@ mod tests {
 
         // (3) Remaining partition (4) was never processed — cache is
         //     initial disabled state (cache_peripherals was never called).
-        let cache4 = ds.cached_peripheral_regions(4);
+        let cache4 = ds.cached_peripheral_regions(pid(4));
         assert_eq!(
             cache4[0], disabled_r4,
             "partition 4 cache[0] must be initial"
@@ -3234,9 +3294,9 @@ mod tests {
         let ds = DynamicStrategy::<2>::with_partition_count();
 
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 2).unwrap();
         let (rb1, rs1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 0).unwrap();
 
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -3271,7 +3331,7 @@ mod tests {
         );
 
         // Partition 0 (reserved=2): peripheral cached in slot 0, slot 1 disabled.
-        let cached0 = ds.cached_peripheral_regions(0);
+        let cached0 = ds.cached_peripheral_regions(pid(0));
         assert_eq!(
             cached0[0],
             (
@@ -3289,7 +3349,7 @@ mod tests {
         // Partition 1 (reserved=0): no cache slots available, both disabled.
         // The peripheral was wired via add_window but is not cached because
         // reserved=0 means build_partition_cache_entry returns None.
-        let cached1 = ds.cached_peripheral_regions(1);
+        let cached1 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(
             cached1[0],
             disabled_pair(DYNAMIC_REGION_BASE),
@@ -3320,11 +3380,11 @@ mod tests {
         let ds = DynamicStrategy::<3>::with_partition_count();
 
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 2).unwrap();
         let (rb1, rs1) = data_region(0x2000_8000, 4096, 6);
-        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 0).unwrap();
         let (rb2, rs2) = data_region(0x2001_0000, 4096, 6);
-        ds.configure_partition(2, &[(rb2, rs2)], 2).unwrap();
+        ds.configure_partition(pid(2), &[(rb2, rs2)], 2).unwrap();
 
         let pcb0 = PartitionControlBlock::new(
             0,
@@ -3377,7 +3437,7 @@ mod tests {
         );
 
         // Partition 0 (reserved=2): peripheral cached in slot 0, slot 1 disabled.
-        let cached0 = ds.cached_peripheral_regions(0);
+        let cached0 = ds.cached_peripheral_regions(pid(0));
         assert_eq!(
             cached0[0],
             (
@@ -3393,7 +3453,7 @@ mod tests {
         );
 
         // Partition 1 (reserved=0): all cache slots disabled.
-        let cached1 = ds.cached_peripheral_regions(1);
+        let cached1 = ds.cached_peripheral_regions(pid(1));
         assert_eq!(
             cached1[0],
             disabled_pair(DYNAMIC_REGION_BASE),
@@ -3406,7 +3466,7 @@ mod tests {
         );
 
         // Partition 2 (reserved=2): 1KiB peripheral cached in slot 0, slot 1 disabled.
-        let cached2 = ds.cached_peripheral_regions(2);
+        let cached2 = ds.cached_peripheral_regions(pid(2));
         assert_eq!(
             cached2[0],
             (
@@ -3435,14 +3495,14 @@ mod tests {
         let ds = DynamicStrategy::<2>::with_partition_count();
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 4);
         let (rb1, rs1) = data_region(0x2000_1000, 4096, 4);
-        ds.configure_partition(0, &[(rb0, rs0)], 0).unwrap();
-        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
-        let v0 = ds.partition_region_values(0);
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 0).unwrap();
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 0).unwrap();
+        let v0 = ds.partition_region_values(pid(0));
         assert_eq!(v0[0], (build_rbar(0x2000_0000, 4).unwrap(), rs0));
         assert_eq!(v0[1].1, 0);
         assert_eq!(v0[2].1, 0);
         assert_eq!(v0[3].1, 0);
-        let v1 = ds.partition_region_values(1);
+        let v1 = ds.partition_region_values(pid(1));
         assert_eq!(v1[0], (build_rbar(0x2000_1000, 4).unwrap(), rs1));
     }
 
@@ -3451,14 +3511,14 @@ mod tests {
         let ds = DynamicStrategy::<2>::with_partition_count();
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
         let (rb1, rs1) = data_region(0x2000_1000, 4096, 6);
-        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
-        ds.configure_partition(1, &[(rb1, rs1)], 2).unwrap();
-        let v0 = ds.partition_region_values(0);
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 2).unwrap();
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 2).unwrap();
+        let v0 = ds.partition_region_values(pid(0));
         assert_eq!(v0[0], disabled_pair(4));
         assert_eq!(v0[1], disabled_pair(5));
         assert_eq!(v0[2], (build_rbar(0x2000_0000, 6).unwrap(), rs0));
         assert_eq!(v0[3].1, 0);
-        let v1 = ds.partition_region_values(1);
+        let v1 = ds.partition_region_values(pid(1));
         assert_eq!(v1[2], (build_rbar(0x2000_1000, 6).unwrap(), rs1));
     }
 
@@ -3466,13 +3526,13 @@ mod tests {
     fn partition_region_values_heterogeneous() {
         let ds = DynamicStrategy::<2>::with_partition_count();
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 2).unwrap();
         let (rb1, rs1) = data_region(0x2000_1000, 4096, 4);
-        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
-        let v1 = ds.partition_region_values(1);
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 0).unwrap();
+        let v1 = ds.partition_region_values(pid(1));
         assert_eq!(v1[0], (build_rbar(0x2000_1000, 4).unwrap(), rs1));
         assert_eq!(v1[2], disabled_pair(6), "P0 RAM disabled for P1");
-        let v0 = ds.partition_region_values(0);
+        let v0 = ds.partition_region_values(pid(0));
         assert_eq!(v0[2], (build_rbar(0x2000_0000, 6).unwrap(), rs0));
         assert_eq!(v0[0], disabled_pair(4), "R4 from peripheral cache");
     }
@@ -3481,13 +3541,13 @@ mod tests {
     fn partition_region_values_preserves_dynamic_window() {
         let ds = DynamicStrategy::<2>::with_partition_count();
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 2).unwrap();
         let (rb1, rs1) = data_region(0x2000_1000, 4096, 4);
-        ds.configure_partition(1, &[(rb1, rs1)], 0).unwrap();
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 0).unwrap();
         let sf = encode_size(256).unwrap();
         let win_rasr = build_rasr(sf, AP_RO_RO, true, (false, false, false));
-        ds.add_window(0x2000_2000, 256, win_rasr, 0).unwrap();
-        let v1 = ds.partition_region_values(1);
+        ds.add_window(0x2000_2000, 256, win_rasr, pid(0)).unwrap();
+        let v1 = ds.partition_region_values(pid(1));
         assert_eq!(
             v1[3],
             (build_rbar(0x2000_2000, 7).unwrap(), win_rasr),
@@ -3503,9 +3563,9 @@ mod tests {
         // filter must disable peripheral-reserved slots, not just RAM.
         let ds = DynamicStrategy::<2>::with_partition_count();
         let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb0, rs0)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 2).unwrap();
         let (rb1, _rs1) = data_region(0x2000_8000, 4096, 4);
-        ds.configure_partition(1, &[(rb1, _rs1)], 0).unwrap();
+        ds.configure_partition(pid(1), &[(rb1, _rs1)], 0).unwrap();
 
         // Wire two peripherals for P0 into reserved slots 0 and 1.
         let pcb0 = PartitionControlBlock::new(
@@ -3525,7 +3585,7 @@ mod tests {
         );
         ds.wire_boot_peripherals(&[pcb0, pcb1]);
 
-        let v1 = ds.partition_region_values(1);
+        let v1 = ds.partition_region_values(pid(1));
         // Slot 1 (R5): P0's peripheral — must be disabled for P1.
         // Before the fix, idx(1) == owner_res(2) was false, leaking
         // P0's peripheral RASR to P1. With idx <= owner_res, it is
@@ -3543,7 +3603,7 @@ mod tests {
         // Partition 0 is never configured: peripheral_reserved defaults to 0,
         // partition_ram is None. All RASR values must be 0 (disabled).
         let ds = DynamicStrategy::<2>::with_partition_count();
-        let vals = ds.partition_region_values(0);
+        let vals = ds.partition_region_values(pid(0));
         for (i, &(_rbar, rasr)) in vals.iter().enumerate() {
             assert_eq!(
                 rasr, 0,
@@ -3563,14 +3623,15 @@ mod tests {
 
         // --- Phase 1: reserved=2, RAM lands in slot 2 (R6) ---
         let (rb_r6, rs_r6) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb_r6, rs_r6)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb_r6, rs_r6)], 2)
+            .unwrap();
 
-        assert_eq!(ds.peripheral_reserved_for(0), 2);
+        assert_eq!(ds.peripheral_reserved_for(pid(0)), 2);
         let s2 = ds.slot(6).expect("RAM in R6 after reserved=2");
-        assert_eq!(s2.owner, 0);
+        assert_eq!(s2.owner, pid(0));
         assert_eq!(s2.base, 0x2000_0000);
 
-        let v = ds.partition_region_values(0);
+        let v = ds.partition_region_values(pid(0));
         // Slots 0-1 (R4-R5): peripheral cache (unconfigured → disabled).
         assert_eq!(v[0], disabled_pair(4), "R4 disabled (no peripheral)");
         assert_eq!(v[1], disabled_pair(5), "R5 disabled (no peripheral)");
@@ -3581,17 +3642,18 @@ mod tests {
 
         // --- Phase 2: reconfigure to reserved=0, RAM moves to slot 0 (R4) ---
         let (rb_r4, rs_r4) = data_region(0x2000_0000, 4096, 4);
-        ds.configure_partition(0, &[(rb_r4, rs_r4)], 0).unwrap();
+        ds.configure_partition(pid(0), &[(rb_r4, rs_r4)], 0)
+            .unwrap();
 
-        assert_eq!(ds.peripheral_reserved_for(0), 0);
+        assert_eq!(ds.peripheral_reserved_for(pid(0)), 0);
         // Old slot 2 (R6) must have been cleared by the owner check.
         assert!(ds.slot(6).is_none(), "stale R6 cleared after 2→0");
         // New slot 0 (R4) holds the RAM.
         let s0 = ds.slot(4).expect("RAM in R4 after reserved=0");
-        assert_eq!(s0.owner, 0);
+        assert_eq!(s0.owner, pid(0));
         assert_eq!(s0.base, 0x2000_0000);
 
-        let v = ds.partition_region_values(0);
+        let v = ds.partition_region_values(pid(0));
         // Slot 0 (R4): partition RAM.
         assert_ne!(v[0].1, 0, "R4 RASR enabled for RAM");
         // Slots 1-3 (R5-R7): all disabled.
@@ -3601,17 +3663,18 @@ mod tests {
 
         // --- Phase 3: reconfigure back to reserved=2, RAM returns to slot 2 (R6) ---
         let (rb_r6b, rs_r6b) = data_region(0x2000_0000, 4096, 6);
-        ds.configure_partition(0, &[(rb_r6b, rs_r6b)], 2).unwrap();
+        ds.configure_partition(pid(0), &[(rb_r6b, rs_r6b)], 2)
+            .unwrap();
 
-        assert_eq!(ds.peripheral_reserved_for(0), 2);
+        assert_eq!(ds.peripheral_reserved_for(pid(0)), 2);
         // Old slot 0 (R4) must have been cleared.
         assert!(ds.slot(4).is_none(), "stale R4 cleared after 0→2");
         // Slot 2 (R6) holds the RAM again.
         let s2b = ds.slot(6).expect("RAM in R6 after reserved=2 again");
-        assert_eq!(s2b.owner, 0);
+        assert_eq!(s2b.owner, pid(0));
         assert_eq!(s2b.base, 0x2000_0000);
 
-        let v = ds.partition_region_values(0);
+        let v = ds.partition_region_values(pid(0));
         // Slots 0-1: peripheral cache (still unconfigured → disabled).
         assert_eq!(v[0], disabled_pair(4), "R4 disabled (peripheral slot)");
         assert_eq!(v[1], disabled_pair(5), "R5 disabled (peripheral slot)");
@@ -3625,7 +3688,7 @@ mod tests {
     fn partition_region_values_out_of_range_returns_disabled() {
         // partition_id beyond the N=2 partition array: every slot must be disabled.
         let ds = DynamicStrategy::<2>::with_partition_count();
-        let vals = ds.partition_region_values(255);
+        let vals = ds.partition_region_values(pid(255));
         for (i, &(_rbar, rasr)) in vals.iter().enumerate() {
             assert_eq!(
                 rasr, 0,
