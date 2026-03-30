@@ -9,6 +9,7 @@ use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
 
 pub use crate::mpu::MpuError;
+use crate::PartitionId;
 
 #[cfg(not(test))]
 use crate::mpu;
@@ -56,7 +57,7 @@ pub trait MpuStrategy {
     /// slots so PendSV can overwrite them with per-partition peripherals.
     fn configure_partition(
         &self,
-        partition_id: u8,
+        partition_id: PartitionId,
         regions: &[(u32, u32)],
         peripheral_reserved: usize,
     ) -> Result<(), MpuError>;
@@ -66,8 +67,13 @@ pub trait MpuStrategy {
     /// `owner` identifies the partition that owns the window.
     /// Returns the MPU region ID on success, or an [`MpuError`] describing
     /// the failure (e.g. `SlotExhausted` when no free region is available).
-    fn add_window(&self, base: u32, size: u32, permissions: u32, owner: u8)
-        -> Result<u8, MpuError>;
+    fn add_window(
+        &self,
+        base: u32,
+        size: u32,
+        permissions: u32,
+        owner: PartitionId,
+    ) -> Result<u8, MpuError>;
 
     /// Remove a previously added window by its region ID.
     fn remove_window(&self, region_id: u8);
@@ -80,7 +86,7 @@ pub struct WindowDescriptor {
     pub base: u32,
     pub size: u32,
     pub permissions: u32,
-    pub owner: u8,
+    pub owner: PartitionId,
     pub rbar: u32,
 }
 fn slot_rbar(base: u32, slot_index: usize) -> u32 {
@@ -236,19 +242,21 @@ impl<const N: usize> DynamicStrategy<N> {
     }
 
     /// Return the peripheral-reserved slot count for `partition_id` (0 if out of range).
-    pub fn peripheral_reserved_for(&self, partition_id: u8) -> usize {
+    pub fn peripheral_reserved_for(&self, partition_id: PartitionId) -> usize {
+        let idx = partition_id.as_raw() as usize;
         with_cs(|cs| {
             let pr = self.peripheral_reserved.borrow(cs);
-            pr.borrow().get(partition_id as usize).copied().unwrap_or(0)
+            pr.borrow().get(idx).copied().unwrap_or(0)
         })
     }
 
     /// Return the stored private-RAM (RBAR, RASR) pair for `partition_id`,
     /// or `None` if the partition has not been configured or is out of range.
-    pub fn partition_ram_for(&self, partition_id: u8) -> Option<(u32, u32)> {
+    pub fn partition_ram_for(&self, partition_id: PartitionId) -> Option<(u32, u32)> {
+        let idx = partition_id.as_raw() as usize;
         with_cs(|cs| {
             let pr = self.partition_ram.borrow(cs);
-            pr.borrow().get(partition_id as usize).copied().flatten()
+            pr.borrow().get(idx).copied().flatten()
         })
     }
 
@@ -265,7 +273,10 @@ impl<const N: usize> DynamicStrategy<N> {
 
     /// Per-partition (RBAR, RASR) for R4-R7: peripherals from cache,
     /// RAM from `partition_ram_for`, cross-partition RAM disabled.
-    pub fn partition_region_values(&self, partition_id: u8) -> [(u32, u32); DYNAMIC_SLOT_COUNT] {
+    pub fn partition_region_values(
+        &self,
+        partition_id: PartitionId,
+    ) -> [(u32, u32); DYNAMIC_SLOT_COUNT] {
         fn rpair(base: u32, perm: u32, region: u32) -> (u32, u32) {
             crate::mpu::build_rbar(base, region)
                 .map(|r| (r, perm))
@@ -276,7 +287,7 @@ impl<const N: usize> DynamicStrategy<N> {
             let slots = slots.borrow();
             let pr = self.peripheral_reserved.borrow(cs);
             let pr = pr.borrow();
-            let reserved = pr.get(partition_id as usize).copied().unwrap_or(0);
+            let reserved = pr.get(partition_id.as_raw() as usize).copied().unwrap_or(0);
             let mut out = [(0u32, 0u32); DYNAMIC_SLOT_COUNT];
             // Fill from shared slots, disabling peripheral-reserved and RAM
             // slots (0..=owner_res) for non-owner partitions to prevent leakage.
@@ -284,7 +295,7 @@ impl<const N: usize> DynamicStrategy<N> {
                 let region = DYNAMIC_REGION_BASE as u32 + idx as u32;
                 *dst = match slot {
                     Some(desc) if desc.owner != partition_id => {
-                        let owner_res = pr.get(desc.owner as usize).copied().unwrap_or(0);
+                        let owner_res = pr.get(desc.owner.as_raw() as usize).copied().unwrap_or(0);
                         if idx <= owner_res {
                             disabled_pair(region as u8)
                         } else {
@@ -302,10 +313,13 @@ impl<const N: usize> DynamicStrategy<N> {
             if reserved >= 2 {
                 let pcache = self.peripheral_cache.borrow(cs);
                 let pcache = pcache.borrow();
-                let cache = pcache.get(partition_id as usize).copied().unwrap_or([
-                    disabled_pair(DYNAMIC_REGION_BASE),
-                    disabled_pair(DYNAMIC_REGION_BASE + 1),
-                ]);
+                let cache = pcache
+                    .get(partition_id.as_raw() as usize)
+                    .copied()
+                    .unwrap_or([
+                        disabled_pair(DYNAMIC_REGION_BASE),
+                        disabled_pair(DYNAMIC_REGION_BASE + 1),
+                    ]);
                 for (dst, val) in out
                     .iter_mut()
                     .zip(cache.iter())
@@ -320,7 +334,7 @@ impl<const N: usize> DynamicStrategy<N> {
                 .partition_ram
                 .borrow(cs)
                 .borrow()
-                .get(partition_id as usize)
+                .get(partition_id.as_raw() as usize)
                 .copied()
                 .flatten()
                 .map(|(rb, rs)| rpair(rb & crate::mpu::RBAR_ADDR_MASK, rs, ram_reg))
@@ -351,7 +365,7 @@ impl<const N: usize> DynamicStrategy<N> {
     /// Iterates over all four dynamic slots (R4–R7) and collects descriptors
     /// where `owner == partition_id`. Returns an empty vector for partitions
     /// with no assigned windows.
-    pub fn accessible_regions(&self, partition_id: u8) -> heapless::Vec<(u32, u32), 4> {
+    pub fn accessible_regions(&self, partition_id: PartitionId) -> heapless::Vec<(u32, u32), 4> {
         with_cs(|cs| {
             let slots = self.slots.borrow(cs);
             let slots = slots.borrow();
@@ -368,8 +382,12 @@ impl<const N: usize> DynamicStrategy<N> {
     ///
     /// `partition_id` indexes into the cache (max `N - 1`).
     /// Out-of-range IDs are silently ignored.
-    pub fn cache_peripherals(&self, partition_id: u8, descriptors: [Option<WindowDescriptor>; 2]) {
-        let idx = partition_id as usize;
+    pub fn cache_peripherals(
+        &self,
+        partition_id: PartitionId,
+        descriptors: [Option<WindowDescriptor>; 2],
+    ) {
+        let idx = partition_id.as_raw() as usize;
         if idx >= N {
             return;
         }
@@ -396,8 +414,8 @@ impl<const N: usize> DynamicStrategy<N> {
     /// switch to overwrite the reserved peripheral slots (R4-R5) with the
     /// incoming partition's cached values.  Partitions without peripherals
     /// receive disabled pairs (RASR = 0).
-    pub fn cached_peripheral_regions(&self, partition_id: u8) -> [(u32, u32); 2] {
-        let idx = partition_id as usize;
+    pub fn cached_peripheral_regions(&self, partition_id: PartitionId) -> [(u32, u32); 2] {
+        let idx = partition_id.as_raw() as usize;
         if idx >= N {
             return [
                 disabled_pair(DYNAMIC_REGION_BASE),
@@ -429,7 +447,7 @@ impl<const N: usize> DynamicStrategy<N> {
                 entry.is_some(),
                 "cache index {} out of bounds for partition {}",
                 ci,
-                part.id()
+                part.id().as_raw()
             );
             let (rbar, rasr) = match entry {
                 Some(&pair) => pair,
@@ -442,7 +460,7 @@ impl<const N: usize> DynamicStrategy<N> {
                     rbar,
                     expected,
                     "cache-PCB RBAR mismatch: partition {} descriptor {}",
-                    part.id(),
+                    part.id().as_raw(),
                     ci
                 );
             }
@@ -450,7 +468,7 @@ impl<const N: usize> DynamicStrategy<N> {
                 rasr,
                 0,
                 "cache-PCB RASR must be non-zero (enabled): partition {} descriptor {}",
-                part.id(),
+                part.id().as_raw(),
                 ci
             );
         }
@@ -473,7 +491,7 @@ impl<const N: usize> DynamicStrategy<N> {
         desc_idx: usize,
         reserved: usize,
         region: (u32, u32, u32),
-        part_id: u8,
+        part_id: PartitionId,
     ) -> Result<usize, MpuError> {
         let (base, size, rasr) = region;
         let (slot_idx, delta) = if desc_idx < reserved.min(2) {
@@ -605,7 +623,7 @@ impl<const N: usize> DynamicStrategy<N> {
         rasr: u32,
         desc_idx: usize,
         reserved: usize,
-        part_id: u8,
+        part_id: PartitionId,
     ) -> Option<WindowDescriptor> {
         if desc_idx >= reserved.min(2) {
             return None;
@@ -624,7 +642,7 @@ impl<const N: usize> DynamicStrategy<N> {
 impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
     fn configure_partition(
         &self,
-        partition_id: u8,
+        partition_id: PartitionId,
         regions: &[(u32, u32)],
         peripheral_reserved: usize,
     ) -> Result<(), MpuError> {
@@ -656,7 +674,7 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
             let mut slots = self.slots.borrow(cs).borrow_mut();
             let mut pr = self.peripheral_reserved.borrow(cs).borrow_mut();
             // Validate partition_id is within the strategy's capacity.
-            let pr_entry = match pr.get_mut(partition_id as usize) {
+            let pr_entry = match pr.get_mut(partition_id.as_raw() as usize) {
                 Some(entry) => entry,
                 None => return Err(MpuError::RegionCountMismatch),
             };
@@ -684,7 +702,7 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
             *pr_entry = peripheral_reserved;
             // Store the raw (RBAR, RASR) pair in partition_ram.
             let mut ram = self.partition_ram.borrow(cs).borrow_mut();
-            if let Some(entry) = ram.get_mut(partition_id as usize) {
+            if let Some(entry) = ram.get_mut(partition_id.as_raw() as usize) {
                 *entry = Some((rbar, rasr));
             }
             Ok(())
@@ -696,7 +714,7 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
         base: u32,
         size: u32,
         permissions: u32,
-        owner: u8,
+        owner: PartitionId,
     ) -> Result<u8, MpuError> {
         crate::mpu::validate_mpu_region(base, size).inspect_err(|&_e| {
             crate::klog!(
@@ -713,7 +731,11 @@ impl<const N: usize> MpuStrategy for DynamicStrategy<N> {
             // Use the owner partition's reserved count: each partition
             // has its own peripheral cache region(s) at the start of
             // its slot view, so only that partition's count matters.
-            let reserved = pr.borrow().get(owner as usize).copied().unwrap_or(0);
+            let reserved = pr
+                .borrow()
+                .get(owner.as_raw() as usize)
+                .copied()
+                .unwrap_or(0);
             // Skip peripheral-reserved slots (0..reserved) and the
             // partition-RAM slot (reserved), scanning from
             // reserved+1 onwards for a free entry.
@@ -759,7 +781,7 @@ const STATIC_REGION_COUNT: usize = 4;
 impl MpuStrategy for StaticStrategy {
     fn configure_partition(
         &self,
-        _partition_id: u8,
+        _partition_id: PartitionId,
         regions: &[(u32, u32)],
         _peripheral_reserved: usize,
     ) -> Result<(), MpuError> {
@@ -776,7 +798,7 @@ impl MpuStrategy for StaticStrategy {
         _base: u32,
         _size: u32,
         _permissions: u32,
-        _owner: u8,
+        _owner: PartitionId,
     ) -> Result<u8, MpuError> {
         // Static strategy does not support dynamic windows.
         Err(MpuError::SlotExhausted)
