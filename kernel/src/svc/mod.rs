@@ -27,7 +27,7 @@ use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
 
 use rtos_traits::ids::{
-    BlackboardId, BufferSlotId, MutexId, QueuingPortId, SamplingPortId, SemaphoreId,
+    BlackboardId, BufferSlotId, MutexId, PartitionId, QueuingPortId, SamplingPortId, SemaphoreId,
 };
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
@@ -2547,7 +2547,7 @@ where
     pub fn increment_starvation_for_ready_partitions(&mut self) {
         let active = self.active_partition;
         for pcb in self.partitions_mut().iter_mut() {
-            if Some(pcb.id()) == active {
+            if active == Some(pcb.id().as_raw() as u8) {
                 continue;
             }
             if pcb.state() == PartitionState::Ready {
@@ -2555,7 +2555,7 @@ where
                 if pcb.is_starved() {
                     crate::klog!(
                         "partition {} starved (count={})",
-                        pcb.id(),
+                        pcb.id().as_raw(),
                         pcb.starvation_count()
                     );
                 }
@@ -2905,6 +2905,15 @@ where
     #[inline(always)]
     pub fn current_partition(&self) -> u8 {
         self.current_partition
+    }
+
+    /// Returns the current partition identity as a [`PartitionId`].
+    ///
+    /// Converts `self.current_partition` (kept as `u8` for PendSV
+    /// `ldrb`/`strb` constraint) into the typed newtype wrapper.
+    #[inline(always)]
+    pub fn current_pid(&self) -> PartitionId {
+        PartitionId::new(self.current_partition as u32)
     }
 
     /// Sets the current partition index.
@@ -3756,7 +3765,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         let k = mem_kernel(0x0800_1001, mpu).expect("should succeed");
         let pcb = k.partitions().get(0).expect("partition 0 must exist");
-        assert_eq!(pcb.id(), 0);
+        assert_eq!(pcb.id(), PartitionId::new(0));
         assert_eq!(pcb.entry_point(), 0x0800_1001);
         assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
         assert_eq!(pcb.mpu_region().size(), 1024);
@@ -3807,7 +3816,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         let k = ext_kernel(0x0800_1001, mpu).expect("should succeed");
         let pcb = k.partitions().get(0).expect("partition 0 must exist");
-        assert_eq!(pcb.id(), 0);
+        assert_eq!(pcb.id(), PartitionId::new(0));
         assert_eq!(pcb.entry_point(), 0x0800_1001);
         assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
         assert_eq!(pcb.mpu_region().size(), 1024);
@@ -3844,9 +3853,9 @@ mod tests {
         let m1 =
             ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1001, mpu, 1).unwrap();
         let k = Kernel::<TestConfig>::new(sched, &[m0, m1]).expect("two partitions should succeed");
-        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
+        assert_eq!(k.partitions().get(0).unwrap().id(), PartitionId::new(0));
         assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0001);
-        assert_eq!(k.partitions().get(1).unwrap().id(), 1);
+        assert_eq!(k.partitions().get(1).unwrap().id(), PartitionId::new(1));
         assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1001);
     }
 
@@ -7118,8 +7127,8 @@ mod tests {
         ];
         let k = try_kernel_new_mem(s, &mems).unwrap();
         assert_eq!(k.partitions().len(), 2);
-        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
-        assert_eq!(k.partitions().get(1).unwrap().id(), 1);
+        assert_eq!(k.partitions().get(0).unwrap().id(), PartitionId::new(0));
+        assert_eq!(k.partitions().get(1).unwrap().id(), PartitionId::new(1));
         // MPU regions must not overlap: region 0 ends at base0+4096 == base1.
         let b0 = k.partitions().get(0).unwrap().mpu_region().base();
         let b1 = k.partitions().get(1).unwrap().mpu_region().base();
@@ -7169,8 +7178,8 @@ mod tests {
         ];
         let k = try_kernel_new_mem(s, &mems).unwrap();
         assert_eq!(k.partitions().len(), 2);
-        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
-        assert_eq!(k.partitions().get(1).unwrap().id(), 1);
+        assert_eq!(k.partitions().get(0).unwrap().id(), PartitionId::new(0));
+        assert_eq!(k.partitions().get(1).unwrap().id(), PartitionId::new(1));
         // Verify data-carrying fields were mapped correctly from ExternalPartitionMemory.
         assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0001);
         assert_eq!(k.partitions().get(1).unwrap().entry_point(), 0x0800_1001);
@@ -7210,7 +7219,7 @@ mod tests {
         assert_eq!(k.current_partition, 255);
         assert!(k.active_partition.is_none());
         assert_eq!(k.partitions().len(), 1);
-        assert_eq!(k.partitions().get(0).unwrap().id(), 0);
+        assert_eq!(k.partitions().get(0).unwrap().id(), PartitionId::new(0));
         // Verify schedule was preserved through init_kernel_struct
         assert_eq!(k.schedule().entries().len(), 1);
         assert_eq!(k.schedule().entries()[0].partition_index, 0);
@@ -7254,7 +7263,7 @@ mod tests {
 
         assert_eq!(k.partitions().len(), 1);
         let pcb = k.partitions().get(0).unwrap();
-        assert_eq!(pcb.id(), 0);
+        assert_eq!(pcb.id(), PartitionId::new(0));
         assert_eq!(pcb.entry_point(), mem.entry_point());
         // User-configured (size>0): base preserved from config.
         assert_eq!(pcb.mpu_region().base(), mem.mpu_region().base());
@@ -7304,7 +7313,7 @@ mod tests {
         assert_eq!(k.partitions().len(), 3);
         for (i, mem) in mems.iter().enumerate() {
             let pcb = k.partitions().get(i).unwrap();
-            assert_eq!(pcb.id(), i as u8);
+            assert_eq!(pcb.id(), PartitionId::new(i as u32));
             assert_eq!(pcb.entry_point(), mem.entry_point());
             // User-configured (size>0): base preserved from config.
             assert_eq!(pcb.mpu_region().base(), mem.mpu_region().base());
@@ -7540,16 +7549,16 @@ mod tests {
         let mut k = kernel_with_schedule();
         let pcb = k.partitions_mut().get_mut(0).unwrap();
         // Verify we can read partition state through the mutable reference
-        assert_eq!(pcb.id(), 0);
+        assert_eq!(pcb.id(), PartitionId::new(0));
     }
 
     #[test]
     fn pcb_returns_correct_partition_by_index() {
         let k = kernel_with_schedule();
         let pcb0 = k.pcb(0).expect("pcb(0) should exist");
-        assert_eq!(pcb0.id(), 0);
+        assert_eq!(pcb0.id(), PartitionId::new(0));
         let pcb1 = k.pcb(1).expect("pcb(1) should exist");
-        assert_eq!(pcb1.id(), 1);
+        assert_eq!(pcb1.id(), PartitionId::new(1));
         assert_eq!(k.partition_count(), 2);
     }
 

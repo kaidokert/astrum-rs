@@ -1,4 +1,5 @@
 use heapless::Vec;
+use rtos_traits::ids::PartitionId;
 
 #[cfg(feature = "partition-debug")]
 use crate::debug::DebugBuffer;
@@ -111,7 +112,7 @@ pub enum RestartError {
 /// `store_kernel` move boundary — see bug 38-iguana.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartitionControlBlock {
-    id: u8,
+    id: PartitionId,
     state: PartitionState,
     stack_pointer: u32,
     entry_point: EntryAddr,
@@ -176,7 +177,7 @@ impl PartitionControlBlock {
         mpu_region: MpuRegion,
     ) -> Self {
         Self {
-            id,
+            id: PartitionId::new(id as u32),
             state: PartitionState::Ready,
             stack_pointer,
             entry_point: entry_point.into(),
@@ -303,7 +304,7 @@ impl PartitionControlBlock {
         &self.peripheral_regions
     }
 
-    pub fn id(&self) -> u8 {
+    pub fn id(&self) -> PartitionId {
         self.id
     }
 
@@ -1316,7 +1317,7 @@ mod tests {
     fn new_partition_is_ready_with_correct_fields() {
         let pcb = make_pcb();
         assert_eq!(pcb.state(), PartitionState::Ready);
-        assert_eq!(pcb.id(), 1);
+        assert_eq!(pcb.id(), PartitionId::new(1));
         assert_eq!(pcb.stack_pointer(), 0x2000_0000 + 1024);
         assert_eq!(pcb.entry_point(), 0x0800_0000);
         assert_eq!(pcb.mpu_region().base(), 0x2000_0000);
@@ -2080,7 +2081,7 @@ mod tests {
         assert!(!table.is_empty());
 
         let retrieved = table.get(0).unwrap();
-        assert_eq!(retrieved.id(), 1);
+        assert_eq!(retrieved.id(), PartitionId::new(1));
     }
 
     #[test]

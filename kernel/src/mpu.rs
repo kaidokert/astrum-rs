@@ -293,7 +293,7 @@ pub(crate) fn partition_mpu_regions_or_deny_all(pcb: &PartitionControlBlock) -> 
         Ok(regions) => regions,
         #[allow(unused_variables)]
         Err(e) => {
-            klog!("MPU DENY-ALL partition {}: {:?}", pcb.id(), e);
+            klog!("MPU DENY-ALL partition {}: {:?}", pcb.id().as_raw(), e);
             deny_all_regions()
         }
     }
@@ -462,7 +462,7 @@ pub fn precompute_mpu_cache(pcb: &mut PartitionControlBlock) -> Result<(), MpuEr
         Err(_e) => {
             klog!(
                 "precompute_mpu_cache: partition {} MPU error: {:?}",
-                pcb.id(),
+                pcb.id().as_raw(),
                 _e
             );
             deny_all_regions()

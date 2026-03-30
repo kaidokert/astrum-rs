@@ -23,7 +23,7 @@ impl DrainContext {
         };
         let mut total = 0;
         let mut remaining = budget;
-        let pid = pcb.id();
+        let pid = pcb.id().as_raw() as u8;
 
         while remaining >= DebugRecordHeader::SIZE {
             let hdr_bytes = buf.drain(&mut self.buffer[..4], 4);

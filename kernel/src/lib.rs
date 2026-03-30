@@ -68,6 +68,7 @@ pub use partition::{
     EntryAddr, EntryPointFn, ExternalPartitionMemory, IsrHandler, PartitionBody, PartitionEntry,
     PartitionMemory, PartitionSpec,
 };
+pub use rtos_traits::ids::PartitionId;
 pub mod partition_core;
 pub use partition_core::{
     AlignedStack1K, AlignedStack256B, AlignedStack2K, AlignedStack4K, AlignedStack512B,

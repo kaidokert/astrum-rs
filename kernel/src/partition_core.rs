@@ -457,6 +457,7 @@ mod tests {
     use super::*;
     use crate::partition::MpuRegion;
     use crate::scheduler::ScheduleEntry;
+    use rtos_traits::ids::PartitionId;
 
     type TestCore<const N: usize, const SCHED: usize> = super::PartitionCore<N, SCHED>;
 
@@ -477,8 +478,8 @@ mod tests {
         core.partitions_mut().add(test_pcb(0)).unwrap();
         core.partitions_mut().add(test_pcb(1)).unwrap();
         assert_eq!(core.partition_count(), 2);
-        assert_eq!(core.pcb(0).unwrap().id(), 0);
-        assert_eq!(core.pcb(1).unwrap().id(), 1);
+        assert_eq!(core.pcb(0).unwrap().id(), PartitionId::new(0));
+        assert_eq!(core.pcb(1).unwrap().id(), PartitionId::new(1));
     }
 
     #[test]
@@ -638,9 +639,9 @@ mod tests {
         core.partitions_mut().add(test_pcb(2)).unwrap();
 
         let slice = core.partition_slice();
-        assert_eq!(slice[0].id(), 0);
-        assert_eq!(slice[1].id(), 1);
-        assert_eq!(slice[2].id(), 2);
+        assert_eq!(slice[0].id(), PartitionId::new(0));
+        assert_eq!(slice[1].id(), PartitionId::new(1));
+        assert_eq!(slice[2].id(), PartitionId::new(2));
     }
 
     #[test]
