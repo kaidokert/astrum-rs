@@ -1,5 +1,6 @@
 use crate::sampling::{SamplingError, SamplingPortPool, Validity};
 use crate::svc::SvcError;
+use rtos_traits::ids::SamplingPortId;
 
 /// Handle `SamplingWrite`.
 ///
@@ -7,14 +8,14 @@ use crate::svc::SvcError;
 /// `ptr` must be valid for `len` bytes (validated by caller).
 pub unsafe fn handle_sampling_write<const S: usize, const M: usize>(
     pool: &mut SamplingPortPool<S, M>,
-    port_id: usize,
+    port_id: SamplingPortId,
     ptr: *const u8,
     len: usize,
     tick: u64,
 ) -> u32 {
     // SAFETY: Caller (check_user_ptr) guarantees [ptr, ptr+len) is valid.
     let data = unsafe { core::slice::from_raw_parts(ptr, len) };
-    pool.write_sampling_message(port_id, data, tick)
+    pool.write_sampling_message(port_id.as_raw() as usize, data, tick)
         .map_or_else(sampling_error_to_svc, |()| 0)
 }
 
@@ -24,14 +25,14 @@ pub unsafe fn handle_sampling_write<const S: usize, const M: usize>(
 /// `ptr` must be valid for `buf_len` bytes (validated by caller).
 pub unsafe fn handle_sampling_read<const S: usize, const M: usize>(
     pool: &mut SamplingPortPool<S, M>,
-    port_id: usize,
+    port_id: SamplingPortId,
     ptr: *mut u8,
     buf_len: usize,
     tick: u64,
 ) -> Result<(u32, Validity), u32> {
     // SAFETY: Caller (check_user_ptr) guarantees [ptr, ptr+buf_len) is valid.
     let buf = unsafe { core::slice::from_raw_parts_mut(ptr, buf_len) };
-    pool.read_sampling_message(port_id, buf, tick)
+    pool.read_sampling_message(port_id.as_raw() as usize, buf, tick)
         .map(|(sz, v)| (sz as u32, v))
         .map_err(sampling_error_to_svc)
 }
@@ -70,8 +71,9 @@ mod tests {
     /// # Safety
     /// Wraps handle_sampling_write with stack-local data.
     unsafe fn wr(p: &mut SamplingPortPool<4, 16>, id: usize, d: &[u8]) -> u32 {
+        let port_id = SamplingPortId::new(id as u32);
         // SAFETY: d is a valid stack-local slice for the call duration.
-        unsafe { handle_sampling_write(p, id, d.as_ptr(), d.len(), 1) }
+        unsafe { handle_sampling_write(p, port_id, d.as_ptr(), d.len(), 1) }
     }
 
     /// # Safety
@@ -82,8 +84,9 @@ mod tests {
         b: &mut [u8],
         tick: u64,
     ) -> Result<(u32, Validity), u32> {
+        let port_id = SamplingPortId::new(id as u32);
         // SAFETY: b is a valid stack-local slice for the call duration.
-        unsafe { handle_sampling_read(p, id, b.as_mut_ptr(), b.len(), tick) }
+        unsafe { handle_sampling_read(p, port_id, b.as_mut_ptr(), b.len(), tick) }
     }
 
     #[test]

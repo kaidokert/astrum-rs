@@ -26,7 +26,7 @@ use crate::blackboard::BlackboardPool;
 use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::context::ExceptionFrame;
 
-use rtos_traits::ids::{MutexId, SemaphoreId};
+use rtos_traits::ids::{MutexId, QueuingPortId, SamplingPortId, SemaphoreId};
 // Re-export SvcError from shared traits crate for ABI isolation
 pub use rtos_traits::syscall::SvcError;
 
@@ -1769,8 +1769,9 @@ where
                             core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                         };
                         let tick = self.tick.get();
+                        let port_id = SamplingPortId::new(frame.r1);
                         match self.ports.sampling_mut().write_sampling_message(
-                            frame.r1 as usize,
+                            port_id.as_raw() as usize,
                             d,
                             tick,
                         ) {
@@ -1785,11 +1786,12 @@ where
                 Err(e) => e,
                 Ok(()) => {
                     let tick = self.tick.get();
+                    let port_id = SamplingPortId::new(frame.r1);
                     // SAFETY: check_user_ptr confirmed [r3, r3+SM) is in-bounds.
                     let r = unsafe {
                         sampling::handle_sampling_read(
                             self.ports.sampling_mut(),
-                            frame.r1 as usize,
+                            port_id,
                             frame.r3 as *mut u8,
                             C::SM,
                             tick,
@@ -1816,12 +1818,13 @@ where
                         let d = unsafe {
                             core::slice::from_raw_parts(frame.r3 as *const u8, frame.r2 as usize)
                         };
+                        let port_id = QueuingPortId::new(frame.r1);
                         queuing::handle_queuing_send(
                             self.msg.queuing_mut(),
                             self.core.partitions_mut(),
                             self.current_partition,
                             self.tick.get(),
-                            frame.r1 as usize,
+                            port_id,
                             d,
                         )
                     }
@@ -1836,12 +1839,13 @@ where
                     // C::QM, a KernelConfig constant. (3) The partition owns this
                     // memory as enforced by MPU isolation.
                     let b = unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::QM) };
+                    let port_id = QueuingPortId::new(frame.r1);
                     queuing::handle_queuing_receive(
                         self.msg.queuing_mut(),
                         self.core.partitions_mut(),
                         self.current_partition,
                         self.tick.get(),
-                        frame.r1 as usize,
+                        port_id,
                         b,
                     )
                 }
@@ -1857,6 +1861,7 @@ where
                         SvcError::InvalidPointer.to_u32()
                     }
                     Ok(()) => {
+                        let port_id = QueuingPortId::new(frame.r1);
                         // SAFETY: (1) check_user_ptr confirmed [r2, r2+size_of
                         // QueuingPortStatus) lies within the calling partition's MPU
                         // data region. (2) Alignment of r2 for QueuingPortStatus is
@@ -1865,7 +1870,7 @@ where
                         unsafe {
                             queuing::handle_queuing_status(
                                 self.msg.queuing(),
-                                frame.r1 as usize,
+                                port_id,
                                 frame.r2 as *mut QueuingPortStatus,
                             )
                         }
