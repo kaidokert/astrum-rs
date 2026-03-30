@@ -1,10 +1,10 @@
-use crate::{buffer_pool::BufferPool, mpu_strategy::DynamicStrategy, svc::SvcError};
+use crate::{buffer_pool::BufferPool, mpu_strategy::DynamicStrategy, svc::SvcError, PartitionId};
 use rtos_traits::ids::BufferSlotId;
 #[allow(clippy::too_many_arguments)]
 pub fn handle_buffer_lend<const S: usize, const Z: usize>(
     buffers: &mut BufferPool<S, Z>,
     strategy: &DynamicStrategy,
-    current_partition: u8,
+    current_partition: PartitionId,
     partition_count: usize,
     tick: u64,
     slot_id: BufferSlotId,
@@ -21,13 +21,8 @@ pub fn handle_buffer_lend<const S: usize, const Z: usize>(
     if target_raw >= partition_count {
         return (SvcError::InvalidPartition.to_u32(), Some(0xFD));
     }
-    match buffers.share_with_partition(
-        slot,
-        current_partition,
-        target_raw as u8,
-        writable,
-        strategy,
-    ) {
+    let target = PartitionId::new(target_raw as u32);
+    match buffers.share_with_partition(slot, current_partition, target, writable, strategy) {
         Ok(rid) => match buffers.slot_base_address(slot) {
             Some(base) => {
                 let r0 = if r3 > 0 && r3 != legacy_sentinel {
@@ -49,27 +44,30 @@ pub fn handle_buffer_lend<const S: usize, const Z: usize>(
 mod tests {
     use super::*;
     use crate::buffer_pool::BorrowMode;
+    fn pid(v: u8) -> PartitionId {
+        PartitionId::new(v as u32)
+    }
     #[test]
     fn validate_and_lend() {
         let (mut p, d) = (BufferPool::<4, 32>::new(), DynamicStrategy::new());
         let eop = SvcError::OperationFailed.to_u32();
         let eip = SvcError::InvalidPartition.to_u32();
         let f = |p: &mut BufferPool<4, 32>, slot: BufferSlotId, r2, r3| {
-            handle_buffer_lend(p, &d, 0, 2, 100, slot, r2, r3, 0xCC)
+            handle_buffer_lend(p, &d, pid(0), 2, 100, slot, r2, r3, 0xCC)
         };
         assert_eq!(
             f(&mut p, BufferSlotId::new(0), 0x0200, 0),
             (eop, Some(0xFE))
         );
         assert_eq!(f(&mut p, BufferSlotId::new(0), 5, 0), (eip, Some(0xFD)));
-        let s = p.alloc(0, BorrowMode::Write).unwrap();
+        let s = p.alloc(pid(0), BorrowMode::Write).unwrap();
         let sid = BufferSlotId::new(s as u8);
         let (r0, r1) = f(&mut p, sid, 1, 50);
         assert_eq!(r0, p.slot_base_address(s).unwrap());
         assert!(r1.is_some());
         // Self-lend (partition 0 → partition 0) must return SelfLend discriminant
         use crate::buffer_pool::BufferError;
-        let (r0, r1) = handle_buffer_lend(&mut p, &d, 0, 2, 100, sid, 0, 0, 0xCC);
+        let (r0, r1) = handle_buffer_lend(&mut p, &d, pid(0), 2, 100, sid, 0, 0, 0xCC);
         assert_eq!(r0, SvcError::OperationFailed.to_u32());
         assert_eq!(r1, Some(BufferError::SelfLend.discriminant()));
     }

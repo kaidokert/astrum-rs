@@ -142,13 +142,19 @@ mod tests {
         }
     }
 
-    struct MockDev(u8, Option<u8>);
+    use crate::ids::PartitionId;
+
+    fn pid(v: u8) -> PartitionId {
+        PartitionId::new(v as u32)
+    }
+
+    struct MockDev(u8, Option<PartitionId>);
     impl MockDev {
         fn new(id: u8) -> Self {
             Self(id, None)
         }
-        fn require_open(&self, pid: u8) -> Result<(), DeviceError> {
-            match self.1 == Some(pid) {
+        fn require_open(&self, p: PartitionId) -> Result<(), DeviceError> {
+            match self.1 == Some(p) {
                 true => Ok(()),
                 false => Err(DeviceError::NotOpen),
             }
@@ -158,29 +164,29 @@ mod tests {
         fn device_id(&self) -> u8 {
             self.0
         }
-        fn open(&mut self, pid: u8) -> Result<(), DeviceError> {
+        fn open(&mut self, p: PartitionId) -> Result<(), DeviceError> {
             if self.1.is_some() {
                 return Err(DeviceError::PermissionDenied);
             }
-            self.1 = Some(pid);
+            self.1 = Some(p);
             Ok(())
         }
-        fn close(&mut self, pid: u8) -> Result<(), DeviceError> {
-            self.require_open(pid)?;
+        fn close(&mut self, p: PartitionId) -> Result<(), DeviceError> {
+            self.require_open(p)?;
             self.1 = None;
             Ok(())
         }
-        fn read(&mut self, pid: u8, buf: &mut [u8]) -> Result<usize, DeviceError> {
-            self.require_open(pid)?;
+        fn read(&mut self, p: PartitionId, buf: &mut [u8]) -> Result<usize, DeviceError> {
+            self.require_open(p)?;
             buf[0] = self.0;
             Ok(1)
         }
-        fn write(&mut self, pid: u8, data: &[u8]) -> Result<usize, DeviceError> {
-            self.require_open(pid)?;
+        fn write(&mut self, p: PartitionId, data: &[u8]) -> Result<usize, DeviceError> {
+            self.require_open(p)?;
             Ok(data.len())
         }
-        fn ioctl(&mut self, pid: u8, _: u32, _: u32) -> Result<u32, DeviceError> {
-            self.require_open(pid)?;
+        fn ioctl(&mut self, p: PartitionId, _: u32, _: u32) -> Result<u32, DeviceError> {
+            self.require_open(p)?;
             Ok(0)
         }
     }
@@ -221,14 +227,14 @@ mod tests {
         let mut reg = DeviceRegistry::<4>::new();
         reg.add(&mut dev).unwrap();
         let d = reg.get_mut(10).unwrap();
-        assert_eq!(d.read(1, &mut [0; 4]), Err(DeviceError::NotOpen));
-        assert_eq!(d.write(1, &[1]), Err(DeviceError::NotOpen));
-        d.open(1).unwrap();
+        assert_eq!(d.read(pid(1), &mut [0; 4]), Err(DeviceError::NotOpen));
+        assert_eq!(d.write(pid(1), &[1]), Err(DeviceError::NotOpen));
+        d.open(pid(1)).unwrap();
         let mut buf = [0u8; 4];
-        assert_eq!(d.read(1, &mut buf).unwrap(), 1);
-        assert_eq!(d.write(1, &[0xAA]).unwrap(), 1);
-        assert_eq!(d.ioctl(1, 0, 0).unwrap(), 0);
-        d.close(1).unwrap();
-        assert_eq!(d.close(1), Err(DeviceError::NotOpen));
+        assert_eq!(d.read(pid(1), &mut buf).unwrap(), 1);
+        assert_eq!(d.write(pid(1), &[0xAA]).unwrap(), 1);
+        assert_eq!(d.ioctl(pid(1), 0, 0).unwrap(), 0);
+        d.close(pid(1)).unwrap();
+        assert_eq!(d.close(pid(1)), Err(DeviceError::NotOpen));
     }
 }

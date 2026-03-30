@@ -1,3 +1,5 @@
+// TODO: buf_syscall.rs uses raw u8/u32 for partition IDs at the syscall ABI boundary;
+// PartitionId conversion happens kernel-side in svc/mod.rs dispatch. No change needed here.
 //! User-space convenience wrappers for buffer-pool lending syscalls.
 
 use crate::syscall::{
