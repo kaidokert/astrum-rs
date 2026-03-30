@@ -1,6 +1,7 @@
 use crate::partition::{PartitionState, PartitionTable};
 use crate::svc::{try_transition, SvcError};
 use crate::waitqueue::SleepQueue;
+use rtos_traits::ids::PartitionId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SleepOutcome {
@@ -20,7 +21,7 @@ impl SleepOutcome {
 pub fn handle_sleep_ticks<const N: usize, const W: usize>(
     sleep_queue: &mut SleepQueue<W>,
     pt: &mut PartitionTable<N>,
-    caller: u8,
+    caller: PartitionId,
     ticks: u32,
     current_tick: u64,
 ) -> SleepOutcome {
@@ -31,10 +32,11 @@ pub fn handle_sleep_ticks<const N: usize, const W: usize>(
     if sleep_queue.push(caller, expiry).is_err() {
         return SleepOutcome::Done(SvcError::WaitQueueFull.to_u32());
     }
-    if !try_transition(pt, caller, PartitionState::Waiting) {
+    let caller_u8 = caller.as_raw() as u8;
+    if !try_transition(pt, caller_u8, PartitionState::Waiting) {
         return SleepOutcome::Done(SvcError::TransitionFailed.to_u32());
     }
-    if let Some(pcb) = pt.get_mut(caller as usize) {
+    if let Some(pcb) = pt.get_mut(caller_u8 as usize) {
         pcb.set_sleep_until(expiry);
     }
     SleepOutcome::Deschedule(0)
@@ -56,10 +58,14 @@ mod tests {
         (t, SleepQueue::new())
     }
 
+    fn pid(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
+
     #[test]
     fn zero_ticks_is_noop() {
         let (mut pt, mut sq) = make_pt_sq();
-        let out = handle_sleep_ticks(&mut sq, &mut pt, 0, 0, 100);
+        let out = handle_sleep_ticks(&mut sq, &mut pt, pid(0), 0, 100);
         assert_eq!(out, SleepOutcome::Done(0));
         assert_eq!(out.into_svc_return(), (0, false));
         assert!(sq.is_empty());
@@ -69,7 +75,7 @@ mod tests {
     #[test]
     fn nonzero_ticks_deschedules() {
         let (mut pt, mut sq) = make_pt_sq();
-        let out = handle_sleep_ticks(&mut sq, &mut pt, 0, 50, 100);
+        let out = handle_sleep_ticks(&mut sq, &mut pt, pid(0), 50, 100);
         assert_eq!(out, SleepOutcome::Deschedule(0));
         assert_eq!(out.into_svc_return(), (0, true));
         assert!(!sq.is_empty() && pt.get(0).unwrap().state() == PartitionState::Waiting);
@@ -80,9 +86,9 @@ mod tests {
     fn full_queue_returns_error() {
         let (mut pt, mut sq) = make_pt_sq();
         for i in 0..4u8 {
-            let _ = sq.push(i, 1000 + i as u64);
+            let _ = sq.push(PartitionId::new(i as u32), 1000 + i as u64);
         }
-        let out = handle_sleep_ticks(&mut sq, &mut pt, 0, 10, 0);
+        let out = handle_sleep_ticks(&mut sq, &mut pt, pid(0), 10, 0);
         assert_eq!(out, SleepOutcome::Done(SvcError::WaitQueueFull.to_u32()));
         assert!(!out.into_svc_return().1);
         assert_eq!(pt.get(0).unwrap().state(), PartitionState::Running);

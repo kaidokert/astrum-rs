@@ -1,7 +1,7 @@
 use crate::blackboard::{BlackboardError, BlackboardPool, ReadBlackboardOutcome};
 use crate::partition::{PartitionState, PartitionTable};
 use crate::svc::try_transition;
-use rtos_traits::ids::BlackboardId;
+use rtos_traits::ids::{BlackboardId, PartitionId};
 
 /// Outcome of a blackboard read at the SVC handler level.
 #[derive(Debug, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub fn handle_bb_display<const N: usize, const S: usize, const M: usize, const W
     let woken = bb.display_blackboard(id.as_raw() as usize, data)?;
     for &w in woken.iter() {
         // TODO: log wake-transition failure when kernel tracing is available
-        let _ = try_transition(pt, w, PartitionState::Ready);
+        let _ = try_transition(pt, w.as_raw() as u8, PartitionState::Ready);
     }
     Ok(())
 }
@@ -30,7 +30,7 @@ pub fn handle_bb_read<const N: usize, const S: usize, const M: usize, const W: u
     bb: &mut BlackboardPool<S, M, W>,
     pt: &mut PartitionTable<N>,
     id: BlackboardId,
-    pid: u8,
+    pid: PartitionId,
     buf: &mut [u8],
     timeout: u32,
     tick: u64,
@@ -41,7 +41,7 @@ pub fn handle_bb_read<const N: usize, const S: usize, const M: usize, const W: u
         }),
         ReadBlackboardOutcome::ReaderBlocked => {
             // TODO: log transition failure when kernel tracing is available
-            let _ = try_transition(pt, pid, PartitionState::Waiting);
+            let _ = try_transition(pt, pid.as_raw() as u8, PartitionState::Waiting);
             Ok(BbReadOutcome::Blocked)
         }
     }
@@ -81,6 +81,7 @@ pub fn bb_error_to_svc(e: BlackboardError) -> u32 {
 mod tests {
     use super::*;
     use crate::partition::{MpuRegion, PartitionControlBlock};
+    fn pid(v: u32) -> PartitionId { PartitionId::new(v) }
     fn setup() -> (BlackboardPool<4, 4, 4>, PartitionTable<4>) {
         let mut b = BlackboardPool::new();
         b.create().unwrap();
@@ -97,14 +98,14 @@ mod tests {
         assert_eq!(handle_bb_display(&mut b, &mut p, id0, &[0x11, 0x22, 0x33]), Ok(()));
         assert_eq!(handle_bb_display(&mut b, &mut p, id99, &[1]), Err(BlackboardError::InvalidBoard));
         let mut buf = [0u8; 4];
-        assert_eq!(handle_bb_read(&mut b, &mut p, id0, 0, &mut buf, 0, 0), Ok(BbReadOutcome::Read { msg_len: 3 }));
+        assert_eq!(handle_bb_read(&mut b, &mut p, id0, pid(0), &mut buf, 0, 0), Ok(BbReadOutcome::Read { msg_len: 3 }));
         assert_eq!(&buf[..3], [0x11, 0x22, 0x33]);
-        assert_eq!(handle_bb_read(&mut b, &mut p, id99, 0, &mut buf, 0, 0), Err(BlackboardError::InvalidBoard));
+        assert_eq!(handle_bb_read(&mut b, &mut p, id99, pid(0), &mut buf, 0, 0), Err(BlackboardError::InvalidBoard));
         assert_eq!(handle_bb_clear(&mut b, id0), Ok(()));
         assert_eq!(handle_bb_clear(&mut b, id99), Err(BlackboardError::InvalidBoard));
         assert_eq!(handle_bb_display(&mut b, &mut p, id0, &[1]), Ok(()));
         assert_eq!(handle_bb_clear(&mut b, id0), Ok(()));
-        assert_eq!(handle_bb_read(&mut b, &mut p, id0, 0, &mut buf, 50, 0), Ok(BbReadOutcome::Blocked));
+        assert_eq!(handle_bb_read(&mut b, &mut p, id0, pid(0), &mut buf, 50, 0), Ok(BbReadOutcome::Blocked));
         assert_eq!(p.get(0).unwrap().state(), PartitionState::Waiting);
     }
     #[test]
@@ -118,7 +119,7 @@ mod tests {
         assert_eq!(handle_bb_display(&mut b, &mut p, id, &[0xAA, 0xBB]), Ok(()));
         let mut buf = [0u8; 4];
         assert_eq!(
-            handle_bb_read(&mut b, &mut p, id, 0, &mut buf, 0, 0),
+            handle_bb_read(&mut b, &mut p, id, pid(0), &mut buf, 0, 0),
             Ok(BbReadOutcome::Read { msg_len: 2 })
         );
         assert_eq!(&buf[..2], [0xAA, 0xBB]);
@@ -128,7 +129,7 @@ mod tests {
         p.get_mut(0).unwrap().transition(PartitionState::Ready).unwrap();
         p.get_mut(0).unwrap().transition(PartitionState::Running).unwrap();
         assert_eq!(
-            handle_bb_read(&mut b, &mut p, id, 0, &mut buf, 10, 0),
+            handle_bb_read(&mut b, &mut p, id, pid(0), &mut buf, 10, 0),
             Ok(BbReadOutcome::Blocked)
         );
     }

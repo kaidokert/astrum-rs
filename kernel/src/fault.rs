@@ -1,5 +1,7 @@
 //! Fault register reading and fault detail capture for MemManage / BusFault / UsageFault.
 
+use rtos_traits::ids::PartitionId;
+
 // CFSR bit constants (ARMv7-M Architecture Reference Manual, B3.2.15)
 
 // MMFSR — CFSR bits [7:0]
@@ -40,14 +42,14 @@ const STACKED_PC_OFFSET: u32 = 0x18;
 /// Snapshot of fault state captured from an exception handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FaultDetails {
-    pub partition_id: u8,
+    pub partition_id: PartitionId,
     pub cfsr: u32,
     pub mmfar: u32,
     pub faulting_pc: u32,
 }
 
 impl FaultDetails {
-    pub const fn new(partition_id: u8, cfsr: u32, mmfar: u32, faulting_pc: u32) -> Self {
+    pub const fn new(partition_id: PartitionId, cfsr: u32, mmfar: u32, faulting_pc: u32) -> Self {
         Self {
             partition_id,
             cfsr,
@@ -184,10 +186,14 @@ pub extern "C" fn fault_trampoline() -> ! {
 mod tests {
     use super::*;
 
+    fn pid(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
+
     #[test]
     fn fault_details_construction_and_traits() {
-        let fd = FaultDetails::new(3, 0x0000_0082, 0x2000_1000, 0x0800_0ABC);
-        assert_eq!(fd.partition_id, 3);
+        let fd = FaultDetails::new(pid(3), 0x0000_0082, 0x2000_1000, 0x0800_0ABC);
+        assert_eq!(fd.partition_id, pid(3));
         assert_eq!(fd.cfsr, 0x0000_0082);
         assert_eq!(fd.mmfar, 0x2000_1000);
         assert_eq!(fd.faulting_pc, 0x0800_0ABC);
@@ -199,39 +205,44 @@ mod tests {
 
     #[test]
     fn cfsr_bit_parsing_helpers() {
-        let fd = FaultDetails::new(0, CFSR_DACCVIOL | CFSR_MMARVALID, 0x2000_F000, 0x100);
+        let fd = FaultDetails::new(pid(0), CFSR_DACCVIOL | CFSR_MMARVALID, 0x2000_F000, 0x100);
         assert!(fd.is_daccviol() && fd.is_mmarvalid());
         assert!(!fd.is_iaccviol() && !fd.is_munstkerr() && !fd.is_mstkerr());
         assert!(!fd.is_preciserr() && !fd.is_undefinstr() && !fd.is_divbyzero());
 
-        let fd = FaultDetails::new(1, CFSR_IACCVIOL, 0, 0x200);
+        let fd = FaultDetails::new(pid(1), CFSR_IACCVIOL, 0, 0x200);
         assert!(fd.is_iaccviol() && !fd.is_daccviol() && !fd.is_mmarvalid());
 
-        let fd = FaultDetails::new(0, CFSR_PRECISERR | CFSR_BFARVALID, 0x4000_0000, 0x300);
+        let fd = FaultDetails::new(pid(0), CFSR_PRECISERR | CFSR_BFARVALID, 0x4000_0000, 0x300);
         assert!(fd.is_preciserr() && fd.is_bfarvalid() && !fd.is_daccviol());
 
-        let fd = FaultDetails::new(2, CFSR_UNDEFINSTR | CFSR_DIVBYZERO, 0, 0x400);
+        let fd = FaultDetails::new(pid(2), CFSR_UNDEFINSTR | CFSR_DIVBYZERO, 0, 0x400);
         assert!(fd.is_undefinstr() && fd.is_divbyzero() && !fd.is_iaccviol());
 
-        let fd = FaultDetails::new(0, CFSR_MSTKERR | CFSR_MUNSTKERR, 0, 0);
+        let fd = FaultDetails::new(pid(0), CFSR_MSTKERR | CFSR_MUNSTKERR, 0, 0);
         assert!(fd.is_mstkerr() && fd.is_munstkerr() && !fd.is_daccviol());
     }
 
     #[test]
     fn subregister_extraction() {
-        let fd = FaultDetails::new(0, CFSR_DACCVIOL | CFSR_MMARVALID | CFSR_PRECISERR, 0, 0);
+        let fd = FaultDetails::new(
+            pid(0),
+            CFSR_DACCVIOL | CFSR_MMARVALID | CFSR_PRECISERR,
+            0,
+            0,
+        );
         assert_eq!(fd.mmfsr(), 0x82);
         assert_eq!(fd.bfsr(), 0x02);
         assert_eq!(fd.ufsr(), 0x0000);
 
-        let fd = FaultDetails::new(0, CFSR_IBUSERR | CFSR_STKERR, 0, 0);
+        let fd = FaultDetails::new(pid(0), CFSR_IBUSERR | CFSR_STKERR, 0, 0);
         assert_eq!(fd.bfsr(), 0x11);
         assert_eq!(fd.mmfsr(), 0x00);
 
-        let fd = FaultDetails::new(0, CFSR_INVSTATE | CFSR_UNALIGNED, 0, 0);
+        let fd = FaultDetails::new(pid(0), CFSR_INVSTATE | CFSR_UNALIGNED, 0, 0);
         assert_eq!(fd.ufsr(), 0x0102);
 
-        let fd = FaultDetails::new(0, CFSR_IACCVIOL | CFSR_IMPRECISERR | CFSR_NOCP, 0, 0);
+        let fd = FaultDetails::new(pid(0), CFSR_IACCVIOL | CFSR_IMPRECISERR | CFSR_NOCP, 0, 0);
         assert_eq!(fd.mmfsr(), 0x01);
         assert_eq!(fd.bfsr(), 0x04);
         assert_eq!(fd.ufsr(), 0x0008);

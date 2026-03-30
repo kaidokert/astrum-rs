@@ -2,6 +2,7 @@
 
 use crate::debug::{DebugRecordHeader, KIND_TEXT};
 use crate::partition::PartitionControlBlock;
+use rtos_traits::ids::PartitionId;
 
 /// Context for draining partition debug output with a fixed-size scratch buffer.
 pub struct DrainContext {
@@ -23,7 +24,7 @@ impl DrainContext {
         };
         let mut total = 0;
         let mut remaining = budget;
-        let pid = pcb.id().as_raw() as u8;
+        let pid = pcb.id();
 
         while remaining >= DebugRecordHeader::SIZE {
             let hdr_bytes = buf.drain(&mut self.buffer[..4], 4);
@@ -70,11 +71,11 @@ impl Default for DrainContext {
 }
 
 #[inline]
-fn log_with_level(pid: u8, level: u8, msg: &str) {
+fn log_with_level(pid: PartitionId, level: u8, msg: &str) {
     const TAGS: [&str; 5] = ["ERR", "WRN", "INF", "DBG", "TRC"];
     let tag = TAGS.get(level as usize).unwrap_or(&"???");
     let _ = (pid, tag, msg);
-    crate::klog!("[P{}:{}] {}", pid, tag, msg);
+    crate::klog!("[P{}:{}] {}", pid.as_raw(), tag, msg);
 }
 
 #[cfg(test)]
