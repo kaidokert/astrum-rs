@@ -308,7 +308,7 @@ impl<const N: usize> DynamicStrategy<N> {
                 };
             }
             // Override peripheral-reserved slots 0..reserved from cache.
-            if reserved >= 2 {
+            if reserved >= 1 {
                 let pcache = self.peripheral_cache.borrow(cs);
                 let pcache = pcache.borrow();
                 let cache = pcache
@@ -338,6 +338,18 @@ impl<const N: usize> DynamicStrategy<N> {
                 .flatten()
                 .map(|(rb, rs)| rpair(rb & crate::mpu::RBAR_ADDR_MASK, rs, ram_reg))
                 .unwrap_or(disabled_pair(ram_reg as u8));
+            // Disable stale peripheral slots between this partition's
+            // reserved count and the maximum reserved across all partitions.
+            // We disable starting from `reserved` (inclusive) so the slot is
+            // explicitly cleared before being overwritten with RAM below.
+            let max_reserved = pr.iter().copied().max().unwrap_or(0);
+            for idx in reserved..=max_reserved {
+                if let Some(dst) = out.get_mut(idx) {
+                    let region = DYNAMIC_REGION_BASE as u32 + idx as u32;
+                    *dst = disabled_pair(region as u8);
+                }
+            }
+            // Override the disabled slot at `reserved` with this partition's RAM.
             if let Some(dst) = out.get_mut(reserved) {
                 *dst = ram_pair;
             }
@@ -407,10 +419,10 @@ impl<const N: usize> DynamicStrategy<N> {
     }
 
     /// Return pre-computed (RBAR, RASR) pairs for `partition_id`'s peripheral
-    /// regions (R4-R5).
+    /// regions (R4-R6).
     ///
     /// Called from `__pendsv_program_mpu` (in `harness.rs`) at every context
-    /// switch to overwrite the reserved peripheral slots (R4-R5) with the
+    /// switch to overwrite the reserved peripheral slots (R4-R6) with the
     /// incoming partition's cached values.  Partitions without peripherals
     /// receive disabled pairs (RASR = 0).
     pub fn cached_peripheral_regions(&self, partition_id: PartitionId) -> [(u32, u32); 3] {
@@ -3779,5 +3791,150 @@ mod tests {
         for (i, &(_rbar, rasr)) in cached.iter().enumerate() {
             assert_ne!(rasr, 0, "cache[{i}] RASR must be non-zero");
         }
+    }
+
+    // -- asymmetric peripheral counts (2 vs 3) ----------------------------
+
+    /// Helper: set up a 2-partition DynamicStrategy with P0(reserved=2)
+    /// and P1(reserved=3), populate peripheral caches directly, and
+    /// return the strategy.
+    fn setup_asymmetric_2v3() -> DynamicStrategy<2> {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        // P0: reserved=2, RAM at slot 2 (R6)
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        ds.configure_partition(pid(0), &[(rb0, rs0)], 2).unwrap();
+        // P1: reserved=3, RAM at slot 3 (R7)
+        let (rb1, rs1) = data_region(0x2000_8000, 4096, 7);
+        ds.configure_partition(pid(1), &[(rb1, rs1)], 3).unwrap();
+
+        // Populate P0 cache: 2 peripherals + 1 disabled slot.
+        ds.cache_peripherals(
+            pid(0),
+            [
+                Some(periph_desc(0x4000_0000, 4096, pid(0))),
+                Some(periph_desc(0x4001_0000, 256, pid(0))),
+                None,
+            ],
+        );
+        // Populate P1 cache: 3 peripherals.
+        ds.cache_peripherals(
+            pid(1),
+            [
+                Some(periph_desc(0x4002_0000, 4096, pid(1))),
+                Some(periph_desc(0x4003_0000, 256, pid(1))),
+                Some(periph_desc(0x4004_0000, 1024, pid(1))),
+            ],
+        );
+        ds
+    }
+
+    #[test]
+    fn asymmetric_p0_reserved2_has_ram_at_r6_and_r7_disabled() {
+        let ds = setup_asymmetric_2v3();
+        let v0 = ds.partition_region_values(pid(0));
+
+        // R4 (slot 0): P0 peripheral from cache (4KiB @ 0x4000_0000)
+        assert_ne!(v0[0].1, 0, "R4 must be active peripheral for P0");
+        assert_eq!(
+            v0[0].0,
+            build_rbar(0x4000_0000, 4).unwrap(),
+            "R4 RBAR must point to P0 peripheral 0"
+        );
+
+        // R5 (slot 1): P0 peripheral from cache (256B @ 0x4001_0000)
+        assert_ne!(v0[1].1, 0, "R5 must be active peripheral for P0");
+        assert_eq!(
+            v0[1].0,
+            build_rbar(0x4001_0000, 5).unwrap(),
+            "R5 RBAR must point to P0 peripheral 1"
+        );
+
+        // R6 (slot 2): P0 RAM — not a stale peripheral
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        assert_eq!(v0[2], (rb0, rs0), "R6 must be P0 RAM, not stale peripheral");
+
+        // R7 (slot 3): disabled (RASR=0)
+        assert_eq!(
+            v0[3].1, 0,
+            "R7 must be disabled for P0 (unused peripheral slot)"
+        );
+    }
+
+    #[test]
+    fn asymmetric_p1_reserved3_has_peripherals_r4_r6_and_ram_r7() {
+        let ds = setup_asymmetric_2v3();
+        let v1 = ds.partition_region_values(pid(1));
+
+        // R4 (slot 0): P1 peripheral from cache (4KiB @ 0x4002_0000)
+        assert_eq!(
+            v1[0].0,
+            build_rbar(0x4002_0000, 4).unwrap(),
+            "R4 RBAR must point to P1 peripheral 0"
+        );
+        assert_eq!(
+            v1[0].1,
+            periph_rasr(4096),
+            "R4 RASR must be 4KiB peripheral"
+        );
+
+        // R5 (slot 1): P1 peripheral from cache (256B @ 0x4003_0000)
+        assert_eq!(
+            v1[1].0,
+            build_rbar(0x4003_0000, 5).unwrap(),
+            "R5 RBAR must point to P1 peripheral 1"
+        );
+        assert_eq!(v1[1].1, periph_rasr(256), "R5 RASR must be 256B peripheral");
+
+        // R6 (slot 2): P1 peripheral from cache (1KiB @ 0x4004_0000)
+        assert_eq!(
+            v1[2].0,
+            build_rbar(0x4004_0000, 6).unwrap(),
+            "R6 RBAR must point to P1 peripheral 2"
+        );
+        assert_eq!(
+            v1[2].1,
+            periph_rasr(1024),
+            "R6 RASR must be 1KiB peripheral"
+        );
+
+        // R7 (slot 3): P1 RAM
+        let (rb1, rs1) = data_region(0x2000_8000, 4096, 7);
+        assert_eq!(v1[3], (rb1, rs1), "R7 must be P1 RAM");
+    }
+
+    #[test]
+    fn asymmetric_no_stale_rasr_between_partitions() {
+        // Verify that alternating partition_region_values calls produce
+        // no stale (non-zero RASR) peripheral entries in unused slots.
+        let ds = setup_asymmetric_2v3();
+
+        // Simulate switching: compute P1 values first, then P0.
+        let _v1 = ds.partition_region_values(pid(1));
+        let v0 = ds.partition_region_values(pid(0));
+
+        // P0 has reserved=2: slots 0,1 are peripherals, slot 2 is RAM.
+        // Slot 3 (R7) must be disabled — no stale P1 peripheral bits.
+        assert_eq!(
+            v0[3].1, 0,
+            "R7 RASR must be 0 for P0 after P1 was active (no stale leak)"
+        );
+        // Also verify slot 2 is P0's RAM, not P1's third peripheral.
+        let (rb0, rs0) = data_region(0x2000_0000, 4096, 6);
+        assert_eq!(
+            v0[2],
+            (rb0, rs0),
+            "R6 must be P0 RAM, not P1 stale peripheral"
+        );
+
+        // Switch back to P1 and verify P1 is clean too.
+        let v1 = ds.partition_region_values(pid(1));
+        for (i, &(_rbar, rasr)) in v1[0..3].iter().enumerate() {
+            assert_ne!(
+                rasr, 0,
+                "P1 slot {i} RASR must be non-zero (active peripheral)"
+            );
+        }
+        let (rb1, rs1) = data_region(0x2000_8000, 4096, 7);
+        assert_eq!(v1[3], (rb1, rs1), "R7 must be P1 RAM after switch-back");
     }
 }
