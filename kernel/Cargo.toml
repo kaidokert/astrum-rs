@@ -522,6 +522,10 @@ name = "builder_periph_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "asymmetric_periph_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "qemu_pac_uart0"
 required-features = ["qemu", "log-semihosting", "qemu-peripherals"]
 
