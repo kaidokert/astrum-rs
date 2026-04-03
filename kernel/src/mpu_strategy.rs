@@ -9,6 +9,7 @@ use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
 
 pub use crate::mpu::MpuError;
+use crate::partition::MAX_PERIPHERAL_REGIONS;
 use crate::PartitionId;
 
 #[cfg(not(test))]
@@ -158,7 +159,7 @@ fn debug_assert_no_stale_regions(
     out: &[(u32, u32); DYNAMIC_SLOT_COUNT],
     partition_id: PartitionId,
     reserved: usize,
-    cache: &[(u32, u32); 3],
+    cache: &[(u32, u32); MAX_PERIPHERAL_REGIONS],
     slots: &[Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT],
 ) {
     for idx in 0..DYNAMIC_SLOT_COUNT {
@@ -192,8 +193,9 @@ fn debug_assert_no_stale_regions(
     }
 }
 
-/// Per-partition pre-computed (RBAR, RASR) pairs for peripheral regions R4-R6.
-type PeripheralCache<const N: usize> = [[(u32, u32); 3]; N];
+/// Per-partition pre-computed (RBAR, RASR) pairs for peripheral regions
+/// starting at R4, with count determined by `MAX_PERIPHERAL_REGIONS`.
+type PeripheralCache<const N: usize> = [[(u32, u32); MAX_PERIPHERAL_REGIONS]; N];
 
 /// Per-partition private-RAM (RBAR, RASR) descriptor, indexed by partition_id.
 type PartitionRamCache<const N: usize> = [Option<(u32, u32)>; N];
@@ -277,11 +279,15 @@ impl<const N: usize> DynamicStrategy<N> {
     /// Create a new strategy with all slots empty and a peripheral cache
     /// sized for `N` partitions.
     pub const fn with_partition_count() -> Self {
-        const DISABLED: [(u32, u32); 3] = [
-            disabled_pair(DYNAMIC_REGION_BASE),
-            disabled_pair(DYNAMIC_REGION_BASE + 1),
-            disabled_pair(DYNAMIC_REGION_BASE + 2),
-        ];
+        const DISABLED: [(u32, u32); MAX_PERIPHERAL_REGIONS] = {
+            let mut arr = [(0u32, 0u32); MAX_PERIPHERAL_REGIONS];
+            let mut i = 0usize;
+            while i < MAX_PERIPHERAL_REGIONS {
+                arr[i] = disabled_pair(DYNAMIC_REGION_BASE + i as u8);
+                i += 1;
+            }
+            arr
+        };
         Self {
             slots: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
             peripheral_reserved: Mutex::new(RefCell::new([0; N])),
@@ -458,7 +464,7 @@ impl<const N: usize> DynamicStrategy<N> {
     pub fn cache_peripherals(
         &self,
         partition_id: PartitionId,
-        descriptors: [Option<WindowDescriptor>; 3],
+        descriptors: [Option<WindowDescriptor>; MAX_PERIPHERAL_REGIONS],
     ) {
         let idx = partition_id.as_raw() as usize;
         if idx >= N {
@@ -487,14 +493,13 @@ impl<const N: usize> DynamicStrategy<N> {
     /// switch to overwrite the reserved peripheral slots (R4-R6) with the
     /// incoming partition's cached values.  Partitions without peripherals
     /// receive disabled pairs (RASR = 0).
-    pub fn cached_peripheral_regions(&self, partition_id: PartitionId) -> [(u32, u32); 3] {
+    pub fn cached_peripheral_regions(
+        &self,
+        partition_id: PartitionId,
+    ) -> [(u32, u32); MAX_PERIPHERAL_REGIONS] {
         let idx = partition_id.as_raw() as usize;
         if idx >= N {
-            return [
-                disabled_pair(DYNAMIC_REGION_BASE),
-                disabled_pair(DYNAMIC_REGION_BASE + 1),
-                disabled_pair(DYNAMIC_REGION_BASE + 2),
-            ];
+            return core::array::from_fn(|i| disabled_pair(DYNAMIC_REGION_BASE + i as u8));
         }
         with_cs(|cs| self.peripheral_cache.borrow(cs).borrow()[idx])
     }
@@ -613,7 +618,8 @@ impl<const N: usize> DynamicStrategy<N> {
 
         for part in partitions.iter() {
             let reserved = self.peripheral_reserved_for(part.id());
-            let mut part_descs: [Option<WindowDescriptor>; 3] = [None; 3];
+            let mut part_descs: [Option<WindowDescriptor>; MAX_PERIPHERAL_REGIONS] =
+                [None; MAX_PERIPHERAL_REGIONS];
             let mut desc_idx = 0usize;
 
             for region in part.peripheral_regions().iter() {
@@ -626,7 +632,7 @@ impl<const N: usize> DynamicStrategy<N> {
                     .iter()
                     .find(|(b, s, _, _)| *b == base && *s == size)
                     .copied();
-                if prior.is_some() && desc_idx >= 3 {
+                if prior.is_some() && desc_idx >= MAX_PERIPHERAL_REGIONS {
                     continue;
                 }
                 let rasr = if let Some((_, _, _, stored)) = prior {
