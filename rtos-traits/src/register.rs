@@ -30,15 +30,27 @@ pub trait RegisterBank {
 // moving `modify` to a separate `RegisterBankExt` extension trait or using a non-generic
 // signature (e.g. `fn modify(&mut self, offset: usize, f: &dyn FnOnce(u32) -> u32)`).
 
-/// Mock register bank for testing, backed by BTreeMap with write logging.
+/// Maximum number of distinct registers a MockRegisterBank can hold.
+#[cfg(any(test, feature = "mock-hal"))]
+const MOCK_MAX_REGS: usize = 64;
+
+/// Maximum number of writes a MockRegisterBank can log.
+#[cfg(any(test, feature = "mock-hal"))]
+const MOCK_MAX_LOG: usize = 128;
+
+/// Mock register bank for testing, backed by fixed-size arrays (no_std compatible).
 ///
 /// Provides pre-loading via `set()`, write log recording, and assertion
 /// helpers (`assert_wrote`, `assert_sequence`) for verifying register access
 /// patterns in unit tests.
 #[cfg(any(test, feature = "mock-hal"))]
 pub struct MockRegisterBank {
-    regs: std::collections::BTreeMap<usize, u32>,
-    log: Vec<(usize, u32)>,
+    /// Sparse register storage: (offset, value) pairs.
+    regs: [(usize, u32); MOCK_MAX_REGS],
+    reg_count: usize,
+    /// Write log: (offset, value) for each write call.
+    log: [(usize, u32); MOCK_MAX_LOG],
+    log_count: usize,
 }
 
 #[cfg(any(test, feature = "mock-hal"))]
@@ -46,14 +58,38 @@ impl MockRegisterBank {
     /// Create an empty mock register bank. All reads return 0 by default.
     pub fn new() -> Self {
         Self {
-            regs: std::collections::BTreeMap::new(),
-            log: Vec::new(),
+            regs: [(0, 0); MOCK_MAX_REGS],
+            reg_count: 0,
+            log: [(0, 0); MOCK_MAX_LOG],
+            log_count: 0,
         }
     }
 
     /// Pre-load a register value before test execution.
     pub fn set(&mut self, offset: usize, value: u32) {
-        self.regs.insert(offset, value);
+        // Update existing entry if found.
+        for i in 0..self.reg_count {
+            if self.regs[i].0 == offset {
+                self.regs[i].1 = value;
+                return;
+            }
+        }
+        assert!(
+            self.reg_count < MOCK_MAX_REGS,
+            "MockRegisterBank: exceeded max register slots"
+        );
+        self.regs[self.reg_count] = (offset, value);
+        self.reg_count += 1;
+    }
+
+    /// Look up a register value by offset.
+    fn get(&self, offset: usize) -> Option<u32> {
+        for i in 0..self.reg_count {
+            if self.regs[i].0 == offset {
+                return Some(self.regs[i].1);
+            }
+        }
+        None
     }
 
     /// Assert that a specific (offset, value) pair appears in the write log.
@@ -61,12 +97,13 @@ impl MockRegisterBank {
     /// # Panics
     /// Panics if the write was not recorded.
     pub fn assert_wrote(&self, offset: usize, value: u32) {
+        let log = self.write_log();
         assert!(
-            self.log.contains(&(offset, value)),
+            log.contains(&(offset, value)),
             "expected write({:#x}, {:#010x}) not found in log: {:?}",
             offset,
             value,
-            self.log
+            log
         );
     }
 
@@ -75,12 +112,12 @@ impl MockRegisterBank {
     /// # Panics
     /// Panics if the log differs from `expected`.
     pub fn assert_sequence(&self, expected: &[(usize, u32)]) {
-        assert_eq!(self.log.as_slice(), expected, "write log mismatch");
+        assert_eq!(self.write_log(), expected, "write log mismatch");
     }
 
     /// Return a reference to the write log.
     pub fn write_log(&self) -> &[(usize, u32)] {
-        &self.log
+        &self.log[..self.log_count]
     }
 }
 
@@ -94,12 +131,19 @@ impl Default for MockRegisterBank {
 #[cfg(any(test, feature = "mock-hal"))]
 impl RegisterBank for MockRegisterBank {
     fn read(&self, offset: usize) -> u32 {
-        self.regs.get(&offset).copied().unwrap_or(0)
+        self.get(offset).unwrap_or(0)
     }
 
     fn write(&mut self, offset: usize, value: u32) {
-        self.regs.insert(offset, value);
-        self.log.push((offset, value));
+        // Update register storage.
+        self.set(offset, value);
+        // Record in write log.
+        assert!(
+            self.log_count < MOCK_MAX_LOG,
+            "MockRegisterBank: exceeded max write log entries"
+        );
+        self.log[self.log_count] = (offset, value);
+        self.log_count += 1;
     }
 }
 
