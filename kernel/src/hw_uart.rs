@@ -9,6 +9,7 @@ use heapless::Deque;
 use crate::split_isr::IsrRingBuffer;
 use crate::uart_hal::UartRegs;
 use crate::virtual_device::{DeviceError, VirtualDevice};
+use crate::PartitionId;
 
 #[cfg(test)]
 use crate::test_register::ArrayRegisterBank as RegBank;
@@ -109,16 +110,16 @@ impl<const N: usize> HwUartBackend<N> {
         count
     }
 
-    fn validate_partition(partition_id: u8) -> Result<(), DeviceError> {
-        if (partition_id as usize) >= N {
+    fn validate_partition(partition_id: PartitionId) -> Result<(), DeviceError> {
+        if (partition_id.as_raw() as usize) >= N {
             return Err(DeviceError::InvalidPartition);
         }
         Ok(())
     }
 
-    fn require_open(&self, partition_id: u8) -> Result<(), DeviceError> {
+    fn require_open(&self, partition_id: PartitionId) -> Result<(), DeviceError> {
         Self::validate_partition(partition_id)?;
-        if !self.open_partitions[partition_id as usize] {
+        if !self.open_partitions[partition_id.as_raw() as usize] {
             return Err(DeviceError::NotOpen);
         }
         Ok(())
@@ -304,22 +305,22 @@ impl<const N: usize> VirtualDevice for HwUartBackend<N> {
         self.device_id
     }
 
-    fn open(&mut self, partition_id: u8) -> Result<(), DeviceError> {
+    fn open(&mut self, partition_id: PartitionId) -> Result<(), DeviceError> {
         Self::validate_partition(partition_id)?;
-        if self.open_partitions[partition_id as usize] {
+        if self.open_partitions[partition_id.as_raw() as usize] {
             return Err(DeviceError::AlreadyOpen);
         }
-        self.open_partitions[partition_id as usize] = true;
+        self.open_partitions[partition_id.as_raw() as usize] = true;
         Ok(())
     }
 
-    fn close(&mut self, partition_id: u8) -> Result<(), DeviceError> {
+    fn close(&mut self, partition_id: PartitionId) -> Result<(), DeviceError> {
         self.require_open(partition_id)?;
-        self.open_partitions[partition_id as usize] = false;
+        self.open_partitions[partition_id.as_raw() as usize] = false;
         Ok(())
     }
 
-    fn read(&mut self, partition_id: u8, buf: &mut [u8]) -> Result<usize, DeviceError> {
+    fn read(&mut self, partition_id: PartitionId, buf: &mut [u8]) -> Result<usize, DeviceError> {
         self.require_open(partition_id)?;
         let mut count = 0;
         for slot in buf.iter_mut() {
@@ -333,7 +334,7 @@ impl<const N: usize> VirtualDevice for HwUartBackend<N> {
         Ok(count)
     }
 
-    fn write(&mut self, partition_id: u8, data: &[u8]) -> Result<usize, DeviceError> {
+    fn write(&mut self, partition_id: PartitionId, data: &[u8]) -> Result<usize, DeviceError> {
         self.require_open(partition_id)?;
         let mut count = 0;
         for &b in data {
@@ -345,7 +346,12 @@ impl<const N: usize> VirtualDevice for HwUartBackend<N> {
         Ok(count)
     }
 
-    fn ioctl(&mut self, partition_id: u8, cmd: u32, _arg: u32) -> Result<u32, DeviceError> {
+    fn ioctl(
+        &mut self,
+        partition_id: PartitionId,
+        cmd: u32,
+        _arg: u32,
+    ) -> Result<u32, DeviceError> {
         self.require_open(partition_id)?;
         match cmd {
             IOCTL_FLUSH => {
@@ -361,6 +367,10 @@ impl<const N: usize> VirtualDevice for HwUartBackend<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pid(v: u8) -> PartitionId {
+        PartitionId::new(v as u32)
+    }
     fn make_backend(id: u8) -> HwUartBackend {
         HwUartBackend::new(id, UartRegs::new(0x4000_C000))
     }
@@ -377,21 +387,21 @@ mod tests {
     #[test]
     fn open_close_manages_partition_vec() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
         assert!(hw.open_partitions[0] && !hw.open_partitions[3]);
-        VirtualDevice::open(&mut hw, 3).unwrap();
+        VirtualDevice::open(&mut hw, pid(3)).unwrap();
         assert!(hw.open_partitions[0] && hw.open_partitions[3]);
-        VirtualDevice::close(&mut hw, 0).unwrap();
+        VirtualDevice::close(&mut hw, pid(0)).unwrap();
         assert!(!hw.open_partitions[0] && hw.open_partitions[3]);
-        VirtualDevice::close(&mut hw, 3).unwrap();
+        VirtualDevice::close(&mut hw, pid(3)).unwrap();
         assert!(hw.open_partitions.iter().all(|&b| !b));
     }
 
     #[test]
     fn write_pushes_to_tx_buffer() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        let n = VirtualDevice::write(&mut hw, 0, &[0xAA, 0xBB, 0xCC]).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        let n = VirtualDevice::write(&mut hw, pid(0), &[0xAA, 0xBB, 0xCC]).unwrap();
         assert_eq!(n, 3);
         assert_eq!(hw.tx_len(), 3);
     }
@@ -399,10 +409,10 @@ mod tests {
     #[test]
     fn read_pops_from_rx_buffer() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
         hw.push_rx(&[10, 20, 30, 40]);
         let mut buf = [0u8; 3];
-        let n = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        let n = VirtualDevice::read(&mut hw, pid(0), &mut buf).unwrap();
         assert_eq!(n, 3);
         assert_eq!(buf, [10, 20, 30]);
         assert_eq!(hw.rx_len(), 1);
@@ -411,18 +421,21 @@ mod tests {
     #[test]
     fn ioctl_flush_and_available() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        VirtualDevice::write(&mut hw, 0, &[1, 2, 3, 4, 5]).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[1, 2, 3, 4, 5]).unwrap();
         assert_eq!(hw.tx_len(), 5);
-        assert_eq!(VirtualDevice::ioctl(&mut hw, 0, IOCTL_FLUSH, 0).unwrap(), 0);
+        assert_eq!(
+            VirtualDevice::ioctl(&mut hw, pid(0), IOCTL_FLUSH, 0).unwrap(),
+            0
+        );
         assert_eq!(hw.tx_len(), 0);
         assert_eq!(
-            VirtualDevice::ioctl(&mut hw, 0, IOCTL_AVAILABLE, 0).unwrap(),
+            VirtualDevice::ioctl(&mut hw, pid(0), IOCTL_AVAILABLE, 0).unwrap(),
             0
         );
         hw.push_rx(&[0xDE, 0xAD]);
         assert_eq!(
-            VirtualDevice::ioctl(&mut hw, 0, IOCTL_AVAILABLE, 0).unwrap(),
+            VirtualDevice::ioctl(&mut hw, pid(0), IOCTL_AVAILABLE, 0).unwrap(),
             2
         );
     }
@@ -430,19 +443,22 @@ mod tests {
     #[test]
     fn full_lifecycle_open_write_read_close() {
         let mut hw = make_backend(5);
-        VirtualDevice::open(&mut hw, 1).unwrap();
-        assert_eq!(VirtualDevice::write(&mut hw, 1, &[0xCA, 0xFE]).unwrap(), 2);
+        VirtualDevice::open(&mut hw, pid(1)).unwrap();
+        assert_eq!(
+            VirtualDevice::write(&mut hw, pid(1), &[0xCA, 0xFE]).unwrap(),
+            2
+        );
         hw.push_rx(&[0xBE, 0xEF]);
         let mut buf = [0u8; 4];
-        assert_eq!(VirtualDevice::read(&mut hw, 1, &mut buf).unwrap(), 2);
+        assert_eq!(VirtualDevice::read(&mut hw, pid(1), &mut buf).unwrap(), 2);
         assert_eq!(&buf[..2], &[0xBE, 0xEF]);
-        VirtualDevice::close(&mut hw, 1).unwrap();
+        VirtualDevice::close(&mut hw, pid(1)).unwrap();
         assert_eq!(
-            VirtualDevice::read(&mut hw, 1, &mut buf),
+            VirtualDevice::read(&mut hw, pid(1), &mut buf),
             Err(DeviceError::NotOpen)
         );
         assert_eq!(
-            VirtualDevice::write(&mut hw, 1, &[0]),
+            VirtualDevice::write(&mut hw, pid(1), &[0]),
             Err(DeviceError::NotOpen)
         );
     }
@@ -452,28 +468,28 @@ mod tests {
         let mut hw = make_backend(1);
         let mut buf = [0u8; 4];
         assert_eq!(
-            VirtualDevice::write(&mut hw, 0, &[1]),
+            VirtualDevice::write(&mut hw, pid(0), &[1]),
             Err(DeviceError::NotOpen)
         );
         assert_eq!(
-            VirtualDevice::read(&mut hw, 0, &mut buf),
+            VirtualDevice::read(&mut hw, pid(0), &mut buf),
             Err(DeviceError::NotOpen)
         );
         assert_eq!(
-            VirtualDevice::ioctl(&mut hw, 0, IOCTL_FLUSH, 0),
+            VirtualDevice::ioctl(&mut hw, pid(0), IOCTL_FLUSH, 0),
             Err(DeviceError::NotOpen)
         );
         assert_eq!(
-            VirtualDevice::open(&mut hw, 8),
+            VirtualDevice::open(&mut hw, pid(8)),
             Err(DeviceError::InvalidPartition)
         );
         assert_eq!(
-            VirtualDevice::close(&mut hw, 255),
+            VirtualDevice::close(&mut hw, pid(255)),
             Err(DeviceError::InvalidPartition)
         );
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
         assert_eq!(
-            VirtualDevice::ioctl(&mut hw, 0, 0xFF, 0),
+            VirtualDevice::ioctl(&mut hw, pid(0), 0xFF, 0),
             Err(DeviceError::NotFound)
         );
     }
@@ -481,10 +497,10 @@ mod tests {
     #[test]
     fn tx_buffer_full_returns_partial_count() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        let n = VirtualDevice::write(&mut hw, 0, &[0xAAu8; CAPACITY]).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        let n = VirtualDevice::write(&mut hw, pid(0), &[0xAAu8; CAPACITY]).unwrap();
         assert_eq!(n, CAPACITY);
-        assert_eq!(VirtualDevice::write(&mut hw, 0, &[0x01]).unwrap(), 0);
+        assert_eq!(VirtualDevice::write(&mut hw, pid(0), &[0x01]).unwrap(), 0);
     }
 
     // ---- ISR top-half / bottom-half drain tests ----
@@ -511,8 +527,8 @@ mod tests {
         assert_eq!(hw.rx_len(), CAPACITY);
         // Verify all bytes are 0x42.
         let mut buf = [0u8; CAPACITY];
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        let read = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        let read = VirtualDevice::read(&mut hw, pid(0), &mut buf).unwrap();
         assert_eq!(read, CAPACITY);
         assert!(buf.iter().all(|&b| b == 0x42));
     }
@@ -535,8 +551,8 @@ mod tests {
     #[test]
     fn drain_tx_to_hw_stops_when_txff() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        VirtualDevice::write(&mut hw, 0, &[1, 2, 3]).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[1, 2, 3]).unwrap();
         // Set TXFF in mock FR register — hardware FIFO is full.
         hw.regs()
             .write(crate::uart_hal::FR, crate::uart_hal::FR_TXFF);
@@ -549,8 +565,8 @@ mod tests {
     #[test]
     fn drain_tx_to_hw_drains_all() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        VirtualDevice::write(&mut hw, 0, &[0xAA, 0xBB, 0xCC]).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[0xAA, 0xBB, 0xCC]).unwrap();
         // FR = 0 → TXFF clear, so writes proceed.
         let n = hw.drain_tx_to_hw();
         assert_eq!(n, 3);
@@ -574,9 +590,9 @@ mod tests {
         assert_eq!(n, 3);
         assert_eq!(hw.rx_len(), 3);
         // Verify FIFO order via VirtualDevice read.
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
         let mut buf = [0u8; 4];
-        let read = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        let read = VirtualDevice::read(&mut hw, pid(0), &mut buf).unwrap();
         assert_eq!(read, 3);
         assert_eq!(&buf[..3], &[10, 20, 30]);
     }
@@ -596,9 +612,9 @@ mod tests {
     #[test]
     fn full_isr_roundtrip_tx_drain_then_rx_fill() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
         // Partition writes 4 bytes into TX ring.
-        VirtualDevice::write(&mut hw, 0, &[1, 2, 3, 4]).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[1, 2, 3, 4]).unwrap();
         assert_eq!(hw.tx_len(), 4);
         // Bottom-half drains TX to hardware.
         let drained = hw.drain_tx_to_hw();
@@ -609,7 +625,7 @@ mod tests {
         assert_eq!(injected, 3);
         // Partition reads RX.
         let mut buf = [0u8; 4];
-        let read = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        let read = VirtualDevice::read(&mut hw, pid(0), &mut buf).unwrap();
         assert_eq!(read, 3);
         assert_eq!(&buf[..3], &[0xA, 0xB, 0xC]);
     }
@@ -635,8 +651,8 @@ mod tests {
     fn drain_tx_to_hw_loopback_copies_tx_to_rx() {
         let mut hw = make_backend(1);
         hw.set_loopback(true);
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        VirtualDevice::write(&mut hw, 0, &[0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
         assert_eq!(hw.tx_len(), 4);
         assert_eq!(hw.rx_len(), 0);
 
@@ -647,7 +663,7 @@ mod tests {
 
         // Verify byte order is preserved (FIFO).
         let mut buf = [0u8; 4];
-        let read = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        let read = VirtualDevice::read(&mut hw, pid(0), &mut buf).unwrap();
         assert_eq!(read, 4);
         assert_eq!(buf, [0xDE, 0xAD, 0xBE, 0xEF]);
     }
@@ -656,14 +672,14 @@ mod tests {
     fn drain_tx_to_hw_loopback_stops_when_rx_full() {
         let mut hw = make_backend(1);
         hw.set_loopback(true);
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
 
         // Fill RX to capacity - 2, leaving room for only 2 bytes.
         hw.push_rx(&[0xFF; CAPACITY - 2]);
         assert_eq!(hw.rx_len(), CAPACITY - 2);
 
         // Write 5 bytes to TX.
-        VirtualDevice::write(&mut hw, 0, &[1, 2, 3, 4, 5]).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[1, 2, 3, 4, 5]).unwrap();
         let n = hw.drain_tx_to_hw();
         // Only 2 bytes should fit in RX.
         assert_eq!(n, 2);
@@ -686,8 +702,8 @@ mod tests {
         // Verify that when loopback is off, bytes go to hardware, not RX.
         let mut hw = make_backend(1);
         assert!(!hw.loopback());
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        VirtualDevice::write(&mut hw, 0, &[0xAA, 0xBB]).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[0xAA, 0xBB]).unwrap();
 
         let n = hw.drain_tx_to_hw();
         assert_eq!(n, 2);
@@ -829,8 +845,8 @@ mod tests {
     #[test]
     fn drain_tx_extracts_bytes_in_order() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        VirtualDevice::write(&mut hw, 0, &[0xAA, 0xBB, 0xCC]).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[0xAA, 0xBB, 0xCC]).unwrap();
         let mut buf = [0u8; 4];
         let n = hw.drain_tx(&mut buf);
         assert_eq!(n, 3);
@@ -841,8 +857,8 @@ mod tests {
     #[test]
     fn drain_tx_partial_when_buf_smaller() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        VirtualDevice::write(&mut hw, 0, &[1, 2, 3, 4, 5]).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[1, 2, 3, 4, 5]).unwrap();
         let mut buf = [0u8; 2];
         let n = hw.drain_tx(&mut buf);
         assert_eq!(n, 2);
@@ -877,10 +893,10 @@ mod tests {
     #[test]
     fn double_open_same_partition_returns_already_open() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 2).unwrap();
+        VirtualDevice::open(&mut hw, pid(2)).unwrap();
         // Opening same partition again must return AlreadyOpen.
         assert_eq!(
-            VirtualDevice::open(&mut hw, 2),
+            VirtualDevice::open(&mut hw, pid(2)),
             Err(DeviceError::AlreadyOpen)
         );
         assert!(hw.open_partitions[2]);
@@ -890,16 +906,19 @@ mod tests {
     fn close_not_open_partition_returns_not_open() {
         let mut hw = make_backend(1);
         // Closing a partition that was never opened must return NotOpen.
-        assert_eq!(VirtualDevice::close(&mut hw, 3), Err(DeviceError::NotOpen));
+        assert_eq!(
+            VirtualDevice::close(&mut hw, pid(3)),
+            Err(DeviceError::NotOpen)
+        );
         assert!(hw.open_partitions.iter().all(|&b| !b));
     }
 
     #[test]
     fn ioctl_unknown_command_returns_not_found() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
         assert_eq!(
-            VirtualDevice::ioctl(&mut hw, 0, 0xDEAD, 0),
+            VirtualDevice::ioctl(&mut hw, pid(0), 0xDEAD, 0),
             Err(DeviceError::NotFound)
         );
     }
@@ -909,7 +928,7 @@ mod tests {
         let mut hw = make_backend(1);
         let mut buf = [0u8; 4];
         assert_eq!(
-            VirtualDevice::read(&mut hw, 0, &mut buf),
+            VirtualDevice::read(&mut hw, pid(0), &mut buf),
             Err(DeviceError::NotOpen)
         );
     }
@@ -918,7 +937,7 @@ mod tests {
     fn write_when_closed_returns_not_open() {
         let mut hw = make_backend(1);
         assert_eq!(
-            VirtualDevice::write(&mut hw, 0, &[1]),
+            VirtualDevice::write(&mut hw, pid(0), &[1]),
             Err(DeviceError::NotOpen)
         );
     }
@@ -927,7 +946,7 @@ mod tests {
     fn ioctl_when_closed_returns_not_open() {
         let mut hw = make_backend(1);
         assert_eq!(
-            VirtualDevice::ioctl(&mut hw, 0, IOCTL_FLUSH, 0),
+            VirtualDevice::ioctl(&mut hw, pid(0), IOCTL_FLUSH, 0),
             Err(DeviceError::NotOpen)
         );
     }
@@ -935,21 +954,21 @@ mod tests {
     #[test]
     fn ioctl_available_reflects_rx_changes() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
         assert_eq!(
-            VirtualDevice::ioctl(&mut hw, 0, IOCTL_AVAILABLE, 0).unwrap(),
+            VirtualDevice::ioctl(&mut hw, pid(0), IOCTL_AVAILABLE, 0).unwrap(),
             0
         );
         hw.push_rx(&[1, 2, 3]);
         assert_eq!(
-            VirtualDevice::ioctl(&mut hw, 0, IOCTL_AVAILABLE, 0).unwrap(),
+            VirtualDevice::ioctl(&mut hw, pid(0), IOCTL_AVAILABLE, 0).unwrap(),
             3
         );
         // Read one byte, count decreases.
         let mut buf = [0u8; 1];
-        VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        VirtualDevice::read(&mut hw, pid(0), &mut buf).unwrap();
         assert_eq!(
-            VirtualDevice::ioctl(&mut hw, 0, IOCTL_AVAILABLE, 0).unwrap(),
+            VirtualDevice::ioctl(&mut hw, pid(0), IOCTL_AVAILABLE, 0).unwrap(),
             2
         );
     }
@@ -957,11 +976,11 @@ mod tests {
     #[test]
     fn ioctl_flush_clears_tx_verified_by_drain() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
-        VirtualDevice::write(&mut hw, 0, &[0xAA, 0xBB, 0xCC]).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[0xAA, 0xBB, 0xCC]).unwrap();
         assert_eq!(hw.tx_len(), 3);
         // Flush via ioctl.
-        VirtualDevice::ioctl(&mut hw, 0, IOCTL_FLUSH, 0).unwrap();
+        VirtualDevice::ioctl(&mut hw, pid(0), IOCTL_FLUSH, 0).unwrap();
         // Verify TX buffer is empty via drain_tx.
         let mut buf = [0u8; 4];
         let n = hw.drain_tx(&mut buf);
@@ -974,24 +993,24 @@ mod tests {
     fn loopback_write_then_read_via_public_api() {
         let mut hw = make_backend(1);
         hw.set_loopback(true);
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
 
         // Write data via VirtualDevice, simulate bottom-half drain,
         // then verify the looped-back data is readable via VirtualDevice.
-        VirtualDevice::write(&mut hw, 0, &[0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
         hw.drain_tx_to_hw();
 
         let mut buf = [0u8; 4];
-        let n = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        let n = VirtualDevice::read(&mut hw, pid(0), &mut buf).unwrap();
         assert_eq!(n, 4);
         assert_eq!(buf, [0xDE, 0xAD, 0xBE, 0xEF]);
 
         // Second round: verify continued loopback operation.
-        VirtualDevice::write(&mut hw, 0, &[0xCA, 0xFE]).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[0xCA, 0xFE]).unwrap();
         hw.drain_tx_to_hw();
 
         let mut buf2 = [0u8; 2];
-        let n = VirtualDevice::read(&mut hw, 0, &mut buf2).unwrap();
+        let n = VirtualDevice::read(&mut hw, pid(0), &mut buf2).unwrap();
         assert_eq!(n, 2);
         assert_eq!(buf2, [0xCA, 0xFE]);
     }
@@ -1001,27 +1020,27 @@ mod tests {
     #[test]
     fn tx_full_then_drain_then_refill() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
         // Fill TX to capacity.
-        let n = VirtualDevice::write(&mut hw, 0, &[0xABu8; CAPACITY]).unwrap();
+        let n = VirtualDevice::write(&mut hw, pid(0), &[0xABu8; CAPACITY]).unwrap();
         assert_eq!(n, CAPACITY);
-        assert_eq!(VirtualDevice::write(&mut hw, 0, &[0x01]).unwrap(), 0);
+        assert_eq!(VirtualDevice::write(&mut hw, pid(0), &[0x01]).unwrap(), 0);
         // Drain all via drain_tx.
         let mut buf = [0u8; CAPACITY];
         let drained = hw.drain_tx(&mut buf);
         assert_eq!(drained, CAPACITY);
         assert_eq!(hw.tx_len(), 0);
         // Refill should work.
-        let n = VirtualDevice::write(&mut hw, 0, &[0xCD; 10]).unwrap();
+        let n = VirtualDevice::write(&mut hw, pid(0), &[0xCD; 10]).unwrap();
         assert_eq!(n, 10);
     }
 
     #[test]
     fn rx_empty_read_returns_zero_bytes() {
         let mut hw = make_backend(1);
-        VirtualDevice::open(&mut hw, 0).unwrap();
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
         let mut buf = [0xFFu8; 4];
-        let n = VirtualDevice::read(&mut hw, 0, &mut buf).unwrap();
+        let n = VirtualDevice::read(&mut hw, pid(0), &mut buf).unwrap();
         assert_eq!(n, 0);
         // Buffer should be unchanged.
         assert_eq!(buf, [0xFF; 4]);

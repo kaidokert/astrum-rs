@@ -89,7 +89,7 @@ fn main() -> ! {
                 stk_iter.next().expect("stack"),
                 entry_fns[i],
                 MpuRegion::new(0, 0, 0),
-                i as u8,
+                kernel::PartitionId::new(i as u32),
             ) {
                 Ok(m) => m, Err(_) => loop { kexit!(failure); },
             }

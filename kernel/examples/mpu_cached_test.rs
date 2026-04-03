@@ -123,7 +123,7 @@ fn main() -> ! {
                     s0,
                     entry_fns[0],
                     MpuRegion::new(base, REGION_SZ, 0),
-                    0,
+                    kernel::PartitionId::new(0),
                 )
                 .expect("mem 0")
                 .with_peripheral_regions(&[MpuRegion::new(0x4000_C000, 4096, AP_FULL_ACCESS)])
@@ -135,7 +135,7 @@ fn main() -> ! {
                     s1,
                     entry_fns[1],
                     MpuRegion::new(base, REGION_SZ, 0),
-                    1,
+                    kernel::PartitionId::new(1),
                 )
                 .expect("mem 1")
             },

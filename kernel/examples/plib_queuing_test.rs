@@ -14,6 +14,7 @@ use kernel::partition::{EntryAddr, ExternalPartitionMemory, MpuRegion};
 use kernel::sampling::PortDirection;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
+use kernel::PartitionId;
 use kernel::{DebugEnabled, MsgSmall, PartitionEntry, Partitions2, PortsTiny, SyncMinimal};
 
 const NP: usize = 2;
@@ -116,8 +117,10 @@ fn main() -> ! {
     let mpu = MpuRegion::new(0, 0, 0);
     let e = EntryAddr::from_entry;
     let memories = [
-        ExternalPartitionMemory::new(s0, e(p0_main as PartitionEntry), mpu, 0).expect("mem 0"),
-        ExternalPartitionMemory::new(s1, e(p1_main as PartitionEntry), mpu, 1).expect("mem 1"),
+        ExternalPartitionMemory::new(s0, e(p0_main as PartitionEntry), mpu, PartitionId::new(0))
+            .expect("mem 0"),
+        ExternalPartitionMemory::new(s1, e(p1_main as PartitionEntry), mpu, PartitionId::new(1))
+            .expect("mem 1"),
     ];
     let mut k = Kernel::<TestConfig>::new(sched, &memories).expect("plib_queuing_test: kernel");
 

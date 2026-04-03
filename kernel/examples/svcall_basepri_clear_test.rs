@@ -152,14 +152,14 @@ fn main() -> ! {
         &mut stk0.0,
         EntryAddr::from_entry(p0_main as PartitionEntry),
         sentinel_mpu,
-        0,
+        kernel::PartitionId::new(0),
     )
     .expect("ext mem");
     let mem1 = ExternalPartitionMemory::new(
         &mut stk1.0,
         EntryAddr::from_entry(p1_main as PartitionEntry),
         sentinel_mpu,
-        1,
+        kernel::PartitionId::new(1),
     )
     .expect("ext mem");
     let mut k = Kernel::<Config>::new(sched, &[mem0, mem1]).expect("basepri: kernel");

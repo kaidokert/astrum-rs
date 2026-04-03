@@ -180,14 +180,14 @@ fn main() -> ! {
                 &mut s0.0,
                 EntryAddr::from_entry(p1_main as PartitionEntry),
                 sentinel_mpu,
-                0,
+                kernel::PartitionId::new(0),
             )
             .expect("ext mem"),
             ExternalPartitionMemory::new(
                 &mut s1.0,
                 EntryAddr::from_entry(p2_main as PartitionEntry),
                 sentinel_mpu,
-                1,
+                kernel::PartitionId::new(1),
             )
             .expect("ext mem"),
         ]

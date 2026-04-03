@@ -1,5 +1,7 @@
 #[cfg(feature = "ipc-blackboard")]
 use crate::waitqueue::TimedWaitQueue;
+#[cfg(feature = "ipc-blackboard")]
+use rtos_traits::ids::PartitionId;
 
 #[cfg(feature = "ipc-blackboard")]
 #[derive(Debug, PartialEq, Eq)]
@@ -66,7 +68,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
 
     /// Returns the PIDs of currently waiting readers in FIFO order.
     #[cfg(test)]
-    pub fn waiting_reader_pids(&self) -> std::vec::Vec<u8> {
+    pub fn waiting_reader_pids(&self) -> std::vec::Vec<PartitionId> {
         self.wait_queue.waiting_pids()
     }
 
@@ -77,7 +79,10 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
     }
 
     /// Overwrite content and wake all blocked readers.
-    pub fn display(&mut self, data: &[u8]) -> Result<heapless::Vec<u8, W>, BlackboardError> {
+    pub fn display(
+        &mut self,
+        data: &[u8],
+    ) -> Result<heapless::Vec<PartitionId, W>, BlackboardError> {
         if data.len() > M {
             return Err(BlackboardError::MessageTooLarge);
         }
@@ -97,7 +102,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
     #[cfg(test)]
     pub fn read(
         &mut self,
-        caller: u8,
+        caller: PartitionId,
         buf: &mut [u8],
         timeout: u32,
     ) -> Result<ReadBlackboardOutcome, BlackboardError> {
@@ -120,7 +125,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
     /// Like `read`, but computes expiry from `current_tick + timeout`.
     pub fn read_timed(
         &mut self,
-        caller: u8,
+        caller: PartitionId,
         buf: &mut [u8],
         timeout: u32,
         current_tick: u64,
@@ -145,7 +150,7 @@ impl<const M: usize, const W: usize> Blackboard<M, W> {
     pub fn drain_expired_readers<const E: usize>(
         &mut self,
         current_tick: u64,
-        out: &mut heapless::Vec<u8, E>,
+        out: &mut heapless::Vec<PartitionId, E>,
     ) {
         self.wait_queue.drain_expired(current_tick, out);
     }
@@ -195,7 +200,7 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
         &mut self,
         id: usize,
         data: &[u8],
-    ) -> Result<heapless::Vec<u8, W>, BlackboardError> {
+    ) -> Result<heapless::Vec<PartitionId, W>, BlackboardError> {
         self.boards
             .get_mut(id)
             .ok_or(BlackboardError::InvalidBoard)?
@@ -207,7 +212,7 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
     pub fn read_blackboard(
         &mut self,
         id: usize,
-        caller: u8,
+        caller: PartitionId,
         buf: &mut [u8],
         timeout: u32,
     ) -> Result<ReadBlackboardOutcome, BlackboardError> {
@@ -220,7 +225,7 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
     pub fn read_blackboard_timed(
         &mut self,
         id: usize,
-        caller: u8,
+        caller: PartitionId,
         buf: &mut [u8],
         timeout: u32,
         current_tick: u64,
@@ -234,7 +239,7 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
     pub fn tick_timeouts<const E: usize>(
         &mut self,
         current_tick: u64,
-        out: &mut heapless::Vec<u8, E>,
+        out: &mut heapless::Vec<PartitionId, E>,
     ) {
         for board in self.boards.iter_mut() {
             board.drain_expired_readers(current_tick, out);
@@ -265,7 +270,7 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
     pub fn tick_timeouts<const E: usize>(
         &mut self,
         _current_tick: u64,
-        _out: &mut heapless::Vec<u8, E>,
+        _out: &mut heapless::Vec<rtos_traits::ids::PartitionId, E>,
     ) {
     }
 }
@@ -273,6 +278,10 @@ impl<const S: usize, const M: usize, const W: usize> BlackboardPool<S, M, W> {
 #[cfg(all(test, feature = "ipc-blackboard"))]
 mod tests {
     use super::*;
+
+    fn pid(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
 
     #[test]
     fn create_and_initial_state() {
@@ -285,7 +294,7 @@ mod tests {
     #[test]
     fn display_writes_data() {
         let mut bb = Blackboard::<16, 4>::new(0);
-        let woken: heapless::Vec<u8, 4> = bb.display(&[1, 2, 3]).unwrap();
+        let woken: heapless::Vec<PartitionId, 4> = bb.display(&[1, 2, 3]).unwrap();
         assert!(!bb.is_empty());
         assert_eq!(bb.data(), &[1, 2, 3]);
         assert!(woken.is_empty());
@@ -294,8 +303,8 @@ mod tests {
     #[test]
     fn display_overwrites_previous() {
         let mut bb = Blackboard::<16, 4>::new(0);
-        let _: heapless::Vec<u8, 4> = bb.display(&[1, 2, 3]).unwrap();
-        let _: heapless::Vec<u8, 4> = bb.display(&[4, 5]).unwrap();
+        let _: heapless::Vec<PartitionId, 4> = bb.display(&[1, 2, 3]).unwrap();
+        let _: heapless::Vec<PartitionId, 4> = bb.display(&[4, 5]).unwrap();
         assert_eq!(bb.data(), &[4, 5]);
     }
 
@@ -306,20 +315,20 @@ mod tests {
         // Blocking reads (timeout > 0) enqueue callers
         for i in 1..=3u8 {
             assert_eq!(
-                bb.read(i, &mut buf, 1),
+                bb.read(pid(i as u32), &mut buf, 1),
                 Ok(ReadBlackboardOutcome::ReaderBlocked)
             );
         }
         assert_eq!(bb.waiting_readers(), 3);
-        let woken: heapless::Vec<u8, 4> = bb.display(&[10]).unwrap();
-        assert_eq!(woken.as_slice(), &[1, 2, 3]);
+        let woken: heapless::Vec<PartitionId, 4> = bb.display(&[10]).unwrap();
+        assert_eq!(woken.as_slice(), &[pid(1), pid(2), pid(3)]);
         assert_eq!(bb.waiting_readers(), 0);
     }
 
     #[test]
     fn display_rejects_oversized() {
         let mut bb = Blackboard::<4, 2>::new(0);
-        let r: Result<heapless::Vec<u8, 2>, _> = bb.display(&[1; 5]);
+        let r: Result<heapless::Vec<PartitionId, 2>, _> = bb.display(&[1; 5]);
         assert_eq!(r, Err(BlackboardError::MessageTooLarge));
     }
 
@@ -328,7 +337,10 @@ mod tests {
         let mut bb = Blackboard::<16, 4>::new(0);
         let mut buf = [0u8; 16];
         // Non-blocking read (timeout=0) on empty board returns error
-        assert_eq!(bb.read(5, &mut buf, 0), Err(BlackboardError::BoardEmpty));
+        assert_eq!(
+            bb.read(pid(5), &mut buf, 0),
+            Err(BlackboardError::BoardEmpty)
+        );
         // Caller was NOT enqueued
         assert_eq!(bb.waiting_readers(), 0);
     }
@@ -339,7 +351,7 @@ mod tests {
         let mut buf = [0u8; 16];
         // Blocking read (timeout>0) on empty board enqueues caller
         assert_eq!(
-            bb.read(5, &mut buf, 1),
+            bb.read(pid(5), &mut buf, 1),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
         assert_eq!(bb.waiting_readers(), 1);
@@ -348,17 +360,17 @@ mod tests {
     #[test]
     fn read_returns_data_and_truncation() {
         let mut bb = Blackboard::<16, 4>::new(0);
-        let _: heapless::Vec<u8, 4> = bb.display(&[1, 2, 3, 4, 5]).unwrap();
+        let _: heapless::Vec<PartitionId, 4> = bb.display(&[1, 2, 3, 4, 5]).unwrap();
         let mut buf = [0u8; 16];
         assert_eq!(
-            bb.read(1, &mut buf, 0),
+            bb.read(pid(1), &mut buf, 0),
             Ok(ReadBlackboardOutcome::Read { msg_len: 5 })
         );
         assert_eq!(&buf[..5], &[1, 2, 3, 4, 5]);
         // Truncation: small buffer gets prefix, returns original length
         let mut small = [0u8; 3];
         assert_eq!(
-            bb.read(1, &mut small, 0),
+            bb.read(pid(1), &mut small, 0),
             Ok(ReadBlackboardOutcome::Read { msg_len: 5 })
         );
         assert_eq!(small, [1, 2, 3]);
@@ -374,16 +386,19 @@ mod tests {
         let mut buf = [0u8; 16];
         // Fill the wait queue with blocking reads
         assert_eq!(
-            bb.read(1, &mut buf, 1),
+            bb.read(pid(1), &mut buf, 1),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
         assert_eq!(
-            bb.read(2, &mut buf, 1),
+            bb.read(pid(2), &mut buf, 1),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
         assert_eq!(bb.waiting_readers(), 2);
         // Third blocking reader should get WaitQueueFull
-        assert_eq!(bb.read(3, &mut buf, 1), Err(BlackboardError::WaitQueueFull));
+        assert_eq!(
+            bb.read(pid(3), &mut buf, 1),
+            Err(BlackboardError::WaitQueueFull)
+        );
         // Wait queue unchanged — the third reader was not enqueued
         assert_eq!(bb.waiting_readers(), 2);
     }
@@ -407,21 +422,21 @@ mod tests {
         let mut buf = [0u8; 16];
         // Block readers (timeout>0) then display
         assert_eq!(
-            pool.read_blackboard(id, 1, &mut buf, 1),
+            pool.read_blackboard(id, pid(1), &mut buf, 1),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
         assert_eq!(
-            pool.read_blackboard(id, 2, &mut buf, 1),
+            pool.read_blackboard(id, pid(2), &mut buf, 1),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
-        let woken: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[42]).unwrap();
-        assert_eq!(woken.as_slice(), &[1, 2]);
-        let outcome = pool.read_blackboard(id, 0, &mut buf, 0).unwrap();
+        let woken: heapless::Vec<PartitionId, 4> = pool.display_blackboard(id, &[42]).unwrap();
+        assert_eq!(woken.as_slice(), &[pid(1), pid(2)]);
+        let outcome = pool.read_blackboard(id, pid(0), &mut buf, 0).unwrap();
         assert_eq!(outcome, ReadBlackboardOutcome::Read { msg_len: 1 });
         assert_eq!(&buf[..1], &[42]);
         // Overwrite
-        let _: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[7, 8]).unwrap();
-        let outcome = pool.read_blackboard(id, 0, &mut buf, 0).unwrap();
+        let _: heapless::Vec<PartitionId, 4> = pool.display_blackboard(id, &[7, 8]).unwrap();
+        let outcome = pool.read_blackboard(id, pid(0), &mut buf, 0).unwrap();
         assert_eq!(outcome, ReadBlackboardOutcome::Read { msg_len: 2 });
         assert_eq!(&buf[..2], &[7, 8]);
     }
@@ -430,10 +445,10 @@ mod tests {
     fn pool_invalid_ids() {
         let mut pool = BlackboardPool::<4, 8, 2>::new();
         let mut buf = [0u8; 8];
-        let r: Result<heapless::Vec<u8, 2>, _> = pool.display_blackboard(99, &[1]);
+        let r: Result<heapless::Vec<PartitionId, 2>, _> = pool.display_blackboard(99, &[1]);
         assert_eq!(r, Err(BlackboardError::InvalidBoard));
         assert_eq!(
-            pool.read_blackboard(99, 0, &mut buf, 0),
+            pool.read_blackboard(99, pid(0), &mut buf, 0),
             Err(BlackboardError::InvalidBoard)
         );
         assert_eq!(
@@ -446,11 +461,11 @@ mod tests {
     fn pool_clear_then_nonblocking_read_returns_empty() {
         let mut pool = BlackboardPool::<4, 16, 4>::new();
         let id = pool.create().unwrap();
-        let _: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[1]).unwrap();
+        let _: heapless::Vec<PartitionId, 4> = pool.display_blackboard(id, &[1]).unwrap();
         pool.clear_blackboard(id).unwrap();
         let mut buf = [0u8; 16];
         assert_eq!(
-            pool.read_blackboard(id, 0, &mut buf, 0),
+            pool.read_blackboard(id, pid(0), &mut buf, 0),
             Err(BlackboardError::BoardEmpty)
         );
         // Caller was not enqueued
@@ -461,11 +476,11 @@ mod tests {
     fn pool_clear_then_blocking_read_enqueues() {
         let mut pool = BlackboardPool::<4, 16, 4>::new();
         let id = pool.create().unwrap();
-        let _: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[1]).unwrap();
+        let _: heapless::Vec<PartitionId, 4> = pool.display_blackboard(id, &[1]).unwrap();
         pool.clear_blackboard(id).unwrap();
         let mut buf = [0u8; 16];
         assert_eq!(
-            pool.read_blackboard(id, 0, &mut buf, 1),
+            pool.read_blackboard(id, pid(0), &mut buf, 1),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 1);
@@ -477,16 +492,16 @@ mod tests {
         let id = pool.create().unwrap();
         let mut buf = [0u8; 16];
         assert_eq!(
-            pool.read_blackboard_timed(id, 1, &mut buf, 50, 100),
+            pool.read_blackboard_timed(id, pid(1), &mut buf, 50, 100),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
-        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut u: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(149, &mut u);
         assert!(u.is_empty());
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 1);
-        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut u: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(150, &mut u);
-        assert_eq!(u.as_slice(), &[1]);
+        assert_eq!(u.as_slice(), &[pid(1)]);
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 0);
     }
 
@@ -496,12 +511,12 @@ mod tests {
         let id = pool.create().unwrap();
         let mut buf = [0u8; 16];
         assert_eq!(
-            pool.read_blackboard_timed(id, 1, &mut buf, 100, 0),
+            pool.read_blackboard_timed(id, pid(1), &mut buf, 100, 0),
             Ok(ReadBlackboardOutcome::ReaderBlocked)
         );
-        let woken: heapless::Vec<u8, 4> = pool.display_blackboard(id, &[0xAB]).unwrap();
-        assert_eq!(woken.as_slice(), &[1]);
-        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let woken: heapless::Vec<PartitionId, 4> = pool.display_blackboard(id, &[0xAB]).unwrap();
+        assert_eq!(woken.as_slice(), &[pid(1)]);
+        let mut u: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(100, &mut u);
         assert!(u.is_empty());
     }
@@ -511,21 +526,24 @@ mod tests {
         let mut pool = BlackboardPool::<4, 16, 4>::new();
         let id = pool.create().unwrap();
         let mut buf = [0u8; 16];
-        pool.read_blackboard_timed(id, 1, &mut buf, 50, 0).unwrap();
-        pool.read_blackboard_timed(id, 2, &mut buf, 100, 0).unwrap();
-        pool.read_blackboard_timed(id, 3, &mut buf, 200, 0).unwrap();
+        pool.read_blackboard_timed(id, pid(1), &mut buf, 50, 0)
+            .unwrap();
+        pool.read_blackboard_timed(id, pid(2), &mut buf, 100, 0)
+            .unwrap();
+        pool.read_blackboard_timed(id, pid(3), &mut buf, 200, 0)
+            .unwrap();
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 3);
-        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut u: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(50, &mut u);
-        assert_eq!(u.as_slice(), &[1]);
+        assert_eq!(u.as_slice(), &[pid(1)]);
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 2);
-        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut u: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(100, &mut u);
-        assert_eq!(u.as_slice(), &[2]);
+        assert_eq!(u.as_slice(), &[pid(2)]);
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 1);
-        let mut u: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut u: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(200, &mut u);
-        assert_eq!(u.as_slice(), &[3]);
+        assert_eq!(u.as_slice(), &[pid(3)]);
         assert_eq!(pool.get(id).unwrap().waiting_readers(), 0);
     }
 
@@ -538,24 +556,24 @@ mod tests {
         let mut bb = Blackboard::<16, 8>::new(0);
         let mut buf = [0u8; 16];
         // PID 10, expiry 200 (survives)
-        bb.read_timed(10, &mut buf, 200, 0).unwrap();
+        bb.read_timed(pid(10), &mut buf, 200, 0).unwrap();
         // PID 20, expiry 50  (expires)
-        bb.read_timed(20, &mut buf, 50, 0).unwrap();
+        bb.read_timed(pid(20), &mut buf, 50, 0).unwrap();
         // PID 30, expiry 300 (survives)
-        bb.read_timed(30, &mut buf, 300, 0).unwrap();
+        bb.read_timed(pid(30), &mut buf, 300, 0).unwrap();
         // PID 40, expiry 50  (expires)
-        bb.read_timed(40, &mut buf, 50, 0).unwrap();
+        bb.read_timed(pid(40), &mut buf, 50, 0).unwrap();
         assert_eq!(bb.waiting_readers(), 4);
 
-        let mut expired: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         bb.drain_expired_readers(50, &mut expired);
 
         // PIDs 20 and 40 expired
-        assert_eq!(expired.as_slice(), &[20, 40]);
+        assert_eq!(expired.as_slice(), &[pid(20), pid(40)]);
         // Remaining waiters: PIDs 10, 30 in original FIFO order
         assert_eq!(bb.waiting_readers(), 2);
         let remaining = bb.waiting_reader_pids();
-        assert_eq!(remaining, vec![10, 30]);
+        assert_eq!(remaining, vec![pid(10), pid(30)]);
     }
 
     /// Verify that `data()` clamps a corrupted `current_size` to M,
@@ -563,7 +581,7 @@ mod tests {
     #[test]
     fn data_accessor_clamps_corrupted_current_size() {
         let mut bb = Blackboard::<8, 2>::new(0);
-        let _: heapless::Vec<u8, 2> = bb.display(&[1, 2, 3]).unwrap();
+        let _: heapless::Vec<PartitionId, 2> = bb.display(&[1, 2, 3]).unwrap();
         // Corrupt current_size to exceed M
         bb.set_current_size_for_test(100);
         // data() should clamp to M=8, not panic
@@ -576,12 +594,12 @@ mod tests {
     #[test]
     fn read_clamps_corrupted_current_size() {
         let mut bb = Blackboard::<8, 2>::new(0);
-        let _: heapless::Vec<u8, 2> = bb.display(&[10, 20]).unwrap();
+        let _: heapless::Vec<PartitionId, 2> = bb.display(&[10, 20]).unwrap();
         // Corrupt current_size to exceed M; is_empty already false from display
         bb.set_current_size_for_test(200);
         let mut buf = [0u8; 16];
         // Should not panic — n is clamped to min(200, 8, 16) = 8
-        let result = bb.read(0, &mut buf, 0);
+        let result = bb.read(pid(0), &mut buf, 0);
         assert!(matches!(result, Ok(ReadBlackboardOutcome::Read { .. })));
     }
 
@@ -590,12 +608,12 @@ mod tests {
     #[test]
     fn read_timed_clamps_corrupted_current_size() {
         let mut bb = Blackboard::<8, 2>::new(0);
-        let _: heapless::Vec<u8, 2> = bb.display(&[10, 20]).unwrap();
+        let _: heapless::Vec<PartitionId, 2> = bb.display(&[10, 20]).unwrap();
         // Corrupt current_size to exceed M; is_empty already false from display
         bb.set_current_size_for_test(200);
         let mut buf = [0u8; 16];
         // Should not panic — n is clamped to min(200, 8, 16) = 8
-        let result = bb.read_timed(0, &mut buf, 0, 0);
+        let result = bb.read_timed(pid(0), &mut buf, 0, 0);
         assert!(matches!(result, Ok(ReadBlackboardOutcome::Read { .. })));
     }
 }

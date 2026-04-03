@@ -8,6 +8,7 @@ use crate::queuing::QueuingPortPool;
 use crate::sampling::SamplingPortPool;
 use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
+use rtos_traits::ids::PartitionId;
 
 impl<'mem, C: KernelConfig> Kernel<'mem, C>
 where
@@ -114,7 +115,11 @@ where
     pub fn set_next_partition(&mut self, id: u8) {
         // Transition the incoming partition to Running so syscalls can block it.
         // This is the authoritative location for this state transition.
-        let _ = try_transition(self.partitions_mut(), id, PartitionState::Running);
+        let _ = try_transition(
+            self.partitions_mut(),
+            PartitionId::new(id as u32),
+            PartitionState::Running,
+        );
         self.core.set_next_partition(id);
     }
 

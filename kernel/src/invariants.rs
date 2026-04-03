@@ -54,9 +54,9 @@ pub fn assert_partition_state_consistency(_partitions: &[PartitionControlBlock])
 pub fn assert_partition_table_integrity(partitions: &[PartitionControlBlock]) {
     for (index, partition) in partitions.iter().enumerate() {
         let pid = partition.id();
-        if pid as usize != index {
+        if pid.as_raw() as usize != index {
             panic!(
-                "invariant violation: partition at index {} has id {} (expected id == index)",
+                "invariant violation: partition at index {} has id {:?} (expected id == index)",
                 index, pid
             );
         }
@@ -103,7 +103,7 @@ pub fn assert_stack_pointer_bounds(partitions: &[PartitionControlBlock], partiti
         // ARM Cortex-M requires 4-byte (word) aligned stack pointers.
         if sp % 4 != 0 {
             panic!(
-                "invariant violation: partition {} SP 0x{:08x} is not 4-byte aligned",
+                "invariant violation: partition {:?} SP 0x{:08x} is not 4-byte aligned",
                 pid, sp
             );
         }
@@ -118,7 +118,7 @@ pub fn assert_stack_pointer_bounds(partitions: &[PartitionControlBlock], partiti
         // SP must be within [stack_base, stack_top] (inclusive on both ends)
         if sp < stack_base || sp > stack_top {
             panic!(
-                "invariant violation: partition {} SP 0x{:08x} outside stack bounds \
+                "invariant violation: partition {:?} SP 0x{:08x} outside stack bounds \
                  [0x{:08x}, 0x{:08x}]",
                 pid, sp, stack_base, stack_top
             );
@@ -205,8 +205,8 @@ pub fn assert_no_overlapping_mpu_regions(partitions: &[PartitionControlBlock]) {
                     if base_a < base_b.wrapping_add(size_b) && base_b < base_a.wrapping_add(size_a)
                     {
                         panic!(
-                            "invariant violation: partition {} region [0x{:08x}, 0x{:08x}) \
-                             overlaps partition {} region [0x{:08x}, 0x{:08x})",
+                            "invariant violation: partition {:?} region [0x{:08x}, 0x{:08x}) \
+                             overlaps partition {:?} region [0x{:08x}, 0x{:08x})",
                             pcb_i.id(),
                             base_a,
                             base_a.wrapping_add(size_a),
@@ -349,7 +349,7 @@ pub fn assert_waiting_implies_yield_requested(
             && !yield_requested
         {
             panic!(
-                "invariant violation: partition {} transitioned Running → Waiting \
+                "invariant violation: partition {:?} transitioned Running → Waiting \
                  but yield_requested is false — blocking must trigger deschedule",
                 i
             );
@@ -384,7 +384,7 @@ pub fn assert_pcb_addresses_in_storage(
         let sb = pcb.stack_base();
         if sb != 0 && (sb < storage_start || sb >= storage_end) {
             panic!(
-                "invariant violation: partition {} stack_base 0x{:08x} outside storage \
+                "invariant violation: partition {:?} stack_base 0x{:08x} outside storage \
                  [0x{:08x}, 0x{:08x})",
                 pcb.id(),
                 sb,
@@ -610,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition at index 0 has id 1")]
+    #[should_panic(expected = "partition at index 0 has id PartitionId(1)")]
     fn partition_table_integrity_mismatch_at_index_0() {
         // Partition at index 0 with id 1 violates the invariant.
         let partitions = [make_pcb(1), make_pcb(1)];
@@ -618,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition at index 1 has id 5")]
+    #[should_panic(expected = "partition at index 1 has id PartitionId(5)")]
     fn partition_table_integrity_mismatch_at_index_1() {
         // Partition at index 1 with id 5 violates the invariant.
         let partitions = [make_pcb(0), make_pcb(5)];
@@ -686,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition 0 SP 0x1fff0000 outside stack bounds")]
+    #[should_panic(expected = "partition PartitionId(0) SP 0x1fff0000 outside stack bounds")]
     fn stack_pointer_bounds_below_base_panics() {
         // SP below stack_base violates the invariant.
         let partitions = [make_pcb(0)];
@@ -695,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition 0 SP 0x20000500 outside stack bounds")]
+    #[should_panic(expected = "partition PartitionId(0) SP 0x20000500 outside stack bounds")]
     fn stack_pointer_bounds_above_top_panics() {
         // SP above stack_top violates the invariant.
         // stack_top = 0x2000_0000 + 0x400 = 0x2000_0400
@@ -705,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition 1 SP 0x30000000 outside stack bounds")]
+    #[should_panic(expected = "partition PartitionId(1) SP 0x30000000 outside stack bounds")]
     fn stack_pointer_bounds_second_partition_out_of_bounds() {
         // Second partition has invalid SP while first is valid.
         let partitions = [make_pcb(0), make_pcb(1)];
@@ -732,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition 0 SP 0x20000201 is not 4-byte aligned")]
+    #[should_panic(expected = "partition PartitionId(0) SP 0x20000201 is not 4-byte aligned")]
     fn stack_pointer_bounds_misaligned_sp_panics() {
         // SP not 4-byte aligned violates ARM Cortex-M requirements.
         let partitions = [make_pcb(0)];
@@ -741,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition 0 SP 0x20000202 is not 4-byte aligned")]
+    #[should_panic(expected = "partition PartitionId(0) SP 0x20000202 is not 4-byte aligned")]
     fn stack_pointer_bounds_misaligned_sp_by_2_panics() {
         // SP misaligned by 2 bytes also violates alignment.
         let partitions = [make_pcb(0)];
@@ -892,7 +892,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "overlaps partition 1")]
+    #[should_panic(expected = "overlaps partition PartitionId(1)")]
     fn overlap_peripheral() {
         let p0 = make_region_pcb(0, 0x2000_0000, 4096, 0x2000_1000, 1024)
             .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0)]);
@@ -931,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "overlaps partition 1")]
+    #[should_panic(expected = "overlaps partition PartitionId(1)")]
     fn overlap_stack_stack() {
         // P0 stack [0x2000_2000, 0x2000_2400) overlaps P1 stack [0x2000_2200, 0x2000_2600).
         let p0 = make_region_pcb(0, 0x2000_0000, 0x1000, 0x2000_2000, 0x400);
@@ -940,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "overlaps partition 1")]
+    #[should_panic(expected = "overlaps partition PartitionId(1)")]
     fn overlap_stack_peripheral() {
         // P0 stack [0x4000_0000, 0x4000_0400) overlaps P1 peripheral [0x4000_0200, 0x4000_1200).
         // Both are exclusive regions, so this must be rejected.
@@ -1024,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition at index 0 has id 1")]
+    #[should_panic(expected = "partition at index 0 has id PartitionId(1)")]
     fn kernel_invariants_catches_table_integrity_violation() {
         assert_kernel_invariants(&[make_pcb(1), make_pcb(1)], None, &[], None, &[0; 2]);
     }
@@ -1044,7 +1044,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "partition 0 SP 0x10000000 outside stack bounds")]
+    #[should_panic(expected = "partition PartitionId(0) SP 0x10000000 outside stack bounds")]
     fn kernel_invariants_catches_stack_pointer_violation() {
         let mut p0 = make_pcb(0);
         p0.transition(PartitionState::Running).unwrap();

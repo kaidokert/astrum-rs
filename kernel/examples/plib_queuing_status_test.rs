@@ -70,8 +70,13 @@ fn main() -> ! {
     let [ref mut s0] = *stacks;
     let mpu = MpuRegion::new(0, 0, 0);
     let e = EntryAddr::from_entry;
-    let memories =
-        [ExternalPartitionMemory::new(s0, e(p0_main as PartitionEntry), mpu, 0).expect("mem 0")];
+    let memories = [ExternalPartitionMemory::new(
+        s0,
+        e(p0_main as PartitionEntry),
+        mpu,
+        kernel::PartitionId::new(0),
+    )
+    .expect("mem 0")];
     let mut k = Kernel::<TestConfig>::new(sched, &memories).expect("kernel");
     let src = k
         .queuing_mut()

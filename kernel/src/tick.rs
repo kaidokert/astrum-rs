@@ -758,9 +758,13 @@ mod tests {
             let mut hw_uart = None;
             let ds = DynamicStrategy::new();
 
-            buffers.lend_to_partition(0, 1, false, &ds).unwrap();
+            buffers
+                .lend_to_partition(0, crate::PartitionId::new(1), false, &ds)
+                .unwrap();
             buffers.set_deadline(0, Some(50)).unwrap();
-            buffers.lend_to_partition(1, 2, true, &ds).unwrap();
+            buffers
+                .lend_to_partition(1, crate::PartitionId::new(2), true, &ds)
+                .unwrap();
             buffers.set_deadline(1, Some(200)).unwrap();
 
             crate::tick::run_bottom_half(
@@ -780,7 +784,9 @@ mod tests {
 
             assert_eq!(
                 buffers.get(1).unwrap().state(),
-                crate::buffer_pool::BorrowState::BorrowedWrite { owner: 2 },
+                crate::buffer_pool::BorrowState::BorrowedWrite {
+                    owner: crate::PartitionId::new(2)
+                },
             );
             assert_eq!(buffers.deadline(1), Some(200));
         }

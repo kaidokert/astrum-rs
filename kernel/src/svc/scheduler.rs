@@ -10,6 +10,7 @@ use crate::scheduler::ScheduleEvent;
 use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
 use crate::svc::{try_transition, Kernel};
+use rtos_traits::ids::PartitionId;
 
 // TODO: The where clause duplicates the full Kernel bounds from svc.rs. This is
 // required by Rust because partitions()/schedule() are defined in the main impl
@@ -45,7 +46,11 @@ where
     if let Some(old_pid) = kernel.active_partition {
         let state = kernel.pcb(old_pid as usize).map(|pcb| pcb.state());
         if state == Some(PartitionState::Running) {
-            try_transition(kernel.partitions_mut(), old_pid, PartitionState::Ready);
+            try_transition(
+                kernel.partitions_mut(),
+                PartitionId::new(old_pid as u32),
+                PartitionState::Ready,
+            );
         }
         // Faulted is terminal — do not attempt any transition.
     }
@@ -139,7 +144,11 @@ where
                     if kernel
                         .pcb(ap as usize)
                         .is_some_and(|p| p.state() == PartitionState::Waiting)
-                        && try_transition(kernel.partitions_mut(), ap, PartitionState::Ready)
+                        && try_transition(
+                            kernel.partitions_mut(),
+                            PartitionId::new(ap as u32),
+                            PartitionState::Ready,
+                        )
                     {
                         kernel.set_next_partition(ap);
                     }

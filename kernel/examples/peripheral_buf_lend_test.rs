@@ -131,7 +131,7 @@ fn main() -> ! {
                 s0,
                 EntryAddr::from_entry(p0_main as PartitionEntry),
                 MpuRegion::new(0, 0, 0),
-                0,
+                kernel::PartitionId::new(0),
             )
             .expect("mem 0")
             .with_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)])
@@ -140,7 +140,7 @@ fn main() -> ! {
                 s1,
                 EntryAddr::from_entry(p1_main as PartitionEntry),
                 MpuRegion::new(0, 0, 0),
-                1,
+                kernel::PartitionId::new(1),
             )
             .expect("mem 1"),
         ];

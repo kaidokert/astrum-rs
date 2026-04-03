@@ -11,6 +11,7 @@ use crate::scheduler::{ScheduleEntry, ScheduleTable};
 use crate::semaphore::Semaphore;
 use crate::svc::{Kernel, YieldResult};
 use heapless::Vec;
+use rtos_traits::ids::PartitionId;
 
 pub struct HarnessConfig;
 
@@ -87,7 +88,7 @@ impl KernelTestHarness {
                 stack.as_u32_slice_mut(),
                 (FLASH_BASE + o) | 1,
                 MpuRegion::new(RAM_BASE + o, STACK_SIZE_BYTES, 0),
-                i as u8,
+                PartitionId::new(i as u32),
             )
             .map_err(HarnessError::KernelInit)?
             .with_peripheral_regions(&peripheral_fn(i))
@@ -216,14 +217,14 @@ impl KernelTestHarness {
             head[0].as_u32_slice_mut(),
             FLASH_BASE | 1,
             MpuRegion::new(0, 0, 0),
-            0,
+            PartitionId::new(0),
         )
         .map_err(HarnessError::KernelInit)?;
         let mem1 = ExternalPartitionMemory::new(
             tail[0].as_u32_slice_mut(),
             (FLASH_BASE + PARTITION_OFFSET) | 1,
             MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
-            1,
+            PartitionId::new(1),
         )
         .map_err(HarnessError::KernelInit)?;
         let mems = [mem0, mem1];
@@ -644,7 +645,7 @@ mod tests {
         assert_eq!(frame.r0, 1, "MTX_LOCK must return 1 (acquired)");
         assert_eq!(
             h.kernel().mutexes().owner(0).unwrap(),
-            Some(0),
+            Some(PartitionId::new(0)),
             "partition 0 must own mutex 0 after lock"
         );
         // SYS_MTX_UNLOCK: r1 = mutex_id(0), r2 = caller_pid(0)
@@ -769,7 +770,7 @@ mod tests {
         // Verify P0 still owns the mutex.
         assert_eq!(
             h.kernel().mutexes().owner(0).unwrap(),
-            Some(0),
+            Some(PartitionId::new(0)),
             "P0 must still own mutex 0 after non-owner unlock attempt"
         );
     }
@@ -996,7 +997,7 @@ mod tests {
         assert_eq!(lock_frame.r0, 1, "MTX_LOCK must return 1 (acquired)");
         assert_eq!(
             h.kernel().mutexes().owner(0).unwrap(),
-            Some(1),
+            Some(PartitionId::new(1)),
             "P1 must own mutex 0 after successful lock"
         );
 
@@ -1019,7 +1020,7 @@ mod tests {
         // Mutex must still be owned by P1 while P0 waits.
         assert_eq!(
             h.kernel().mutexes().owner(0).unwrap(),
-            Some(1),
+            Some(PartitionId::new(1)),
             "P1 must still own mutex 0 while P0 is blocked"
         );
 
@@ -1037,7 +1038,7 @@ mod tests {
         // Verify ownership transferred to P0.
         assert_eq!(
             h.kernel().mutexes().owner(0).unwrap(),
-            Some(0),
+            Some(PartitionId::new(0)),
             "P0 must own mutex 0 after ownership transfer from P1 unlock"
         );
     }
@@ -1540,7 +1541,7 @@ mod tests {
     fn validate_ptr_peripheral_base_accepted() {
         let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
         assert!(
-            validate_user_ptr(h.kernel().partitions(), 0, 0x4000_0000, 1),
+            validate_user_ptr(h.kernel().partitions(), PartitionId::new(0), 0x4000_0000, 1),
             "pointer at peripheral base must be accepted"
         );
     }
@@ -1549,7 +1550,7 @@ mod tests {
     fn validate_ptr_peripheral_last_byte_accepted() {
         let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
         assert!(
-            validate_user_ptr(h.kernel().partitions(), 0, 0x4000_00FF, 1),
+            validate_user_ptr(h.kernel().partitions(), PartitionId::new(0), 0x4000_00FF, 1),
             "pointer at base+size-1 with len=1 must be accepted"
         );
     }
@@ -1558,7 +1559,7 @@ mod tests {
     fn validate_ptr_peripheral_just_past_end_rejected() {
         let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
         assert!(
-            !validate_user_ptr(h.kernel().partitions(), 0, 0x4000_0100, 1),
+            !validate_user_ptr(h.kernel().partitions(), PartitionId::new(0), 0x4000_0100, 1),
             "pointer at base+size must be rejected"
         );
     }
@@ -1567,7 +1568,7 @@ mod tests {
     fn validate_ptr_peripheral_just_before_base_rejected() {
         let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
         assert!(
-            !validate_user_ptr(h.kernel().partitions(), 0, 0x3FFF_FFFF, 1),
+            !validate_user_ptr(h.kernel().partitions(), PartitionId::new(0), 0x3FFF_FFFF, 1),
             "pointer at base-1 must be rejected"
         );
     }
@@ -1576,7 +1577,7 @@ mod tests {
     fn validate_ptr_peripheral_spanning_end_rejected() {
         let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
         assert!(
-            !validate_user_ptr(h.kernel().partitions(), 0, 0x4000_00FF, 2),
+            !validate_user_ptr(h.kernel().partitions(), PartitionId::new(0), 0x4000_00FF, 2),
             "pointer spanning past peripheral region end must be rejected"
         );
     }
@@ -1585,7 +1586,7 @@ mod tests {
     fn validate_ptr_peripheral_wrong_partition_rejected() {
         let h = KernelTestHarness::with_peripheral_regions().expect("harness setup");
         assert!(
-            !validate_user_ptr(h.kernel().partitions(), 1, 0x4000_0000, 1),
+            !validate_user_ptr(h.kernel().partitions(), PartitionId::new(1), 0x4000_0000, 1),
             "P1 (no peripheral) must not access P0 peripheral address"
         );
     }
@@ -1662,15 +1663,11 @@ mod tests {
         let strategy = DynamicStrategy::new();
 
         // Configure each partition's dynamic region with 2 peripheral-reserved slots.
-        for pid in 0..2u8 {
-            let pcb = h
-                .kernel()
-                .partitions()
-                .get(pid as usize)
-                .expect("partition");
+        for pid_idx in 0..2usize {
+            let pcb = h.kernel().partitions().get(pid_idx).expect("partition");
             let dyn_region = pcb.cached_dynamic_region();
             strategy
-                .configure_partition(pid, &[dyn_region], 2)
+                .configure_partition(PartitionId::new(pid_idx as u32), &[dyn_region], 2)
                 .expect("configure_partition");
         }
 
@@ -1678,8 +1675,8 @@ mod tests {
         let wired = strategy.wire_boot_peripherals(h.kernel().partitions().as_slice());
         assert!(wired > 0, "at least one peripheral must be wired");
 
-        let regions_p0 = strategy.cached_peripheral_regions(0);
-        let regions_p1 = strategy.cached_peripheral_regions(1);
+        let regions_p0 = strategy.cached_peripheral_regions(PartitionId::new(0));
+        let regions_p1 = strategy.cached_peripheral_regions(PartitionId::new(1));
 
         // --- P0: R4 must encode 0x4000_0000 base, R5 disabled ---
         let p0_r4_rbar = regions_p0[0].0;
@@ -2682,7 +2679,7 @@ mod tests {
             head[0].as_u32_slice_mut(),
             FLASH_BASE | 1,
             MpuRegion::new(0, 0, 0),
-            0,
+            PartitionId::new(0),
         )
         .expect("mem0");
         let mem1 = ExternalPartitionMemory::new(
@@ -2693,7 +2690,7 @@ mod tests {
                 original_config_size,
                 SENTINEL_DATA_PERMISSIONS,
             ),
-            1,
+            PartitionId::new(1),
         )
         .expect("mem1");
         let mems = [mem0, mem1];
@@ -3130,7 +3127,9 @@ mod tests {
             "expected 'kernel init failed:' prefix, got: {msg}"
         );
 
-        let err2 = BootError::KernelInit(ConfigError::StackSizeInvalid { partition_id: 3 });
+        let err2 = BootError::KernelInit(ConfigError::StackSizeInvalid {
+            partition_id: PartitionId::new(3),
+        });
         let msg2 = format!("{err2}");
         assert!(
             msg2.starts_with("kernel init failed:"),

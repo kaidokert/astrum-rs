@@ -8,6 +8,7 @@ use crate::blackboard::{Blackboard, ReadBlackboardOutcome};
 use crate::message::{MessageQueue, RecvOutcome, SendOutcome};
 use crate::queuing::{QueuingPortPool, RecvQueuingOutcome, SendQueuingOutcome};
 use crate::sampling::PortDirection;
+use rtos_traits::ids::PartitionId;
 
 /// Single-word (4-byte) message-queue round-trip.
 #[test]
@@ -61,7 +62,9 @@ fn queuing_max_size_routed_integrity() {
     for (i, b) in pattern.iter_mut().enumerate() {
         *b = i as u8;
     }
-    let send = pool.send_routed(src, 0, &pattern, 0, 0).unwrap();
+    let send = pool
+        .send_routed(src, PartitionId::new(0), &pattern, 0, 0)
+        .unwrap();
     assert_eq!(
         send,
         SendQueuingOutcome::Delivered {
@@ -70,7 +73,7 @@ fn queuing_max_size_routed_integrity() {
     );
     let mut buf = [0u8; 32];
     let recv = pool
-        .receive_queuing_message(dst, 1, &mut buf, 0, 0)
+        .receive_queuing_message(dst, PartitionId::new(1), &mut buf, 0, 0)
         .unwrap();
     assert_eq!(
         recv,
@@ -88,10 +91,10 @@ fn queuing_max_size_routed_integrity() {
 fn blackboard_display_read_integrity() {
     let mut bb = Blackboard::<16, 4>::new(0);
     let pattern = [0xCA, 0xFE, 0xBA, 0xBE, 0x01, 0x02, 0x03];
-    let woken: heapless::Vec<u8, 4> = bb.display(&pattern).unwrap();
+    let woken: heapless::Vec<PartitionId, 4> = bb.display(&pattern).unwrap();
     assert!(woken.is_empty());
     let mut buf = [0u8; 16];
-    let outcome = bb.read_timed(0, &mut buf, 0, 0).unwrap();
+    let outcome = bb.read_timed(PartitionId::new(0), &mut buf, 0, 0).unwrap();
     assert_eq!(outcome, ReadBlackboardOutcome::Read { msg_len: 7 });
     assert_eq!(&buf[..7], &pattern, "blackboard data corrupted");
 }
@@ -103,7 +106,9 @@ fn queuing_zero_length_integrity() {
     let src = pool.create_port(PortDirection::Source).unwrap();
     let dst = pool.create_port(PortDirection::Destination).unwrap();
     pool.connect_ports(src, dst).unwrap();
-    let send = pool.send_routed(src, 0, &[], 0, 0).unwrap();
+    let send = pool
+        .send_routed(src, PartitionId::new(0), &[], 0, 0)
+        .unwrap();
     assert_eq!(
         send,
         SendQueuingOutcome::Delivered {
@@ -112,7 +117,7 @@ fn queuing_zero_length_integrity() {
     );
     let mut buf = [0xFFu8; 16];
     let recv = pool
-        .receive_queuing_message(dst, 1, &mut buf, 0, 0)
+        .receive_queuing_message(dst, PartitionId::new(1), &mut buf, 0, 0)
         .unwrap();
     assert_eq!(
         recv,

@@ -131,14 +131,14 @@ fn main() -> ! {
                 s0,
                 EntryAddr::from_entry(p0_main as PartitionEntry),
                 mpu,
-                0,
+                kernel::PartitionId::new(0),
             )
             .expect("mem 0"),
             ExternalPartitionMemory::new(
                 s1,
                 EntryAddr::from_entry(p1_main as PartitionEntry),
                 mpu,
-                1,
+                kernel::PartitionId::new(1),
             )
             .expect("mem 1"),
         ];

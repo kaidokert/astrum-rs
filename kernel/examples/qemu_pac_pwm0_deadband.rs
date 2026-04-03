@@ -304,7 +304,7 @@ fn main() -> ! {
                 stk,
                 entry_fns[i],
                 MpuRegion::new(base, REGION_SZ, 0),
-                i as u8,
+                kernel::PartitionId::new(i as u32),
             ) {
                 Ok(m) => m,
                 Err(_) => fatal_halt(),

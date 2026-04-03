@@ -143,11 +143,11 @@ pub fn unpack_packed_r2(r2: u32) -> (u16, u16) {
 /// Grant (2) runs before SRAM guard (3) so granted regions are accepted first.
 pub fn validate_user_ptr<const N: usize>(
     partitions: &PartitionTable<N>,
-    pid: u8,
+    pid: PartitionId,
     ptr: u32,
     len: usize,
 ) -> bool {
-    let pcb = match partitions.get(pid as usize) {
+    let pcb = match partitions.get(pid.as_raw() as usize) {
         Some(p) => p,
         None => return false,
     };
@@ -187,11 +187,11 @@ pub fn validate_user_ptr<const N: usize>(
 pub fn validate_user_ptr_dynamic<const N: usize>(
     partitions: &PartitionTable<N>,
     strategy: &crate::mpu_strategy::DynamicStrategy,
-    pid: u8,
+    pid: PartitionId,
     ptr: u32,
     len: usize,
 ) -> bool {
-    let pcb = match partitions.get(pid as usize) {
+    let pcb = match partitions.get(pid.as_raw() as usize) {
         Some(p) => p,
         None => return false,
     };
@@ -270,11 +270,11 @@ pub fn validate_user_ptr_dynamic<const N: usize>(
 pub fn all_accessible_regions<const N: usize>(
     partitions: &PartitionTable<N>,
     strategy: &crate::mpu_strategy::DynamicStrategy,
-    pid: u8,
+    pid: PartitionId,
 ) -> heapless::Vec<(u32, u32), 8> {
     let mut result = heapless::Vec::new();
 
-    let pcb = match partitions.get(pid as usize) {
+    let pcb = match partitions.get(pid.as_raw() as usize) {
         Some(p) => p,
         None => return result,
     };
@@ -903,9 +903,15 @@ pub fn dispatch_syscall<const N: usize>(
         // TODO: dispatch_syscall cannot trigger descheduling; blocking
         // state is silently dropped here. Callers needing full EventWait
         // semantics should use Kernel::dispatch (handle_svc) instead.
-        Some(SyscallId::EventWait) => ev::handle_event_wait(partitions, caller, frame.r2).0,
-        Some(SyscallId::EventSet) => ev::handle_event_set(partitions, frame.r1 as usize, frame.r2),
-        Some(SyscallId::EventClear) => ev::handle_event_clear(partitions, caller, frame.r2),
+        Some(SyscallId::EventWait) => {
+            ev::handle_event_wait(partitions, PartitionId::new(caller as u32), frame.r2).0
+        }
+        Some(SyscallId::EventSet) => {
+            ev::handle_event_set(partitions, PartitionId::new(frame.r1), frame.r2)
+        }
+        Some(SyscallId::EventClear) => {
+            ev::handle_event_clear(partitions, PartitionId::new(caller as u32), frame.r2)
+        }
         Some(SyscallId::IrqAck) => SvcError::InvalidResource.to_u32(),
         Some(SyscallId::RegisterErrorHandler) => match partitions.get_mut(caller) {
             Some(pcb) => {
@@ -1180,18 +1186,20 @@ where
             // mpu_region and peripheral_regions, which ARE used in the final PCB.
             // Size==0 is a sentinel meaning "no user-configured data region".
             if c.mpu_region.size() > 0 {
+                let pid = PartitionId::new(c.id as u32);
                 crate::mpu::validate_mpu_region(c.mpu_region.base(), c.mpu_region.size()).map_err(
                     |detail| ConfigError::MpuRegionInvalid {
-                        partition_id: c.id,
+                        partition_id: pid,
                         detail,
                     },
                 )?;
             }
+            let pid = PartitionId::new(c.id as u32);
             if let Some(ref code) = c.code_mpu_region {
                 if code.size() > 0 {
                     crate::mpu::validate_mpu_region(code.base(), code.size()).map_err(
                         |detail| ConfigError::CodeRegionInvalid {
-                            partition_id: c.id,
+                            partition_id: pid,
                             detail,
                         },
                     )?;
@@ -1201,7 +1209,7 @@ where
                 let effective_entry = c.entry_point.raw() & !1;
                 if effective_entry.wrapping_sub(code.base()) >= code.size() {
                     return Err(ConfigError::EntryPointOutsideCodeRegion {
-                        partition_id: c.id,
+                        partition_id: pid,
                         entry_point: c.entry_point.raw(),
                         region_base: code.base(),
                         region_size: code.size(),
@@ -1211,7 +1219,7 @@ where
             for (j, region) in c.peripheral_regions.iter().enumerate() {
                 crate::mpu::validate_mpu_region(region.base(), region.size()).map_err(
                     |detail| ConfigError::PeripheralRegionInvalid {
-                        partition_id: c.id,
+                        partition_id: pid,
                         region_index: j,
                         detail,
                     },
@@ -1359,7 +1367,7 @@ where
     /// `Err(SvcError::InvalidPointer.to_u32())` on failure.
     #[inline(always)]
     pub fn check_user_ptr(&self, ptr: u32, len: usize) -> Result<(), u32> {
-        validate_user_ptr(self.partitions(), self.current_partition, ptr, len)
+        validate_user_ptr(self.partitions(), self.current_pid(), ptr, len)
             .then_some(())
             .ok_or(SvcError::InvalidPointer.to_u32())
     }
@@ -1373,7 +1381,7 @@ where
         validate_user_ptr_dynamic(
             self.partitions(),
             &self.dynamic_strategy,
-            self.current_partition,
+            self.current_pid(),
             ptr,
             len,
         )
@@ -1509,9 +1517,12 @@ where
     /// when the closure returns a `DeviceError`.
     fn dev_dispatch<F>(&mut self, device_id: u8, f: F) -> u32
     where
-        F: FnOnce(&mut dyn VirtualDevice, u8) -> Result<u32, crate::virtual_device::DeviceError>,
+        F: FnOnce(
+            &mut dyn VirtualDevice,
+            PartitionId,
+        ) -> Result<u32, crate::virtual_device::DeviceError>,
     {
-        let pid = self.current_partition;
+        let pid = self.current_pid();
         match self.registry.get_mut(device_id) {
             Some(d) => match f(d, pid) {
                 Ok(val) => val,
@@ -1533,7 +1544,7 @@ where
     ///
     /// Calls `semaphores.tick_timeouts()`, `queuing.tick_timeouts()`, and
     /// `blackboards.tick_timeouts()` with the given tick, collecting all
-    /// expired partition IDs into a single `heapless::Vec<u8, E>`, then
+    /// expired partition IDs into a single `heapless::Vec<PartitionId, E>`, then
     /// transitions each from [`Waiting`](PartitionState::Waiting) to
     /// [`Ready`](PartitionState::Ready).
     ///
@@ -1550,7 +1561,7 @@ where
     // TODO: Consider tying E to the KernelConfig::N const so callers cannot
     // under-size the buffer. Currently E is caller-chosen.
     pub fn expire_timed_waits<const E: usize>(&mut self, current_tick: u64) {
-        let mut expired: heapless::Vec<u8, E> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, E> = heapless::Vec::new();
         self.sync
             .semaphores_mut()
             .tick_timeouts(current_tick, &mut expired);
@@ -1566,12 +1577,12 @@ where
             try_transition(self.core.partitions_mut(), pid, PartitionState::Ready);
         }
         // Drain expired sleep timers from the sorted sleep queue.
-        let mut sleep_expired: heapless::Vec<u8, E> = heapless::Vec::new();
+        let mut sleep_expired: heapless::Vec<PartitionId, E> = heapless::Vec::new();
         self.sleep_queue
             .drain_expired(current_tick, &mut sleep_expired);
         for &pid in sleep_expired.iter() {
             if try_transition(self.core.partitions_mut(), pid, PartitionState::Ready) {
-                if let Some(pcb) = self.core.partitions_mut().get_mut(pid as usize) {
+                if let Some(pcb) = self.core.partitions_mut().get_mut(pid.as_raw() as usize) {
                     pcb.set_sleep_until(0);
                 }
             }
@@ -1589,7 +1600,7 @@ where
     /// buffer pool slots (when dynamic-mpu enabled), (5) remove from
     /// queuing port wait queues.
     pub fn cleanup_partition_ipc(&mut self, pid: usize) {
-        let pid_u8 = pid as u8;
+        let pid_u8 = PartitionId::new(pid as u32);
 
         // (1) Clear PCB event flags and wait mask.
         if let Some(pcb) = self.core.partitions_mut().get_mut(pid) {
@@ -1655,6 +1666,7 @@ where
         let arg2 = frame.r2;
         let arg3 = frame.r3;
         let caller = self.current_partition as usize;
+        let caller_pid = self.current_pid();
         self.assert_dispatch_invariants();
         #[cfg(feature = "trace")]
         rtos_trace::trace::marker_begin(syscall_id);
@@ -1671,17 +1683,21 @@ where
             Some(SyscallId::Yield) => self.trigger_deschedule(),
             Some(SyscallId::GetPartitionId) => caller as u32,
             Some(SyscallId::EventWait) => {
-                let (result, block) = ev::handle_event_wait(self.partitions_mut(), caller, arg2);
+                let (result, block) = ev::handle_event_wait(
+                    self.partitions_mut(),
+                    PartitionId::new(caller as u32),
+                    arg2,
+                );
                 if block {
                     self.trigger_deschedule();
                 }
                 result
             }
             Some(SyscallId::EventSet) => {
-                ev::handle_event_set(self.partitions_mut(), arg1 as usize, arg2)
+                ev::handle_event_set(self.partitions_mut(), PartitionId::new(arg1), arg2)
             }
             Some(SyscallId::EventClear) => {
-                ev::handle_event_clear(self.partitions_mut(), caller, arg2)
+                ev::handle_event_clear(self.partitions_mut(), PartitionId::new(caller as u32), arg2)
             }
             Some(SyscallId::SemWait) => {
                 let pt = self.core.partitions_mut();
@@ -1824,7 +1840,7 @@ where
                         queuing::handle_queuing_send(
                             self.msg.queuing_mut(),
                             self.core.partitions_mut(),
-                            self.current_partition,
+                            caller_pid,
                             self.tick.get(),
                             port_id,
                             d,
@@ -1845,7 +1861,7 @@ where
                     queuing::handle_queuing_receive(
                         self.msg.queuing_mut(),
                         self.core.partitions_mut(),
-                        self.current_partition,
+                        caller_pid,
                         self.tick.get(),
                         port_id,
                         b,
@@ -1918,7 +1934,7 @@ where
                         let b =
                             unsafe { core::slice::from_raw_parts_mut(frame.r3 as *mut u8, C::BM) };
                         let bb_id = BlackboardId::new(frame.r1);
-                        let pid = self.current_partition;
+                        let pid = caller_pid;
                         let tick = self.tick.get();
                         match blackboard::handle_bb_read(
                             self.ports.blackboards_mut(),
@@ -1946,7 +1962,7 @@ where
             }
             Some(SyscallId::GetTime) => self.tick.get() as u32,
             Some(SyscallId::GetStartCondition) => {
-                match self.partitions().get(self.current_partition as usize) {
+                match self.partitions().get(caller_pid.as_raw() as usize) {
                     Some(pcb) => match pcb.start_condition() {
                         crate::partition::StartCondition::NormalBoot => 0,
                         crate::partition::StartCondition::WarmRestart => 1,
@@ -1961,7 +1977,7 @@ where
                 let outcome = self::sleep::handle_sleep_ticks(
                     &mut self.sleep_queue,
                     self.core.partitions_mut(),
-                    self.current_partition,
+                    caller_pid,
                     arg1,
                     self.tick.get(),
                 );
@@ -1974,7 +1990,7 @@ where
             Some(SyscallId::BufferAlloc) => {
                 let (r0, r1_ov) = buf::handle_buf_alloc(
                     &mut self.buffers,
-                    self.current_partition,
+                    caller_pid,
                     frame.r1,
                     frame.r2,
                     self.tick.get(),
@@ -1986,8 +2002,7 @@ where
             }
             Some(SyscallId::BufferRelease) => {
                 let slot_id = BufferSlotId::new(frame.r1 as u8);
-                let (r0, r1_ov) =
-                    buf::handle_buf_release(&mut self.buffers, slot_id, self.current_partition);
+                let (r0, r1_ov) = buf::handle_buf_release(&mut self.buffers, slot_id, caller_pid);
                 if let Some(v) = r1_ov {
                     frame.r1 = v;
                 }
@@ -2000,7 +2015,7 @@ where
                 let (r0, r1_ov) = buffer::handle_buffer_lend(
                     &mut self.buffers,
                     &self.dynamic_strategy,
-                    self.current_partition,
+                    caller_pid,
                     pc,
                     tick,
                     slot_id,
@@ -2022,8 +2037,8 @@ where
                     let target = target_raw as u8;
                     match self.buffers.unshare_from_partition(
                         slot,
-                        self.current_partition,
-                        target,
+                        caller_pid,
+                        PartitionId::new(target as u32),
                         &self.dynamic_strategy,
                     ) {
                         Ok(()) => 0,
@@ -2041,8 +2056,8 @@ where
                     Ok(new_owner) if (new_owner as usize) < self.partition_count() => {
                         match self.buffers.transfer_ownership(
                             slot,
-                            self.current_partition,
-                            new_owner,
+                            caller_pid,
+                            PartitionId::new(new_owner as u32),
                         ) {
                             Ok(()) => 0,
                             Err(e) => {
@@ -2064,7 +2079,7 @@ where
                             buf::handle_buf_write(
                                 &mut self.buffers,
                                 slot_id,
-                                self.current_partition,
+                                caller_pid,
                                 frame.r3 as *const u8,
                                 frame.r2 as usize,
                             )
@@ -2086,7 +2101,7 @@ where
                             buf::handle_buf_read(
                                 &mut self.buffers,
                                 slot_id,
-                                self.current_partition,
+                                caller_pid,
                                 frame.r3 as *mut u8,
                                 frame.r2 as usize,
                             )
@@ -2149,7 +2164,7 @@ where
                     Ok(()) => {
                         let buf_ptr = frame.r3 as *mut u8;
                         let timeout = timeout_ticks as u32;
-                        let pid = self.current_partition;
+                        let pid = PartitionId::new(self.current_partition as u32);
                         let device_id = frame.r1 as u8;
                         match self.registry.get_mut(device_id) {
                             Some(dev) => {
@@ -2203,7 +2218,7 @@ where
                         // (2) len clamped to C::QM. (3) The partition owns this
                         // memory as enforced by MPU isolation.
                         let b = unsafe { core::slice::from_raw_parts_mut(arg3 as *mut u8, rlen) };
-                        let pid = self.current_partition;
+                        let pid = caller_pid;
                         let tick = self.tick.get();
                         match self.msg.queuing_mut().receive_queuing_message(
                             arg1 as usize,
@@ -2250,7 +2265,7 @@ where
                         // the calling partition's MPU data region.
                         let d =
                             unsafe { core::slice::from_raw_parts(frame.r3 as *const u8, data_len) };
-                        let pid = self.current_partition;
+                        let pid = caller_pid;
                         let tick = self.tick.get();
                         match self.msg.queuing_mut().send_routed(
                             frame.r1 as usize,
@@ -2284,7 +2299,7 @@ where
             }
             Some(SyscallId::DebugPrint) => {
                 let (ptr, len) = (frame.r1, frame.r2 as usize);
-                if !validate_user_ptr(self.partitions(), self.current_partition, ptr, len) {
+                if !validate_user_ptr(self.partitions(), caller_pid, ptr, len) {
                     SvcError::InvalidPointer.to_u32()
                 } else {
                     // SAFETY: validate_user_ptr confirmed [ptr, ptr+len) in partition memory.
@@ -2295,13 +2310,13 @@ where
             Some(SyscallId::DebugExit) => debug::handle_debug_exit(frame.r1),
             #[cfg(feature = "partition-debug")]
             Some(SyscallId::DebugNotify) => {
-                let pid = self.current_partition as usize;
+                let pid = caller_pid.as_raw() as usize;
                 debug::handle_debug_notify(self.partitions_mut(), pid)
             }
             #[cfg(feature = "partition-debug")]
             Some(SyscallId::DebugWrite) => {
                 let (ptr, len) = (frame.r1, frame.r2 as usize);
-                if !validate_user_ptr(self.partitions(), self.current_partition, ptr, len) {
+                if !validate_user_ptr(self.partitions(), caller_pid, ptr, len) {
                     SvcError::InvalidPointer.to_u32()
                 } else {
                     let pid = self.current_partition as usize;
@@ -2465,7 +2480,7 @@ where
             }
             Some(SyscallId::IrqAck) => {
                 let irq_num = arg1 as u8;
-                let caller_id = self.current_partition;
+                let caller_id = caller_pid;
                 self::irq::handle_irq_ack(self.irq_bindings, caller_id, irq_num)
             }
             #[allow(unreachable_patterns)]
@@ -2849,7 +2864,11 @@ where
                     if self
                         .pcb(ap as usize)
                         .is_some_and(|p| p.state() == PartitionState::Waiting)
-                        && try_transition(self.partitions_mut(), ap, PartitionState::Ready)
+                        && try_transition(
+                            self.partitions_mut(),
+                            PartitionId::new(ap as u32),
+                            PartitionState::Ready,
+                        )
                     {
                         self.set_next_partition(ap);
                     }
@@ -2871,8 +2890,16 @@ where
             // schedule advanced past system-only windows but no partition was
             // found, so we keep the current partition active.
             if let Some(ap) = self.active_partition {
-                if try_transition(self.partitions_mut(), ap, PartitionState::Ready) {
-                    let _ = try_transition(self.partitions_mut(), ap, PartitionState::Running);
+                if try_transition(
+                    self.partitions_mut(),
+                    PartitionId::new(ap as u32),
+                    PartitionState::Ready,
+                ) {
+                    let _ = try_transition(
+                        self.partitions_mut(),
+                        PartitionId::new(ap as u32),
+                        PartitionState::Running,
+                    );
                 }
             }
             return ScheduleEvent::None;
@@ -2918,8 +2945,8 @@ where
 
     /// Sets the current partition index.
     #[inline(always)]
-    pub fn set_current_partition(&mut self, pid: u8) {
-        self.current_partition = pid;
+    pub fn set_current_partition(&mut self, pid: PartitionId) {
+        self.current_partition = pid.as_raw() as u8;
     }
 
     /// Returns the active partition (the one currently running in user mode).
@@ -3072,11 +3099,11 @@ where
 /// Try to transition partition `pid` to `state`. Returns `true` on success.
 pub fn try_transition<const N: usize>(
     partitions: &mut PartitionTable<N>,
-    pid: u8,
+    pid: PartitionId,
     state: PartitionState,
 ) -> bool {
     partitions
-        .get_mut(pid as usize)
+        .get_mut(pid.as_raw() as usize)
         .and_then(|p| p.transition(state).ok())
         .is_some()
 }
@@ -3102,7 +3129,7 @@ fn apply_send_outcome<const N: usize>(
             if !try_transition(partitions, blocked, PartitionState::Waiting) {
                 return Err(SvcError::TransitionFailed);
             }
-            Ok(Some(blocked as u32))
+            Ok(Some(blocked.as_raw()))
         }
     }
 }
@@ -3152,7 +3179,7 @@ where
                 return Err(SvcError::TransitionFailed);
             }
             kernel.trigger_deschedule();
-            Ok(Some(blocked as u32))
+            Ok(Some(blocked.as_raw()))
         }
     }
 }
@@ -3269,8 +3296,8 @@ mod tests {
         let mut stk1 = AlignedStack1K::default();
         let mpu0 = MpuRegion::new(0x2000_0000, 4096, 0);
         let mpu1 = MpuRegion::new(0x2000_1000, 4096, 0);
-        let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0001, mpu0, 0).unwrap();
-        let m1 = ExternalPartitionMemory::new(&mut stk1.0, 0x0800_1001, mpu1, 1).unwrap();
+        let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0001, mpu0, pid(0)).unwrap();
+        let m1 = ExternalPartitionMemory::new(&mut stk1.0, 0x0800_1001, mpu1, pid(1)).unwrap();
         let k = Kernel::<TestConfig>::new(schedule, &[m0, m1]).unwrap();
         assert_eq!(k.partitions().len(), 2);
         assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0001);
@@ -3287,7 +3314,7 @@ mod tests {
         let mut stk0 = AlignedStack1K::default();
         let data_region = MpuRegion::new(0x2000_0000, 4096, 0);
         let code_region = MpuRegion::new(0x0800_0000, 8192, 0);
-        let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0001, data_region, 0)
+        let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0001, data_region, pid(0))
             .unwrap()
             .with_code_mpu_region(code_region)
             .unwrap();
@@ -3555,7 +3582,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.active_partition = Some(0);
         // Fix invariant: only P0 should be Running.
-        try_transition(k.partitions_mut(), 1, PartitionState::Ready);
+        try_transition(k.partitions_mut(), pid(1), PartitionState::Ready);
 
         // Default start condition is NormalBoot → 0
         let r = dispatch_r0(&mut k, SYS_GET_START_CONDITION, 0, 0);
@@ -3583,7 +3610,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.active_partition = Some(0);
         // Fix invariant: only P0 should be Running.
-        try_transition(k.partitions_mut(), 1, PartitionState::Ready);
+        try_transition(k.partitions_mut(), pid(1), PartitionState::Ready);
         assert!(!k.yield_requested());
         let mut ef = frame(SYS_YIELD, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
@@ -3597,7 +3624,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.active_partition = Some(0);
         // Fix invariant: only P0 should be Running.
-        try_transition(k.partitions_mut(), 1, PartitionState::Ready);
+        try_transition(k.partitions_mut(), pid(1), PartitionState::Ready);
         let mut ef = frame(SYS_YIELD, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
@@ -3605,7 +3632,7 @@ mod tests {
         k.set_yield_requested(false);
         assert!(!k.yield_requested());
         // Restore P0 to Running (yield transitioned it to Ready).
-        try_transition(k.partitions_mut(), 0, PartitionState::Running);
+        try_transition(k.partitions_mut(), pid(0), PartitionState::Running);
         // Non-yield syscall does not set the flag
         let mut ef = frame(crate::syscall::SYS_GET_TIME, 0, 0);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
@@ -3618,7 +3645,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.active_partition = Some(0);
         // Fix invariant: only P0 should be Running.
-        try_transition(k.partitions_mut(), 1, PartitionState::Ready);
+        try_transition(k.partitions_mut(), pid(1), PartitionState::Ready);
         assert!(!k.yield_requested());
         let ret = k.trigger_deschedule();
         assert_eq!(ret, 0);
@@ -3685,7 +3712,8 @@ mod tests {
         schedule.add(ScheduleEntry::new(0, 10)).unwrap();
         schedule.add_system_window(1).unwrap();
         let mut stk = AlignedStack1K::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stk, 0x0800_0001, region, 0)?;
+        let mem =
+            ExternalPartitionMemory::from_aligned_stack(&mut stk, 0x0800_0001, region, pid(0))?;
         Kernel::<TestConfig>::new(schedule, core::slice::from_ref(&mem))
     }
 
@@ -3720,9 +3748,9 @@ mod tests {
             matches!(
                 err,
                 ConfigError::MpuRegionInvalid {
-                    partition_id: 0,
+                    partition_id,
                     detail: MpuError::SizeTooSmall,
-                }
+                } if partition_id == pid(0)
             ),
             "Expected MpuRegionInvalid with SizeTooSmall, got: {:?}",
             err,
@@ -3741,9 +3769,9 @@ mod tests {
             matches!(
                 err,
                 ConfigError::MpuRegionInvalid {
-                    partition_id: 0,
+                    partition_id,
                     detail: MpuError::BaseNotAligned,
-                }
+                } if partition_id == pid(0)
             ),
             "Expected MpuRegionInvalid with BaseNotAligned, got: {:?}",
             err,
@@ -3756,7 +3784,7 @@ mod tests {
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
         sched.add_system_window(1).unwrap();
         let mut stk = AlignedStack1K::default();
-        let m = ExternalPartitionMemory::from_aligned_stack(&mut stk, entry, mpu, 0)?;
+        let m = ExternalPartitionMemory::from_aligned_stack(&mut stk, entry, mpu, pid(0))?;
         Kernel::<TestConfig>::new(sched, &[m])
     }
 
@@ -3785,15 +3813,19 @@ mod tests {
         assert!(matches!(
             err,
             ConfigError::MpuRegionInvalid {
-                partition_id: 0,
+                partition_id,
                 ..
-            }
+            } if partition_id == pid(0)
         ));
         // Empty schedule rejected
         let mut stk = AlignedStack1K::default();
-        let m =
-            ExternalPartitionMemory::from_aligned_stack(&mut stk, 1, MpuRegion::new(0, 0, 0), 0)
-                .unwrap();
+        let m = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            1,
+            MpuRegion::new(0, 0, 0),
+            pid(0),
+        )
+        .unwrap();
         let err = Kernel::<TestConfig>::new(ScheduleTable::<4>::new(), &[m]);
         assert!(matches!(err, Err(ConfigError::ScheduleEmpty)));
     }
@@ -3807,7 +3839,7 @@ mod tests {
         sched.add(ScheduleEntry::new(0, 10)).unwrap();
         sched.add_system_window(1).unwrap();
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, entry, mpu, 0)?;
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, entry, mpu, pid(0))?;
         Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
     }
 
@@ -3833,7 +3865,7 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mut stack = AlignedStack256B::default();
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 1, mpu, 0).unwrap();
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 1, mpu, pid(0)).unwrap();
         let err = Kernel::<TestConfig>::new(ScheduleTable::<4>::new(), core::slice::from_ref(&mem));
         assert!(matches!(err, Err(ConfigError::ScheduleEmpty)));
     }
@@ -3848,10 +3880,10 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         let mut stack0 = AlignedStack256B::default();
         let mut stack1 = AlignedStack256B::default();
-        let m0 =
-            ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0001, mpu, 0).unwrap();
-        let m1 =
-            ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1001, mpu, 1).unwrap();
+        let m0 = ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0001, mpu, pid(0))
+            .unwrap();
+        let m1 = ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1001, mpu, pid(1))
+            .unwrap();
         let k = Kernel::<TestConfig>::new(sched, &[m0, m1]).expect("two partitions should succeed");
         assert_eq!(k.partitions().get(0).unwrap().id(), PartitionId::new(0));
         assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0001);
@@ -3867,7 +3899,7 @@ mod tests {
         let mut stacks: [AlignedStack256B; 5] = [AlignedStack256B::default(); 5];
         let mut mems: heapless::Vec<ExternalPartitionMemory<'_>, 5> = heapless::Vec::new();
         for (i, s) in stacks.iter_mut().enumerate() {
-            let m = ExternalPartitionMemory::from_aligned_stack(s, 1, mpu, i as u8).unwrap();
+            let m = ExternalPartitionMemory::from_aligned_stack(s, 1, mpu, pid(i as u32)).unwrap();
             mems.push(m).unwrap();
         }
         // Schedule only needs to reference partition 0 — the failure is in
@@ -3889,17 +3921,18 @@ mod tests {
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let bad_code = MpuRegion::new(0x0800_0000, 100, 0); // 100 is not power-of-two
         let mut stack = AlignedStack256B::default();
-        let err = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, 0)
-            .unwrap()
-            .with_code_mpu_region(bad_code)
-            .unwrap_err();
+        let err =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, pid(0))
+                .unwrap()
+                .with_code_mpu_region(bad_code)
+                .unwrap_err();
         assert!(
             matches!(
                 err,
                 ConfigError::CodeRegionInvalid {
-                    partition_id: 0,
+                    partition_id,
                     detail: MpuError::SizeNotPowerOfTwo,
-                }
+                } if partition_id == pid(0)
             ),
             "Expected CodeRegionInvalid, got: {:?}",
             err,
@@ -3916,10 +3949,11 @@ mod tests {
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, 0)
-            .unwrap()
-            .with_code_mpu_region(code_mpu)
-            .unwrap();
+        let mem =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, pid(0))
+                .unwrap()
+                .with_code_mpu_region(code_mpu)
+                .unwrap();
         let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
             .expect("valid code_mpu_region should be accepted");
         let pcb = k.partitions().get(0).expect("partition 0 must exist");
@@ -3937,8 +3971,9 @@ mod tests {
         sched.add_system_window(1).unwrap();
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, 0)
-            .unwrap();
+        let mem =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, pid(0))
+                .unwrap();
         let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
             .expect("no code_mpu_region should be accepted");
         let pcb = k.partitions().get(0).expect("partition 0 must exist");
@@ -3960,18 +3995,19 @@ mod tests {
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_1000, 4096, 0);
         let mut stack = AlignedStack256B::default();
-        let err = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, 0)
-            .unwrap()
-            .with_code_mpu_region(code_mpu)
-            .expect_err("should reject entry below code region");
+        let err =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, data_mpu, pid(0))
+                .unwrap()
+                .with_code_mpu_region(code_mpu)
+                .expect_err("should reject entry below code region");
         assert!(matches!(
             err,
             ConfigError::EntryPointOutsideCodeRegion {
-                partition_id: 0,
+                partition_id,
                 entry_point: 0x0800_0001,
                 region_base: 0x0800_1000,
                 region_size: 4096,
-            }
+            } if partition_id == pid(0)
         ));
     }
 
@@ -3981,18 +4017,19 @@ mod tests {
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_0000, 4096, 0);
         let mut stack = AlignedStack256B::default();
-        let err = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_1001, data_mpu, 0)
-            .unwrap()
-            .with_code_mpu_region(code_mpu)
-            .expect_err("should reject entry at code region end");
+        let err =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_1001, data_mpu, pid(0))
+                .unwrap()
+                .with_code_mpu_region(code_mpu)
+                .expect_err("should reject entry at code region end");
         assert!(matches!(
             err,
             ConfigError::EntryPointOutsideCodeRegion {
-                partition_id: 0,
+                partition_id,
                 entry_point: 0x0800_1001,
                 region_base: 0x0800_0000,
                 region_size: 4096,
-            }
+            } if partition_id == pid(0)
         ));
     }
 
@@ -4005,10 +4042,11 @@ mod tests {
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0101, data_mpu, 0)
-            .unwrap()
-            .with_code_mpu_region(code_mpu)
-            .unwrap();
+        let mem =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0101, data_mpu, pid(0))
+                .unwrap()
+                .with_code_mpu_region(code_mpu)
+                .unwrap();
         let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
             .expect("entry within code region should be accepted");
         assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0101);
@@ -4024,10 +4062,11 @@ mod tests {
         let code_mpu = MpuRegion::new(0x0800_0000, 8192, 0);
         let mut stack = AlignedStack256B::default();
         // entry 0x0800_0101 has Thumb bit; effective = 0x0800_0100
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0101, data_mpu, 0)
-            .unwrap()
-            .with_code_mpu_region(code_mpu)
-            .unwrap();
+        let mem =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0101, data_mpu, pid(0))
+                .unwrap()
+                .with_code_mpu_region(code_mpu)
+                .unwrap();
         let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
             .expect("entry with Thumb bit within code region should be accepted");
         assert_eq!(k.partitions().get(0).unwrap().entry_point(), 0x0800_0101);
@@ -4041,8 +4080,9 @@ mod tests {
         sched.add_system_window(1).unwrap();
         let data_mpu = MpuRegion::new(0x2000_0000, 1024, 0);
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0FFF_0001, data_mpu, 0)
-            .unwrap();
+        let mem =
+            ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0FFF_0001, data_mpu, pid(0))
+                .unwrap();
         Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
             .expect("no code region means no entry point bounds check");
     }
@@ -4056,7 +4096,7 @@ mod tests {
         sched.add_system_window(1).unwrap();
         let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
         let mut stack = AlignedStack256B::default();
-        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, mpu, 0)
+        let mem = ExternalPartitionMemory::from_aligned_stack(&mut stack, 0x0800_0001, mpu, pid(0))
             .unwrap()
             .with_fault_policy(FaultPolicy::WarmRestart { max: 3 });
         let k = Kernel::<TestConfig>::new(sched, core::slice::from_ref(&mem))
@@ -4400,7 +4440,7 @@ mod tests {
         assert_eq!(svc!(SYS_BUF_ALLOC, 0), 0); // re-alloc reuses 0
         assert_eq!(svc!(SYS_BUF_RELEASE, 0), 0); // release 0 again
         assert_eq!(svc!(SYS_BUF_RELEASE, 0), eres); // double-release
-        k.set_current_partition(1); // switch to partition 1
+        k.set_current_partition(pid(1)); // switch to partition 1
         assert_eq!(
             svc!(SYS_BUF_RELEASE, 1),
             SvcError::PermissionDenied.to_u32()
@@ -5414,50 +5454,50 @@ mod tests {
     #[test]
     fn validate_ptr_valid_at_start() {
         let t = ptr_table(0x2000_0000, 4096);
-        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 16));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0000, 16));
     }
 
     #[test]
     fn validate_ptr_valid_middle() {
         let t = ptr_table(0x2000_0000, 4096);
-        assert!(validate_user_ptr(&t, 0, 0x2000_0100, 64));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0100, 64));
     }
 
     #[test]
     fn validate_ptr_valid_exact_end() {
         // ptr + len == base + size (last byte is at base + size - 1)
         let t = ptr_table(0x2000_0000, 4096);
-        assert!(validate_user_ptr(&t, 0, 0x2000_0FF0, 16));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0FF0, 16));
     }
 
     #[test]
     fn validate_ptr_before_region() {
         let t = ptr_table(0x2000_0000, 4096);
-        assert!(!validate_user_ptr(&t, 0, 0x1FFF_FFF0, 32));
+        assert!(!validate_user_ptr(&t, pid(0), 0x1FFF_FFF0, 32));
     }
 
     #[test]
     fn validate_ptr_after_region() {
         let t = ptr_table(0x2000_0000, 4096);
-        assert!(!validate_user_ptr(&t, 0, 0x2000_1000, 1));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_1000, 1));
     }
 
     #[test]
     fn validate_ptr_overflow_wraps() {
         let t = ptr_table(0x2000_0000, 4096);
         // ptr + len overflows u32
-        assert!(!validate_user_ptr(&t, 0, 0xFFFF_FFF0, 0x20));
+        assert!(!validate_user_ptr(&t, pid(0), 0xFFFF_FFF0, 0x20));
     }
 
     #[test]
     fn validate_ptr_in_kernel_code_fails() {
         // Even if MPU region covers flash, kernel code region is rejected.
         let t = ptr_table(0x0000_0000, 0x0002_0000);
-        assert!(!validate_user_ptr(&t, 0, 0x0000_0000, 16));
-        assert!(!validate_user_ptr(&t, 0, 0x0000_8000, 64));
-        assert!(!validate_user_ptr(&t, 0, KERNEL_CODE_END - 16, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x0000_0000, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x0000_8000, 64));
+        assert!(!validate_user_ptr(&t, pid(0), KERNEL_CODE_END - 16, 16));
         // Spanning boundary: starts in kernel code, ends outside.
-        assert!(!validate_user_ptr(&t, 0, KERNEL_CODE_END - 8, 16));
+        assert!(!validate_user_ptr(&t, pid(0), KERNEL_CODE_END - 8, 16));
     }
 
     #[test]
@@ -5468,12 +5508,12 @@ mod tests {
         // MPU region covers SRAM from 0x2000_2000 onward (above kernel data).
         let t = ptr_table(0x2000_2000, 0x0000_E000);
         // Pointer inside kernel data region — rejected by Guard 3.
-        assert!(!validate_user_ptr(&t, 0, 0x2000_0000, 16));
-        assert!(!validate_user_ptr(&t, 0, 0x2000_1000, 64));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_0000, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_1000, 64));
         // Spanning boundary: starts in kernel data, ends outside.
-        assert!(!validate_user_ptr(&t, 0, 0x2000_1FF0, 32));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_1FF0, 32));
         // Pointer at kernel_data_end — accepted (outside kernel data, in grant).
-        assert!(validate_user_ptr(&t, 0, 0x2000_2000, 16));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_2000, 16));
         // Clean up override.
         KERNEL_DATA_END_OVERRIDE.with(|c| c.set(None));
     }
@@ -5487,9 +5527,9 @@ mod tests {
         let t = ptr_table_separate_regions(0x2000_0000, 0x800, 0x2000_2000, 0x1000);
         // Guard 2 (grant) must accept own-stack pointers before Guard 3 (SRAM
         // rejection) fires.  This exercises the guard ordering fix.
-        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 4)); // start of stack
-        assert!(validate_user_ptr(&t, 0, 0x2000_0400, 16)); // middle of stack
-        assert!(validate_user_ptr(&t, 0, 0x2000_07F0, 16)); // near end of stack
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0000, 4)); // start of stack
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0400, 16)); // middle of stack
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_07F0, 16)); // near end of stack
 
         // Clean up override.
         KERNEL_DATA_END_OVERRIDE.with(|c| c.set(None));
@@ -5499,20 +5539,20 @@ mod tests {
     fn validate_ptr_null_and_low_kernel_code_rejected() {
         let t = ptr_table(0x2000_0000, 4096);
         // Null pointer (address 0) — rejected.
-        assert!(!validate_user_ptr(&t, 0, 0, 1));
+        assert!(!validate_user_ptr(&t, pid(0), 0, 1));
         // Null with zero length: not in any grant region — rejected.
-        assert!(!validate_user_ptr(&t, 0, 0, 0));
+        assert!(!validate_user_ptr(&t, pid(0), 0, 0));
         // Non-zero address in kernel code region — verifies range check, not
         // just a null check.
-        assert!(!validate_user_ptr(&t, 0, 0x8000, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x8000, 16));
     }
 
     #[test]
     fn validate_ptr_length_wraps_address_space() {
         let t = ptr_table(0x2000_0000, 0x0001_0000);
         // ptr + len wraps u32 — rejected by checked_add overflow.
-        assert!(!validate_user_ptr(&t, 0, 0x2000_0100, usize::MAX));
-        assert!(!validate_user_ptr(&t, 0, 1, u32::MAX as usize));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_0100, usize::MAX));
+        assert!(!validate_user_ptr(&t, pid(0), 1, u32::MAX as usize));
     }
 
     // ---- overlaps_kernel_data parameterized tests ----
@@ -5551,24 +5591,24 @@ mod tests {
     fn validate_ptr_zero_length() {
         let t = ptr_table(0x2000_0000, 4096);
         // Zero-length at region start is valid.
-        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 0));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0000, 0));
         // Zero-length at region end (ptr == base + size) is valid.
-        assert!(validate_user_ptr(&t, 0, 0x2000_1000, 0));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_1000, 0));
         // Zero-length outside the region is invalid.
-        assert!(!validate_user_ptr(&t, 0, 0x1FFF_FFFF, 0));
+        assert!(!validate_user_ptr(&t, pid(0), 0x1FFF_FFFF, 0));
     }
 
     #[test]
     fn validate_ptr_nonexistent_partition() {
         let t = ptr_table(0x2000_0000, 4096);
-        assert!(!validate_user_ptr(&t, 99, 0x2000_0000, 16));
+        assert!(!validate_user_ptr(&t, pid(99), 0x2000_0000, 16));
     }
 
     #[test]
     fn validate_ptr_spans_past_end() {
         let t = ptr_table(0x2000_0000, 4096);
         // Starts inside but extends 1 byte past the region.
-        assert!(!validate_user_ptr(&t, 0, 0x2000_0FF0, 17));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_0FF0, 17));
     }
 
     /// Build a partition table with separate (non-overlapping) data and stack regions.
@@ -5598,10 +5638,10 @@ mod tests {
         // Data at  0x2000_1000..0x2000_2000 (4KB, non-overlapping)
         let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_1000, 0x1000);
         // Pointer entirely within stack region should pass.
-        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 16));
-        assert!(validate_user_ptr(&t, 0, 0x2000_0100, 64));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0000, 16));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0100, 64));
         // Exact end of stack region.
-        assert!(validate_user_ptr(&t, 0, 0x2000_03F0, 16));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_03F0, 16));
     }
 
     #[test]
@@ -5610,9 +5650,9 @@ mod tests {
         // Data at  0x2000_0400..0x2000_0800 (adjacent, no overlap)
         let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_0400, 0x400);
         // Pointer starts in stack, ends in data region — must fail.
-        assert!(!validate_user_ptr(&t, 0, 0x2000_0300, 0x200));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_0300, 0x200));
         // Pointer starts in data, ends past data — must fail.
-        assert!(!validate_user_ptr(&t, 0, 0x2000_0700, 0x200));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_0700, 0x200));
     }
 
     #[test]
@@ -5621,8 +5661,8 @@ mod tests {
         // Data at  0x2000_1000..0x2000_2000 (non-overlapping)
         let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_1000, 0x1000);
         // Pointer entirely within data region should pass.
-        assert!(validate_user_ptr(&t, 0, 0x2000_1000, 16));
-        assert!(validate_user_ptr(&t, 0, 0x2000_1800, 64));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_1000, 16));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_1800, 64));
     }
 
     #[test]
@@ -5631,11 +5671,11 @@ mod tests {
         // Data at  0x2000_1000..0x2000_2000
         let t = ptr_table_separate_regions(0x2000_0000, 0x400, 0x2000_1000, 0x1000);
         // Gap between stack and data (0x2000_0400..0x2000_1000).
-        assert!(!validate_user_ptr(&t, 0, 0x2000_0500, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_0500, 16));
         // Before stack.
-        assert!(!validate_user_ptr(&t, 0, 0x1FFF_FF00, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x1FFF_FF00, 16));
         // After data.
-        assert!(!validate_user_ptr(&t, 0, 0x2000_2000, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_2000, 16));
     }
 
     // ---- validate_user_ptr peripheral region tests ----
@@ -5670,15 +5710,15 @@ mod tests {
         let t = ptr_table_with_peripherals(0x2000_0000, 0x400, 0x2000_1000, 0x1000, &periph);
 
         // Pointer at start of peripheral region.
-        assert!(validate_user_ptr(&t, 0, 0x4000_0000, 4));
+        assert!(validate_user_ptr(&t, pid(0), 0x4000_0000, 4));
         // Pointer in middle of peripheral region.
-        assert!(validate_user_ptr(&t, 0, 0x4000_0080, 16));
+        assert!(validate_user_ptr(&t, pid(0), 0x4000_0080, 16));
         // Pointer at exact end of peripheral region (ptr + len == base + size).
-        assert!(validate_user_ptr(&t, 0, 0x4000_00F0, 16));
+        assert!(validate_user_ptr(&t, pid(0), 0x4000_00F0, 16));
         // Zero-length at peripheral region start.
-        assert!(validate_user_ptr(&t, 0, 0x4000_0000, 0));
+        assert!(validate_user_ptr(&t, pid(0), 0x4000_0000, 0));
         // Zero-length at peripheral region end.
-        assert!(validate_user_ptr(&t, 0, 0x4000_0100, 0));
+        assert!(validate_user_ptr(&t, pid(0), 0x4000_0100, 0));
     }
 
     #[test]
@@ -5690,13 +5730,13 @@ mod tests {
         let t = ptr_table_with_peripherals(0x2000_0000, 0x400, 0x2000_1000, 0x1000, &periph);
 
         // Before peripheral region.
-        assert!(!validate_user_ptr(&t, 0, 0x3FFF_FF00, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x3FFF_FF00, 16));
         // After peripheral region.
-        assert!(!validate_user_ptr(&t, 0, 0x4000_0100, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x4000_0100, 16));
         // Spanning past peripheral region end.
-        assert!(!validate_user_ptr(&t, 0, 0x4000_00F8, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x4000_00F8, 16));
         // In gap between data and peripheral.
-        assert!(!validate_user_ptr(&t, 0, 0x3000_0000, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x3000_0000, 16));
     }
 
     #[test]
@@ -5712,15 +5752,15 @@ mod tests {
         let t = ptr_table_with_peripherals(0x2000_0000, 0x400, 0x2000_1000, 0x1000, &periph);
 
         // First peripheral region.
-        assert!(validate_user_ptr(&t, 0, 0x4000_0000, 16));
-        assert!(validate_user_ptr(&t, 0, 0x4000_00F0, 16));
+        assert!(validate_user_ptr(&t, pid(0), 0x4000_0000, 16));
+        assert!(validate_user_ptr(&t, pid(0), 0x4000_00F0, 16));
         // Second peripheral region.
-        assert!(validate_user_ptr(&t, 0, 0x4001_0000, 32));
-        assert!(validate_user_ptr(&t, 0, 0x4001_01E0, 32));
+        assert!(validate_user_ptr(&t, pid(0), 0x4001_0000, 32));
+        assert!(validate_user_ptr(&t, pid(0), 0x4001_01E0, 32));
         // Gap between peripherals fails.
-        assert!(!validate_user_ptr(&t, 0, 0x4000_0800, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x4000_0800, 16));
         // Spanning both peripherals fails.
-        assert!(!validate_user_ptr(&t, 0, 0x4000_0000, 0x1_0100));
+        assert!(!validate_user_ptr(&t, pid(0), 0x4000_0000, 0x1_0100));
     }
 
     #[test]
@@ -5729,10 +5769,10 @@ mod tests {
         let t = ptr_table_with_peripherals(0x2000_0000, 0x400, 0x2000_1000, 0x1000, &[]);
 
         // Pointer in typical peripheral address range should fail.
-        assert!(!validate_user_ptr(&t, 0, 0x4000_0000, 16));
+        assert!(!validate_user_ptr(&t, pid(0), 0x4000_0000, 16));
         // Data and stack regions still work.
-        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 16)); // stack
-        assert!(validate_user_ptr(&t, 0, 0x2000_1000, 16)); // data
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0000, 16)); // stack
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_1000, 16)); // data
     }
 
     // ---- Dedicated pointer validation unit tests ----
@@ -5744,23 +5784,23 @@ mod tests {
     fn validate_ptr_null_pointer_rejected() {
         let t = ptr_table(0x2000_0000, 4096);
         // Null pointer (0x0) is in kernel code region — always rejected.
-        assert!(!validate_user_ptr(&t, 0, 0x0, 1));
-        assert!(!validate_user_ptr(&t, 0, 0x0, 4));
+        assert!(!validate_user_ptr(&t, pid(0), 0x0, 1));
+        assert!(!validate_user_ptr(&t, pid(0), 0x0, 4));
         // Null with zero length: ptr=0 is outside accessible regions.
-        assert!(!validate_user_ptr(&t, 0, 0x0, 0));
+        assert!(!validate_user_ptr(&t, pid(0), 0x0, 0));
     }
 
     #[test]
     fn validate_ptr_at_u32_max_boundary() {
         let t = ptr_table(0x2000_0000, 4096);
         // ptr = 0xFFFF_FFFF, len = 1 → overflow (wraps past u32::MAX).
-        assert!(!validate_user_ptr(&t, 0, 0xFFFF_FFFF, 1));
+        assert!(!validate_user_ptr(&t, pid(0), 0xFFFF_FFFF, 1));
         // ptr = 0xFFFF_FFFF, len = 0 → no overflow, but outside all regions.
-        assert!(!validate_user_ptr(&t, 0, 0xFFFF_FFFF, 0));
+        assert!(!validate_user_ptr(&t, pid(0), 0xFFFF_FFFF, 0));
         // ptr = 0xFFFF_FFFE, len = 2 → end = 0x1_0000_0000 overflows u32.
-        assert!(!validate_user_ptr(&t, 0, 0xFFFF_FFFE, 2));
+        assert!(!validate_user_ptr(&t, pid(0), 0xFFFF_FFFE, 2));
         // No overflow but far outside partition region.
-        assert!(!validate_user_ptr(&t, 0, 0xFFFF_FF00, 0xFF));
+        assert!(!validate_user_ptr(&t, pid(0), 0xFFFF_FF00, 0xFF));
     }
 
     #[test]
@@ -5770,9 +5810,9 @@ mod tests {
         // region membership. Misaligned pointers inside a valid region
         // are accepted by this function. Alignment rejection is enforced
         // at the MPU configuration layer (validate_mpu_region / PartitionConfig::validate).
-        assert!(validate_user_ptr(&t, 0, 0x2000_0001, 1)); // odd byte
-        assert!(validate_user_ptr(&t, 0, 0x2000_0003, 2)); // halfword-misaligned
-        assert!(validate_user_ptr(&t, 0, 0x2000_0005, 4)); // word-misaligned
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0001, 1)); // odd byte
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0003, 2)); // halfword-misaligned
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0005, 4)); // word-misaligned
     }
 
     /// Misaligned pointer rejection: `validate_mpu_region` rejects bases
@@ -5799,20 +5839,20 @@ mod tests {
     fn validate_ptr_exact_full_region() {
         let t = ptr_table(0x2000_0000, 4096);
         // Pointer covers the ENTIRE region [base, base + size).
-        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 4096));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0000, 4096));
         // One byte more than the full region — rejected.
-        assert!(!validate_user_ptr(&t, 0, 0x2000_0000, 4097));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_0000, 4097));
     }
 
     #[test]
     fn validate_ptr_single_byte_at_region_edges() {
         let t = ptr_table(0x2000_0000, 4096);
         // First byte of region: valid.
-        assert!(validate_user_ptr(&t, 0, 0x2000_0000, 1));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0000, 1));
         // Last valid byte of region (base + size - 1).
-        assert!(validate_user_ptr(&t, 0, 0x2000_0FFF, 1));
+        assert!(validate_user_ptr(&t, pid(0), 0x2000_0FFF, 1));
         // First byte past region end: invalid.
-        assert!(!validate_user_ptr(&t, 0, 0x2000_1000, 1));
+        assert!(!validate_user_ptr(&t, pid(0), 0x2000_1000, 1));
     }
 
     #[test]
@@ -5820,9 +5860,9 @@ mod tests {
         // Region starts at 0 covering 128KB of flash.
         let t = ptr_table(0x0000_0000, 0x0002_0000);
         // Pointer at exactly KERNEL_CODE_END is valid (outside kernel code).
-        assert!(validate_user_ptr(&t, 0, KERNEL_CODE_END, 16));
+        assert!(validate_user_ptr(&t, pid(0), KERNEL_CODE_END, 16));
         // One byte below KERNEL_CODE_END is in kernel code — rejected.
-        assert!(!validate_user_ptr(&t, 0, KERNEL_CODE_END - 1, 1));
+        assert!(!validate_user_ptr(&t, pid(0), KERNEL_CODE_END - 1, 1));
     }
 
     // ---- validate_user_ptr_dynamic tests (dynamic-mpu feature) ----
@@ -5837,27 +5877,33 @@ mod tests {
         let s = DynamicStrategy::new();
 
         // Add 3 windows: one for P0, two more for P0, none for P1
-        s.add_window(0x2001_0000, 256, 0, 0).unwrap(); // R5: P0
-        s.add_window(0x2002_0000, 512, 0, 0).unwrap(); // R6: P0
-        s.add_window(0x2003_0000, 1024, 0, 1).unwrap(); // R7: P1
+        s.add_window(0x2001_0000, 256, 0, pid(0)).unwrap(); // R5: P0
+        s.add_window(0x2002_0000, 512, 0, pid(0)).unwrap(); // R6: P0
+        s.add_window(0x2003_0000, 1024, 0, pid(1)).unwrap(); // R7: P1
 
         // Pointer in dynamic windows passes
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2001_0000, 16));
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2002_0100, 64));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2001_0000, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2002_0100, 64));
         // Fallback to static data region
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_1000, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_1000, 16));
         // Fallback to static stack region
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0000, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_0000, 16));
         // Outside all regions fails
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0500, 16));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_0500, 16));
         // Spanning window boundary fails
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x2001_00F0, 32));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x2001_00F0, 32));
         // Nonexistent partition fails
-        assert!(!validate_user_ptr_dynamic(&t, &s, 99, 0x2000_0000, 16));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(99), 0x2000_0000, 16));
         // Overflow fails
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0xFFFF_FFF0, 0x20));
+        assert!(!validate_user_ptr_dynamic(
+            &t,
+            &s,
+            pid(0),
+            0xFFFF_FFF0,
+            0x20
+        ));
         // Partition isolation: P0 cannot access P1's window
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x2003_0000, 16));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x2003_0000, 16));
     }
 
     /// Test validate_user_ptr_dynamic with peripheral regions.
@@ -5871,22 +5917,22 @@ mod tests {
         let t = ptr_table_with_peripherals(0x2000_0000, 0x400, 0x2000_1000, 0x1000, &periph);
         let s = DynamicStrategy::new();
         // Add a dynamic window for P0.
-        s.add_window(0x2001_0000, 256, 0, 0).unwrap();
+        s.add_window(0x2001_0000, 256, 0, pid(0)).unwrap();
 
         // Dynamic window passes.
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2001_0000, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2001_0000, 16));
         // Static data region passes.
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_1000, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_1000, 16));
         // Static stack region passes.
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0000, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_0000, 16));
         // Peripheral region passes.
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x4000_0000, 4));
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x4000_0080, 16));
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x4000_00F0, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x4000_0000, 4));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x4000_0080, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x4000_00F0, 16));
         // Outside peripheral region fails.
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x4000_0100, 16));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x4000_0100, 16));
         // Spanning peripheral boundary fails.
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x4000_00F8, 16));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x4000_00F8, 16));
     }
 
     /// Test that validate_user_ptr_dynamic rejects pointers in kernel code region.
@@ -5897,15 +5943,15 @@ mod tests {
         let t = ptr_table(0x0000_0000, 0x0002_0000);
         let s = DynamicStrategy::new();
         // Add a dynamic window that also covers kernel code
-        s.add_window(0x0000_0000, 0x0001_0000, 0, 0).unwrap();
+        s.add_window(0x0000_0000, 0x0001_0000, 0, pid(0)).unwrap();
 
         // Kernel code region [0, KERNEL_CODE_END) must be rejected
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x0000_0000, 16));
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x0000_8000, 64));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x0000_0000, 16));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x0000_8000, 64));
         assert!(!validate_user_ptr_dynamic(
             &t,
             &s,
-            0,
+            pid(0),
             KERNEL_CODE_END - 16,
             16
         ));
@@ -5913,7 +5959,7 @@ mod tests {
         assert!(!validate_user_ptr_dynamic(
             &t,
             &s,
-            0,
+            pid(0),
             KERNEL_CODE_END - 8,
             16
         ));
@@ -5933,12 +5979,12 @@ mod tests {
         // MPU region covers SRAM
         let t = ptr_table(0x2000_0000, 0x0001_0000);
         let s = DynamicStrategy::new();
-        s.add_window(0x2000_0000, 0x0001_0000, 0, 0).unwrap();
+        s.add_window(0x2000_0000, 0x0001_0000, 0, pid(0)).unwrap();
 
         // With KERNEL_DATA_END == 0x2000_0000, the kernel data region is empty,
         // so SRAM addresses are allowed (assuming valid MPU coverage).
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0000, 16));
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0100, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_0000, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_0100, 16));
     }
 
     /// Test that revoking a dynamic MPU window invalidates pointers that were
@@ -5956,15 +6002,15 @@ mod tests {
         let s = DynamicStrategy::new();
 
         // Add a dynamic window for partition 0 at 0x3000_0000 (256 bytes).
-        let region_id = s.add_window(0x3000_0000, 256, 0, 0).unwrap();
+        let region_id = s.add_window(0x3000_0000, 256, 0, pid(0)).unwrap();
         assert_eq!(region_id, 5); // First dynamic slot is R5
 
         // Pointer at start of window is valid.
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x3000_0000, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x3000_0000, 16));
         // Pointer in middle of window is valid.
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x3000_0080, 64));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x3000_0080, 64));
         // Pointer at end of window is valid.
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x3000_00F0, 16));
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x3000_00F0, 16));
 
         // Revoke the window.
         s.remove_window(region_id);
@@ -5973,13 +6019,13 @@ mod tests {
         assert!(s.slot(region_id).is_none());
 
         // Same pointers that were valid before are now invalid.
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x3000_0000, 16));
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x3000_0080, 64));
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x3000_00F0, 16));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x3000_0000, 16));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x3000_0080, 64));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x3000_00F0, 16));
 
         // Static regions still work after window revocation.
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0000, 16)); // stack
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_1000, 16)); // data
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_0000, 16)); // stack
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_1000, 16)); // data
     }
 
     /// Test that validate_user_ptr_dynamic accepts own-stack pointers even when
@@ -6001,12 +6047,12 @@ mod tests {
 
         // Guard 2b (grant) must accept own-stack pointers before Guard 3
         // (SRAM rejection) fires.
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0000, 4)); // start
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0400, 16)); // middle
-        assert!(validate_user_ptr_dynamic(&t, &s, 0, 0x2000_07F0, 16)); // near end
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_0000, 4)); // start
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_0400, 16)); // middle
+        assert!(validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_07F0, 16)); // near end
 
         // Pointer inside kernel data but outside all granted regions → rejected.
-        assert!(!validate_user_ptr_dynamic(&t, &s, 0, 0x2000_0900, 4));
+        assert!(!validate_user_ptr_dynamic(&t, &s, pid(0), 0x2000_0900, 4));
 
         // Clean up override.
         KERNEL_DATA_END_OVERRIDE.with(|c| c.set(None));
@@ -6025,20 +6071,20 @@ mod tests {
         let s = DynamicStrategy::new();
 
         // Nonexistent partition returns empty
-        assert!(all_accessible_regions(&t, &s, 99).is_empty());
+        assert!(all_accessible_regions(&t, &s, pid(99)).is_empty());
 
         // No dynamic windows: only static (data + stack)
-        let r = all_accessible_regions(&t, &s, 0);
+        let r = all_accessible_regions(&t, &s, pid(0));
         assert_eq!(r.len(), 2);
         assert!(r.contains(&(0x2000_1000, 0x1000)) && r.contains(&(0x2000_0000, 0x400)));
 
         // Add windows: P0 gets 2, P1 gets 1
-        s.add_window(0x3000_0000, 256, 0, 0).unwrap();
-        s.add_window(0x3001_0000, 512, 0, 0).unwrap();
-        s.add_window(0x4000_0000, 1024, 0, 1).unwrap();
+        s.add_window(0x3000_0000, 256, 0, pid(0)).unwrap();
+        s.add_window(0x3001_0000, 512, 0, pid(0)).unwrap();
+        s.add_window(0x4000_0000, 1024, 0, pid(1)).unwrap();
 
         // P0: 2 static + 2 dynamic = 4
-        let r0 = all_accessible_regions(&t, &s, 0);
+        let r0 = all_accessible_regions(&t, &s, pid(0));
         assert_eq!(r0.len(), 4);
         assert!(r0.contains(&(0x3000_0000, 256)) && r0.contains(&(0x3001_0000, 512)));
         assert!(!r0.contains(&(0x4000_0000, 1024))); // P1's window excluded
@@ -6048,7 +6094,7 @@ mod tests {
         assert!(static_bases.contains(&0x2000_1000) && static_bases.contains(&0x2000_0000));
 
         // P1 not in partition table → empty
-        assert!(all_accessible_regions(&t, &s, 1).is_empty());
+        assert!(all_accessible_regions(&t, &s, pid(1)).is_empty());
     }
 
     // ---- check_user_ptr / check_user_ptr_dynamic method tests ----
@@ -6078,7 +6124,7 @@ mod tests {
         let window_base: u32 = 0x3000_0000;
         let window_size: u32 = 256;
         k.dynamic_strategy
-            .add_window(window_base, window_size, 0, 0)
+            .add_window(window_base, window_size, 0, pid(0))
             .expect("add_window failed: MPU window slots exhausted or invalid config");
         // Static-only rejects the dynamic window.
         assert_eq!(
@@ -6098,7 +6144,7 @@ mod tests {
         let k = kernel(0, 0, 0);
         // Window owned by partition 1 — inaccessible to partition 0.
         k.dynamic_strategy
-            .add_window(0x3000_0000, 256, 0, 1)
+            .add_window(0x3000_0000, 256, 0, pid(1))
             .expect("add_window for partition 1 failed unexpectedly");
         assert_eq!(
             k.check_user_ptr_dynamic(0x3000_0000, 4),
@@ -6109,7 +6155,7 @@ mod tests {
         let k2 = kernel(0, 0, 0);
         let rid = k2
             .dynamic_strategy
-            .add_window(0x3000_0000, 256, 0, 0)
+            .add_window(0x3000_0000, 256, 0, pid(0))
             .expect("add_window for partition 0 failed unexpectedly");
         assert_eq!(k2.check_user_ptr_dynamic(0x3000_0000, 4), Ok(()));
         k2.dynamic_strategy.remove_window(rid);
@@ -6260,7 +6306,7 @@ mod tests {
         k.queuing_mut()
             .get_mut(dst)
             .unwrap()
-            .enqueue_blocked_sender(1, u64::MAX);
+            .enqueue_blocked_sender(pid(1), u64::MAX);
         let page = low32_buf(0);
         // Byte offset within the shared mmap page, chosen to avoid data
         // races with parallel tests that also use low32_buf(0).
@@ -6492,7 +6538,7 @@ mod tests {
             .queuing_mut()
             .get_mut(d)
             .unwrap()
-            .receive_queuing_message(1, &mut recv_buf, 0, 0)
+            .receive_queuing_message(pid(1), &mut recv_buf, 0, 0)
             .unwrap();
         match outcome {
             RecvQueuingOutcome::Received { msg_len, .. } => {
@@ -6516,7 +6562,7 @@ mod tests {
         k.queuing_mut()
             .get_mut(d)
             .unwrap()
-            .enqueue_blocked_receiver(1, u64::MAX);
+            .enqueue_blocked_receiver(pid(1), u64::MAX);
         let ptr = low32_buf(0);
         // TODO: Offset change (64 -> 512) to avoid test interference is outside original
         // subtask scope; consider moving to separate commit.
@@ -6812,7 +6858,7 @@ mod tests {
             let mut ef = frame(SYS_MTX_LOCK, 0, 0);
             dispatch_checked(&mut k, &mut ef);
             assert_eq!(ef.r0, 1, "MutexLock: first lock should acquire");
-            k.set_current_partition(1);
+            k.set_current_partition(pid(1));
             let mut ef = frame(SYS_MTX_LOCK, 0, 1);
             dispatch_checked(&mut k, &mut ef);
             assert_eq!(ef.r0, 0);
@@ -7005,7 +7051,7 @@ mod tests {
             &mut stk,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap();
         // Test empty schedule rejection
@@ -7029,9 +7075,13 @@ mod tests {
         s.add(ScheduleEntry::new(0, 100)).unwrap();
         s.add_system_window(1).unwrap();
         let mut stk = AlignedStack1K::default();
-        let mem =
-            ExternalPartitionMemory::from_aligned_stack(&mut stk, 1, MpuRegion::new(0, 0, 0), 0)
-                .unwrap();
+        let mem = ExternalPartitionMemory::from_aligned_stack(
+            &mut stk,
+            1,
+            MpuRegion::new(0, 0, 0),
+            pid(0),
+        )
+        .unwrap();
         let k = Kernel::<TestConfig>::new(s, core::slice::from_ref(&mem)).unwrap();
         assert_eq!(k.partitions().len(), 1);
         assert_eq!(k.active_partition(), None);
@@ -7050,14 +7100,14 @@ mod tests {
                 &mut stk0,
                 0x0800_0001,
                 MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
-                0,
+                pid(0),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
                 0x0800_1001,
                 MpuRegion::new(0x2000_1000, 1024, 0x0306_0000),
-                1,
+                pid(1),
             )
             .unwrap(),
         ];
@@ -7088,14 +7138,14 @@ mod tests {
                 &mut stk0,
                 0x0800_0001,
                 MpuRegion::new(0x2000_0000, 16384, 0),
-                0,
+                pid(0),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
                 0x0800_2001,
                 MpuRegion::new(0x2000_2000, 4096, 0),
-                1,
+                pid(1),
             )
             .unwrap(),
         ];
@@ -7114,14 +7164,14 @@ mod tests {
                 &mut stk0,
                 0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
-                0,
+                pid(0),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
                 0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
-                1,
+                pid(1),
             )
             .unwrap(),
         ];
@@ -7165,14 +7215,14 @@ mod tests {
                 &mut stk0,
                 0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
-                0,
+                pid(0),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
                 0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
-                1,
+                pid(1),
             )
             .unwrap(),
         ];
@@ -7255,7 +7305,7 @@ mod tests {
             &mut stk,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap();
 
@@ -7289,21 +7339,21 @@ mod tests {
                 &mut stk0,
                 0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
-                0,
+                pid(0),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
                 0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
-                1,
+                pid(1),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk2,
                 0x0800_2001,
                 MpuRegion::new(0x2000_2000, 4096, 0),
-                2,
+                pid(2),
             )
             .unwrap(),
         ];
@@ -7336,7 +7386,7 @@ mod tests {
             &mut stk,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap();
 
@@ -7360,7 +7410,7 @@ mod tests {
             &mut stk,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap();
 
@@ -7389,7 +7439,7 @@ mod tests {
             &mut stk,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap();
 
@@ -7410,17 +7460,17 @@ mod tests {
             &mut stk,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap()
         .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 16, 0x03)]);
         assert!(matches!(
             result,
             Err(ConfigError::PeripheralRegionInvalid {
-                partition_id: 0,
+                partition_id,
                 region_index: 0,
                 detail: MpuError::SizeTooSmall,
-            })
+            }) if partition_id == pid(0)
         ));
     }
 
@@ -7431,17 +7481,17 @@ mod tests {
             &mut stk,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap()
         .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 100, 0x03)]);
         assert!(matches!(
             result,
             Err(ConfigError::PeripheralRegionInvalid {
-                partition_id: 0,
+                partition_id,
                 region_index: 0,
                 detail: MpuError::SizeNotPowerOfTwo,
-            })
+            }) if partition_id == pid(0)
         ));
     }
 
@@ -7453,17 +7503,17 @@ mod tests {
             &mut stk,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap()
         .with_peripheral_regions(&[MpuRegion::new(0x4000_0100, 4096, 0x03)]);
         assert!(matches!(
             result,
             Err(ConfigError::PeripheralRegionInvalid {
-                partition_id: 0,
+                partition_id,
                 region_index: 0,
                 detail: MpuError::BaseNotAligned,
-            })
+            }) if partition_id == pid(0)
         ));
     }
 
@@ -7476,7 +7526,7 @@ mod tests {
             &mut stk,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap()
         .with_peripheral_regions(&[MpuRegion::new(0x4000_0000, 4096, 0x03)])
@@ -7520,14 +7570,14 @@ mod tests {
                 &mut stk0,
                 0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
-                0,
+                pid(0),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
                 0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
-                1,
+                pid(1),
             )
             .unwrap(),
         ];
@@ -7820,21 +7870,21 @@ mod tests {
                 &mut stk0,
                 0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
-                0,
+                pid(0),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
                 0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
-                1,
+                pid(1),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk2,
                 0x0800_2001,
                 MpuRegion::new(0x2000_2000, 4096, 0),
-                2,
+                pid(2),
             )
             .unwrap(),
         ];
@@ -8253,7 +8303,7 @@ mod tests {
         let mut k = kernel(0, 0, 0);
         k.active_partition = Some(0);
         // Fix invariant: only P0 should be Running.
-        try_transition(k.partitions_mut(), 1, PartitionState::Ready);
+        try_transition(k.partitions_mut(), pid(1), PartitionState::Ready);
         // kernel() creates partitions via tbl(), which transitions them to Running.
         assert_eq!(
             k.partitions()
@@ -8447,7 +8497,7 @@ mod tests {
 
         // Lend a buffer with an already-expired deadline
         let ds = &k.dynamic_strategy;
-        k.buffers.lend_to_partition(0, 1, false, ds).unwrap();
+        k.buffers.lend_to_partition(0, pid(1), false, ds).unwrap();
         k.buffers.set_deadline(0, Some(0)).unwrap();
 
         // bottom_half_stale is false — fallback should be a no-op
@@ -8458,7 +8508,7 @@ mod tests {
         // Buffer should still be borrowed
         assert_eq!(
             k.buffers.get(0).unwrap().state(),
-            crate::buffer_pool::BorrowState::BorrowedRead { owner: 1 },
+            crate::buffer_pool::BorrowState::BorrowedRead { owner: pid(1) },
         );
     }
 
@@ -8472,7 +8522,7 @@ mod tests {
 
         // Lend slot 0 with deadline=10
         let ds = &k.dynamic_strategy;
-        k.buffers.lend_to_partition(0, 1, true, ds).unwrap();
+        k.buffers.lend_to_partition(0, pid(1), true, ds).unwrap();
         k.buffers.set_deadline(0, Some(10)).unwrap();
 
         // Advance past threshold to trigger stale flag
@@ -8500,7 +8550,7 @@ mod tests {
 
         // Lend slot 0 with a deadline far in the future
         let ds = &k.dynamic_strategy;
-        k.buffers.lend_to_partition(0, 1, false, ds).unwrap();
+        k.buffers.lend_to_partition(0, pid(1), false, ds).unwrap();
         k.buffers.set_deadline(0, Some(999_999)).unwrap();
 
         // Advance past threshold to trigger stale flag
@@ -8514,7 +8564,7 @@ mod tests {
         assert_eq!(revoked, 0, "non-expired buffer should not be revoked");
         assert_eq!(
             k.buffers.get(0).unwrap().state(),
-            crate::buffer_pool::BorrowState::BorrowedRead { owner: 1 },
+            crate::buffer_pool::BorrowState::BorrowedRead { owner: pid(1) },
         );
     }
 
@@ -8534,13 +8584,13 @@ mod tests {
 
         // Lend slot 0 with deadline=10 (will expire quickly).
         let ds = &k.dynamic_strategy;
-        k.buffers.lend_to_partition(0, 1, true, ds).unwrap();
+        k.buffers.lend_to_partition(0, pid(1), true, ds).unwrap();
         k.buffers.set_deadline(0, Some(10)).unwrap();
 
         // Confirm buffer is currently borrowed.
         assert_eq!(
             k.buffers.get(0).unwrap().state(),
-            BorrowState::BorrowedWrite { owner: 1 },
+            BorrowState::BorrowedWrite { owner: pid(1) },
         );
 
         // Drive ticks past the stale threshold via systick_handler.
@@ -9097,7 +9147,7 @@ mod tests {
         );
 
         // Set up P0 as active Running partition.
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         k.set_next_partition(0);
         k.active_partition = Some(0);
         assert_eq!(
@@ -9163,7 +9213,7 @@ mod tests {
         // Set up P0 as active Running partition with matching current_partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -9341,7 +9391,7 @@ mod tests {
         // P0 as active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_partition_state_consistency(k.partitions().as_slice());
 
         // Step 1: SYS_EVT_WAIT — P0 blocks (no events set).
@@ -9366,7 +9416,7 @@ mod tests {
         assert_partition_state_consistency(k.partitions().as_slice());
 
         // Step 3: event_set — P0 is already Running, no state change.
-        let ret = crate::events::event_set(k.partitions_mut(), 0, 0b1010);
+        let ret = crate::events::event_set(k.partitions_mut(), PartitionId::new(0), 0b1010);
         assert_eq!(ret, 0, "event_set must return 0");
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
@@ -9428,7 +9478,7 @@ mod tests {
         // P0 as active Running partition, P1 stays Ready.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_partition_state_consistency(k.partitions().as_slice());
 
         // Step 1: P0 SYS_SEM_WAIT — blocks (Waiting).
@@ -9457,7 +9507,7 @@ mod tests {
 
         // Step 3: Promote P1 to Running (harness context-switch).
         k.set_next_partition(1);
-        k.set_current_partition(1);
+        k.set_current_partition(pid(1));
         assert_eq!(
             k.partitions().get(1).unwrap().state(),
             PartitionState::Running
@@ -9510,7 +9560,7 @@ mod tests {
 
         // Step 6: Harness context-switch — advance_schedule_tick already
         // promoted P0 to Running via set_next_partition(0); update current.
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running
@@ -9578,7 +9628,7 @@ mod tests {
         // Set scheduler fields to track P0 as the active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_partition_state_consistency(k.partitions().as_slice());
 
         // Schedule: P0(5) | P1(3) [+ SystemWindow(1) with dynamic-mpu].
@@ -9673,7 +9723,7 @@ mod tests {
         // Step 2: Set up P0 as the active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -9734,14 +9784,14 @@ mod tests {
 
         // Step 1: P1 acquires mutex 0 while active_partition is still None
         // (dispatch invariants skip when active_partition is None in tests).
-        k.set_current_partition(1);
+        k.set_current_partition(pid(1));
         let mut ef = frame(SYS_MTX_LOCK, 0, 1);
         // SAFETY: See module-level SAFETY docs for test dispatch justification.
         unsafe { k.dispatch(&mut ef) };
         assert_eq!(ef.r0, 1, "uncontested MutexLock must return 1 (acquired)");
         assert_eq!(
             k.mutexes().owner(0),
-            Ok(Some(1)),
+            Ok(Some(pid(1))),
             "mutex 0 must be owned by P1"
         );
 
@@ -9759,7 +9809,7 @@ mod tests {
         // Step 3: Set up P0 as the active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -9834,7 +9884,7 @@ mod tests {
         // Step 3: Set up P0 as the active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -9920,7 +9970,7 @@ mod tests {
         // Step 3: Set up P0 as the active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -9999,7 +10049,7 @@ mod tests {
         // Step 2: Set up P0 as the active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -10077,7 +10127,7 @@ mod tests {
         // Step 2: Set up P0 as the active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -10157,7 +10207,7 @@ mod tests {
         // Step 2: Set up P0 as the active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -10239,7 +10289,7 @@ mod tests {
         // Step 2: Set up P0 as the active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -10316,7 +10366,7 @@ mod tests {
         // Step 2: Set up P0 as the active Running partition.
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -10413,7 +10463,7 @@ mod tests {
 
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
 
         // Dispatch blocking SYS_EVT_WAIT (no events → blocks).
         let mut ef = frame(SYS_EVT_WAIT, 0, 0b1010);
@@ -10463,7 +10513,7 @@ mod tests {
             &mut stk0,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap()];
         let mut k = kernel_from_ext(schedule, &mems);
@@ -10666,14 +10716,14 @@ mod tests {
                 &mut stk0,
                 0x0800_0001,
                 MpuRegion::new(0x2000_0000, 4096, 0),
-                0,
+                pid(0),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
                 0x0800_1001,
                 MpuRegion::new(0x2000_1000, 4096, 0),
-                1,
+                pid(1),
             )
             .unwrap(),
         ];
@@ -10735,7 +10785,7 @@ mod tests {
         // --- Step 1: P0 starts Running via set_next_partition ---
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running
@@ -10823,7 +10873,7 @@ mod tests {
         // --- Step 1: P0 starts Running ---
         k.set_next_partition(0);
         k.active_partition = Some(0);
-        k.set_current_partition(0);
+        k.set_current_partition(pid(0));
         assert_eq!(
             k.partitions().get(0).unwrap().state(),
             PartitionState::Running,
@@ -10937,14 +10987,14 @@ mod tests {
                 &mut stk0,
                 0x0800_0001,
                 MpuRegion::new(0, 0, 0),
-                0,
+                pid(0),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
                 0x0800_1001,
                 MpuRegion::new(0x2004_0000, 2048, 0x0306_0000),
-                1,
+                pid(1),
             )
             .unwrap(),
         ];

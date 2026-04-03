@@ -40,6 +40,13 @@ define_id!(QueuingPortId, u32);
 define_id!(BlackboardId, u32);
 define_id!(DeviceId, u8);
 define_id!(PartitionId, u32);
+
+impl core::fmt::Display for PartitionId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 define_id!(BufferSlotId, u8);
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

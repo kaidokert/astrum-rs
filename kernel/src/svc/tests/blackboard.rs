@@ -12,7 +12,7 @@ fn bb_nonblocking_read_empty_returns_error_without_enqueue() {
     let mut buf = [0u8; 64];
     // Non-blocking read (timeout=0) on empty board returns error
     assert_eq!(
-        k.blackboards_mut().read_blackboard(id, 0, &mut buf, 0),
+        k.blackboards_mut().read_blackboard(id, pid(0), &mut buf, 0),
         Err(BlackboardError::BoardEmpty)
     );
     // Caller was NOT enqueued
@@ -27,7 +27,7 @@ fn bb_blocking_read_and_display_wake() {
     let mut buf = [0u8; 64];
     // Blocking read (timeout>0) enqueues the caller
     assert_eq!(
-        k.blackboards_mut().read_blackboard(id, 0, &mut buf, 1),
+        k.blackboards_mut().read_blackboard(id, pid(0), &mut buf, 1),
         Ok(ReadBlackboardOutcome::ReaderBlocked)
     );
     assert_eq!(k.blackboards().get(id).unwrap().waiting_readers(), 1);
@@ -36,11 +36,11 @@ fn bb_blocking_read_and_display_wake() {
         .blackboards_mut()
         .display_blackboard(id, &[0xAA, 0xBB])
         .unwrap();
-    assert_eq!(woken.as_slice(), &[0]);
+    assert_eq!(woken.as_slice(), &[pid(0)]);
     // Non-blocking read now succeeds
     let outcome = k
         .blackboards_mut()
-        .read_blackboard(id, 0, &mut buf, 0)
+        .read_blackboard(id, pid(0), &mut buf, 0)
         .unwrap();
     assert_eq!(outcome, ReadBlackboardOutcome::Read { msg_len: 2 });
     assert_eq!(&buf[..2], &[0xAA, 0xBB]);
@@ -59,14 +59,14 @@ fn bb_blocking_read_wakes_partition() {
         .transition(PartitionState::Waiting)
         .unwrap();
     assert_eq!(
-        k.blackboards_mut().read_blackboard(id, 1, &mut buf, 1),
+        k.blackboards_mut().read_blackboard(id, pid(1), &mut buf, 1),
         Ok(ReadBlackboardOutcome::ReaderBlocked)
     );
     // Display wakes partition 1
     let woken = k.blackboards_mut().display_blackboard(id, &[0x01]).unwrap();
-    assert_eq!(woken.as_slice(), &[1]);
-    for &pid in woken.iter() {
-        try_transition(k.partitions_mut(), pid, PartitionState::Ready);
+    assert_eq!(woken.as_slice(), &[pid(1)]);
+    for &wpid in woken.iter() {
+        try_transition(k.partitions_mut(), wpid, PartitionState::Ready);
     }
     assert_eq!(
         k.partitions().get(1).unwrap().state(),
@@ -78,7 +78,8 @@ fn bb_blocking_read_wakes_partition() {
 fn bb_invalid_board_errors() {
     use crate::blackboard::BlackboardError;
     let mut k = kernel(0, 0, 0);
-    let r: Result<heapless::Vec<u8, 4>, _> = k.blackboards_mut().display_blackboard(99, &[1]);
+    let r: Result<heapless::Vec<PartitionId, 4>, _> =
+        k.blackboards_mut().display_blackboard(99, &[1]);
     assert_eq!(r, Err(BlackboardError::InvalidBoard));
 }
 
@@ -99,7 +100,7 @@ fn bb_clear_svc_dispatch() {
     // Non-blocking read after clear should fail
     let mut buf = [0u8; 64];
     assert_eq!(
-        k.blackboards_mut().read_blackboard(id, 0, &mut buf, 0),
+        k.blackboards_mut().read_blackboard(id, pid(0), &mut buf, 0),
         Err(BlackboardError::BoardEmpty)
     );
     // Invalid board via SVC

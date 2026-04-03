@@ -134,9 +134,10 @@ fn SysTick() {
         if *SW >= TARGET_SWITCHES {
             // Final descriptor check via DynamicStrategy software state.
             let desc = STRATEGY.slot(4).expect("R4 occupied");
-            let desc_ok = desc.base == exp_base && desc.owner == active_pid;
+            let desc_ok =
+                desc.base == exp_base && desc.owner == kernel::PartitionId::new(active_pid as u32);
             hprintln!(
-                "desc: base={:#010x} owner={} => {}",
+                "desc: base={:#010x} owner={:?} => {}",
                 desc.base,
                 desc.owner,
                 if desc_ok { "PASS" } else { "FAIL" },
@@ -163,7 +164,7 @@ fn SysTick() {
             if let Some(pcb) = k.partitions().get(pid as usize) {
                 let dyn_region = pcb.cached_dynamic_region();
                 STRATEGY
-                    .configure_partition(pid, &[dyn_region], 0)
+                    .configure_partition(kernel::PartitionId::new(pid as u32), &[dyn_region], 0)
                     .expect("configure_partition");
             }
             // SAFETY: single-core exclusive write; PendSV reads this after
@@ -220,14 +221,14 @@ fn main() -> ! {
                 &mut s0.0,
                 EntryAddr::from_entry(partition_main as PartitionEntry),
                 MpuRegion::new(DATA_BASES[0], DATA_SIZES[0], 0),
-                0,
+                kernel::PartitionId::new(0),
             )
             .expect("ext mem"),
             ExternalPartitionMemory::new(
                 &mut s1.0,
                 EntryAddr::from_entry(partition_main as PartitionEntry),
                 MpuRegion::new(DATA_BASES[1], DATA_SIZES[1], 0),
-                1,
+                kernel::PartitionId::new(1),
             )
             .expect("ext mem"),
         ];

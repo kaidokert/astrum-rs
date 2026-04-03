@@ -146,11 +146,12 @@ fn main() -> ! {
             &mut s0.0,
             EntryAddr::from_entry(partition_main as PartitionEntry),
             sentinel_mpu,
-            0,
+            kernel::PartitionId::new(0),
         )
         .expect("debug_boot: partition memory 0");
-        let m1 = ExternalPartitionMemory::new(&mut s1.0, 0, sentinel_mpu, 1)
-            .expect("debug_boot: partition memory 1");
+        let m1 =
+            ExternalPartitionMemory::new(&mut s1.0, 0, sentinel_mpu, kernel::PartitionId::new(1))
+                .expect("debug_boot: partition memory 1");
         [m0, m1]
     };
 

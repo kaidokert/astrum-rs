@@ -1,5 +1,6 @@
 use crate::partition::{PartitionState, PartitionTable, TransitionError};
 use crate::waitqueue::TimedWaitQueue;
+use rtos_traits::ids::PartitionId;
 #[derive(Debug, PartialEq, Eq)]
 pub enum SemaphoreError {
     InvalidSemaphore,
@@ -73,7 +74,7 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
         pcb.transition(PartitionState::Waiting)?;
         // Cannot fail: len() < W was checked above and we hold &mut self.
         sem.wait_queue
-            .push(caller as u8, u64::MAX)
+            .push(PartitionId::new(caller as u32), u64::MAX)
             .expect("wait_queue push after len check");
         Ok(false)
     }
@@ -105,7 +106,7 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
             .min(u64::MAX - 1);
         // Cannot fail: len() < W was checked above and we hold &mut self.
         sem.wait_queue
-            .push(caller as u8, expiry)
+            .push(PartitionId::new(caller as u32), expiry)
             .expect("wait_queue push after len check");
         Ok(false)
     }
@@ -113,7 +114,7 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
     ///
     /// Used during partition restart to clean up IPC state.
     // TODO: reviewer false positive — heapless::Vec::iter_mut() already respects len
-    pub fn remove_from_waitqueues(&mut self, pid: u8) {
+    pub fn remove_from_waitqueues(&mut self, pid: PartitionId) {
         for sem in self.slots.iter_mut() {
             sem.wait_queue.remove_by_id(pid);
         }
@@ -122,7 +123,7 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
     pub fn tick_timeouts<const E: usize>(
         &mut self,
         current_tick: u64,
-        out: &mut heapless::Vec<u8, E>,
+        out: &mut heapless::Vec<PartitionId, E>,
     ) {
         for sem in self.slots.iter_mut() {
             sem.wait_queue.drain_expired(current_tick, out);
@@ -139,7 +140,7 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
             .ok_or(SemaphoreError::InvalidSemaphore)?;
         if let Some(pid) = sem.wait_queue.pop_front_pid() {
             let pcb = parts
-                .get_mut(pid as usize)
+                .get_mut(pid.as_raw() as usize)
                 .ok_or(SemaphoreError::InvalidPartition)?;
             pcb.transition(PartitionState::Ready)?;
             return Ok(());
@@ -197,7 +198,7 @@ mod tests {
         // P2 waits on sem 1
         assert_eq!(p.wait(&mut t, 1, 2), Ok(false));
         // Remove P1 from all semaphore wait queues
-        p.remove_from_waitqueues(1);
+        p.remove_from_waitqueues(PartitionId::new(1));
         // Signal sem 0: P0 should wake (P1 was removed)
         p.signal(&mut t, 0).unwrap();
         assert_eq!(t.get(0).unwrap().state(), Ready, "P0 woken after P1 removed");
@@ -208,7 +209,7 @@ mod tests {
     #[test] fn remove_from_waitqueues_noop_for_absent_pid() {
         let mut p = SemaphorePool::<2, 4>::new();
         p.add(Semaphore::new(3, 5)).unwrap();
-        p.remove_from_waitqueues(99); // no-op, should not panic
+        p.remove_from_waitqueues(PartitionId::new(99)); // no-op, should not panic
         assert_eq!(p.get(0).unwrap().count(), 3);
     }
     #[test]

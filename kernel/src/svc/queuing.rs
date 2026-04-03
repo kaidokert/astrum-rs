@@ -24,7 +24,7 @@ pub fn handle_queuing_send<
     match pool.send_routed(port_id.as_raw() as usize, current_partition, data, 0, tick) {
         Ok(SendQueuingOutcome::Delivered { wake_receiver: w }) => {
             if let Some(wpid) = w {
-                try_transition(partitions, wpid.as_raw() as u8, PartitionState::Ready);
+                try_transition(partitions, wpid, PartitionState::Ready);
             }
             0
         }
@@ -53,7 +53,7 @@ pub fn handle_queuing_receive<
             wake_sender,
         }) => {
             if let Some(w) = wake_sender {
-                try_transition(partitions, w.as_raw() as u8, PartitionState::Ready);
+                try_transition(partitions, w, PartitionState::Ready);
             }
             msg_len as u32
         }
@@ -91,6 +91,10 @@ mod tests {
     use crate::partition::{MpuRegion, PartitionControlBlock};
     use crate::sampling::PortDirection;
 
+    fn pid(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
+
     #[test]
     #[rustfmt::skip]
     #[allow(clippy::undocumented_unsafe_blocks)]
@@ -98,18 +102,18 @@ mod tests {
         let (mut pool, mut pt) = make_pool_and_pt();
         let (src, dst) = add_route(&mut pool);
         let mut buf = [0u8; 64];
-        pool.send_routed(src, 0, &[0xCC; 8], 0, 100).unwrap();
-        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, 1, 100, qid(dst), &mut buf), 8);
+        pool.send_routed(src, pid(0), &[0xCC; 8], 0, 100).unwrap();
+        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, pid(1), 100, qid(dst), &mut buf), 8);
         assert_eq!(&buf[..8], &[0xCC; 8]);
         assert_eq!(pt.get(0).unwrap().state(), PartitionState::Running);
         pool.get_mut(dst).unwrap().inject_message(4, &[0xDD; 4]);
         pt.get_mut(0).unwrap().transition(PartitionState::Waiting).unwrap();
-        pool.get_mut(dst).unwrap().enqueue_blocked_sender(0, 999);
-        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, 1, 101, qid(dst), &mut buf), 4);
+        pool.get_mut(dst).unwrap().enqueue_blocked_sender(pid(0), 999);
+        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, pid(1), 101, qid(dst), &mut buf), 4);
         assert_eq!(&buf[..4], &[0xDD; 4]);
         assert_eq!(pt.get(0).unwrap().state(), PartitionState::Ready);
-        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, 1, 102, qid(dst), &mut buf), 0);
-        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, 0, 103, qid(99), &mut buf), SvcError::InvalidResource.to_u32());
+        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, pid(1), 102, qid(dst), &mut buf), 0);
+        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, pid(0), 103, qid(99), &mut buf), SvcError::InvalidResource.to_u32());
         let mut s = core::mem::MaybeUninit::<QueuingPortStatus>::uninit();
         assert_eq!(unsafe { handle_queuing_status(&pool, qid(dst), s.as_mut_ptr()) }, 0);
         let s = unsafe { s.assume_init() };
@@ -142,7 +146,7 @@ mod tests {
     #[test]
     fn invalid_port_returns_error() {
         let (mut pool, mut pt) = make_pool_and_pt();
-        let r = handle_queuing_send(&mut pool, &mut pt, 0, 100, qid(99), &[1, 2, 3]);
+        let r = handle_queuing_send(&mut pool, &mut pt, pid(0), 100, qid(99), &[1, 2, 3]);
         assert_eq!(r, SvcError::InvalidResource.to_u32());
     }
 
@@ -150,12 +154,12 @@ mod tests {
     fn delivered_without_wake() {
         let (mut pool, mut pt) = make_pool_and_pt();
         let (src, dst) = add_route(&mut pool);
-        let r = handle_queuing_send(&mut pool, &mut pt, 0, 100, qid(src), &[0xAA; 8]);
+        let r = handle_queuing_send(&mut pool, &mut pt, pid(0), 100, qid(src), &[0xAA; 8]);
         assert_eq!(r, 0);
         assert_eq!(pt.get(1).unwrap().state(), PartitionState::Running);
         let mut buf = [0u8; 64];
         let recv = pool
-            .receive_queuing_message(dst, 1, &mut buf, 0, 0)
+            .receive_queuing_message(dst, pid(1), &mut buf, 0, 0)
             .unwrap();
         assert!(matches!(
             recv,
@@ -172,12 +176,12 @@ mod tests {
         pt.get_mut(1).unwrap().transition(PartitionState::Waiting).unwrap();
         // TODO: uses internal pool API to set up blocked-receiver state; consider
         // a higher-level test helper if this coupling becomes fragile.
-        pool.get_mut(dst).unwrap().enqueue_blocked_receiver(1, 200);
-        let r = handle_queuing_send(&mut pool, &mut pt, 0, 100, qid(src), &[0xBB; 4]);
+        pool.get_mut(dst).unwrap().enqueue_blocked_receiver(pid(1), 200);
+        let r = handle_queuing_send(&mut pool, &mut pt, pid(0), 100, qid(src), &[0xBB; 4]);
         assert_eq!(r, 0);
         assert_eq!(pt.get(1).unwrap().state(), PartitionState::Ready);
         let mut buf = [0u8; 64];
-        let recv = pool.receive_queuing_message(dst, 1, &mut buf, 0, 0).unwrap();
+        let recv = pool.receive_queuing_message(dst, pid(1), &mut buf, 0, 0).unwrap();
         assert!(matches!(recv, RecvQueuingOutcome::Received { msg_len: 4, .. }));
         assert_eq!(&buf[..4], &[0xBB; 4]);
     }
@@ -187,9 +191,9 @@ mod tests {
     fn queue_full_returns_zero() {
         let (mut pool, mut pt) = make_pool_and_pt();
         let (src, _) = add_route(&mut pool);
-        assert_eq!(handle_queuing_send(&mut pool, &mut pt, 0, 100, qid(src), &[1]), 0);
-        assert_eq!(handle_queuing_send(&mut pool, &mut pt, 0, 101, qid(src), &[2]), 0);
-        assert_eq!(handle_queuing_send(&mut pool, &mut pt, 0, 102, qid(src), &[3]), 0);
+        assert_eq!(handle_queuing_send(&mut pool, &mut pt, pid(0), 100, qid(src), &[1]), 0);
+        assert_eq!(handle_queuing_send(&mut pool, &mut pt, pid(0), 101, qid(src), &[2]), 0);
+        assert_eq!(handle_queuing_send(&mut pool, &mut pt, pid(0), 102, qid(src), &[3]), 0);
     }
 
     #[test]
@@ -199,9 +203,9 @@ mod tests {
         let (mut pool, mut pt) = make_pool_and_pt();
         let (src, dst) = add_route(&mut pool);
         let (src_id, dst_id) = (qid(src), qid(dst));
-        assert_eq!(handle_queuing_send(&mut pool, &mut pt, 0, 100, src_id, &[0xDE, 0xAD]), 0);
+        assert_eq!(handle_queuing_send(&mut pool, &mut pt, pid(0), 100, src_id, &[0xDE, 0xAD]), 0);
         let mut buf = [0u8; 64];
-        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, 1, 100, dst_id, &mut buf), 2);
+        assert_eq!(handle_queuing_receive(&mut pool, &mut pt, pid(1), 100, dst_id, &mut buf), 2);
         assert_eq!(&buf[..2], &[0xDE, 0xAD]);
         let mut s = core::mem::MaybeUninit::<QueuingPortStatus>::uninit();
         assert_eq!(unsafe { handle_queuing_status(&pool, dst_id, s.as_mut_ptr()) }, 0);

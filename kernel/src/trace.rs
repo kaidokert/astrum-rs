@@ -176,7 +176,7 @@ pub fn name_fault_markers() {
 // conveyed via task_terminate rather than embedded in the marker itself.
 pub fn emit_fault_trace(details: &crate::fault::FaultDetails) {
     rtos_trace::trace::marker(fault_marker_for_cfsr(details.cfsr));
-    rtos_trace::trace::task_terminate(details.partition_id as u32);
+    rtos_trace::trace::task_terminate(details.partition_id.as_raw());
 }
 
 /// Register human-readable names for syscall trace markers.
@@ -552,15 +552,26 @@ mod tests {
         let _g = TEST_MUTEX.lock().unwrap();
         // marker() and task_terminate() are no-ops in test builds;
         // verify the function does not panic for various fault details.
+        use rtos_traits::ids::PartitionId;
         emit_fault_trace(&FaultDetails::new(
-            0,
+            PartitionId::new(0),
             CFSR_DACCVIOL | CFSR_MMARVALID,
             0x2000_0000,
             0x0800_0000,
         ));
-        emit_fault_trace(&FaultDetails::new(1, CFSR_IACCVIOL, 0, 0x0800_1000));
-        emit_fault_trace(&FaultDetails::new(3, 0, 0, 0));
-        emit_fault_trace(&FaultDetails::new(255, CFSR_DACCVIOL, 0x2000_F000, 0));
+        emit_fault_trace(&FaultDetails::new(
+            PartitionId::new(1),
+            CFSR_IACCVIOL,
+            0,
+            0x0800_1000,
+        ));
+        emit_fault_trace(&FaultDetails::new(PartitionId::new(3), 0, 0, 0));
+        emit_fault_trace(&FaultDetails::new(
+            PartitionId::new(255),
+            CFSR_DACCVIOL,
+            0x2000_F000,
+            0,
+        ));
     }
 
     #[test]

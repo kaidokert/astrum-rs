@@ -37,13 +37,18 @@ pub fn irq_ack_inner(bindings: &[IrqBinding], caller: PartitionId, irq_num: u8) 
 mod tests {
     use super::*;
     use crate::irq_dispatch::{ClearStrategy, IrqClearModel};
+    use crate::PartitionId;
+
+    const fn p(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
 
     const BINDINGS: [IrqBinding; 3] = [
-        IrqBinding::new(5, 0, 0x01),  // IRQ 5 → partition 0, PartitionAcks
-        IrqBinding::new(10, 1, 0x02), // IRQ 10 → partition 1, PartitionAcks
+        IrqBinding::new(5, p(0), 0x01),  // IRQ 5 → partition 0, PartitionAcks
+        IrqBinding::new(10, p(1), 0x02), // IRQ 10 → partition 1, PartitionAcks
         IrqBinding::with_clear_model(
             20,
-            2,
+            p(2),
             0x04,
             IrqClearModel::KernelClears(ClearStrategy::ClearBit {
                 addr: 0x4000_0000,
@@ -54,14 +59,14 @@ mod tests {
 
     #[test]
     fn valid_ack_returns_zero() {
-        assert_eq!(irq_ack_inner(&BINDINGS, 0, 5), 0);
-        assert_eq!(irq_ack_inner(&BINDINGS, 1, 10), 0);
+        assert_eq!(irq_ack_inner(&BINDINGS, p(0), 5), 0);
+        assert_eq!(irq_ack_inner(&BINDINGS, p(1), 10), 0);
     }
 
     #[test]
     fn missing_binding_returns_invalid_resource() {
         assert_eq!(
-            irq_ack_inner(&BINDINGS, 0, 99),
+            irq_ack_inner(&BINDINGS, p(0), 99),
             SvcError::InvalidResource.to_u32(),
         );
     }
@@ -70,7 +75,7 @@ mod tests {
     fn wrong_partition_returns_permission_denied() {
         // IRQ 5 belongs to partition 0; caller 1 should be rejected.
         assert_eq!(
-            irq_ack_inner(&BINDINGS, 1, 5),
+            irq_ack_inner(&BINDINGS, p(1), 5),
             SvcError::PermissionDenied.to_u32(),
         );
     }
@@ -79,41 +84,44 @@ mod tests {
     fn kernel_clears_returns_operation_failed() {
         // IRQ 20 uses KernelClears; even the correct owner is rejected.
         assert_eq!(
-            irq_ack_inner(&BINDINGS, 2, 20),
+            irq_ack_inner(&BINDINGS, p(2), 20),
             SvcError::OperationFailed.to_u32(),
         );
     }
 
     #[test]
     fn empty_bindings_returns_invalid_resource() {
-        assert_eq!(irq_ack_inner(&[], 0, 5), SvcError::InvalidResource.to_u32(),);
+        assert_eq!(
+            irq_ack_inner(&[], p(0), 5),
+            SvcError::InvalidResource.to_u32(),
+        );
     }
 
     #[test]
     fn multiple_bindings_correct_lookup() {
         // Each IRQ resolves to its own binding independently.
-        assert_eq!(irq_ack_inner(&BINDINGS, 0, 5), 0);
-        assert_eq!(irq_ack_inner(&BINDINGS, 1, 10), 0);
+        assert_eq!(irq_ack_inner(&BINDINGS, p(0), 5), 0);
+        assert_eq!(irq_ack_inner(&BINDINGS, p(1), 10), 0);
         // Wrong caller for IRQ 10.
         assert_eq!(
-            irq_ack_inner(&BINDINGS, 0, 10),
+            irq_ack_inner(&BINDINGS, p(0), 10),
             SvcError::PermissionDenied.to_u32(),
         );
     }
 
     #[test]
     fn boundary_irq_num_zero() {
-        let table = [IrqBinding::new(0, 0, 0x01)];
-        assert_eq!(irq_ack_inner(&table, 0, 0), 0);
+        let table = [IrqBinding::new(0, p(0), 0x01)];
+        assert_eq!(irq_ack_inner(&table, p(0), 0), 0);
     }
 
     #[test]
     fn boundary_irq_num_max() {
-        let table = [IrqBinding::new(255, 3, 0x80)];
-        assert_eq!(irq_ack_inner(&table, 3, 255), 0);
+        let table = [IrqBinding::new(255, p(3), 0x80)];
+        assert_eq!(irq_ack_inner(&table, p(3), 255), 0);
         // Wrong caller at boundary.
         assert_eq!(
-            irq_ack_inner(&table, 0, 255),
+            irq_ack_inner(&table, p(0), 255),
             SvcError::PermissionDenied.to_u32(),
         );
     }
@@ -124,10 +132,10 @@ mod tests {
     fn irq_ack_inner_return_must_distinguish_success_from_each_error() {
         // irq_ack_inner returns a u32 status code. Callers MUST forward it
         // to the syscall return register — dropping it silently hides errors.
-        let success = irq_ack_inner(&BINDINGS, 0, 5);
-        let not_found = irq_ack_inner(&BINDINGS, 0, 99);
-        let wrong_owner = irq_ack_inner(&BINDINGS, 1, 5);
-        let kernel_clears = irq_ack_inner(&BINDINGS, 2, 20);
+        let success = irq_ack_inner(&BINDINGS, p(0), 5);
+        let not_found = irq_ack_inner(&BINDINGS, p(0), 99);
+        let wrong_owner = irq_ack_inner(&BINDINGS, p(1), 5);
+        let kernel_clears = irq_ack_inner(&BINDINGS, p(2), 20);
 
         // Success is zero.
         assert_eq!(success, 0);
@@ -147,7 +155,7 @@ mod tests {
         // not just ClearBit.
         let bindings = [IrqBinding::with_clear_model(
             7,
-            0,
+            p(0),
             0x01,
             IrqClearModel::KernelClears(ClearStrategy::WriteRegister {
                 addr: 0x4000_1000,
@@ -155,7 +163,7 @@ mod tests {
             }),
         )];
         assert_eq!(
-            irq_ack_inner(&bindings, 0, 7),
+            irq_ack_inner(&bindings, p(0), 7),
             SvcError::OperationFailed.to_u32(),
         );
     }
@@ -164,7 +172,7 @@ mod tests {
     fn kernel_clears_wrong_caller_returns_permission_denied() {
         // Permission check takes priority over clear-model check.
         assert_eq!(
-            irq_ack_inner(&BINDINGS, 0, 20),
+            irq_ack_inner(&BINDINGS, p(0), 20),
             SvcError::PermissionDenied.to_u32(),
         );
     }

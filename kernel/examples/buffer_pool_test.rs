@@ -42,7 +42,7 @@ const NP: usize = 2;
 const STACK_WORDS: usize = 256;
 const DATA_BASES: [u32; NP] = [0x2000_0000, 0x2000_8000];
 const DATA_SIZES: [u32; NP] = [4096, 4096];
-const P2: u8 = 1;
+const P2: kernel::PartitionId = kernel::PartitionId::new(1);
 const MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 
 #[repr(C, align(1024))]
@@ -202,7 +202,7 @@ fn SysTick() {
             if let Some(pcb) = k.partitions().get(pid as usize) {
                 let dyn_region = pcb.cached_dynamic_region();
                 STRATEGY
-                    .configure_partition(pid, &[dyn_region], 0)
+                    .configure_partition(kernel::PartitionId::new(pid as u32), &[dyn_region], 0)
                     .expect("configure_partition");
             }
             // SAFETY: single-core; PendSV cannot preempt SysTick.
@@ -260,7 +260,9 @@ fn SysTick() {
                         let slot = k.buffers.get(*SLOT).unwrap();
                         let slot_idx = DynamicStrategy::<4>::region_to_slot_index(*RID)
                             .expect("RID must map to a valid dynamic slot");
-                        let rasr = STRATEGY.partition_region_values(0)[slot_idx].1;
+                        let rasr = STRATEGY.partition_region_values(kernel::PartitionId::new(0))
+                            [slot_idx]
+                            .1;
                         let ok = slot.state() == kernel::buffer_pool::BorrowState::Free
                             && slot.mpu_region().is_none()
                             && STRATEGY.slot(*RID).is_none()
@@ -320,14 +322,14 @@ fn main() -> ! {
             &mut s0.0,
             EntryAddr::from_entry(partition_p1_entry as PartitionEntry),
             MpuRegion::new(DATA_BASES[0], DATA_SIZES[0], 0),
-            0,
+            kernel::PartitionId::new(0),
         )
         .expect("partition memory 0"),
         ExternalPartitionMemory::new(
             &mut s1.0,
             EntryAddr::from_entry(partition_p2_entry as PartitionEntry),
             MpuRegion::new(DATA_BASES[1], DATA_SIZES[1], 0),
-            1,
+            kernel::PartitionId::new(1),
         )
         .expect("partition memory 1"),
     ];

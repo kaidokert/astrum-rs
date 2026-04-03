@@ -101,8 +101,8 @@ mod restart_clears {
         let m0 = MpuRegion::new(d0.0.as_ptr() as u32, 256, 0);
         let m1 = MpuRegion::new(d1.0.as_ptr() as u32, 256, 0);
         let mems = [
-            ExternalPartitionMemory::from_aligned_stack(s0, 0x0800_1001, m0, 0).unwrap(),
-            ExternalPartitionMemory::from_aligned_stack(s1, 0x0800_2001, m1, 1).unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(s0, 0x0800_1001, m0, pid(0)).unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(s1, 0x0800_2001, m1, pid(1)).unwrap(),
         ];
         Kernel::<Cfg>::new(sched, &mems).expect("kernel init")
     }

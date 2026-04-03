@@ -6,11 +6,11 @@ use super::*;
 
 /// Static binding table shared by IrqAck dispatch tests.
 static IRQ_ACK_TEST_BINDINGS: [crate::irq_dispatch::IrqBinding; 3] = [
-    crate::irq_dispatch::IrqBinding::new(5, 0, 0x01), // IRQ 5 → partition 0
-    crate::irq_dispatch::IrqBinding::new(10, 1, 0x02), // IRQ 10 → partition 1
+    crate::irq_dispatch::IrqBinding::new(5, crate::PartitionId::new(0), 0x01), // IRQ 5 → partition 0
+    crate::irq_dispatch::IrqBinding::new(10, crate::PartitionId::new(1), 0x02), // IRQ 10 → partition 1
     crate::irq_dispatch::IrqBinding::with_clear_model(
         20,
-        0,
+        crate::PartitionId::new(0),
         0x04,
         crate::irq_dispatch::IrqClearModel::KernelClears(
             crate::irq_dispatch::ClearStrategy::ClearBit {
@@ -98,8 +98,10 @@ fn with_irq_bindings_stores_bindings() {
     let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
     let mut stack0 = AlignedStack256B::default();
     let mut stack1 = AlignedStack256B::default();
-    let m0 = ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0001, mpu, 0).unwrap();
-    let m1 = ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1001, mpu, 1).unwrap();
+    let m0 =
+        ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0001, mpu, pid(0)).unwrap();
+    let m1 =
+        ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1001, mpu, pid(1)).unwrap();
     let mut k = Kernel::<TestConfig>::new(sched, &[m0, m1]).expect("two partitions should succeed");
     k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
     assert_eq!(k.irq_bindings.len(), 3);
@@ -119,8 +121,10 @@ fn with_irq_bindings_irq_ack_dispatch_succeeds() {
     let mpu = MpuRegion::new(0x2000_0000, 1024, 0x03);
     let mut stack0 = AlignedStack256B::default();
     let mut stack1 = AlignedStack256B::default();
-    let m0 = ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0001, mpu, 0).unwrap();
-    let m1 = ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1001, mpu, 1).unwrap();
+    let m0 =
+        ExternalPartitionMemory::from_aligned_stack(&mut stack0, 0x0800_0001, mpu, pid(0)).unwrap();
+    let m1 =
+        ExternalPartitionMemory::from_aligned_stack(&mut stack1, 0x0800_1001, mpu, pid(1)).unwrap();
     let mut k = Kernel::<TestConfig>::new(sched, &[m0, m1]).expect("two partitions should succeed");
     k.store_irq_bindings(&IRQ_ACK_TEST_BINDINGS);
     k.current_partition = 0;

@@ -227,7 +227,7 @@ impl<const W: usize> TimedWaitQueue<W> {
     /// in FIFO order. Intended for test assertions that need to observe queue
     /// contents without mutating the queue.
     #[cfg(test)]
-    pub fn waiting_pids(&self) -> std::vec::Vec<u8> {
+    pub fn waiting_pids(&self) -> std::vec::Vec<PartitionId> {
         self.inner.iter().map(|&(pid, _)| pid).collect()
     }
 }
@@ -259,14 +259,14 @@ impl<const W: usize> DeviceWaitQueue<W> {
     /// Block a partition on a device read with an optional expiry tick.
     ///
     /// Returns `Err(WaitQueueFull)` if the queue has reached capacity.
-    pub fn block_reader(&mut self, pid: u8, expiry: u64) -> Result<(), WaitQueueFull> {
+    pub fn block_reader(&mut self, pid: PartitionId, expiry: u64) -> Result<(), WaitQueueFull> {
         self.inner.push(pid, expiry)
     }
 
     /// Wake the oldest blocked reader, returning its partition ID.
     ///
     /// Returns `None` if no readers are blocked.
-    pub fn wake_one_reader(&mut self) -> Option<u8> {
+    pub fn wake_one_reader(&mut self) -> Option<PartitionId> {
         self.inner.pop_front_pid()
     }
 
@@ -275,7 +275,7 @@ impl<const W: usize> DeviceWaitQueue<W> {
     pub fn drain_expired<const E: usize>(
         &mut self,
         current_tick: u64,
-        out: &mut heapless::Vec<u8, E>,
+        out: &mut heapless::Vec<PartitionId, E>,
     ) {
         self.inner.drain_expired(current_tick, out);
     }
@@ -301,7 +301,7 @@ impl<const W: usize> DeviceWaitQueue<W> {
 /// [`drain_expired`]: SleepQueue::drain_expired
 #[derive(Debug)]
 pub struct SleepQueue<const W: usize> {
-    inner: heapless::Vec<(u8, u64), W>,
+    inner: heapless::Vec<(PartitionId, u64), W>,
 }
 
 impl<const W: usize> Default for SleepQueue<W> {
@@ -321,7 +321,7 @@ impl<const W: usize> SleepQueue<W> {
     /// Insert a sleep entry, maintaining sorted order by expiry tick.
     ///
     /// Returns `Err(WaitQueueFull)` if the queue has reached capacity.
-    pub fn push(&mut self, pid: u8, expiry: u64) -> Result<(), WaitQueueFull> {
+    pub fn push(&mut self, pid: PartitionId, expiry: u64) -> Result<(), WaitQueueFull> {
         if self.inner.is_full() {
             return Err(WaitQueueFull);
         }
@@ -347,7 +347,7 @@ impl<const W: usize> SleepQueue<W> {
     pub fn drain_expired<const E: usize>(
         &mut self,
         current_tick: u64,
-        out: &mut heapless::Vec<u8, E>,
+        out: &mut heapless::Vec<PartitionId, E>,
     ) {
         let mut drained = 0usize;
         for &(pid, expiry) in self.inner.iter() {
@@ -383,7 +383,7 @@ impl<const W: usize> SleepQueue<W> {
     ///
     /// Returns `false` if no entry with that partition ID exists.
     /// Remaining entries preserve their sorted order.
-    pub fn remove_by_id(&mut self, pid: u8) -> bool {
+    pub fn remove_by_id(&mut self, pid: PartitionId) -> bool {
         if let Some(idx) = self.inner.iter().position(|&(p, _)| p == pid) {
             self.inner.remove(idx);
             true
@@ -397,6 +397,10 @@ impl<const W: usize> SleepQueue<W> {
 mod tests {
     use super::*;
 
+    fn pid(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
+
     #[test]
     fn new_queue_is_empty() {
         let q = WaitQueue::<4>::new();
@@ -408,21 +412,21 @@ mod tests {
     #[test]
     fn push_and_pop_single() {
         let mut q = WaitQueue::<4>::new();
-        q.push(7).unwrap();
+        q.push(pid(7)).unwrap();
         assert_eq!(q.len(), 1);
         assert!(!q.is_empty());
-        assert_eq!(q.pop_front(), Some(7));
+        assert_eq!(q.pop_front(), Some(pid(7)));
         assert!(q.is_empty());
     }
 
     #[test]
     fn fifo_ordering() {
         let mut q = WaitQueue::<8>::new();
-        for pid in 0..5u8 {
-            q.push(pid).unwrap();
+        for i in 0..5u32 {
+            q.push(pid(i)).unwrap();
         }
-        for pid in 0..5u8 {
-            assert_eq!(q.pop_front(), Some(pid));
+        for i in 0..5u32 {
+            assert_eq!(q.pop_front(), Some(pid(i)));
         }
         assert!(q.is_empty());
     }
@@ -430,14 +434,14 @@ mod tests {
     #[test]
     fn capacity_limit_returns_error() {
         let mut q = WaitQueue::<3>::new();
-        q.push(0).unwrap();
-        q.push(1).unwrap();
-        q.push(2).unwrap();
+        q.push(pid(0)).unwrap();
+        q.push(pid(1)).unwrap();
+        q.push(pid(2)).unwrap();
         assert!(q.is_full());
-        assert_eq!(q.push(3), Err(WaitQueueFull));
+        assert_eq!(q.push(pid(3)), Err(WaitQueueFull));
         // Queue contents unchanged after failed push
         assert_eq!(q.len(), 3);
-        assert_eq!(q.pop_front(), Some(0));
+        assert_eq!(q.pop_front(), Some(pid(0)));
     }
 
     #[test]
@@ -449,29 +453,29 @@ mod tests {
     #[test]
     fn fill_drain_refill() {
         let mut q = WaitQueue::<2>::new();
-        q.push(10).unwrap();
-        q.push(20).unwrap();
+        q.push(pid(10)).unwrap();
+        q.push(pid(20)).unwrap();
         assert!(q.is_full());
 
-        assert_eq!(q.pop_front(), Some(10));
-        assert_eq!(q.pop_front(), Some(20));
+        assert_eq!(q.pop_front(), Some(pid(10)));
+        assert_eq!(q.pop_front(), Some(pid(20)));
         assert!(q.is_empty());
 
         // Refill after drain
-        q.push(30).unwrap();
-        q.push(40).unwrap();
+        q.push(pid(30)).unwrap();
+        q.push(pid(40)).unwrap();
         assert!(q.is_full());
-        assert_eq!(q.pop_front(), Some(30));
-        assert_eq!(q.pop_front(), Some(40));
+        assert_eq!(q.pop_front(), Some(pid(30)));
+        assert_eq!(q.pop_front(), Some(pid(40)));
     }
 
     #[test]
     fn len_tracks_pushes_and_pops() {
         let mut q = WaitQueue::<4>::new();
         assert_eq!(q.len(), 0);
-        q.push(1).unwrap();
+        q.push(pid(1)).unwrap();
         assert_eq!(q.len(), 1);
-        q.push(2).unwrap();
+        q.push(pid(2)).unwrap();
         assert_eq!(q.len(), 2);
         q.pop_front();
         assert_eq!(q.len(), 1);
@@ -482,23 +486,23 @@ mod tests {
     #[test]
     fn capacity_one_queue() {
         let mut q = WaitQueue::<1>::new();
-        q.push(42).unwrap();
+        q.push(pid(42)).unwrap();
         assert!(q.is_full());
-        assert_eq!(q.push(43), Err(WaitQueueFull));
-        assert_eq!(q.pop_front(), Some(42));
+        assert_eq!(q.push(pid(43)), Err(WaitQueueFull));
+        assert_eq!(q.pop_front(), Some(pid(42)));
         assert!(q.is_empty());
     }
 
     #[test]
     fn duplicate_pids_allowed() {
         let mut q = WaitQueue::<4>::new();
-        q.push(5).unwrap();
-        q.push(5).unwrap();
-        q.push(5).unwrap();
+        q.push(pid(5)).unwrap();
+        q.push(pid(5)).unwrap();
+        q.push(pid(5)).unwrap();
         assert_eq!(q.len(), 3);
-        assert_eq!(q.pop_front(), Some(5));
-        assert_eq!(q.pop_front(), Some(5));
-        assert_eq!(q.pop_front(), Some(5));
+        assert_eq!(q.pop_front(), Some(pid(5)));
+        assert_eq!(q.pop_front(), Some(pid(5)));
+        assert_eq!(q.pop_front(), Some(pid(5)));
     }
 
     // ---- TimedWaitQueue tests ----
@@ -515,14 +519,14 @@ mod tests {
     #[test]
     fn timed_push_pop_and_pop_pid() {
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(7, 100).unwrap();
+        q.push(pid(7), 100).unwrap();
         assert_eq!(q.len(), 1);
         assert!(!q.is_empty());
-        assert_eq!(q.pop_front(), Some((7, 100)));
+        assert_eq!(q.pop_front(), Some((pid(7), 100)));
         assert!(q.is_empty());
         // pop_front_pid discards the expiry
-        q.push(3, 999).unwrap();
-        assert_eq!(q.pop_front_pid(), Some(3));
+        q.push(pid(3), 999).unwrap();
+        assert_eq!(q.pop_front_pid(), Some(pid(3)));
         // pop on empty
         assert_eq!(q.pop_front(), None);
         assert_eq!(q.pop_front_pid(), None);
@@ -531,11 +535,11 @@ mod tests {
     #[test]
     fn timed_fifo_ordering() {
         let mut q = TimedWaitQueue::<8>::new();
-        for pid in 0..5u8 {
-            q.push(pid, pid as u64 * 10).unwrap();
+        for i in 0..5u32 {
+            q.push(pid(i), i as u64 * 10).unwrap();
         }
-        for pid in 0..5u8 {
-            assert_eq!(q.pop_front(), Some((pid, pid as u64 * 10)));
+        for i in 0..5u32 {
+            assert_eq!(q.pop_front(), Some((pid(i), i as u64 * 10)));
         }
         assert!(q.is_empty());
     }
@@ -544,11 +548,11 @@ mod tests {
     fn timed_capacity_and_len() {
         let mut q = TimedWaitQueue::<2>::new();
         assert_eq!(q.len(), 0);
-        q.push(0, 10).unwrap();
+        q.push(pid(0), 10).unwrap();
         assert_eq!(q.len(), 1);
-        q.push(1, 20).unwrap();
+        q.push(pid(1), 20).unwrap();
         assert_eq!(q.len(), 2);
-        assert_eq!(q.push(2, 30), Err(WaitQueueFull));
+        assert_eq!(q.push(pid(2), 30), Err(WaitQueueFull));
         assert_eq!(q.len(), 2);
         q.pop_front();
         assert_eq!(q.len(), 1);
@@ -557,33 +561,33 @@ mod tests {
     #[test]
     fn timed_drain_expired_mixed() {
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(1, 100).unwrap();
-        q.push(2, 200).unwrap();
-        q.push(3, 50).unwrap();
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 200).unwrap();
+        q.push(pid(3), 50).unwrap();
 
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(100, &mut expired);
-        assert_eq!(expired.as_slice(), &[1, 3]);
+        assert_eq!(expired.as_slice(), &[pid(1), pid(3)]);
         assert_eq!(q.len(), 1);
-        assert_eq!(q.pop_front(), Some((2, 200)));
+        assert_eq!(q.pop_front(), Some((pid(2), 200)));
     }
 
     #[test]
     fn timed_drain_expired_none_and_all() {
         // None expired
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(1, 100).unwrap();
-        q.push(2, 200).unwrap();
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 200).unwrap();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(50, &mut expired);
         assert!(expired.is_empty());
         assert_eq!(q.len(), 2);
 
         // All expired
         expired.clear();
-        q.push(3, 30).unwrap();
+        q.push(pid(3), 30).unwrap();
         q.drain_expired(200, &mut expired);
-        assert_eq!(expired.as_slice(), &[1, 2, 3]);
+        assert_eq!(expired.as_slice(), &[pid(1), pid(2), pid(3)]);
         assert!(q.is_empty());
 
         // Empty queue
@@ -595,28 +599,28 @@ mod tests {
     #[test]
     fn timed_drain_expired_preserves_fifo_order() {
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(10, 200).unwrap(); // survives
-        q.push(20, 50).unwrap(); // expires
-        q.push(30, 300).unwrap(); // survives
-        q.push(40, 50).unwrap(); // expires
+        q.push(pid(10), 200).unwrap(); // survives
+        q.push(pid(20), 50).unwrap(); // expires
+        q.push(pid(30), 300).unwrap(); // survives
+        q.push(pid(40), 50).unwrap(); // expires
 
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(50, &mut expired);
-        assert_eq!(expired.as_slice(), &[20, 40]);
-        assert_eq!(q.pop_front_pid(), Some(10));
-        assert_eq!(q.pop_front_pid(), Some(30));
+        assert_eq!(expired.as_slice(), &[pid(20), pid(40)]);
+        assert_eq!(q.pop_front_pid(), Some(pid(10)));
+        assert_eq!(q.pop_front_pid(), Some(pid(30)));
     }
 
     #[test]
     fn timed_drain_expired_tick_boundary() {
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(1, 100).unwrap();
+        q.push(pid(1), 100).unwrap();
         // Exact boundary: current_tick == expiry => expired
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(100, &mut expired);
-        assert_eq!(expired.as_slice(), &[1]);
+        assert_eq!(expired.as_slice(), &[pid(1)]);
         // One tick before: not expired
-        q.push(2, 100).unwrap();
+        q.push(pid(2), 100).unwrap();
         expired.clear();
         q.drain_expired(99, &mut expired);
         assert!(expired.is_empty());
@@ -626,11 +630,11 @@ mod tests {
     #[test]
     fn timed_drain_all_and_wake_all() {
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(5, 10).unwrap();
-        q.push(3, 20).unwrap();
-        q.push(7, 30).unwrap();
+        q.push(pid(5), 10).unwrap();
+        q.push(pid(3), 20).unwrap();
+        q.push(pid(7), 30).unwrap();
         let pids = q.drain_all();
-        assert_eq!(pids.as_slice(), &[5, 3, 7]);
+        assert_eq!(pids.as_slice(), &[pid(5), pid(3), pid(7)]);
         assert!(q.is_empty());
         // drain_all on empty
         let pids = q.drain_all();
@@ -640,20 +644,20 @@ mod tests {
     #[test]
     fn timed_fill_drain_refill() {
         let mut q = TimedWaitQueue::<2>::new();
-        q.push(10, 50).unwrap();
-        q.push(20, 60).unwrap();
-        assert_eq!(q.pop_front(), Some((10, 50)));
-        assert_eq!(q.pop_front(), Some((20, 60)));
-        q.push(30, 70).unwrap();
-        q.push(40, 80).unwrap();
-        assert_eq!(q.pop_front(), Some((30, 70)));
-        assert_eq!(q.pop_front(), Some((40, 80)));
+        q.push(pid(10), 50).unwrap();
+        q.push(pid(20), 60).unwrap();
+        assert_eq!(q.pop_front(), Some((pid(10), 50)));
+        assert_eq!(q.pop_front(), Some((pid(20), 60)));
+        q.push(pid(30), 70).unwrap();
+        q.push(pid(40), 80).unwrap();
+        assert_eq!(q.pop_front(), Some((pid(30), 70)));
+        assert_eq!(q.pop_front(), Some((pid(40), 80)));
     }
 
     #[test]
     fn timed_drain_expired_empty_queue() {
         let mut q = TimedWaitQueue::<4>::new();
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(1000, &mut expired);
         assert!(expired.is_empty());
         assert!(q.is_empty());
@@ -662,54 +666,54 @@ mod tests {
     #[test]
     fn timed_drain_expired_single_expired() {
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(42, 50).unwrap();
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.push(pid(42), 50).unwrap();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(50, &mut expired);
-        assert_eq!(expired.as_slice(), &[42]);
+        assert_eq!(expired.as_slice(), &[pid(42)]);
         assert!(q.is_empty());
     }
 
     #[test]
     fn timed_drain_expired_single_not_expired() {
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(42, 100).unwrap();
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.push(pid(42), 100).unwrap();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(50, &mut expired);
         assert!(expired.is_empty());
         assert_eq!(q.len(), 1);
-        assert_eq!(q.pop_front(), Some((42, 100)));
+        assert_eq!(q.pop_front(), Some((pid(42), 100)));
     }
 
     #[test]
     fn timed_drain_expired_interleaved_pattern() {
         // Alternating expired/not-expired entries
         let mut q = TimedWaitQueue::<8>::new();
-        q.push(1, 10).unwrap(); // expired
-        q.push(2, 200).unwrap(); // kept
-        q.push(3, 20).unwrap(); // expired
-        q.push(4, 300).unwrap(); // kept
-        q.push(5, 30).unwrap(); // expired
-        q.push(6, 400).unwrap(); // kept
+        q.push(pid(1), 10).unwrap(); // expired
+        q.push(pid(2), 200).unwrap(); // kept
+        q.push(pid(3), 20).unwrap(); // expired
+        q.push(pid(4), 300).unwrap(); // kept
+        q.push(pid(5), 30).unwrap(); // expired
+        q.push(pid(6), 400).unwrap(); // kept
 
-        let mut expired: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         q.drain_expired(50, &mut expired);
-        assert_eq!(expired.as_slice(), &[1, 3, 5]);
+        assert_eq!(expired.as_slice(), &[pid(1), pid(3), pid(5)]);
         // Survivors preserve FIFO order
-        assert_eq!(q.waiting_pids(), vec![2, 4, 6]);
+        assert_eq!(q.waiting_pids(), vec![pid(2), pid(4), pid(6)]);
     }
 
     #[test]
     fn timed_drain_expired_all_at_full_capacity() {
         // Fill to capacity and expire everything
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(1, 10).unwrap();
-        q.push(2, 20).unwrap();
-        q.push(3, 30).unwrap();
-        q.push(4, 40).unwrap();
+        q.push(pid(1), 10).unwrap();
+        q.push(pid(2), 20).unwrap();
+        q.push(pid(3), 30).unwrap();
+        q.push(pid(4), 40).unwrap();
 
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(100, &mut expired);
-        assert_eq!(expired.as_slice(), &[1, 2, 3, 4]);
+        assert_eq!(expired.as_slice(), &[pid(1), pid(2), pid(3), pid(4)]);
         assert!(q.is_empty());
     }
 
@@ -717,42 +721,42 @@ mod tests {
     fn timed_drain_expired_none_at_full_capacity() {
         // Fill to capacity and expire nothing
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(1, 100).unwrap();
-        q.push(2, 200).unwrap();
-        q.push(3, 300).unwrap();
-        q.push(4, 400).unwrap();
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 200).unwrap();
+        q.push(pid(3), 300).unwrap();
+        q.push(pid(4), 400).unwrap();
 
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(50, &mut expired);
         assert!(expired.is_empty());
         assert_eq!(q.len(), 4);
-        assert_eq!(q.waiting_pids(), vec![1, 2, 3, 4]);
+        assert_eq!(q.waiting_pids(), vec![pid(1), pid(2), pid(3), pid(4)]);
     }
 
     #[test]
     fn timed_drain_expired_successive_drains() {
         // Multiple successive drain_expired calls with advancing ticks
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(1, 100).unwrap();
-        q.push(2, 200).unwrap();
-        q.push(3, 300).unwrap();
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 200).unwrap();
+        q.push(pid(3), 300).unwrap();
 
         // First drain at tick 150: only pid 1 expires
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(150, &mut expired);
-        assert_eq!(expired.as_slice(), &[1]);
-        assert_eq!(q.waiting_pids(), vec![2, 3]);
+        assert_eq!(expired.as_slice(), &[pid(1)]);
+        assert_eq!(q.waiting_pids(), vec![pid(2), pid(3)]);
 
         // Second drain at tick 250: pid 2 expires
         expired.clear();
         q.drain_expired(250, &mut expired);
-        assert_eq!(expired.as_slice(), &[2]);
-        assert_eq!(q.waiting_pids(), vec![3]);
+        assert_eq!(expired.as_slice(), &[pid(2)]);
+        assert_eq!(q.waiting_pids(), vec![pid(3)]);
 
         // Third drain at tick 300: pid 3 expires
         expired.clear();
         q.drain_expired(300, &mut expired);
-        assert_eq!(expired.as_slice(), &[3]);
+        assert_eq!(expired.as_slice(), &[pid(3)]);
         assert!(q.is_empty());
     }
 
@@ -762,21 +766,21 @@ mod tests {
         // before filling, so the internal head pointer is non-zero.
         let mut q = TimedWaitQueue::<4>::new();
         // Push and pop two entries to advance the ring buffer head
-        q.push(99, 1).unwrap();
-        q.push(98, 2).unwrap();
+        q.push(pid(99), 1).unwrap();
+        q.push(pid(98), 2).unwrap();
         q.pop_front();
         q.pop_front();
 
         // Now head is at offset 2; push 4 entries that wrap around
-        q.push(1, 50).unwrap(); // expired
-        q.push(2, 200).unwrap(); // kept
-        q.push(3, 60).unwrap(); // expired
-        q.push(4, 300).unwrap(); // kept
+        q.push(pid(1), 50).unwrap(); // expired
+        q.push(pid(2), 200).unwrap(); // kept
+        q.push(pid(3), 60).unwrap(); // expired
+        q.push(pid(4), 300).unwrap(); // kept
 
-        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(100, &mut expired);
-        assert_eq!(expired.as_slice(), &[1, 3]);
-        assert_eq!(q.waiting_pids(), vec![2, 4]);
+        assert_eq!(expired.as_slice(), &[pid(1), pid(3)]);
+        assert_eq!(q.waiting_pids(), vec![pid(2), pid(4)]);
     }
 
     // ---- DeviceWaitQueue tests ----
@@ -786,36 +790,37 @@ mod tests {
 
     mod device_wait_queue {
         use super::super::*;
+        use super::pid;
 
         #[test]
         fn forwards_block_and_wake() {
             let mut q = DeviceWaitQueue::<4>::new();
             assert!(q.is_empty());
             assert_eq!(q.len(), 0);
-            q.block_reader(3, 100).unwrap();
+            q.block_reader(pid(3), 100).unwrap();
             assert_eq!(q.len(), 1);
             assert!(!q.is_empty());
-            assert_eq!(q.wake_one_reader(), Some(3));
+            assert_eq!(q.wake_one_reader(), Some(pid(3)));
             assert!(q.is_empty());
         }
 
         #[test]
         fn forwards_drain_expired() {
             let mut q = DeviceWaitQueue::<4>::new();
-            q.block_reader(1, 50).unwrap();
-            q.block_reader(2, 200).unwrap();
-            let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+            q.block_reader(pid(1), 50).unwrap();
+            q.block_reader(pid(2), 200).unwrap();
+            let mut expired: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
             q.drain_expired(100, &mut expired);
-            assert_eq!(expired.as_slice(), &[1]);
+            assert_eq!(expired.as_slice(), &[pid(1)]);
             assert_eq!(q.len(), 1);
         }
 
         #[test]
         fn forwards_capacity_error() {
             let mut q = DeviceWaitQueue::<2>::new();
-            q.block_reader(0, 100).unwrap();
-            q.block_reader(1, 200).unwrap();
-            assert_eq!(q.block_reader(2, 300), Err(WaitQueueFull));
+            q.block_reader(pid(0), 100).unwrap();
+            q.block_reader(pid(1), 200).unwrap();
+            assert_eq!(q.block_reader(pid(2), 300), Err(WaitQueueFull));
         }
     }
 
@@ -831,33 +836,33 @@ mod tests {
     #[test]
     fn sleep_queue_push_maintains_sorted_order() {
         let mut q = SleepQueue::<4>::new();
-        q.push(1, 300).unwrap();
-        q.push(2, 100).unwrap();
-        q.push(3, 200).unwrap();
+        q.push(pid(1), 300).unwrap();
+        q.push(pid(2), 100).unwrap();
+        q.push(pid(3), 200).unwrap();
         // Drain all: should come out in expiry order (100, 200, 300).
-        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut out: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(300, &mut out);
-        assert_eq!(out.as_slice(), &[2, 3, 1]);
+        assert_eq!(out.as_slice(), &[pid(2), pid(3), pid(1)]);
         assert!(q.is_empty());
     }
 
     #[test]
     fn sleep_queue_drain_expired_stops_at_non_expired() {
         let mut q = SleepQueue::<4>::new();
-        q.push(1, 50).unwrap();
-        q.push(2, 100).unwrap();
-        q.push(3, 200).unwrap();
-        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.push(pid(1), 50).unwrap();
+        q.push(pid(2), 100).unwrap();
+        q.push(pid(3), 200).unwrap();
+        let mut out: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(100, &mut out);
-        assert_eq!(out.as_slice(), &[1, 2]);
+        assert_eq!(out.as_slice(), &[pid(1), pid(2)]);
         assert_eq!(q.len(), 1);
     }
 
     #[test]
     fn sleep_queue_drain_expired_none() {
         let mut q = SleepQueue::<4>::new();
-        q.push(1, 100).unwrap();
-        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.push(pid(1), 100).unwrap();
+        let mut out: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(50, &mut out);
         assert!(out.is_empty());
         assert_eq!(q.len(), 1);
@@ -866,7 +871,7 @@ mod tests {
     #[test]
     fn sleep_queue_drain_expired_empty_queue() {
         let mut q = SleepQueue::<4>::new();
-        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut out: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(1000, &mut out);
         assert!(out.is_empty());
     }
@@ -874,21 +879,21 @@ mod tests {
     #[test]
     fn sleep_queue_capacity_error() {
         let mut q = SleepQueue::<2>::new();
-        q.push(1, 100).unwrap();
-        q.push(2, 200).unwrap();
-        assert_eq!(q.push(3, 300), Err(WaitQueueFull));
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 200).unwrap();
+        assert_eq!(q.push(pid(3), 300), Err(WaitQueueFull));
     }
 
     #[test]
     fn sleep_queue_drain_stops_when_out_full() {
         let mut q = SleepQueue::<4>::new();
-        q.push(1, 10).unwrap();
-        q.push(2, 20).unwrap();
-        q.push(3, 30).unwrap();
+        q.push(pid(1), 10).unwrap();
+        q.push(pid(2), 20).unwrap();
+        q.push(pid(3), 30).unwrap();
         // Output buffer only has room for 2.
-        let mut out: heapless::Vec<u8, 2> = heapless::Vec::new();
+        let mut out: heapless::Vec<PartitionId, 2> = heapless::Vec::new();
         q.drain_expired(100, &mut out);
-        assert_eq!(out.as_slice(), &[1, 2]);
+        assert_eq!(out.as_slice(), &[pid(1), pid(2)]);
         // Pid 3 remains in queue for retry next tick.
         assert_eq!(q.len(), 1);
     }
@@ -896,12 +901,12 @@ mod tests {
     #[test]
     fn sleep_queue_equal_expiry_preserves_push_order() {
         let mut q = SleepQueue::<4>::new();
-        q.push(1, 100).unwrap();
-        q.push(2, 100).unwrap();
-        q.push(3, 100).unwrap();
-        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 100).unwrap();
+        q.push(pid(3), 100).unwrap();
+        let mut out: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(100, &mut out);
-        assert_eq!(out.as_slice(), &[1, 2, 3]);
+        assert_eq!(out.as_slice(), &[pid(1), pid(2), pid(3)]);
     }
 
     // ---- safe_expiry tests ----
@@ -938,58 +943,58 @@ mod tests {
     #[test]
     fn wq_remove_by_id_found() {
         let mut q = WaitQueue::<4>::new();
-        q.push(1).unwrap();
-        q.push(2).unwrap();
-        q.push(3).unwrap();
-        assert!(q.remove_by_id(2));
+        q.push(pid(1)).unwrap();
+        q.push(pid(2)).unwrap();
+        q.push(pid(3)).unwrap();
+        assert!(q.remove_by_id(pid(2)));
         assert_eq!(q.len(), 2);
-        assert_eq!(q.pop_front(), Some(1));
-        assert_eq!(q.pop_front(), Some(3));
+        assert_eq!(q.pop_front(), Some(pid(1)));
+        assert_eq!(q.pop_front(), Some(pid(3)));
     }
 
     #[test]
     fn wq_remove_by_id_not_found() {
         let mut q = WaitQueue::<4>::new();
-        q.push(1).unwrap();
-        q.push(2).unwrap();
-        assert!(!q.remove_by_id(99));
+        q.push(pid(1)).unwrap();
+        q.push(pid(2)).unwrap();
+        assert!(!q.remove_by_id(pid(99)));
         assert_eq!(q.len(), 2);
-        assert_eq!(q.pop_front(), Some(1));
-        assert_eq!(q.pop_front(), Some(2));
+        assert_eq!(q.pop_front(), Some(pid(1)));
+        assert_eq!(q.pop_front(), Some(pid(2)));
     }
 
     #[test]
     fn wq_remove_by_id_empty() {
         let mut q = WaitQueue::<4>::new();
-        assert!(!q.remove_by_id(1));
+        assert!(!q.remove_by_id(pid(1)));
         assert!(q.is_empty());
     }
 
     #[test]
     fn wq_remove_by_id_preserves_order() {
         let mut q = WaitQueue::<8>::new();
-        for pid in 0..6u8 {
-            q.push(pid).unwrap();
+        for i in 0..6u32 {
+            q.push(pid(i)).unwrap();
         }
-        assert!(q.remove_by_id(3));
+        assert!(q.remove_by_id(pid(3)));
         assert_eq!(q.len(), 5);
-        assert_eq!(q.pop_front(), Some(0));
-        assert_eq!(q.pop_front(), Some(1));
-        assert_eq!(q.pop_front(), Some(2));
-        assert_eq!(q.pop_front(), Some(4));
-        assert_eq!(q.pop_front(), Some(5));
+        assert_eq!(q.pop_front(), Some(pid(0)));
+        assert_eq!(q.pop_front(), Some(pid(1)));
+        assert_eq!(q.pop_front(), Some(pid(2)));
+        assert_eq!(q.pop_front(), Some(pid(4)));
+        assert_eq!(q.pop_front(), Some(pid(5)));
     }
 
     #[test]
     fn wq_remove_by_id_duplicate_removes_first_only() {
         let mut q = WaitQueue::<4>::new();
-        q.push(5).unwrap();
-        q.push(5).unwrap();
-        q.push(5).unwrap();
-        assert!(q.remove_by_id(5));
+        q.push(pid(5)).unwrap();
+        q.push(pid(5)).unwrap();
+        q.push(pid(5)).unwrap();
+        assert!(q.remove_by_id(pid(5)));
         assert_eq!(q.len(), 2);
-        assert_eq!(q.pop_front(), Some(5));
-        assert_eq!(q.pop_front(), Some(5));
+        assert_eq!(q.pop_front(), Some(pid(5)));
+        assert_eq!(q.pop_front(), Some(pid(5)));
     }
 
     // ---- TimedWaitQueue::remove_by_id tests ----
@@ -997,58 +1002,58 @@ mod tests {
     #[test]
     fn twq_remove_by_id_found() {
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(1, 100).unwrap();
-        q.push(2, 200).unwrap();
-        q.push(3, 300).unwrap();
-        assert!(q.remove_by_id(2));
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 200).unwrap();
+        q.push(pid(3), 300).unwrap();
+        assert!(q.remove_by_id(pid(2)));
         assert_eq!(q.len(), 2);
-        assert_eq!(q.pop_front(), Some((1, 100)));
-        assert_eq!(q.pop_front(), Some((3, 300)));
+        assert_eq!(q.pop_front(), Some((pid(1), 100)));
+        assert_eq!(q.pop_front(), Some((pid(3), 300)));
     }
 
     #[test]
     fn twq_remove_by_id_not_found() {
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(1, 100).unwrap();
-        q.push(2, 200).unwrap();
-        assert!(!q.remove_by_id(99));
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 200).unwrap();
+        assert!(!q.remove_by_id(pid(99)));
         assert_eq!(q.len(), 2);
-        assert_eq!(q.pop_front(), Some((1, 100)));
-        assert_eq!(q.pop_front(), Some((2, 200)));
+        assert_eq!(q.pop_front(), Some((pid(1), 100)));
+        assert_eq!(q.pop_front(), Some((pid(2), 200)));
     }
 
     #[test]
     fn twq_remove_by_id_empty() {
         let mut q = TimedWaitQueue::<4>::new();
-        assert!(!q.remove_by_id(1));
+        assert!(!q.remove_by_id(pid(1)));
         assert!(q.is_empty());
     }
 
     #[test]
     fn twq_remove_by_id_preserves_order() {
         let mut q = TimedWaitQueue::<8>::new();
-        for pid in 0..6u8 {
-            q.push(pid, pid as u64 * 10).unwrap();
+        for i in 0..6u32 {
+            q.push(pid(i), i as u64 * 10).unwrap();
         }
-        assert!(q.remove_by_id(3));
+        assert!(q.remove_by_id(pid(3)));
         assert_eq!(q.len(), 5);
-        assert_eq!(q.pop_front(), Some((0, 0)));
-        assert_eq!(q.pop_front(), Some((1, 10)));
-        assert_eq!(q.pop_front(), Some((2, 20)));
-        assert_eq!(q.pop_front(), Some((4, 40)));
-        assert_eq!(q.pop_front(), Some((5, 50)));
+        assert_eq!(q.pop_front(), Some((pid(0), 0)));
+        assert_eq!(q.pop_front(), Some((pid(1), 10)));
+        assert_eq!(q.pop_front(), Some((pid(2), 20)));
+        assert_eq!(q.pop_front(), Some((pid(4), 40)));
+        assert_eq!(q.pop_front(), Some((pid(5), 50)));
     }
 
     #[test]
     fn twq_remove_by_id_duplicate_removes_first_only() {
         let mut q = TimedWaitQueue::<4>::new();
-        q.push(5, 100).unwrap();
-        q.push(5, 200).unwrap();
-        q.push(5, 300).unwrap();
-        assert!(q.remove_by_id(5));
+        q.push(pid(5), 100).unwrap();
+        q.push(pid(5), 200).unwrap();
+        q.push(pid(5), 300).unwrap();
+        assert!(q.remove_by_id(pid(5)));
         assert_eq!(q.len(), 2);
-        assert_eq!(q.pop_front(), Some((5, 200)));
-        assert_eq!(q.pop_front(), Some((5, 300)));
+        assert_eq!(q.pop_front(), Some((pid(5), 200)));
+        assert_eq!(q.pop_front(), Some((pid(5), 300)));
     }
 
     // ---- SleepQueue::remove_by_id tests ----
@@ -1056,29 +1061,29 @@ mod tests {
     #[test]
     fn sq_remove_by_id_found() {
         let mut q = SleepQueue::<4>::new();
-        q.push(1, 100).unwrap();
-        q.push(2, 200).unwrap();
-        q.push(3, 300).unwrap();
-        assert!(q.remove_by_id(2));
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 200).unwrap();
+        q.push(pid(3), 300).unwrap();
+        assert!(q.remove_by_id(pid(2)));
         assert_eq!(q.len(), 2);
-        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut out: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(300, &mut out);
-        assert_eq!(out.as_slice(), &[1, 3]);
+        assert_eq!(out.as_slice(), &[pid(1), pid(3)]);
     }
 
     #[test]
     fn sq_remove_by_id_not_found() {
         let mut q = SleepQueue::<4>::new();
-        q.push(1, 100).unwrap();
-        q.push(2, 200).unwrap();
-        assert!(!q.remove_by_id(99));
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 200).unwrap();
+        assert!(!q.remove_by_id(pid(99)));
         assert_eq!(q.len(), 2);
     }
 
     #[test]
     fn sq_remove_by_id_empty() {
         let mut q = SleepQueue::<4>::new();
-        assert!(!q.remove_by_id(1));
+        assert!(!q.remove_by_id(pid(1)));
         assert!(q.is_empty());
     }
 
@@ -1086,29 +1091,29 @@ mod tests {
     fn sq_remove_by_id_preserves_sorted_order() {
         let mut q = SleepQueue::<8>::new();
         // Insert out of order; SleepQueue sorts by expiry.
-        q.push(3, 300).unwrap();
-        q.push(1, 100).unwrap();
-        q.push(2, 200).unwrap();
-        q.push(4, 400).unwrap();
+        q.push(pid(3), 300).unwrap();
+        q.push(pid(1), 100).unwrap();
+        q.push(pid(2), 200).unwrap();
+        q.push(pid(4), 400).unwrap();
         // Remove pid 2 (expiry 200)
-        assert!(q.remove_by_id(2));
+        assert!(q.remove_by_id(pid(2)));
         assert_eq!(q.len(), 3);
-        let mut out: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut out: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         q.drain_expired(400, &mut out);
         // Should drain in sorted expiry order: 100, 300, 400
-        assert_eq!(out.as_slice(), &[1, 3, 4]);
+        assert_eq!(out.as_slice(), &[pid(1), pid(3), pid(4)]);
     }
 
     #[test]
     fn sq_remove_by_id_duplicate_removes_first_only() {
         let mut q = SleepQueue::<4>::new();
-        q.push(5, 100).unwrap();
-        q.push(5, 200).unwrap();
-        q.push(5, 300).unwrap();
-        assert!(q.remove_by_id(5));
+        q.push(pid(5), 100).unwrap();
+        q.push(pid(5), 200).unwrap();
+        q.push(pid(5), 300).unwrap();
+        assert!(q.remove_by_id(pid(5)));
         assert_eq!(q.len(), 2);
-        let mut out: heapless::Vec<u8, 4> = heapless::Vec::new();
+        let mut out: heapless::Vec<PartitionId, 4> = heapless::Vec::new();
         q.drain_expired(300, &mut out);
-        assert_eq!(out.as_slice(), &[5, 5]);
+        assert_eq!(out.as_slice(), &[pid(5), pid(5)]);
     }
 }

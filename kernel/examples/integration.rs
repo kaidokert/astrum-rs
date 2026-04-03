@@ -14,8 +14,8 @@ use kernel::partition::{ExternalPartitionMemory, MpuRegion, PartitionState};
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::svc::Kernel;
 use kernel::{
-    boot, events, AlignedStack1K, DebugEnabled, MsgStandard, PartitionEntry, Partitions4,
-    PortsTiny, StackStorage as _, SyncMinimal,
+    boot, events, AlignedStack1K, DebugEnabled, MsgStandard, PartitionEntry, PartitionId,
+    Partitions4, PortsTiny, StackStorage as _, SyncMinimal,
 };
 
 kernel::compose_kernel_config!(IntegrationConfig<Partitions4, SyncMinimal, MsgStandard, PortsTiny, DebugEnabled>);
@@ -62,7 +62,7 @@ kernel::define_unified_harness!(no_boot, IntegrationConfig, |tick, k| {
             .get_mut(1)
             .unwrap()
             .transition(PartitionState::Running);
-        events::event_set(k.partitions_mut(), 0, 0x01);
+        events::event_set(k.partitions_mut(), PartitionId::new(0), 0x01);
         assert!(k.partitions().get(0).unwrap().event_flags() & 0x01 != 0);
         hprintln!("[PASS] event_flag ack");
         IPC.store(1, Ordering::Release);
@@ -101,7 +101,7 @@ fn main() -> ! {
                 stk_iter.next().unwrap(),
                 entry_fns[i],
                 MpuRegion::new(0, 0, 0),
-                i as u8,
+                kernel::PartitionId::new(i as u32),
             )
             .unwrap()
         });

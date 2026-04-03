@@ -169,6 +169,7 @@ mod tests {
 
     use crate::syscall::{SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_WAIT};
     use crate::test_harness::KernelTestHarness;
+    use rtos_traits::ids::PartitionId;
 
     /// sys_sem_wait: r0 = SYS_SEM_WAIT, r1 = sem_id.
     /// Dispatching with r1=1 must decrement semaphore 1 and leave semaphore 0
@@ -213,7 +214,7 @@ mod tests {
         assert_eq!(ef.r0, 1, "MtxLock must return 1 (acquired)");
         assert_eq!(
             h.kernel().mutexes().owner(0),
-            Ok(Some(0)),
+            Ok(Some(PartitionId::new(0))),
             "mutex 0 must be owned by partition 0"
         );
     }
@@ -226,7 +227,7 @@ mod tests {
         // Lock mutex 0 first.
         let ef = h.dispatch(SYS_MTX_LOCK, 0, 0, 0);
         assert_eq!(ef.r0, 1);
-        assert_eq!(h.kernel().mutexes().owner(0), Ok(Some(0)));
+        assert_eq!(h.kernel().mutexes().owner(0), Ok(Some(PartitionId::new(0))));
         // Unlock mutex 0.
         let ef = h.dispatch(SYS_MTX_UNLOCK, 0, 0, 0);
         assert_eq!(ef.r0, 0, "MtxUnlock must return 0 (success)");

@@ -52,7 +52,7 @@ fn single_partition_fields_roundtrip() {
     let mut stk = Align4K([0u32; 1024]);
     let expected_base = stk.0.as_ptr() as u32;
     let mpu = MpuRegion::new(0x2000_0000, 4096, 0x03);
-    let m0 = ExternalPartitionMemory::new(&mut stk.0, 0x0800_0001, mpu, 0).unwrap();
+    let m0 = ExternalPartitionMemory::new(&mut stk.0, 0x0800_0001, mpu, pid(0)).unwrap();
 
     let k = Kernel::<TestConfig>::new(schedule_1p(), &[m0]).unwrap();
     let pcb = k.partitions().get(0).unwrap();
@@ -79,7 +79,7 @@ fn minimum_stack_with_all_optional_fields() {
     let mpu = MpuRegion::new(0x2000_0000, 4096, 0x01);
     let periph = MpuRegion::new(0x4000_C000, 4096, 0x03);
 
-    let m0 = ExternalPartitionMemory::new(&mut stk.0, 0x0800_0001, mpu, 0)
+    let m0 = ExternalPartitionMemory::new(&mut stk.0, 0x0800_0001, mpu, pid(0))
         .unwrap()
         .with_peripheral_regions(&[periph])
         .unwrap()
@@ -131,12 +131,12 @@ fn multiple_partitions_distinct_configs() {
     let mpu0 = MpuRegion::new(0x2000_0000, 4096, 0x00);
     let mpu1 = MpuRegion::new(0x2000_1000, 4096, 0x03);
 
-    let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0001, mpu0, 0)
+    let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0001, mpu0, pid(0))
         .unwrap()
         .with_fault_policy(FaultPolicy::ColdRestart { max: 5 })
         .with_r0_hint(100);
 
-    let m1 = ExternalPartitionMemory::new(&mut stk1.0, 0x0800_1001, mpu1, 1)
+    let m1 = ExternalPartitionMemory::new(&mut stk1.0, 0x0800_1001, mpu1, pid(1))
         .unwrap()
         .with_fault_policy(FaultPolicy::StayDead)
         .with_error_handler(0x0800_3001)
@@ -188,7 +188,7 @@ fn three_partitions_with_peripheral_regions() {
     // P0: two peripheral regions
     let periph_uart = MpuRegion::new(0x4000_C000, 4096, 0x03);
     let periph_i2c = MpuRegion::new(0x4002_0000, 4096, 0x03);
-    let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0001, mpu0, 0)
+    let m0 = ExternalPartitionMemory::new(&mut stk0.0, 0x0800_0001, mpu0, pid(0))
         .unwrap()
         .with_peripheral_regions(&[periph_uart, periph_i2c])
         .unwrap();
@@ -197,14 +197,14 @@ fn three_partitions_with_peripheral_regions() {
     let periph_spi = MpuRegion::new(0x4000_8000, 4096, 0x03);
     let periph_adc = MpuRegion::new(0x4003_8000, 4096, 0x03);
     let periph_tmr = MpuRegion::new(0x4003_0000, 4096, 0x03);
-    let m1 = ExternalPartitionMemory::new(&mut stk1.0, 0x0800_1001, mpu1, 1)
+    let m1 = ExternalPartitionMemory::new(&mut stk1.0, 0x0800_1001, mpu1, pid(1))
         .unwrap()
         .with_peripheral_regions(&[periph_spi, periph_adc, periph_tmr])
         .unwrap()
         .with_fault_policy(FaultPolicy::WarmRestart { max: 1 });
 
     // P2: no peripheral regions, default everything
-    let m2 = ExternalPartitionMemory::new(&mut stk2.0, 0x0800_2001, mpu2, 2).unwrap();
+    let m2 = ExternalPartitionMemory::new(&mut stk2.0, 0x0800_2001, mpu2, pid(2)).unwrap();
 
     let k = Kernel::<TestConfig>::new(schedule_3p(), &[m0, m1, m2]).unwrap();
 
@@ -250,7 +250,7 @@ fn fault_policy_cold_restart_max_zero() {
     let mut stk = AlignedStack1K::default();
     let mpu = MpuRegion::new(0x2000_0000, 4096, 0x01);
 
-    let m0 = ExternalPartitionMemory::new(&mut stk.0, 0x0800_0001, mpu, 0)
+    let m0 = ExternalPartitionMemory::new(&mut stk.0, 0x0800_0001, mpu, pid(0))
         .unwrap()
         .with_fault_policy(FaultPolicy::ColdRestart { max: 0 });
 

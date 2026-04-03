@@ -283,14 +283,14 @@ impl<const D: usize, const M: usize, const W: usize> QueuingPort<D, M, W> {
     }
 
     /// Add a blocked sender to the wait queue for test setup.
-    pub fn enqueue_blocked_sender(&mut self, pid: u8, expiry: u64) {
+    pub fn enqueue_blocked_sender(&mut self, pid: PartitionId, expiry: u64) {
         self.sender_wq
             .push(pid, expiry)
             .expect("enqueue_blocked_sender: wait queue full");
     }
 
     /// Add a blocked receiver to the wait queue for test setup.
-    pub fn enqueue_blocked_receiver(&mut self, pid: u8, expiry: u64) {
+    pub fn enqueue_blocked_receiver(&mut self, pid: PartitionId, expiry: u64) {
         self.receiver_wq
             .push(pid, expiry)
             .expect("enqueue_blocked_receiver: wait queue full");
@@ -340,7 +340,7 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
     pub fn send_queuing_message(
         &mut self,
         port_id: usize,
-        caller: u8,
+        caller: PartitionId,
         data: &[u8],
         timeout_ticks: u64,
         current_tick: u64,
@@ -354,7 +354,7 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
     pub fn receive_queuing_message(
         &mut self,
         port_id: usize,
-        caller: u8,
+        caller: PartitionId,
         buf: &mut [u8],
         timeout_ticks: u64,
         current_tick: u64,
@@ -379,7 +379,7 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
     ///
     /// Used during partition restart to clean up IPC state.
     // TODO: reviewer false positive — heapless::Vec::iter_mut() already respects len
-    pub fn remove_from_waitqueues(&mut self, pid: u8) {
+    pub fn remove_from_waitqueues(&mut self, pid: PartitionId) {
         for port in self.ports.iter_mut() {
             port.remove_from_waitqueues(pid);
         }
@@ -397,7 +397,7 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
     pub fn tick_timeouts<const E: usize>(
         &mut self,
         current_tick: u64,
-        out: &mut heapless::Vec<u8, E>,
+        out: &mut heapless::Vec<PartitionId, E>,
     ) {
         for port in self.ports.iter_mut() {
             port.drain_expired_senders(current_tick, out);
@@ -409,7 +409,7 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
     pub fn send_routed(
         &mut self,
         src_id: usize,
-        caller: u8,
+        caller: PartitionId,
         data: &[u8],
         timeout_ticks: u64,
         current_tick: u64,
@@ -467,6 +467,10 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> QueuingPort
 mod tests {
     use super::*;
 
+    fn pid(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
+
     #[test]
     fn create_port_and_initial_state() {
         let mut pool = QueuingPortPool::<4, 8, 16, 4>::new();
@@ -499,63 +503,72 @@ mod tests {
             Err(QueuingError::PoolFull)
         );
         assert_eq!(pool.len(), 2);
-        pool.get_mut(id).unwrap().send(0, &[1; 8]).unwrap();
+        pool.get_mut(id).unwrap().send(pid(0), &[1; 8]).unwrap();
         assert_eq!(pool.get(id).unwrap().nb_messages(), 1);
     }
 
     #[test]
     fn send_recv_and_direction_errors() {
         let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
-        assert_eq!(src.send(0, &[1, 2, 3, 4]).unwrap(), None);
+        assert_eq!(src.send(pid(0), &[1, 2, 3, 4]).unwrap(), None);
         assert_eq!(src.nb_messages(), 1);
         // Direction violations
         let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
-        assert_eq!(dst.send(0, &[1; 4]), Err(QueuingError::DirectionViolation));
+        assert_eq!(
+            dst.send(pid(0), &[1; 4]),
+            Err(QueuingError::DirectionViolation)
+        );
         let mut buf = [0u8; 4];
-        assert_eq!(src.recv(0, &mut buf), Err(QueuingError::DirectionViolation));
+        assert_eq!(
+            src.recv(pid(0), &mut buf),
+            Err(QueuingError::DirectionViolation)
+        );
         // Size errors
-        assert_eq!(src.send(0, &[1; 5]), Err(QueuingError::MessageTooLarge));
+        assert_eq!(
+            src.send(pid(0), &[1; 5]),
+            Err(QueuingError::MessageTooLarge)
+        );
     }
 
     #[test]
     fn queue_full_and_empty_blocking() {
         let mut src = QueuingPort::<2, 4, 4>::new(PortDirection::Source);
-        src.send(0, &[1; 4]).unwrap();
-        src.send(0, &[2; 4]).unwrap();
+        src.send(pid(0), &[1; 4]).unwrap();
+        src.send(pid(0), &[2; 4]).unwrap();
         assert!(src.is_full());
-        assert_eq!(src.send(1, &[3; 4]), Err(QueuingError::QueueFull));
+        assert_eq!(src.send(pid(1), &[3; 4]), Err(QueuingError::QueueFull));
         assert_eq!(src.pending_senders(), 1);
         let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         let mut buf = [0u8; 4];
-        assert_eq!(dst.recv(0, &mut buf), Err(QueuingError::QueueEmpty));
+        assert_eq!(dst.recv(pid(0), &mut buf), Err(QueuingError::QueueEmpty));
         assert_eq!(dst.pending_receivers(), 1);
     }
 
     #[test]
     fn wake_blocked_receiver_and_sender() {
         let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
-        src.enqueue_blocked_receiver(2, u64::MAX);
-        assert_eq!(src.send(0, &[1; 4]).unwrap(), Some(2));
+        src.enqueue_blocked_receiver(pid(2), u64::MAX);
+        assert_eq!(src.send(pid(0), &[1; 4]).unwrap(), Some(pid(2)));
         let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         dst.inject_message(4, &[1; 4]);
-        dst.enqueue_blocked_sender(3, u64::MAX);
+        dst.enqueue_blocked_sender(pid(3), u64::MAX);
         let mut buf = [0u8; 4];
-        let (sz, wake) = dst.recv(1, &mut buf).unwrap();
-        assert_eq!((sz, wake), (4, Some(3)));
+        let (sz, wake) = dst.recv(pid(1), &mut buf).unwrap();
+        assert_eq!((sz, wake), (4, Some(pid(3))));
     }
 
     #[test]
     fn wait_queue_full_errors() {
         let mut src = QueuingPort::<1, 4, 2>::new(PortDirection::Source);
-        src.send(0, &[1; 4]).unwrap();
-        let _ = src.send(1, &[2; 4]);
-        let _ = src.send(2, &[3; 4]);
-        assert_eq!(src.send(3, &[4; 4]), Err(QueuingError::WaitQueueFull));
+        src.send(pid(0), &[1; 4]).unwrap();
+        let _ = src.send(pid(1), &[2; 4]);
+        let _ = src.send(pid(2), &[3; 4]);
+        assert_eq!(src.send(pid(3), &[4; 4]), Err(QueuingError::WaitQueueFull));
         let mut dst = QueuingPort::<4, 4, 2>::new(PortDirection::Destination);
         let mut buf = [0u8; 4];
-        let _ = dst.recv(0, &mut buf);
-        let _ = dst.recv(1, &mut buf);
-        assert_eq!(dst.recv(2, &mut buf), Err(QueuingError::WaitQueueFull));
+        let _ = dst.recv(pid(0), &mut buf);
+        let _ = dst.recv(pid(1), &mut buf);
+        assert_eq!(dst.recv(pid(2), &mut buf), Err(QueuingError::WaitQueueFull));
     }
 
     #[test]
@@ -565,12 +578,12 @@ mod tests {
         dst.inject_message(5, &[40, 50, 60, 70, 80]);
         // First message: 3 bytes
         let mut b1 = [0u8; 8];
-        let (len1, _) = dst.recv(1, &mut b1).unwrap();
+        let (len1, _) = dst.recv(pid(1), &mut b1).unwrap();
         assert_eq!(len1, 3);
         assert_eq!(&b1[..len1], &[10, 20, 30]);
         // Second message: 5 bytes — FIFO order preserved
         let mut b2 = [0u8; 8];
-        let (len2, _) = dst.recv(1, &mut b2).unwrap();
+        let (len2, _) = dst.recv(pid(1), &mut b2).unwrap();
         assert_eq!(len2, 5);
         assert_eq!(&b2[..len2], &[40, 50, 60, 70, 80]);
     }
@@ -580,7 +593,7 @@ mod tests {
         let mut dst = QueuingPort::<4, 8, 4>::new(PortDirection::Destination);
         dst.inject_message(5, &[1, 2, 3, 4, 5]);
         let mut small = [0u8; 3];
-        let (msg_len, _) = dst.recv(1, &mut small).unwrap();
+        let (msg_len, _) = dst.recv(pid(1), &mut small).unwrap();
         // msg_len is the original length; caller detects truncation
         assert_eq!(msg_len, 5);
         assert_eq!(small, [1, 2, 3]);
@@ -589,7 +602,7 @@ mod tests {
     #[test]
     fn send_queuing_delivers_when_space_available() {
         let mut p = QueuingPort::<2, 8, 4>::new(PortDirection::Source);
-        let o = p.send_queuing_message(0, &[1, 2, 3], 100, 50).unwrap();
+        let o = p.send_queuing_message(pid(0), &[1, 2, 3], 100, 50).unwrap();
         assert_eq!(
             o,
             SendQueuingOutcome::Delivered {
@@ -602,12 +615,12 @@ mod tests {
     #[test]
     fn send_queuing_wakes_blocked_receiver() {
         let mut p = QueuingPort::<2, 8, 4>::new(PortDirection::Source);
-        p.enqueue_blocked_receiver(5, u64::MAX);
-        let o = p.send_queuing_message(1, &[4; 4], 0, 0).unwrap();
+        p.enqueue_blocked_receiver(pid(5), u64::MAX);
+        let o = p.send_queuing_message(pid(1), &[4; 4], 0, 0).unwrap();
         assert_eq!(
             o,
             SendQueuingOutcome::Delivered {
-                wake_receiver: Some(5)
+                wake_receiver: Some(pid(5))
             }
         );
     }
@@ -616,7 +629,7 @@ mod tests {
     fn send_queuing_rejects_destination_port() {
         let mut dst = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         assert_eq!(
-            dst.send_queuing_message(0, &[1; 4], 0, 0),
+            dst.send_queuing_message(pid(0), &[1; 4], 0, 0),
             Err(QueuingError::DirectionViolation)
         );
     }
@@ -625,7 +638,7 @@ mod tests {
     fn send_queuing_rejects_oversized_message() {
         let mut p = QueuingPort::<2, 8, 4>::new(PortDirection::Source);
         assert_eq!(
-            p.send_queuing_message(0, &[1; 9], 0, 0),
+            p.send_queuing_message(pid(0), &[1; 9], 0, 0),
             Err(QueuingError::MessageTooLarge)
         );
     }
@@ -633,9 +646,9 @@ mod tests {
     #[test]
     fn send_queuing_full_zero_timeout_returns_queue_full() {
         let mut q = QueuingPort::<1, 4, 4>::new(PortDirection::Source);
-        q.send_queuing_message(0, &[1; 4], 0, 0).unwrap();
+        q.send_queuing_message(pid(0), &[1; 4], 0, 0).unwrap();
         assert_eq!(
-            q.send_queuing_message(1, &[2; 4], 0, 10),
+            q.send_queuing_message(pid(1), &[2; 4], 0, 10),
             Err(QueuingError::QueueFull)
         );
         assert_eq!(q.pending_senders(), 0);
@@ -644,8 +657,8 @@ mod tests {
     #[test]
     fn send_queuing_full_nonzero_timeout_blocks_sender() {
         let mut q = QueuingPort::<1, 4, 4>::new(PortDirection::Source);
-        q.send_queuing_message(0, &[1; 4], 0, 0).unwrap();
-        let o = q.send_queuing_message(1, &[2; 4], 50, 100).unwrap();
+        q.send_queuing_message(pid(0), &[1; 4], 0, 0).unwrap();
+        let o = q.send_queuing_message(pid(1), &[2; 4], 50, 100).unwrap();
         assert_eq!(o, SendQueuingOutcome::SenderBlocked { expiry_tick: 150 });
         assert_eq!(q.pending_senders(), 1);
     }
@@ -654,7 +667,9 @@ mod tests {
     fn send_queuing_pool_delivers() {
         let mut pool = QueuingPortPool::<4, 2, 8, 4>::new();
         let id = pool.create_port(PortDirection::Source).unwrap();
-        let o = pool.send_queuing_message(id, 0, &[1, 2], 0, 0).unwrap();
+        let o = pool
+            .send_queuing_message(id, pid(0), &[1, 2], 0, 0)
+            .unwrap();
         assert_eq!(
             o,
             SendQueuingOutcome::Delivered {
@@ -667,7 +682,7 @@ mod tests {
     fn send_queuing_pool_invalid_port() {
         let mut pool = QueuingPortPool::<4, 2, 8, 4>::new();
         assert_eq!(
-            pool.send_queuing_message(99, 0, &[1], 0, 0),
+            pool.send_queuing_message(99, pid(0), &[1], 0, 0),
             Err(QueuingError::InvalidPort)
         );
     }
@@ -676,14 +691,14 @@ mod tests {
     fn receive_queuing_delivers_and_wakes_sender() {
         let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         p.inject_message(2, &[1, 2]);
-        p.enqueue_blocked_sender(3, 999);
+        p.enqueue_blocked_sender(pid(3), 999);
         let mut buf = [0u8; 4];
-        let o = p.receive_queuing_message(0, &mut buf, 0, 0).unwrap();
+        let o = p.receive_queuing_message(pid(0), &mut buf, 0, 0).unwrap();
         assert_eq!(
             o,
             RecvQueuingOutcome::Received {
                 msg_len: 2,
-                wake_sender: Some(3),
+                wake_sender: Some(pid(3)),
             }
         );
         assert_eq!(&buf[..2], &[1, 2]);
@@ -694,7 +709,7 @@ mod tests {
         let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         let mut buf = [0u8; 4];
         assert_eq!(
-            p.receive_queuing_message(0, &mut buf, 0, 10),
+            p.receive_queuing_message(pid(0), &mut buf, 0, 10),
             Err(QueuingError::QueueEmpty)
         );
         assert_eq!(p.pending_receivers(), 0);
@@ -704,7 +719,9 @@ mod tests {
     fn receive_queuing_empty_nonzero_timeout_blocks() {
         let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         let mut buf = [0u8; 4];
-        let o = p.receive_queuing_message(1, &mut buf, 50, 100).unwrap();
+        let o = p
+            .receive_queuing_message(pid(1), &mut buf, 50, 100)
+            .unwrap();
         assert_eq!(o, RecvQueuingOutcome::ReceiverBlocked { expiry_tick: 150 });
         assert_eq!(p.pending_receivers(), 1);
     }
@@ -714,7 +731,7 @@ mod tests {
         let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
         let mut buf = [0u8; 4];
         assert_eq!(
-            src.receive_queuing_message(0, &mut buf, 0, 0),
+            src.receive_queuing_message(pid(0), &mut buf, 0, 0),
             Err(QueuingError::DirectionViolation)
         );
     }
@@ -724,7 +741,7 @@ mod tests {
         let mut p = QueuingPort::<4, 4, 4>::new(PortDirection::Destination);
         p.inject_message(3, &[10, 20, 30]);
         let mut buf = [0u8; 4];
-        let o = p.receive_queuing_message(0, &mut buf, 0, 0).unwrap();
+        let o = p.receive_queuing_message(pid(0), &mut buf, 0, 0).unwrap();
         assert_eq!(
             o,
             RecvQueuingOutcome::Received {
@@ -814,7 +831,9 @@ mod tests {
         let d = pool.create_port(PortDirection::Destination).unwrap();
         pool.get_mut(d).unwrap().inject_message(1, &[42]);
         let mut buf = [0u8; 4];
-        let o = pool.receive_queuing_message(d, 0, &mut buf, 0, 0).unwrap();
+        let o = pool
+            .receive_queuing_message(d, pid(0), &mut buf, 0, 0)
+            .unwrap();
         assert_eq!(
             o,
             RecvQueuingOutcome::Received {
@@ -824,7 +843,7 @@ mod tests {
         );
         assert_eq!(buf[0], 42);
         assert_eq!(
-            pool.receive_queuing_message(99, 0, &mut buf, 0, 0),
+            pool.receive_queuing_message(99, pid(0), &mut buf, 0, 0),
             Err(QueuingError::InvalidPort)
         );
     }
@@ -836,21 +855,23 @@ mod tests {
         let mut pool = QueuingPortPool::<4, 1, 4, 4>::new();
         let s = pool.create_port(PortDirection::Source).unwrap();
         // Fill queue, then block a sender with expiry at tick 100
-        pool.send_queuing_message(s, 0, &[1; 4], 0, 0).unwrap();
-        let o = pool.send_queuing_message(s, 1, &[2; 4], 50, 50).unwrap();
+        pool.send_queuing_message(s, pid(0), &[1; 4], 0, 0).unwrap();
+        let o = pool
+            .send_queuing_message(s, pid(1), &[2; 4], 50, 50)
+            .unwrap();
         assert_eq!(o, SendQueuingOutcome::SenderBlocked { expiry_tick: 100 });
         assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
 
         // Tick 99: not yet expired
-        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut unblocked: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(99, &mut unblocked);
         assert!(unblocked.is_empty());
         assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
 
         // Tick 100: expired
-        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut unblocked: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(100, &mut unblocked);
-        assert_eq!(unblocked.as_slice(), &[1]);
+        assert_eq!(unblocked.as_slice(), &[pid(1)]);
         assert_eq!(pool.get(s).unwrap().pending_senders(), 0);
     }
 
@@ -861,21 +882,21 @@ mod tests {
         // Block a receiver with expiry at tick 200
         let mut buf = [0u8; 4];
         let o = pool
-            .receive_queuing_message(d, 2, &mut buf, 100, 100)
+            .receive_queuing_message(d, pid(2), &mut buf, 100, 100)
             .unwrap();
         assert_eq!(o, RecvQueuingOutcome::ReceiverBlocked { expiry_tick: 200 });
         assert_eq!(pool.get(d).unwrap().pending_receivers(), 1);
 
         // Tick 199: not yet expired
-        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut unblocked: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(199, &mut unblocked);
         assert!(unblocked.is_empty());
         assert_eq!(pool.get(d).unwrap().pending_receivers(), 1);
 
         // Tick 200: expired
-        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut unblocked: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(200, &mut unblocked);
-        assert_eq!(unblocked.as_slice(), &[2]);
+        assert_eq!(unblocked.as_slice(), &[pid(2)]);
         assert_eq!(pool.get(d).unwrap().pending_receivers(), 0);
     }
 
@@ -883,12 +904,13 @@ mod tests {
     fn tick_timeouts_no_expiry_keeps_waiters() {
         let mut pool = QueuingPortPool::<4, 1, 4, 4>::new();
         let s = pool.create_port(PortDirection::Source).unwrap();
-        pool.send_queuing_message(s, 0, &[1; 4], 0, 0).unwrap();
+        pool.send_queuing_message(s, pid(0), &[1; 4], 0, 0).unwrap();
         // Block with expiry at tick 500
-        pool.send_queuing_message(s, 1, &[2; 4], 400, 100).unwrap();
+        pool.send_queuing_message(s, pid(1), &[2; 4], 400, 100)
+            .unwrap();
 
         // Tick 200: well before expiry
-        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut unblocked: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(200, &mut unblocked);
         assert!(unblocked.is_empty());
         assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
@@ -901,28 +923,30 @@ mod tests {
         let d = pool.create_port(PortDirection::Destination).unwrap();
 
         // Block two senders with different expiries
-        pool.send_queuing_message(s, 0, &[1; 4], 0, 0).unwrap();
-        pool.send_queuing_message(s, 1, &[2; 4], 50, 50).unwrap(); // expiry 100
-        pool.send_queuing_message(s, 2, &[3; 4], 100, 50).unwrap(); // expiry 150
+        pool.send_queuing_message(s, pid(0), &[1; 4], 0, 0).unwrap();
+        pool.send_queuing_message(s, pid(1), &[2; 4], 50, 50)
+            .unwrap(); // expiry 100
+        pool.send_queuing_message(s, pid(2), &[3; 4], 100, 50)
+            .unwrap(); // expiry 150
 
         // Block one receiver
         let mut buf = [0u8; 4];
-        pool.receive_queuing_message(d, 3, &mut buf, 50, 50)
+        pool.receive_queuing_message(d, pid(3), &mut buf, 50, 50)
             .unwrap(); // expiry 100
 
         // Tick 100: sender 1 and receiver 3 expire; sender 2 stays
-        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut unblocked: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(100, &mut unblocked);
         assert_eq!(unblocked.len(), 2);
-        assert!(unblocked.contains(&1));
-        assert!(unblocked.contains(&3));
+        assert!(unblocked.contains(&pid(1)));
+        assert!(unblocked.contains(&pid(3)));
         assert_eq!(pool.get(s).unwrap().pending_senders(), 1);
         assert_eq!(pool.get(d).unwrap().pending_receivers(), 0);
 
         // Tick 150: sender 2 expires
-        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut unblocked: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(150, &mut unblocked);
-        assert_eq!(unblocked.as_slice(), &[2]);
+        assert_eq!(unblocked.as_slice(), &[pid(2)]);
         assert_eq!(pool.get(s).unwrap().pending_senders(), 0);
     }
 
@@ -930,7 +954,7 @@ mod tests {
     fn tick_timeouts_empty_pool_returns_empty() {
         let mut pool = QueuingPortPool::<4, 4, 4, 4>::new();
         pool.create_port(PortDirection::Source).unwrap();
-        let mut unblocked: heapless::Vec<u8, 8> = heapless::Vec::new();
+        let mut unblocked: heapless::Vec<PartitionId, 8> = heapless::Vec::new();
         pool.tick_timeouts(1000, &mut unblocked);
         assert!(unblocked.is_empty());
     }
@@ -942,27 +966,28 @@ mod tests {
         let d = pool.create_port(PortDirection::Destination).unwrap();
         pool.connect_ports(s, d).unwrap();
         for v in [10u8, 20, 30] {
-            pool.send_routed(s, 0, &[v], 0, 0).unwrap();
+            pool.send_routed(s, pid(0), &[v], 0, 0).unwrap();
         }
         assert_eq!(pool.get(s).unwrap().nb_messages(), 0);
         assert_eq!(pool.get(d).unwrap().nb_messages(), 3);
         let mut buf = [0u8; 8];
         for exp in [10u8, 20, 30] {
-            pool.receive_queuing_message(d, 1, &mut buf, 0, 0).unwrap();
+            pool.receive_queuing_message(d, pid(1), &mut buf, 0, 0)
+                .unwrap();
             assert_eq!(buf[0], exp);
         }
         // Error cases: direction, no connection, oversized
         let mut p2 = QueuingPortPool::<4, 1, 8, 4>::new();
         let dd = p2.create_port(PortDirection::Destination).unwrap();
-        assert!(p2.send_routed(dd, 0, &[1], 0, 0).is_err());
+        assert!(p2.send_routed(dd, pid(0), &[1], 0, 0).is_err());
         let ss = p2.create_port(PortDirection::Source).unwrap();
-        assert!(p2.send_routed(ss, 0, &[1], 0, 0).is_err()); // no connection
+        assert!(p2.send_routed(ss, pid(0), &[1], 0, 0).is_err()); // no connection
         let s3 = p2.create_port(PortDirection::Source).unwrap();
         let d3 = p2.create_port(PortDirection::Destination).unwrap();
         p2.connect_ports(s3, d3).unwrap();
-        assert!(p2.send_routed(s3, 0, &[0; 9], 0, 0).is_err());
-        p2.send_routed(s3, 0, &[1], 0, 0).unwrap();
-        assert!(p2.send_routed(s3, 1, &[2], 0, 0).is_err());
+        assert!(p2.send_routed(s3, pid(0), &[0; 9], 0, 0).is_err());
+        p2.send_routed(s3, pid(0), &[1], 0, 0).unwrap();
+        assert!(p2.send_routed(s3, pid(1), &[2], 0, 0).is_err());
     }
 
     // --- Defense-in-depth bounds guard tests ---
@@ -983,7 +1008,7 @@ mod tests {
         dst.buf.push_back((9, msg)).unwrap(); // len=9 > M=4
 
         let mut buf = [0u8; 8];
-        let (reported_len, _) = dst.recv(0, &mut buf).unwrap();
+        let (reported_len, _) = dst.recv(pid(0), &mut buf).unwrap();
         // reported_len is the raw stored value (9) so caller can detect corruption,
         // but only M bytes (4) were actually copied — no out-of-bounds panic.
         assert_eq!(reported_len, 9);
@@ -998,7 +1023,7 @@ mod tests {
         dst.buf.push_back((100, msg)).unwrap(); // len=100 >> M=4
 
         let mut buf = [0u8; 4];
-        let o = dst.receive_queuing_message(0, &mut buf, 0, 0).unwrap();
+        let o = dst.receive_queuing_message(pid(0), &mut buf, 0, 0).unwrap();
         assert_eq!(
             o,
             RecvQueuingOutcome::Received {
@@ -1019,7 +1044,7 @@ mod tests {
         dst.buf.push_back((20, msg)).unwrap(); // len=20 > M=8
 
         let mut small = [0u8; 3]; // buf.len()=3 < M=8 < len=20
-        let (reported_len, _) = dst.recv(0, &mut small).unwrap();
+        let (reported_len, _) = dst.recv(pid(0), &mut small).unwrap();
         assert_eq!(reported_len, 20);
         // copy_len = min(20, 8, 3) = 3
         assert_eq!(&small, &[0xFF, 0xFF, 0xFF]);
@@ -1032,7 +1057,10 @@ mod tests {
         let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
         // data.len() = 5 > M = 4; the explicit check catches this first,
         // but the get_mut guard would also catch it.
-        assert_eq!(src.send(0, &[1; 5]), Err(QueuingError::MessageTooLarge));
+        assert_eq!(
+            src.send(pid(0), &[1; 5]),
+            Err(QueuingError::MessageTooLarge)
+        );
     }
 
     /// Verify send_queuing_message get_mut guard for oversized data.
@@ -1040,7 +1068,7 @@ mod tests {
     fn send_queuing_get_mut_guard_returns_message_too_large() {
         let mut src = QueuingPort::<4, 4, 4>::new(PortDirection::Source);
         assert_eq!(
-            src.send_queuing_message(0, &[1; 5], 0, 0),
+            src.send_queuing_message(pid(0), &[1; 5], 0, 0),
             Err(QueuingError::MessageTooLarge)
         );
     }
@@ -1053,7 +1081,7 @@ mod tests {
         let d = pool.create_port(PortDirection::Destination).unwrap();
         pool.connect_ports(s, d).unwrap();
         assert_eq!(
-            pool.send_routed(s, 0, &[1; 5], 0, 0),
+            pool.send_routed(s, pid(0), &[1; 5], 0, 0),
             Err(QueuingError::MessageTooLarge)
         );
     }

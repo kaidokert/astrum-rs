@@ -39,7 +39,7 @@ macro_rules! define_memmanage_handler {
                         // If the partition was restarted (Ready) or its error
                         // handler was activated (in_error_handler), return the
                         // fresh SP so we can update PSP accordingly.
-                        let pid = d.partition_id as usize;
+                        let pid = d.partition_id.as_raw() as usize;
                         if k.pcb(pid).map_or(false, |pcb|
                             pcb.state() == $crate::partition::PartitionState::Ready
                             || pcb.in_error_handler())
@@ -107,7 +107,12 @@ where
     >,
 {
     let pid = kernel.active_partition()?;
-    let details = crate::fault::FaultDetails::new(pid, cfsr, mmfar, faulting_pc);
+    let details = crate::fault::FaultDetails::new(
+        rtos_traits::ids::PartitionId::new(pid as u32),
+        cfsr,
+        mmfar,
+        faulting_pc,
+    );
 
     #[cfg(feature = "trace")]
     crate::trace::emit_fault_trace(&details);
@@ -199,6 +204,7 @@ mod tests {
     use crate::partition::{ExternalPartitionMemory, MpuRegion, PartitionState};
     use crate::partition_core::AlignedStack256B;
     use crate::scheduler::{ScheduleEntry, ScheduleTable};
+    use rtos_traits::ids::PartitionId;
 
     struct TestConfig;
     impl KernelConfig for TestConfig {
@@ -231,8 +237,20 @@ mod tests {
         let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
         let m = MpuRegion::new(0, 0, 0);
         let mems = [
-            ExternalPartitionMemory::from_aligned_stack(&mut s0, 0x0800_1001, m, 0).unwrap(),
-            ExternalPartitionMemory::from_aligned_stack(&mut s1, 0x0800_2001, m, 1).unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut s0,
+                0x0800_1001,
+                m,
+                PartitionId::new(0),
+            )
+            .unwrap(),
+            ExternalPartitionMemory::from_aligned_stack(
+                &mut s1,
+                0x0800_2001,
+                m,
+                PartitionId::new(1),
+            )
+            .unwrap(),
         ];
         crate::svc::Kernel::<TestConfig>::new(sched, &mems).expect("kernel init")
     }
@@ -264,7 +282,7 @@ mod tests {
                 .expect("should return fault details");
         assert_eq!(
             details,
-            FaultDetails::new(0, cfsr, 0x2000_F000, 0x0800_1234)
+            FaultDetails::new(PartitionId::new(0), cfsr, 0x2000_F000, 0x0800_1234)
         );
         assert!(details.is_daccviol() && details.is_mmarvalid());
         assert_eq!(details.mmfsr(), (cfsr & CFSR_MMFSR_MASK) as u8);
@@ -343,7 +361,7 @@ mod tests {
         let details =
             handle_memmanage_fault::<TestConfig>(&mut kernel, CFSR_IACCVIOL, 0, 0x0800_2000)
                 .expect("should return fault details");
-        assert_eq!(details.partition_id, 1);
+        assert_eq!(details.partition_id, PartitionId::new(1));
         assert!(details.is_iaccviol() && !details.is_daccviol());
         assert_eq!(kernel.pcb(1).unwrap().state(), PartitionState::Faulted);
     }
@@ -371,7 +389,7 @@ mod tests {
         let details =
             handle_memmanage_fault::<TestConfig>(&mut kernel, CFSR_IACCVIOL, 0x1000, 0x2000)
                 .unwrap();
-        assert_eq!(details.partition_id, 0);
+        assert_eq!(details.partition_id, PartitionId::new(0));
         assert_eq!(kernel.pcb(0).unwrap().state(), PartitionState::Faulted);
     }
 
@@ -393,10 +411,21 @@ mod tests {
             let m0 = MpuRegion::new(d0.0.as_ptr() as u32, 256, 0);
             let m1 = MpuRegion::new(0, 0, 0);
             let mems = [
-                ExternalPartitionMemory::from_aligned_stack(s0, 0x0800_1001, m0, 0)
-                    .unwrap()
-                    .with_fault_policy(policy),
-                ExternalPartitionMemory::from_aligned_stack(s1, 0x0800_2001, m1, 1).unwrap(),
+                ExternalPartitionMemory::from_aligned_stack(
+                    s0,
+                    0x0800_1001,
+                    m0,
+                    PartitionId::new(0),
+                )
+                .unwrap()
+                .with_fault_policy(policy),
+                ExternalPartitionMemory::from_aligned_stack(
+                    s1,
+                    0x0800_2001,
+                    m1,
+                    PartitionId::new(1),
+                )
+                .unwrap(),
             ];
             crate::svc::Kernel::<TestConfig>::new(sched, &mems).expect("kernel init")
         }
@@ -511,15 +540,26 @@ mod tests {
             sched.add_system_window(1).unwrap();
             let m0 = MpuRegion::new(d0.0.as_ptr() as u32, 256, 0);
             let m1 = MpuRegion::new(0, 0, 0);
-            let mut epm0 = ExternalPartitionMemory::from_aligned_stack(s0, 0x0800_1001, m0, 0)
-                .unwrap()
-                .with_fault_policy(FaultPolicy::StayDead);
+            let mut epm0 = ExternalPartitionMemory::from_aligned_stack(
+                s0,
+                0x0800_1001,
+                m0,
+                PartitionId::new(0),
+            )
+            .unwrap()
+            .with_fault_policy(FaultPolicy::StayDead);
             if let Some(addr) = error_handler {
                 epm0 = epm0.with_error_handler(addr);
             }
             let mems = [
                 epm0,
-                ExternalPartitionMemory::from_aligned_stack(s1, 0x0800_2001, m1, 1).unwrap(),
+                ExternalPartitionMemory::from_aligned_stack(
+                    s1,
+                    0x0800_2001,
+                    m1,
+                    PartitionId::new(1),
+                )
+                .unwrap(),
             ];
             crate::svc::Kernel::<TestConfig>::new(sched, &mems).expect("kernel init")
         }
@@ -560,7 +600,7 @@ mod tests {
             assert_ne!(sp, 0, "SP must be valid");
 
             // Fault details are still returned correctly.
-            assert_eq!(details.partition_id, 0);
+            assert_eq!(details.partition_id, PartitionId::new(0));
             assert_eq!(details.cfsr, cfsr);
         }
 
@@ -604,15 +644,26 @@ mod tests {
             sched.add_system_window(1).unwrap();
             let m0 = MpuRegion::new(d0.0.as_ptr() as u32, 256, 0);
             let m1 = MpuRegion::new(0, 0, 0);
-            let mut epm0 = ExternalPartitionMemory::from_aligned_stack(s0, 0x0800_1001, m0, 0)
-                .unwrap()
-                .with_fault_policy(policy);
+            let mut epm0 = ExternalPartitionMemory::from_aligned_stack(
+                s0,
+                0x0800_1001,
+                m0,
+                PartitionId::new(0),
+            )
+            .unwrap()
+            .with_fault_policy(policy);
             if let Some(addr) = error_handler {
                 epm0 = epm0.with_error_handler(addr);
             }
             let mems = [
                 epm0,
-                ExternalPartitionMemory::from_aligned_stack(s1, 0x0800_2001, m1, 1).unwrap(),
+                ExternalPartitionMemory::from_aligned_stack(
+                    s1,
+                    0x0800_2001,
+                    m1,
+                    PartitionId::new(1),
+                )
+                .unwrap(),
             ];
             crate::svc::Kernel::<TestConfig>::new(sched, &mems).expect("kernel init")
         }

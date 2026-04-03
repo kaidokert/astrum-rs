@@ -19,14 +19,14 @@ fn kernel_2p() -> Kernel<'static, TestConfig> {
             &mut stk0,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap(),
         ExternalPartitionMemory::from_aligned_stack(
             &mut stk1,
             0x0800_1001,
             MpuRegion::new(0x2000_1000, 4096, 0),
-            1,
+            pid(1),
         )
         .unwrap(),
     ];
@@ -59,21 +59,21 @@ fn kernel_3p() -> Kernel<'static, TestConfig> {
             &mut stk0,
             0x0800_0001,
             MpuRegion::new(0x2000_0000, 4096, 0),
-            0,
+            pid(0),
         )
         .unwrap(),
         ExternalPartitionMemory::from_aligned_stack(
             &mut stk1,
             0x0800_1001,
             MpuRegion::new(0x2000_1000, 4096, 0),
-            1,
+            pid(1),
         )
         .unwrap(),
         ExternalPartitionMemory::from_aligned_stack(
             &mut stk2,
             0x0800_2001,
             MpuRegion::new(0x2000_2000, 4096, 0),
-            2,
+            pid(2),
         )
         .unwrap(),
     ];

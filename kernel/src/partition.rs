@@ -715,7 +715,7 @@ impl PartitionConfig {
         // (bit[0]) set, since the processor only supports Thumb state.
         if (self.entry_point.raw() & 1) == 0 {
             return Err(ConfigError::EntryPointNotThumb {
-                partition_id: self.id,
+                partition_id: PartitionId::new(self.id as u32),
                 entry_point: self.entry_point.raw(),
             });
         }
@@ -723,7 +723,7 @@ impl PartitionConfig {
         // MPU region validation
         validate_mpu_region(self.mpu_region.base(), self.mpu_region.size()).map_err(|detail| {
             ConfigError::MpuRegionInvalid {
-                partition_id: self.id,
+                partition_id: PartitionId::new(self.id as u32),
                 detail,
             }
         })?;
@@ -732,7 +732,7 @@ impl PartitionConfig {
         for (i, region) in self.peripheral_regions.iter().enumerate() {
             validate_mpu_region(region.base(), region.size()).map_err(|detail| {
                 ConfigError::PeripheralRegionInvalid {
-                    partition_id: self.id,
+                    partition_id: PartitionId::new(self.id as u32),
                     region_index: i,
                     detail,
                 }
@@ -744,7 +744,7 @@ impl PartitionConfig {
         if let Some(region) = &self.code_mpu_region {
             validate_mpu_region(region.base(), region.size()).map_err(|detail| {
                 ConfigError::CodeRegionInvalid {
-                    partition_id: self.id,
+                    partition_id: PartitionId::new(self.id as u32),
                     detail,
                 }
             })?;
@@ -753,7 +753,7 @@ impl PartitionConfig {
             let effective_entry = self.entry_point.raw() & !1; // strip Thumb bit
             if effective_entry.wrapping_sub(region.base()) >= region.size() {
                 return Err(ConfigError::EntryPointOutsideCodeRegion {
-                    partition_id: self.id,
+                    partition_id: PartitionId::new(self.id as u32),
                     entry_point: self.entry_point.raw(),
                     region_base: region.base(),
                     region_size: region.size(),
@@ -777,13 +777,16 @@ pub enum ConfigError {
         num_partitions: usize,
     },
     /// A partition's MPU region failed validation.
-    MpuRegionInvalid { partition_id: u8, detail: MpuError },
+    MpuRegionInvalid {
+        partition_id: PartitionId,
+        detail: MpuError,
+    },
     /// A partition's stack size is not a power of two or is less than 32.
-    StackSizeInvalid { partition_id: u8 },
+    StackSizeInvalid { partition_id: PartitionId },
     /// A partition's stack base is not aligned to its stack size.
-    StackBaseNotAligned { partition_id: u8 },
+    StackBaseNotAligned { partition_id: PartitionId },
     /// A partition's stack base + stack size overflows u32.
-    StackOverflow { partition_id: u8 },
+    StackOverflow { partition_id: PartitionId },
     /// The partition table is full; no room for another partition.
     PartitionTableFull,
     /// A partition's id does not match its array index.
@@ -793,30 +796,36 @@ pub enum ConfigError {
         actual_id: u8,
     },
     /// Failed to access internal stack for a partition during initialization.
-    StackInitFailed { partition_id: u8 },
+    StackInitFailed { partition_id: PartitionId },
     /// The number of memories passed to `Kernel::new` does not match `C::N`.
     PartitionCountMismatch { expected: usize, actual: usize },
     /// A partition's peripheral region failed MPU validation.
     PeripheralRegionInvalid {
-        partition_id: u8,
+        partition_id: PartitionId,
         region_index: usize,
         detail: MpuError,
     },
     /// The number of non-zero-size peripheral regions exceeds the maximum
     /// allowed by the dynamic MPU slot layout.
     TooManyPeripheralRegions {
-        partition_id: u8,
+        partition_id: PartitionId,
         got: usize,
         max: usize,
     },
     /// A partition's code region failed MPU validation.
-    CodeRegionInvalid { partition_id: u8, detail: MpuError },
+    CodeRegionInvalid {
+        partition_id: PartitionId,
+        detail: MpuError,
+    },
     /// A partition's entry point does not have the Thumb bit (bit\[0\]) set.
-    EntryPointNotThumb { partition_id: u8, entry_point: u32 },
+    EntryPointNotThumb {
+        partition_id: PartitionId,
+        entry_point: u32,
+    },
     /// A partition's entry point (Thumb bit stripped) falls outside its code
     /// MPU region.
     EntryPointOutsideCodeRegion {
-        partition_id: u8,
+        partition_id: PartitionId,
         entry_point: u32,
         region_base: u32,
         region_size: u32,
@@ -1060,7 +1069,7 @@ pub type PartitionMemory<'mem> = ExternalPartitionMemory<'mem>;
 fn validate_stack_geometry(
     base: u32,
     size_bytes: u32,
-    partition_id: u8,
+    partition_id: PartitionId,
 ) -> Result<(), ConfigError> {
     if base & (size_bytes - 1) != 0 {
         return Err(ConfigError::StackBaseNotAligned { partition_id });
@@ -1080,7 +1089,7 @@ pub struct ExternalPartitionMemory<'mem> {
     peripheral_regions: PeripheralRegionVec,
     code_mpu_region: Option<MpuRegion>,
     r0_hint: u32,
-    partition_id: u8,
+    partition_id: PartitionId,
     fault_policy: FaultPolicy,
     error_handler: Option<u32>,
 }
@@ -1092,7 +1101,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         stack: &'mem mut [u32],
         entry_point: impl Into<EntryAddr>,
         mpu_region: MpuRegion,
-        partition_id: u8,
+        partition_id: PartitionId,
     ) -> Result<Self, ConfigError> {
         let entry_point = entry_point.into();
         let size_bytes: u32 = stack
@@ -1140,7 +1149,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         storage: &'mem mut S,
         entry_point: impl Into<EntryAddr>,
         mpu_region: MpuRegion,
-        partition_id: u8,
+        partition_id: PartitionId,
     ) -> Result<Self, ConfigError> {
         Self::new(
             storage.as_u32_slice_mut(),
@@ -1246,7 +1255,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     pub fn from_spec<S: StackStorage>(
         storage: &'mem mut S,
         spec: &PartitionSpec,
-        partition_id: u8,
+        partition_id: PartitionId,
     ) -> Result<Self, ConfigError> {
         let data_mpu = spec.data_mpu().unwrap_or(MpuRegion::new(0, 0, 0));
         let mut mem =
@@ -2155,12 +2164,18 @@ mod tests {
                 num_partitions: 4,
             },
             ConfigError::MpuRegionInvalid {
-                partition_id: 1,
+                partition_id: PartitionId::new(1),
                 detail: MpuError::SizeTooSmall,
             },
-            ConfigError::StackSizeInvalid { partition_id: 2 },
-            ConfigError::StackBaseNotAligned { partition_id: 3 },
-            ConfigError::StackOverflow { partition_id: 4 },
+            ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(2),
+            },
+            ConfigError::StackBaseNotAligned {
+                partition_id: PartitionId::new(3),
+            },
+            ConfigError::StackOverflow {
+                partition_id: PartitionId::new(4),
+            },
             ConfigError::PartitionTableFull,
             ConfigError::PartitionIdMismatch {
                 index: 0,
@@ -2205,7 +2220,7 @@ mod tests {
         let msg = format!(
             "{}",
             ConfigError::MpuRegionInvalid {
-                partition_id: 3,
+                partition_id: PartitionId::new(3),
                 detail: MpuError::BaseNotAligned,
             }
         );
@@ -2215,21 +2230,36 @@ mod tests {
 
     #[test]
     fn config_error_display_stack_size_invalid() {
-        let msg = format!("{}", ConfigError::StackSizeInvalid { partition_id: 1 });
+        let msg = format!(
+            "{}",
+            ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(1)
+            }
+        );
         assert!(msg.contains("partition 1"));
         assert!(msg.contains("power of two"));
     }
 
     #[test]
     fn config_error_display_stack_base_not_aligned() {
-        let msg = format!("{}", ConfigError::StackBaseNotAligned { partition_id: 2 });
+        let msg = format!(
+            "{}",
+            ConfigError::StackBaseNotAligned {
+                partition_id: PartitionId::new(2)
+            }
+        );
         assert!(msg.contains("partition 2"));
         assert!(msg.contains("not aligned"));
     }
 
     #[test]
     fn config_error_display_stack_overflow() {
-        let msg = format!("{}", ConfigError::StackOverflow { partition_id: 5 });
+        let msg = format!(
+            "{}",
+            ConfigError::StackOverflow {
+                partition_id: PartitionId::new(5)
+            }
+        );
         assert!(msg.contains("partition 5"));
         assert!(msg.contains("overflows"));
     }
@@ -2261,7 +2291,7 @@ mod tests {
         let msg = format!(
             "{}",
             ConfigError::EntryPointNotThumb {
-                partition_id: 3,
+                partition_id: PartitionId::new(3),
                 entry_point: 0x0800_0002,
             }
         );
@@ -2277,7 +2307,7 @@ mod tests {
         let msg = format!(
             "{}",
             ConfigError::EntryPointOutsideCodeRegion {
-                partition_id: 2,
+                partition_id: PartitionId::new(2),
                 entry_point: 0x0900_0100,
                 region_base: 0x0800_0000,
                 region_size: 0x0001_0000,
@@ -2293,7 +2323,7 @@ mod tests {
     #[test]
     fn config_error_entry_point_outside_code_region_distinct() {
         let outside = ConfigError::EntryPointOutsideCodeRegion {
-            partition_id: 1,
+            partition_id: PartitionId::new(1),
             entry_point: 0x0900_0000,
             region_base: 0x0800_0000,
             region_size: 0x0001_0000,
@@ -2303,7 +2333,7 @@ mod tests {
         assert_ne!(
             outside,
             ConfigError::EntryPointNotThumb {
-                partition_id: 1,
+                partition_id: PartitionId::new(1),
                 entry_point: 0x0900_0000,
             }
         );
@@ -2314,7 +2344,7 @@ mod tests {
         let msg = format!(
             "{}",
             ConfigError::CodeRegionInvalid {
-                partition_id: 5,
+                partition_id: PartitionId::new(5),
                 detail: MpuError::BaseNotAligned,
             }
         );
@@ -2344,23 +2374,32 @@ mod tests {
         assert!(format!(
             "{:?}",
             ConfigError::MpuRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 detail: MpuError::SizeTooSmall,
             }
         )
         .contains("MpuRegionInvalid"));
-        assert!(
-            format!("{:?}", ConfigError::StackSizeInvalid { partition_id: 0 })
-                .contains("StackSizeInvalid")
-        );
-        assert!(
-            format!("{:?}", ConfigError::StackBaseNotAligned { partition_id: 0 })
-                .contains("StackBaseNotAligned")
-        );
-        assert!(
-            format!("{:?}", ConfigError::StackOverflow { partition_id: 0 })
-                .contains("StackOverflow")
-        );
+        assert!(format!(
+            "{:?}",
+            ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(0)
+            }
+        )
+        .contains("StackSizeInvalid"));
+        assert!(format!(
+            "{:?}",
+            ConfigError::StackBaseNotAligned {
+                partition_id: PartitionId::new(0)
+            }
+        )
+        .contains("StackBaseNotAligned"));
+        assert!(format!(
+            "{:?}",
+            ConfigError::StackOverflow {
+                partition_id: PartitionId::new(0)
+            }
+        )
+        .contains("StackOverflow"));
         assert!(format!("{:?}", ConfigError::PartitionTableFull).contains("PartitionTableFull"));
         assert!(format!(
             "{:?}",
@@ -2374,7 +2413,7 @@ mod tests {
         assert!(format!(
             "{:?}",
             ConfigError::EntryPointOutsideCodeRegion {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 entry_point: 0x0900_0000,
                 region_base: 0x0800_0000,
                 region_size: 0x0001_0000,
@@ -2396,7 +2435,7 @@ mod tests {
         ];
         for detail in mpu_variants {
             let e = ConfigError::MpuRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 detail,
             };
             let msg = format!("{e}");
@@ -2430,21 +2469,27 @@ mod tests {
         );
         has(
             &ConfigError::MpuRegionInvalid {
-                partition_id: 1,
+                partition_id: PartitionId::new(1),
                 detail: MpuError::SizeTooSmall,
             },
             &["1", &format!("{}", MpuError::SizeTooSmall)],
         );
         has(
-            &ConfigError::StackSizeInvalid { partition_id: 2 },
+            &ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(2),
+            },
             &["2", "power of two"],
         );
         has(
-            &ConfigError::StackBaseNotAligned { partition_id: 3 },
+            &ConfigError::StackBaseNotAligned {
+                partition_id: PartitionId::new(3),
+            },
             &["3", "not aligned"],
         );
         has(
-            &ConfigError::StackOverflow { partition_id: 4 },
+            &ConfigError::StackOverflow {
+                partition_id: PartitionId::new(4),
+            },
             &["4", "overflow"],
         );
         has(&ConfigError::PartitionTableFull, &["full"]);
@@ -2457,7 +2502,9 @@ mod tests {
             &["1", "5"],
         );
         has(
-            &ConfigError::StackInitFailed { partition_id: 6 },
+            &ConfigError::StackInitFailed {
+                partition_id: PartitionId::new(6),
+            },
             &["6", "stack"],
         );
         has(
@@ -2469,7 +2516,7 @@ mod tests {
         );
         has(
             &ConfigError::PeripheralRegionInvalid {
-                partition_id: 7,
+                partition_id: PartitionId::new(7),
                 region_index: 2,
                 detail: MpuError::BaseNotAligned,
             },
@@ -2477,7 +2524,7 @@ mod tests {
         );
         has(
             &ConfigError::TooManyPeripheralRegions {
-                partition_id: 8,
+                partition_id: PartitionId::new(8),
                 got: 5,
                 max: 3,
             },
@@ -2485,21 +2532,21 @@ mod tests {
         );
         has(
             &ConfigError::CodeRegionInvalid {
-                partition_id: 9,
+                partition_id: PartitionId::new(9),
                 detail: MpuError::AddressOverflow,
             },
             &["9", &format!("{}", MpuError::AddressOverflow)],
         );
         has(
             &ConfigError::EntryPointNotThumb {
-                partition_id: 10,
+                partition_id: PartitionId::new(10),
                 entry_point: 0x0800_0100,
             },
             &["10", "0x08000100", "Thumb"],
         );
         has(
             &ConfigError::EntryPointOutsideCodeRegion {
-                partition_id: 11,
+                partition_id: PartitionId::new(11),
                 entry_point: 0x0900_0000,
                 region_base: 0x0800_0000,
                 region_size: 0x0001_0000,
@@ -2568,7 +2615,7 @@ mod tests {
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::MpuRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 detail: MpuError::SizeNotPowerOfTwo,
             })
         );
@@ -2581,7 +2628,7 @@ mod tests {
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::MpuRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 detail: MpuError::BaseNotAligned,
             })
         );
@@ -2592,13 +2639,13 @@ mod tests {
         let mut cfg = valid_config();
         cfg.id = 7;
         cfg.mpu_region = MpuRegion::new(0x2000_0000, 100, 0);
-        assert!(matches!(
-            cfg.validate(),
-            Err(ConfigError::MpuRegionInvalid {
-                partition_id: 7,
-                ..
-            })
-        ));
+        let err = cfg.validate().unwrap_err();
+        match err {
+            ConfigError::MpuRegionInvalid { partition_id, .. } => {
+                assert_eq!(partition_id, PartitionId::new(7));
+            }
+            other => panic!("expected MpuRegionInvalid, got {:?}", other),
+        }
     }
 
     // ------------------------------------------------------------------
@@ -2623,7 +2670,7 @@ mod tests {
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::PeripheralRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 region_index: 0,
                 detail: MpuError::SizeTooSmall,
             })
@@ -2639,14 +2686,14 @@ mod tests {
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::PeripheralRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 region_index: 1,
                 detail: MpuError::SizeNotPowerOfTwo,
             })
         );
         // Display format check
         let e = ConfigError::PeripheralRegionInvalid {
-            partition_id: 2,
+            partition_id: PartitionId::new(2),
             region_index: 1,
             detail: MpuError::BaseNotAligned,
         };
@@ -2665,7 +2712,7 @@ mod tests {
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::CodeRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 detail: MpuError::SizeNotPowerOfTwo,
             })
         );
@@ -2678,7 +2725,7 @@ mod tests {
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::CodeRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 detail: MpuError::BaseNotAligned,
             })
         );
@@ -2709,7 +2756,7 @@ mod tests {
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::EntryPointNotThumb {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 entry_point: 0x0800_0002,
             })
         );
@@ -2736,7 +2783,7 @@ mod tests {
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::EntryPointOutsideCodeRegion {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 entry_point: 0x0900_0001,
                 region_base: 0x0800_0000,
                 region_size: 4096,
@@ -2993,7 +3040,12 @@ mod tests {
             let no_sys = ConfigError::NoSystemWindow;
             assert_ne!(no_sys, ConfigError::ScheduleEmpty);
             assert_ne!(no_sys, ConfigError::PartitionTableFull);
-            assert_ne!(no_sys, ConfigError::StackSizeInvalid { partition_id: 0 });
+            assert_ne!(
+                no_sys,
+                ConfigError::StackSizeInvalid {
+                    partition_id: PartitionId::new(0)
+                }
+            );
         }
     }
 
@@ -3362,7 +3414,8 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let expected_base = buf.0.as_ptr() as u32;
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1001, mpu, 3).unwrap();
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1001, mpu, PartitionId::new(3))
+            .unwrap();
         assert_eq!(epm.entry_point(), 0x0800_1001);
         assert_eq!(epm.stack_size_bytes(), 256);
         assert_eq!(epm.stack_base(), expected_base);
@@ -3376,16 +3429,21 @@ mod tests {
         // Size too small: 4 words = 16 bytes
         let mut small = [0u32; 4];
         assert_eq!(
-            ExternalPartitionMemory::new(&mut small, 0, valid_mpu, 5).unwrap_err(),
-            ConfigError::StackSizeInvalid { partition_id: 5 }
+            ExternalPartitionMemory::new(&mut small, 0, valid_mpu, PartitionId::new(5))
+                .unwrap_err(),
+            ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(5)
+            }
         );
         // Non-power-of-two: 48 words = 192 bytes
         #[repr(C)]
         struct B([u32; 48]);
         let mut b = B([0u32; 48]);
         assert_eq!(
-            ExternalPartitionMemory::new(&mut b.0, 0, valid_mpu, 7).unwrap_err(),
-            ConfigError::StackSizeInvalid { partition_id: 7 }
+            ExternalPartitionMemory::new(&mut b.0, 0, valid_mpu, PartitionId::new(7)).unwrap_err(),
+            ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(7)
+            }
         );
         // Misaligned base
         #[repr(C, align(512))]
@@ -3393,19 +3451,32 @@ mod tests {
         let mut buf = A([0u32; 128]);
         let sub = &mut buf.0[16..80]; // 64 words = 256 bytes at non-256-aligned offset
         assert_eq!(
-            ExternalPartitionMemory::new(sub, 0, valid_mpu, 2).unwrap_err(),
-            ConfigError::StackBaseNotAligned { partition_id: 2 }
+            ExternalPartitionMemory::new(sub, 0, valid_mpu, PartitionId::new(2)).unwrap_err(),
+            ConfigError::StackBaseNotAligned {
+                partition_id: PartitionId::new(2)
+            }
         );
         // Invalid MPU region (non-power-of-two size)
         let mut buf2 = Align256([0u32; 64]);
-        let err = ExternalPartitionMemory::new(&mut buf2.0, 0, MpuRegion::new(0, 33, 0), 1);
+        let err = ExternalPartitionMemory::new(
+            &mut buf2.0,
+            0,
+            MpuRegion::new(0, 33, 0),
+            PartitionId::new(1),
+        );
         assert!(matches!(err, Err(ConfigError::MpuRegionInvalid { .. })));
     }
 
     #[test]
     fn ext_pmem_sentinel_mpu_accepted() {
         let mut buf = Align256([0u32; 64]);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, MpuRegion::new(0, 0, 0), 1).unwrap();
+        let epm = ExternalPartitionMemory::new(
+            &mut buf.0,
+            1,
+            MpuRegion::new(0, 0, 0),
+            PartitionId::new(1),
+        )
+        .unwrap();
         assert_eq!(epm.mpu_region().size(), 0);
     }
 
@@ -3414,8 +3485,13 @@ mod tests {
         use crate::partition_core::AlignedStack256B;
         let mut storage = AlignedStack256B::default();
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
-        let epm =
-            ExternalPartitionMemory::from_aligned_stack(&mut storage, 0x0800_0001, mpu, 0).unwrap();
+        let epm = ExternalPartitionMemory::from_aligned_stack(
+            &mut storage,
+            0x0800_0001,
+            mpu,
+            PartitionId::new(0),
+        )
+        .unwrap();
         assert_eq!(epm.stack_size_bytes(), 256);
         assert_eq!(epm.entry_point(), 0x0800_0001);
     }
@@ -3429,7 +3505,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let expected_base = buf.0.as_ptr() as u32;
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
-        let pm = PartitionMemory::new(&mut buf.0, 0x0800_2001, mpu, 0).unwrap();
+        let pm = PartitionMemory::new(&mut buf.0, 0x0800_2001, mpu, PartitionId::new(0)).unwrap();
         assert_eq!(pm.entry_point(), 0x0800_2001);
         assert_eq!(pm.stack_size_bytes(), 256);
         assert_eq!(pm.stack_base(), expected_base);
@@ -3443,7 +3519,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // A 32-byte (8-word) sub-slice starting at offset 1 word is misaligned
         let sub = &mut buf.0[1..9];
-        let result = PartitionMemory::new(sub, 0x0800_0001, mpu, 0);
+        let result = PartitionMemory::new(sub, 0x0800_0001, mpu, PartitionId::new(0));
         assert!(result.is_err());
     }
 
@@ -3452,7 +3528,7 @@ mod tests {
         let valid_mpu = MpuRegion::new(0, 32, 0);
         // 3 words = 12 bytes, not a power of two
         let mut tiny = [0u32; 3];
-        let result = PartitionMemory::new(&mut tiny, 0x0800_0001, valid_mpu, 0);
+        let result = PartitionMemory::new(&mut tiny, 0x0800_0001, valid_mpu, PartitionId::new(0));
         assert!(result.is_err());
     }
 
@@ -3461,7 +3537,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let periph = MpuRegion::new(0x4000_0000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1001, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_1001, mpu, PartitionId::new(0))
             .unwrap()
             .with_peripheral_regions(&[periph])
             .unwrap();
@@ -3473,7 +3549,8 @@ mod tests {
     fn ext_pmem_code_mpu_region_default_none() {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 0).unwrap();
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, PartitionId::new(0))
+            .unwrap();
         assert!(epm.code_mpu_region().is_none());
     }
 
@@ -3482,7 +3559,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let code = MpuRegion::new(0x0800_0000, 1024, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, PartitionId::new(0))
             .unwrap()
             .with_code_mpu_region(code)
             .unwrap();
@@ -3496,7 +3573,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let code = MpuRegion::new(0x0800_0000, 512, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, PartitionId::new(0))
             .unwrap()
             .with_code_mpu_region(code)
             .unwrap();
@@ -3511,7 +3588,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // Base 0x0800_0100 is not aligned to size 1024 (0x400).
         let code = MpuRegion::new(0x0800_0100, 1024, 0);
-        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0101, mpu, 0)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0101, mpu, PartitionId::new(0))
             .unwrap()
             .with_code_mpu_region(code)
             .unwrap_err();
@@ -3529,7 +3606,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // Size 48 is not a power of two.
         let code = MpuRegion::new(0x0800_0000, 48, 0);
-        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 0)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, PartitionId::new(0))
             .unwrap()
             .with_code_mpu_region(code)
             .unwrap_err();
@@ -3546,7 +3623,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let code = MpuRegion::new(0x0800_0000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, PartitionId::new(0))
             .unwrap()
             .with_code_mpu_region(code)
             .unwrap();
@@ -3575,7 +3652,8 @@ mod tests {
     fn ext_pmem_minimum_valid_stack_size_32_bytes() {
         let mut buf = TestBuf32([0u32; 8]); // 8 words = 32 bytes
         let mpu = MpuRegion::new(0, 0, 0); // sentinel
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 1).unwrap();
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, PartitionId::new(1))
+            .unwrap();
         assert_eq!(epm.stack_size_bytes(), 32);
     }
 
@@ -3584,8 +3662,10 @@ mod tests {
         let mut empty: [u32; 0] = [];
         let mpu = MpuRegion::new(0, 0, 0);
         assert_eq!(
-            ExternalPartitionMemory::new(&mut empty, 0, mpu, 9).unwrap_err(),
-            ConfigError::StackSizeInvalid { partition_id: 9 }
+            ExternalPartitionMemory::new(&mut empty, 0, mpu, PartitionId::new(9)).unwrap_err(),
+            ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(9)
+            }
         );
     }
 
@@ -3594,8 +3674,16 @@ mod tests {
         // 4 words = 16 bytes: valid power-of-two but below minimum
         let mut buf = TestBuf16([0u32; 4]);
         assert_eq!(
-            ExternalPartitionMemory::new(&mut buf.0, 0, MpuRegion::new(0, 0, 0), 4).unwrap_err(),
-            ConfigError::StackSizeInvalid { partition_id: 4 }
+            ExternalPartitionMemory::new(
+                &mut buf.0,
+                0,
+                MpuRegion::new(0, 0, 0),
+                PartitionId::new(4)
+            )
+            .unwrap_err(),
+            ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(4)
+            }
         );
     }
 
@@ -3607,8 +3695,16 @@ mod tests {
         struct NonPow2Buf([u32; 12]);
         let mut buf = NonPow2Buf([0u32; 12]);
         assert_eq!(
-            ExternalPartitionMemory::new(&mut buf.0, 0, MpuRegion::new(0, 0, 0), 6).unwrap_err(),
-            ConfigError::StackSizeInvalid { partition_id: 6 }
+            ExternalPartitionMemory::new(
+                &mut buf.0,
+                0,
+                MpuRegion::new(0, 0, 0),
+                PartitionId::new(6)
+            )
+            .unwrap_err(),
+            ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(6)
+            }
         );
     }
 
@@ -3618,8 +3714,11 @@ mod tests {
         // 64 words = 256 bytes starting at word offset 1 → misaligned for 256
         let sub = &mut buf.0[1..65];
         assert_eq!(
-            ExternalPartitionMemory::new(sub, 0, MpuRegion::new(0, 0, 0), 3).unwrap_err(),
-            ConfigError::StackBaseNotAligned { partition_id: 3 }
+            ExternalPartitionMemory::new(sub, 0, MpuRegion::new(0, 0, 0), PartitionId::new(3))
+                .unwrap_err(),
+            ConfigError::StackBaseNotAligned {
+                partition_id: PartitionId::new(3)
+            }
         );
     }
 
@@ -3629,8 +3728,10 @@ mod tests {
         // base address near u32::MAX so that base + size_bytes wraps — no
         // unsafe needed.
         assert_eq!(
-            validate_stack_geometry(0xFFFF_FF00, 256, 8).unwrap_err(),
-            ConfigError::StackOverflow { partition_id: 8 }
+            validate_stack_geometry(0xFFFF_FF00, 256, PartitionId::new(8)).unwrap_err(),
+            ConfigError::StackOverflow {
+                partition_id: PartitionId::new(8)
+            }
         );
     }
 
@@ -3643,9 +3744,13 @@ mod tests {
                 use crate::partition_core::$stack_ty;
                 let mut storage = $stack_ty::default();
                 let mpu = MpuRegion::new(0x2000_0000, $size, 0);
-                let epm =
-                    ExternalPartitionMemory::from_aligned_stack(&mut storage, 0x0800_4001, mpu, 2)
-                        .unwrap();
+                let epm = ExternalPartitionMemory::from_aligned_stack(
+                    &mut storage,
+                    0x0800_4001,
+                    mpu,
+                    PartitionId::new(2),
+                )
+                .unwrap();
                 assert_eq!(epm.stack_size_bytes(), $size);
                 assert_eq!(epm.entry_point(), 0x0800_4001);
                 assert_eq!(*epm.mpu_region(), mpu);
@@ -3667,7 +3772,7 @@ mod tests {
         let r1 = MpuRegion::new(0x4000_0000, 256, 0);
         let r2 = MpuRegion::new(0x4000_1000, 4096, 0);
         let r3 = MpuRegion::new(0x4000_2000, 8192, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, PartitionId::new(0))
             .unwrap()
             .with_peripheral_regions(&[r1, r2, r3])
             .unwrap();
@@ -3676,17 +3781,22 @@ mod tests {
         // 4 non-zero regions should fail with TooManyPeripheralRegions.
         let mut buf2 = Align256([0u32; 64]);
         let r4 = MpuRegion::new(0x4000_4000, 16384, 0);
-        let result = ExternalPartitionMemory::new(&mut buf2.0, 1, mpu, 0)
+        let result = ExternalPartitionMemory::new(&mut buf2.0, 1, mpu, PartitionId::new(0))
             .unwrap()
             .with_peripheral_regions(&[r1, r2, r3, r4]);
-        assert!(matches!(
-            result,
-            Err(ConfigError::TooManyPeripheralRegions {
-                partition_id: 0,
-                got: 4,
-                max: 3,
-            })
-        ));
+        let err = result.unwrap_err();
+        match err {
+            ConfigError::TooManyPeripheralRegions {
+                partition_id,
+                got,
+                max,
+            } => {
+                assert_eq!(partition_id, PartitionId::new(0));
+                assert_eq!(got, 4);
+                assert_eq!(max, 3);
+            }
+            other => panic!("expected TooManyPeripheralRegions, got {:?}", other),
+        }
     }
 
     #[test]
@@ -3695,16 +3805,19 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // Base 0x4000_0080 not aligned to size 256.
         let bad = MpuRegion::new(0x4000_0080, 256, 0);
-        let err = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 3)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, PartitionId::new(3))
             .unwrap()
             .with_peripheral_regions(&[bad])
             .unwrap_err();
         match err {
             ConfigError::PeripheralRegionInvalid {
-                partition_id: 3,
+                partition_id,
                 region_index: 0,
                 detail,
-            } => assert_eq!(detail, MpuError::BaseNotAligned),
+            } => {
+                assert_eq!(partition_id, PartitionId::new(3));
+                assert_eq!(detail, MpuError::BaseNotAligned);
+            }
             other => panic!("expected PeripheralRegionInvalid/BaseNotAligned, got {other:?}"),
         }
     }
@@ -3715,16 +3828,19 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // Size 48 is not a power of two.
         let bad = MpuRegion::new(0x4000_0000, 48, 0);
-        let err = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 1)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, PartitionId::new(1))
             .unwrap()
             .with_peripheral_regions(&[bad])
             .unwrap_err();
         match err {
             ConfigError::PeripheralRegionInvalid {
-                partition_id: 1,
+                partition_id,
                 region_index: 0,
                 detail,
-            } => assert_eq!(detail, MpuError::SizeNotPowerOfTwo),
+            } => {
+                assert_eq!(partition_id, PartitionId::new(1));
+                assert_eq!(detail, MpuError::SizeNotPowerOfTwo);
+            }
             other => panic!("expected PeripheralRegionInvalid/SizeNotPowerOfTwo, got {other:?}"),
         }
     }
@@ -3734,7 +3850,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let good = MpuRegion::new(0x4000_0000, 256, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, PartitionId::new(0))
             .unwrap()
             .with_peripheral_regions(&[good])
             .unwrap();
@@ -3750,16 +3866,19 @@ mod tests {
         let good = MpuRegion::new(0x4000_0000, 256, 0);
         // Second region: misaligned base.
         let bad = MpuRegion::new(0x4000_0080, 256, 0);
-        let err = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 2)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, PartitionId::new(2))
             .unwrap()
             .with_peripheral_regions(&[good, bad])
             .unwrap_err();
         match err {
             ConfigError::PeripheralRegionInvalid {
-                partition_id: 2,
+                partition_id,
                 region_index: 1,
                 detail,
-            } => assert_eq!(detail, MpuError::BaseNotAligned),
+            } => {
+                assert_eq!(partition_id, PartitionId::new(2));
+                assert_eq!(detail, MpuError::BaseNotAligned);
+            }
             other => panic!("expected PeripheralRegionInvalid at index 1, got {other:?}"),
         }
     }
@@ -3770,7 +3889,7 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         // Zero-size region with misaligned base should be silently skipped.
         let zero = MpuRegion::new(0xDEAD_BEEF, 0, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 0)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, PartitionId::new(0))
             .unwrap()
             .with_peripheral_regions(&[zero])
             .unwrap();
@@ -3783,7 +3902,7 @@ mod tests {
         let expected_base = buf.0.as_ptr() as u32;
         let mpu = MpuRegion::new(0x2000_0000, 256, 0x0306_0000);
         let periph = MpuRegion::new(0x4000_0000, 256, 0x03);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_ABC9, mpu, 5)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_ABC9, mpu, PartitionId::new(5))
             .unwrap()
             .with_peripheral_regions(&[periph])
             .unwrap();
@@ -3806,9 +3925,10 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0, 0, 0);
         assert_eq!(
-            ExternalPartitionMemory::new(&mut buf.0, 0x0800_0002, mpu, 3).unwrap_err(),
+            ExternalPartitionMemory::new(&mut buf.0, 0x0800_0002, mpu, PartitionId::new(3))
+                .unwrap_err(),
             ConfigError::EntryPointNotThumb {
-                partition_id: 3,
+                partition_id: PartitionId::new(3),
                 entry_point: 0x0800_0002,
             }
         );
@@ -3818,7 +3938,8 @@ mod tests {
     fn ext_pmem_accepts_entry_point_with_thumb_bit() {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0, 0, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 1).unwrap();
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, PartitionId::new(1))
+            .unwrap();
         assert_eq!(epm.entry_point(), 0x0800_0001);
     }
 
@@ -3827,9 +3948,10 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0, 0, 0);
         assert_eq!(
-            ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, 0).unwrap_err(),
+            ExternalPartitionMemory::new(&mut buf.0, 0x0800_0000, mpu, PartitionId::new(0))
+                .unwrap_err(),
             ConfigError::EntryPointNotThumb {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 entry_point: 0x0800_0000,
             }
         );
@@ -3840,7 +3962,8 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0, 0, 0);
         // 0x0800_0003: real address 0x0800_0002 (2-byte aligned) with Thumb bit set
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0003, mpu, 7).unwrap();
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0003, mpu, PartitionId::new(7))
+            .unwrap();
         assert_eq!(epm.entry_point(), 0x0800_0003);
     }
 
@@ -3849,7 +3972,8 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0, 0, 0);
         // 0x0800_0803: real address 0x0800_0802 (halfword-aligned) with Thumb bit set
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0803, mpu, 5).unwrap();
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0803, mpu, PartitionId::new(5))
+            .unwrap();
         assert_eq!(epm.entry_point(), 0x0800_0803);
     }
 
@@ -3885,7 +4009,7 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0, 0, 0);
         let ep: PartitionEntry = test_entry;
-        let pmem = ExternalPartitionMemory::new(&mut buf.0, ep, mpu, 0).unwrap();
+        let pmem = ExternalPartitionMemory::new(&mut buf.0, ep, mpu, PartitionId::new(0)).unwrap();
         assert_eq!(pmem.entry_point(), EntryAddr::from_entry(test_entry).raw());
     }
 
@@ -3911,7 +4035,8 @@ mod tests {
         let mut buf = Align256([0u32; 64]);
         let mpu = MpuRegion::new(0, 0, 0);
         let body: PartitionBody = test_body;
-        let pmem = ExternalPartitionMemory::new(&mut buf.0, body, mpu, 0).unwrap();
+        let pmem =
+            ExternalPartitionMemory::new(&mut buf.0, body, mpu, PartitionId::new(0)).unwrap();
         assert_eq!(pmem.entry_point(), EntryAddr::from_entry(test_body).raw());
     }
 
@@ -4096,7 +4221,7 @@ mod tests {
             MpuRegion::new(0x4000_2000, 8192, 0),
             MpuRegion::new(0x4000_4000, 16384, 0),
         ];
-        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 5)
+        let err = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, PartitionId::new(5))
             .unwrap()
             .with_peripheral_regions(&regions)
             .unwrap_err();
@@ -4106,7 +4231,7 @@ mod tests {
                 got,
                 max,
             } => {
-                assert_eq!(partition_id, 5);
+                assert_eq!(partition_id, PartitionId::new(5));
                 assert_eq!(got, 4);
                 assert_eq!(max, 3);
             }
@@ -4124,7 +4249,7 @@ mod tests {
             MpuRegion::new(0x4000_2000, 8192, 0),
             MpuRegion::new(0x0000_0000, 0, 0), // zero-size, not counted
         ];
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, 2)
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 0x0800_0001, mpu, PartitionId::new(2))
             .unwrap()
             .with_peripheral_regions(&regions)
             .unwrap();
@@ -4151,15 +4276,24 @@ mod tests {
             2
         );
         assert_eq!(
-            ConfigError::StackSizeInvalid { partition_id: 0 }.discriminant(),
+            ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(0)
+            }
+            .discriminant(),
             3
         );
         assert_eq!(
-            ConfigError::StackBaseNotAligned { partition_id: 0 }.discriminant(),
+            ConfigError::StackBaseNotAligned {
+                partition_id: PartitionId::new(0)
+            }
+            .discriminant(),
             4
         );
         assert_eq!(
-            ConfigError::StackOverflow { partition_id: 0 }.discriminant(),
+            ConfigError::StackOverflow {
+                partition_id: PartitionId::new(0)
+            }
+            .discriminant(),
             5
         );
         assert_eq!(ConfigError::PartitionTableFull.discriminant(), 6);
@@ -4173,7 +4307,10 @@ mod tests {
             7
         );
         assert_eq!(
-            ConfigError::StackInitFailed { partition_id: 0 }.discriminant(),
+            ConfigError::StackInitFailed {
+                partition_id: PartitionId::new(0)
+            }
+            .discriminant(),
             8
         );
         assert_eq!(
@@ -4186,7 +4323,7 @@ mod tests {
         );
         assert_eq!(
             ConfigError::TooManyPeripheralRegions {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 got: 4,
                 max: 3,
             }
@@ -4195,7 +4332,7 @@ mod tests {
         );
         assert_eq!(
             ConfigError::EntryPointNotThumb {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 entry_point: 0x0800_0000,
             }
             .discriminant(),
@@ -4203,7 +4340,7 @@ mod tests {
         );
         assert_eq!(
             ConfigError::EntryPointOutsideCodeRegion {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 entry_point: 0x0800_0000,
                 region_base: 0x0900_0000,
                 region_size: 0x1000,
@@ -4216,7 +4353,7 @@ mod tests {
         // MpuError::SizeTooSmall = 2, so MpuRegionInvalid = 0x102.
         assert_eq!(
             ConfigError::MpuRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 detail: MpuError::SizeTooSmall,
             }
             .discriminant(),
@@ -4225,7 +4362,7 @@ mod tests {
         // MpuError::BaseNotAligned = 4, so PeripheralRegionInvalid = 0x204.
         assert_eq!(
             ConfigError::PeripheralRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 region_index: 0,
                 detail: MpuError::BaseNotAligned,
             }
@@ -4235,7 +4372,7 @@ mod tests {
         // MpuError::AddressOverflow = 5, so CodeRegionInvalid = 0x305.
         assert_eq!(
             ConfigError::CodeRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 detail: MpuError::AddressOverflow,
             }
             .discriminant(),
@@ -4268,43 +4405,51 @@ mod tests {
                 num_partitions: 1,
             },
             ConfigError::MpuRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 detail: m,
             },
-            ConfigError::StackSizeInvalid { partition_id: 0 },
-            ConfigError::StackBaseNotAligned { partition_id: 0 },
-            ConfigError::StackOverflow { partition_id: 0 },
+            ConfigError::StackSizeInvalid {
+                partition_id: PartitionId::new(0),
+            },
+            ConfigError::StackBaseNotAligned {
+                partition_id: PartitionId::new(0),
+            },
+            ConfigError::StackOverflow {
+                partition_id: PartitionId::new(0),
+            },
             ConfigError::PartitionTableFull,
             ConfigError::PartitionIdMismatch {
                 index: 0,
                 expected_id: 0,
                 actual_id: 1,
             },
-            ConfigError::StackInitFailed { partition_id: 0 },
+            ConfigError::StackInitFailed {
+                partition_id: PartitionId::new(0),
+            },
             ConfigError::PartitionCountMismatch {
                 expected: 2,
                 actual: 1,
             },
             ConfigError::PeripheralRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 region_index: 0,
                 detail: m,
             },
             ConfigError::TooManyPeripheralRegions {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 got: 4,
                 max: 3,
             },
             ConfigError::CodeRegionInvalid {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 detail: m,
             },
             ConfigError::EntryPointNotThumb {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 entry_point: 0x0800_0000,
             },
             ConfigError::EntryPointOutsideCodeRegion {
-                partition_id: 0,
+                partition_id: PartitionId::new(0),
                 entry_point: 0x0800_0000,
                 region_base: 0x0900_0000,
                 region_size: 0x1000,
@@ -4436,7 +4581,7 @@ mod tests {
             &mut storage,
             0x0800_0001u32,
             MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
-            0,
+            PartitionId::new(0),
         )
         .unwrap();
         assert_eq!(epm.fault_policy(), FaultPolicy::StayDead);
@@ -4450,7 +4595,7 @@ mod tests {
             &mut storage,
             0x0800_0001u32,
             MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
-            0,
+            PartitionId::new(0),
         )
         .unwrap()
         .with_fault_policy(FaultPolicy::ColdRestart { max: 5 });
@@ -4520,7 +4665,7 @@ mod tests {
             &mut storage,
             0x0800_0001u32,
             MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
-            0,
+            PartitionId::new(0),
         )
         .unwrap();
         assert_eq!(epm.error_handler(), None);
@@ -4534,7 +4679,7 @@ mod tests {
             &mut storage,
             0x0800_0001u32,
             MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
-            0,
+            PartitionId::new(0),
         )
         .unwrap()
         .with_error_handler(0x0800_3001);

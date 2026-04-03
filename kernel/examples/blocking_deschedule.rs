@@ -99,7 +99,11 @@ fn SysTick() {
         let event = kernel::svc::scheduler::advance_schedule_tick(k);
         if let kernel::scheduler::ScheduleEvent::PartitionSwitch(pid) = event {
             // Transition incoming partition to Running so syscalls can block it
-            let _ = try_transition(k.partitions_mut(), pid, PartitionState::Running);
+            let _ = try_transition(
+                k.partitions_mut(),
+                kernel::PartitionId::new(pid as u32),
+                PartitionState::Running,
+            );
             k.set_next_partition(pid);
             cortex_m::peripheral::SCB::set_pendsv();
         }
@@ -164,7 +168,7 @@ fn main() -> ! {
             &mut STACKS[0].0,
             EntryAddr::from_entry(partition_main as PartitionEntry),
             MpuRegion::new(0, 0, 0),
-            0,
+            kernel::PartitionId::new(0),
         )
         .expect("partition memory 0")]
     };
@@ -180,7 +184,11 @@ fn main() -> ! {
 
     // Transition partition 0 to Running before the first context switch
     // so that blocking syscalls can transition it to Waiting.
-    let _ = try_transition(k.partitions_mut(), 0, PartitionState::Running);
+    let _ = try_transition(
+        k.partitions_mut(),
+        kernel::PartitionId::new(0),
+        PartitionState::Running,
+    );
 
     // Start schedule and set next partition before storing kernel
     let first_pid = kernel::svc::scheduler::start_schedule(&mut k).expect("schedule start failed");

@@ -126,8 +126,20 @@ fn main() -> ! {
     let mpu = MpuRegion::new(0, 0, 0);
     let e = EntryAddr::from_entry;
     let memories = [
-        ExternalPartitionMemory::new(s0, e(p0_main as PartitionEntry), mpu, 0).expect("mem 0"),
-        ExternalPartitionMemory::new(s1, e(p1_main as PartitionEntry), mpu, 1).expect("mem 1"),
+        ExternalPartitionMemory::new(
+            s0,
+            e(p0_main as PartitionEntry),
+            mpu,
+            kernel::PartitionId::new(0),
+        )
+        .expect("mem 0"),
+        ExternalPartitionMemory::new(
+            s1,
+            e(p1_main as PartitionEntry),
+            mpu,
+            kernel::PartitionId::new(1),
+        )
+        .expect("mem 1"),
     ];
     let mut k = Kernel::<Config>::new(sched, &memories).expect("tick_fairness: Kernel::create");
 

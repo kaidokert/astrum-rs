@@ -311,6 +311,7 @@ mod tests {
     use crate::partition::{ExternalPartitionMemory, MpuRegion};
     use crate::partition_core::AlignedStack256B;
     use crate::scheduler::{ScheduleEntry, ScheduleTable};
+    use rtos_traits::ids::PartitionId;
 
     struct TestConfig;
 
@@ -355,14 +356,14 @@ mod tests {
                 &mut stk0,
                 0x0800_1001,
                 MpuRegion::new(0, 0, 0),
-                0,
+                PartitionId::new(0),
             )
             .unwrap(),
             ExternalPartitionMemory::from_aligned_stack(
                 &mut stk1,
                 0x0800_2001,
                 MpuRegion::new(0, 0, 0),
-                1,
+                PartitionId::new(1),
             )
             .unwrap(),
         ];

@@ -27,22 +27,29 @@ mod tests {
     use crate::irq_dispatch::{ClearStrategy, IrqClearModel};
     use rtos_traits::syscall::SvcError;
 
-    const B: [IrqBinding; 2] = [IrqBinding::new(5, 0, 0x01), IrqBinding::new(10, 1, 0x02)];
+    const fn p(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
+
+    const B: [IrqBinding; 2] = [
+        IrqBinding::new(5, p(0), 0x01),
+        IrqBinding::new(10, p(1), 0x02),
+    ];
 
     #[test]
     fn delegates_to_irq_ack_inner() {
-        assert_eq!(handle_irq_ack(&B, 0, 5), 0);
-        assert_eq!(handle_irq_ack(&B, 1, 10), 0);
+        assert_eq!(handle_irq_ack(&B, p(0), 5), 0);
+        assert_eq!(handle_irq_ack(&B, p(1), 10), 0);
         assert_eq!(
-            handle_irq_ack(&B, 0, 99),
+            handle_irq_ack(&B, p(0), 99),
             SvcError::InvalidResource.to_u32()
         );
         assert_eq!(
-            handle_irq_ack(&B, 1, 5),
+            handle_irq_ack(&B, p(1), 5),
             SvcError::PermissionDenied.to_u32()
         );
         assert_eq!(
-            handle_irq_ack(&[], 0, 5),
+            handle_irq_ack(&[], p(0), 5),
             SvcError::InvalidResource.to_u32()
         );
     }
@@ -51,13 +58,16 @@ mod tests {
     fn kernel_clears_rejected() {
         let b = [IrqBinding::with_clear_model(
             7,
-            0,
+            p(0),
             0x01,
             IrqClearModel::KernelClears(ClearStrategy::ClearBit {
                 addr: 0x4000_0000,
                 bit: 3,
             }),
         )];
-        assert_eq!(handle_irq_ack(&b, 0, 7), SvcError::OperationFailed.to_u32());
+        assert_eq!(
+            handle_irq_ack(&b, p(0), 7),
+            SvcError::OperationFailed.to_u32()
+        );
     }
 }

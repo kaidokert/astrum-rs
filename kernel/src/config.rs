@@ -2904,6 +2904,7 @@ mod tests {
     #[test]
     fn config_max_periph_1_rejects_two_regions() {
         use crate::partition::{ExternalPartitionMemory, MpuRegion};
+        use rtos_traits::ids::PartitionId;
 
         #[repr(align(256))]
         struct Align256([u32; 64]);
@@ -2911,19 +2912,24 @@ mod tests {
         let mpu = MpuRegion::new(0x2000_0000, 256, 0);
         let r1 = MpuRegion::new(0x4000_0000, 256, 0);
         let r2 = MpuRegion::new(0x4000_1000, 4096, 0);
-        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, 0).unwrap();
+        let epm = ExternalPartitionMemory::new(&mut buf.0, 1, mpu, PartitionId::new(0)).unwrap();
         let result = epm.with_peripheral_regions_limited(
             &[r1, r2],
             ComposedMaxPeriphOne::MAX_PERIPHERAL_REGIONS,
         );
-        assert!(matches!(
-            result,
-            Err(crate::partition::ConfigError::TooManyPeripheralRegions {
-                partition_id: 0,
-                got: 2,
-                max: 1,
-            })
-        ));
+        let err = result.unwrap_err();
+        match err {
+            crate::partition::ConfigError::TooManyPeripheralRegions {
+                partition_id,
+                got,
+                max,
+            } => {
+                assert_eq!(partition_id, PartitionId::new(0));
+                assert_eq!(got, 2);
+                assert_eq!(max, 1);
+            }
+            other => panic!("expected TooManyPeripheralRegions, got {:?}", other),
+        }
     }
 
     compose_kernel_config!(

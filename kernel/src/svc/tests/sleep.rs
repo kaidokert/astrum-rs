@@ -1,4 +1,5 @@
 use super::*;
+use rtos_traits::ids::PartitionId;
 
 // -------------------------------------------------------------------------
 // Sleep and timed-wait expiry tests
@@ -63,7 +64,7 @@ fn test_dispatch(k: &mut Kernel<'_, TestConfig>, ef: &mut ExceptionFrame) {
 fn expire_timed_waits_wakes_sleeping_partition() {
     let mut k = kernel(0, 0, 0);
     k.partitions_mut().get_mut(0).unwrap().set_sleep_until(100);
-    k.sleep_queue.push(0, 100).unwrap();
+    k.sleep_queue.push(PartitionId::new(0), 100).unwrap();
     k.partitions_mut()
         .get_mut(0)
         .unwrap()
@@ -112,7 +113,7 @@ fn expire_timed_waits_sleep_transition_fail_preserves_sleep_until() {
         .transition(PartitionState::Ready)
         .unwrap();
     k.partitions_mut().get_mut(0).unwrap().set_sleep_until(50);
-    k.sleep_queue.push(0, 50).unwrap();
+    k.sleep_queue.push(PartitionId::new(0), 50).unwrap();
     k.expire_timed_waits::<8>(50);
     assert_eq!(k.partitions().get(0).unwrap().sleep_until(), 50);
     assert!(k.sleep_queue.is_empty());
@@ -157,7 +158,9 @@ fn sleep_ticks_queue_full_returns_error() {
     let mut k = kernel(0, 0, 0);
     k.sync_tick(10);
     for i in 0..4u8 {
-        let _ = k.sleep_queue.push(i, 1000 + i as u64);
+        let _ = k
+            .sleep_queue
+            .push(PartitionId::new(i as u32), 1000 + i as u64);
     }
     let mut ef = frame(crate::syscall::SYS_SLEEP_TICKS, 50, 0);
     test_dispatch(&mut k, &mut ef);
@@ -187,7 +190,7 @@ fn expire_timed_waits_wakes_blocked_receiver() {
     let mut buf = [0u8; 4];
     let outcome = k
         .queuing_mut()
-        .receive_queuing_message(dst, 0, &mut buf, 50, 100)
+        .receive_queuing_message(dst, PartitionId::new(0), &mut buf, 50, 100)
         .unwrap();
     assert_eq!(
         outcome,
@@ -229,7 +232,10 @@ fn expire_timed_waits_wakes_blocked_sender() {
 
     // Fill the destination queue (depth=4).
     for i in 0..4u8 {
-        let outcome = k.queuing_mut().send_routed(src, 0, &[i; 4], 0, 0).unwrap();
+        let outcome = k
+            .queuing_mut()
+            .send_routed(src, PartitionId::new(0), &[i; 4], 0, 0)
+            .unwrap();
         assert!(matches!(outcome, SendQueuingOutcome::Delivered { .. }));
     }
 
@@ -237,7 +243,7 @@ fn expire_timed_waits_wakes_blocked_sender() {
     // Queue is full so the sender blocks with expiry=150.
     let outcome = k
         .queuing_mut()
-        .send_routed(src, 1, &[0xFF; 4], 100, 50)
+        .send_routed(src, PartitionId::new(1), &[0xFF; 4], 100, 50)
         .unwrap();
     assert_eq!(
         outcome,
@@ -278,7 +284,7 @@ fn expire_timed_waits_non_expired_stays_waiting() {
     let mut buf = [0u8; 4];
     let outcome = k
         .queuing_mut()
-        .receive_queuing_message(dst, 0, &mut buf, 100, 100)
+        .receive_queuing_message(dst, PartitionId::new(0), &mut buf, 100, 100)
         .unwrap();
     assert_eq!(
         outcome,
@@ -311,7 +317,9 @@ fn expire_timed_waits_non_expired_stays_waiting() {
 #[test]
 fn expire_timed_waits_device_reader_expiry() {
     let mut k = kernel(0, 0, 0);
-    k.dev_wait_queue_mut().block_reader(0, 100).unwrap();
+    k.dev_wait_queue_mut()
+        .block_reader(PartitionId::new(0), 100)
+        .unwrap();
     k.partitions_mut()
         .get_mut(0)
         .unwrap()

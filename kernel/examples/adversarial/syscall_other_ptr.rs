@@ -126,14 +126,14 @@ fn main() -> ! {
         &mut stack0.0,
         EntryAddr::from_entry(p0_main as PartitionEntry),
         sentinel_mpu,
-        0,
+        kernel::PartitionId::new(0),
     )
     .expect("ext mem 0");
     let mem1 = ExternalPartitionMemory::new(
         &mut stack1.0,
         EntryAddr::from_entry(p1_main as PartitionEntry),
         sentinel_mpu,
-        1,
+        kernel::PartitionId::new(1),
     )
     .expect("ext mem 1");
     let mems: [ExternalPartitionMemory; NUM_PARTITIONS] = [mem0, mem1];

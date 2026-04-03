@@ -1,4 +1,5 @@
 use crate::waitqueue::WaitQueue;
+use rtos_traits::ids::PartitionId;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MsgError {
@@ -12,10 +13,10 @@ pub enum MsgError {
 pub enum SendOutcome {
     /// Message was enqueued. If `wake_receiver` is `Some(pid)`, the kernel
     /// should transition that partition from Waiting to Ready.
-    Delivered { wake_receiver: Option<u8> },
+    Delivered { wake_receiver: Option<PartitionId> },
     /// Queue was full; the caller (pid = `blocked`) has been placed on the
     /// sender wait-queue. The kernel should transition it to Waiting.
-    SenderBlocked { blocked: u8 },
+    SenderBlocked { blocked: PartitionId },
 }
 
 /// Outcome of a successful `recv` operation.
@@ -24,10 +25,10 @@ pub enum RecvOutcome {
     /// A message was dequeued into the caller's buffer. If `wake_sender` is
     /// `Some(pid)`, the kernel should transition that partition from Waiting
     /// to Ready.
-    Received { wake_sender: Option<u8> },
+    Received { wake_sender: Option<PartitionId> },
     /// Queue was empty; the caller (pid = `blocked`) has been placed on the
     /// receiver wait-queue. The kernel should transition it to Waiting.
-    ReceiverBlocked { blocked: u8 },
+    ReceiverBlocked { blocked: PartitionId },
 }
 
 /// Fixed-depth, fixed-message-size queue with independent const-generic
@@ -68,12 +69,13 @@ impl<const D: usize, const M: usize, const W: usize> MessageQueue<D, M, W> {
         let dst = msg.get_mut(..M).ok_or(MsgError::SizeMismatch)?;
         let src = data.get(..M).ok_or(MsgError::SizeMismatch)?;
         dst.copy_from_slice(src);
+        let caller_pid = PartitionId::new(caller as u32);
         if self.buf.push_back(msg).is_err() {
             self.sender_wq
-                .push(caller as u8)
+                .push(caller_pid)
                 .map_err(|_| MsgError::WaitQueueFull)?;
             return Ok(SendOutcome::SenderBlocked {
-                blocked: caller as u8,
+                blocked: caller_pid,
             });
         }
         let wake = self.receiver_wq.pop_front();
@@ -99,11 +101,12 @@ impl<const D: usize, const M: usize, const W: usize> MessageQueue<D, M, W> {
             let wake = self.sender_wq.pop_front();
             return Ok(RecvOutcome::Received { wake_sender: wake });
         }
+        let caller_pid = PartitionId::new(caller as u32);
         self.receiver_wq
-            .push(caller as u8)
+            .push(caller_pid)
             .map_err(|_| MsgError::WaitQueueFull)?;
         Ok(RecvOutcome::ReceiverBlocked {
-            blocked: caller as u8,
+            blocked: caller_pid,
         })
     }
 
@@ -171,6 +174,10 @@ impl<const S: usize, const D: usize, const M: usize, const W: usize> MessagePool
 mod tests {
     use super::*;
 
+    fn pid(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
+
     #[test]
     fn send_and_recv_basic() {
         let mut q = MessageQueue::<4, 4, 4>::new();
@@ -206,7 +213,7 @@ mod tests {
         q.send(0, &[1; 4]).unwrap();
         q.send(0, &[2; 4]).unwrap();
         let outcome = q.send(1, &[3; 4]).unwrap();
-        assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: 1 });
+        assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: pid(1) });
     }
 
     #[test]
@@ -215,14 +222,14 @@ mod tests {
         q.send(0, &[1; 4]).unwrap();
         // Queue full, sender 1 blocks
         let outcome = q.send(1, &[2; 4]).unwrap();
-        assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: 1 });
+        assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: pid(1) });
         // Recv should pop a message and report that sender 1 can be woken
         let mut buf = [0u8; 4];
         let outcome = q.recv(2, &mut buf).unwrap();
         assert_eq!(
             outcome,
             RecvOutcome::Received {
-                wake_sender: Some(1)
+                wake_sender: Some(pid(1))
             }
         );
         assert_eq!(buf, [1; 4]);
@@ -233,7 +240,7 @@ mod tests {
         let mut q = MessageQueue::<4, 4, 4>::new();
         let mut buf = [0u8; 4];
         let outcome = q.recv(0, &mut buf).unwrap();
-        assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: 0 });
+        assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: pid(0) });
     }
 
     #[test]
@@ -242,13 +249,13 @@ mod tests {
         // Receiver 0 blocks on empty queue
         let mut buf = [0u8; 4];
         let outcome = q.recv(0, &mut buf).unwrap();
-        assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: 0 });
+        assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: pid(0) });
         // Send should deliver and report that receiver 0 can be woken
         let outcome = q.send(1, &[5, 6, 7, 8]).unwrap();
         assert_eq!(
             outcome,
             SendOutcome::Delivered {
-                wake_receiver: Some(0)
+                wake_receiver: Some(pid(0))
             }
         );
     }

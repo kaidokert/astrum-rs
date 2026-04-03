@@ -249,7 +249,7 @@ macro_rules! define_unified_harness {
                     let dyn_region = pcb.cached_dynamic_region();
                     let periph_reserved = pcb.peripheral_regions().len();
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
-                        &HARNESS_STRATEGY, pid, &[dyn_region], periph_reserved,
+                        &HARNESS_STRATEGY, rtos_traits::ids::PartitionId::new(pid as u32), &[dyn_region], periph_reserved,
                     )
                     // TODO: preserves only a static string; consider logging the
                     // underlying strategy error once we have a boot-time log sink.
@@ -279,7 +279,7 @@ macro_rules! define_unified_harness {
                     let other_dyn = other_pcb.cached_dynamic_region();
                     let other_periph = other_pcb.peripheral_regions().len();
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
-                        &HARNESS_STRATEGY, other_pid, &[other_dyn], other_periph,
+                        &HARNESS_STRATEGY, rtos_traits::ids::PartitionId::new(other_pid as u32), &[other_dyn], other_periph,
                     ).map_err(|_| "failed to configure non-boot partition")?;
                 }
 
@@ -366,7 +366,7 @@ macro_rules! define_unified_harness {
             // Write per-partition R4-R7 strategy regions
             // (peripherals, RAM, cross-partition filtering) and re-enable.
             if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
-                let values = HARNESS_STRATEGY.partition_region_values(pid);
+                let values = HARNESS_STRATEGY.partition_region_values(rtos_traits::ids::PartitionId::new(pid as u32));
                 for &(rbar, rasr) in &values {
                     $crate::mpu::configure_region(&p.MPU, rbar, rasr);
                 }
@@ -444,7 +444,7 @@ macro_rules! define_unified_harness {
             let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
-                let mem = ExternalPartitionMemory::from_spec(stk, spec, i as u8)
+                let mem = ExternalPartitionMemory::from_spec(stk, spec, rtos_traits::ids::PartitionId::new(i as u32))
                     .map_err(|e| {
                         $crate::klog!("init_kernel failed: {:?}", e);
                         $crate::harness::BootError::KernelInit(e)
@@ -544,7 +544,7 @@ macro_rules! define_unified_harness {
             let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
-                let mem = ExternalPartitionMemory::from_spec(stk, spec, i as u8)
+                let mem = ExternalPartitionMemory::from_spec(stk, spec, rtos_traits::ids::PartitionId::new(i as u32))
                     .map_err(|e| {
                         $crate::klog!("init_kernel failed: {:?}", e);
                         $crate::harness::BootError::KernelInit(e)
@@ -593,6 +593,7 @@ mod tests {
     use crate::config::KernelConfig;
     use crate::kernel_config_types;
     use core::fmt::Write;
+    use rtos_traits::ids::PartitionId;
 
     /// Fixed-size buffer for formatting in no_std tests.
     struct FmtBuf {
@@ -659,7 +660,9 @@ mod tests {
         );
 
         // Verify with StackInitFailed variant
-        let ce2 = ConfigError::StackInitFailed { partition_id: 3 };
+        let ce2 = ConfigError::StackInitFailed {
+            partition_id: PartitionId::new(3),
+        };
         let err2 = BootError::KernelInit(ce2);
         let mut buf2 = FmtBuf::new();
         write!(&mut buf2, "{}", err2).unwrap();
@@ -920,13 +923,13 @@ mod tests {
         let even_entry = 0x0800_1234u32;
 
         // Replicate the harness init_kernel() pattern:
-        //   ExternalPartitionMemory::from_aligned_stack(stk, spec.entry_point(), sentinel_mpu, i as u8)
+        //   ExternalPartitionMemory::from_aligned_stack(stk, spec.entry_point(), sentinel_mpu, PartitionId::new(i as u32))
         //       .map_err(|e| BootError::KernelInit(e))?
         let boot_err = ExternalPartitionMemory::new(
             stack.as_u32_slice_mut(),
             even_entry,
             sentinel_mpu,
-            3u8, // partition_id
+            PartitionId::new(3), // partition_id
         )
         .map_err(BootError::KernelInit)
         .expect_err("even entry point must be rejected");
@@ -937,7 +940,7 @@ mod tests {
                 partition_id,
                 entry_point,
             }) => {
-                assert_eq!(*partition_id, 3);
+                assert_eq!(*partition_id, PartitionId::new(3));
                 assert_eq!(*entry_point, even_entry);
             }
             other => panic!("expected BootError::KernelInit(EntryPointNotThumb), got: {other:?}"),
@@ -1015,10 +1018,10 @@ mod tests {
 
         let mut stack0 = AlignedStack256B::default();
         let mut stack1 = AlignedStack256B::default();
-        let mem0 =
-            ExternalPartitionMemory::from_spec(&mut stack0, &spec0, 0).expect("from_spec P0");
-        let mem1 =
-            ExternalPartitionMemory::from_spec(&mut stack1, &spec1, 1).expect("from_spec P1");
+        let mem0 = ExternalPartitionMemory::from_spec(&mut stack0, &spec0, PartitionId::new(0))
+            .expect("from_spec P0");
+        let mem1 = ExternalPartitionMemory::from_spec(&mut stack1, &spec1, PartitionId::new(1))
+            .expect("from_spec P1");
 
         let k = Kernel::<Cfg>::new(sched, &[mem0, mem1]).expect("kernel init");
 
@@ -1062,8 +1065,8 @@ mod tests {
         let spec = PartitionSpec::from_raw_entry(0x0800_0001, 0);
 
         let mut stack = AlignedStack256B::default();
-        let mem =
-            ExternalPartitionMemory::from_spec(&mut stack, &spec, 0).expect("from_spec default");
+        let mem = ExternalPartitionMemory::from_spec(&mut stack, &spec, PartitionId::new(0))
+            .expect("from_spec default");
 
         let k = Kernel::<Cfg2>::new(sched, core::slice::from_ref(&mem))
             .expect("kernel init with defaults");

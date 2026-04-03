@@ -24,7 +24,7 @@ pub fn signal_partition_inner<const N: usize>(
     let was_waiting = t
         .get(target)
         .is_some_and(|p| p.state() == PartitionState::Waiting);
-    events::event_set(t, target, event_bits);
+    events::event_set(t, PartitionId::new(target as u32), event_bits);
     was_waiting
         && t.get(target)
             .is_some_and(|p| p.state() == PartitionState::Ready)
@@ -325,7 +325,7 @@ mod tests {
     fn signal_waiting_with_matching_mask_wakes() {
         let mut t = tbl();
         // Put partition 0 into Waiting on bit 0.
-        events::event_wait(&mut t, 0, 0b0001);
+        events::event_wait(&mut t, p(0), 0b0001);
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
 
         let woke = signal_partition_inner(&mut t, 0, 0b0001);
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn signal_waiting_with_nonmatching_mask_stays_waiting() {
         let mut t = tbl();
-        events::event_wait(&mut t, 0, 0b0001);
+        events::event_wait(&mut t, p(0), 0b0001);
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
 
         let woke = signal_partition_inner(&mut t, 0, 0b1100);
@@ -380,7 +380,7 @@ mod tests {
             .unwrap()
             .transition(PartitionState::Running)
             .unwrap();
-        events::event_wait(&mut t, 3, 0b0001);
+        events::event_wait(&mut t, p(3), 0b0001);
         assert_eq!(t.get(3).unwrap().state(), PartitionState::Waiting);
 
         let woke = signal_partition_inner(&mut t, 3, 0b0001);
@@ -396,7 +396,7 @@ mod tests {
     fn multiple_signals_accumulate_flags() {
         let mut t = tbl();
         // Put partition 0 into Waiting on bits 0 and 1.
-        events::event_wait(&mut t, 0, 0b0011);
+        events::event_wait(&mut t, p(0), 0b0011);
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
 
         // First signal: bit 2 — no overlap with wait mask.
@@ -415,9 +415,9 @@ mod tests {
 
     #[test]
     fn new_constructor_sets_fields() {
-        let b = IrqBinding::new(7, 2, 0x0000_0010);
+        let b = IrqBinding::new(7, p(2), 0x0000_0010);
         assert_eq!(b.irq_num, 7);
-        assert_eq!(b.partition_id, 2);
+        assert_eq!(b.partition_id, p(2));
         assert_eq!(b.event_bits, 0x0000_0010);
         assert_eq!(b.clear_model, IrqClearModel::PartitionAcks);
     }
@@ -426,7 +426,7 @@ mod tests {
     fn direct_struct_construction() {
         let b = IrqBinding {
             irq_num: 15,
-            partition_id: 0,
+            partition_id: p(0),
             event_bits: 0xDEAD_BEEF,
             clear_model: IrqClearModel::KernelClears(ClearStrategy::ClearBit {
                 addr: 0x400,
@@ -434,7 +434,7 @@ mod tests {
             }),
         };
         assert_eq!(b.irq_num, 15);
-        assert_eq!(b.partition_id, 0);
+        assert_eq!(b.partition_id, p(0));
         assert_eq!(b.event_bits, 0xDEAD_BEEF);
         assert_eq!(
             b.clear_model,
@@ -447,16 +447,16 @@ mod tests {
 
     #[test]
     fn const_construction() {
-        const BINDING: IrqBinding = IrqBinding::new(3, 1, 0x01);
+        const BINDING: IrqBinding = IrqBinding::new(3, p(1), 0x01);
         assert_eq!(BINDING.irq_num, 3);
-        assert_eq!(BINDING.partition_id, 1);
+        assert_eq!(BINDING.partition_id, p(1));
         assert_eq!(BINDING.event_bits, 0x01);
         assert_eq!(BINDING.clear_model, IrqClearModel::PartitionAcks);
     }
 
     #[test]
     fn new_defaults_to_partition_acks() {
-        let b = IrqBinding::new(1, 0, 0x10);
+        let b = IrqBinding::new(1, p(0), 0x10);
         assert_eq!(b.clear_model, IrqClearModel::PartitionAcks);
     }
 
@@ -466,16 +466,16 @@ mod tests {
             addr: 0xE000_E280,
             value: 1 << 7,
         };
-        let b = IrqBinding::with_clear_model(7, 0, 0x01, IrqClearModel::KernelClears(strategy));
+        let b = IrqBinding::with_clear_model(7, p(0), 0x01, IrqClearModel::KernelClears(strategy));
         assert_eq!(b.irq_num, 7);
-        assert_eq!(b.partition_id, 0);
+        assert_eq!(b.partition_id, p(0));
         assert_eq!(b.event_bits, 0x01);
         assert_eq!(b.clear_model, IrqClearModel::KernelClears(strategy));
     }
 
     #[test]
     fn with_clear_model_stores_partition_acks() {
-        let b = IrqBinding::with_clear_model(3, 1, 0x04, IrqClearModel::PartitionAcks);
+        let b = IrqBinding::with_clear_model(3, p(1), 0x04, IrqClearModel::PartitionAcks);
         assert_eq!(b.clear_model, IrqClearModel::PartitionAcks);
     }
 
@@ -483,7 +483,7 @@ mod tests {
     fn with_clear_model_const_evaluation() {
         const B: IrqBinding = IrqBinding::with_clear_model(
             9,
-            2,
+            p(2),
             0x08,
             IrqClearModel::KernelClears(ClearStrategy::ClearBit {
                 addr: 0x300,
@@ -491,7 +491,7 @@ mod tests {
             }),
         );
         assert_eq!(B.irq_num, 9);
-        assert_eq!(B.partition_id, 2);
+        assert_eq!(B.partition_id, p(2));
         assert_eq!(B.event_bits, 0x08);
         assert_eq!(
             B.clear_model,
@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn clone_produces_equal_value() {
-        let a = IrqBinding::new(10, 3, 0xFF);
+        let a = IrqBinding::new(10, p(3), 0xFF);
         // Call Clone::clone explicitly through a reference to avoid clone_on_copy lint.
         let b = Clone::clone(&a);
         assert_eq!(a, b);
@@ -512,59 +512,59 @@ mod tests {
 
     #[test]
     fn copy_semantics() {
-        let a = IrqBinding::new(10, 3, 0xFF);
+        let a = IrqBinding::new(10, p(3), 0xFF);
         let b = a; // Copy
         assert_eq!(a, b); // `a` still usable — Copy
     }
 
     #[test]
     fn partial_eq_detects_difference() {
-        let a = IrqBinding::new(1, 2, 3);
-        let b = IrqBinding::new(1, 2, 4);
+        let a = IrqBinding::new(1, p(2), 3);
+        let b = IrqBinding::new(1, p(2), 4);
         assert_ne!(a, b);
     }
 
     #[test]
     fn debug_format_contains_fields() {
-        let b = IrqBinding::new(5, 1, 0x80);
+        let b = IrqBinding::new(5, p(1), 0x80);
         let dbg = format!("{:?}", b);
         assert!(dbg.contains("IrqBinding"));
         assert!(dbg.contains("irq_num: 5"));
-        assert!(dbg.contains("partition_id: 1"));
+        assert!(dbg.contains("PartitionId(1)"));
         assert!(dbg.contains("event_bits: 128"));
     }
 
     #[test]
     fn boundary_values() {
-        let b = IrqBinding::new(u8::MAX, u8::MAX, u32::MAX);
+        let b = IrqBinding::new(u8::MAX, p(u32::MAX), u32::MAX);
         assert_eq!(b.irq_num, 255);
-        assert_eq!(b.partition_id, 255);
+        assert_eq!(b.partition_id, p(u32::MAX));
         assert_eq!(b.event_bits, u32::MAX);
 
-        let z = IrqBinding::new(0, 0, 0);
+        let z = IrqBinding::new(0, p(0), 0);
         assert_eq!(z.irq_num, 0);
-        assert_eq!(z.partition_id, 0);
+        assert_eq!(z.partition_id, p(0));
         assert_eq!(z.event_bits, 0);
     }
 
     #[test]
     fn const_array_of_bindings() {
         const TABLE: [IrqBinding; 3] = [
-            IrqBinding::new(0, 0, 0x01),
-            IrqBinding::new(1, 0, 0x02),
-            IrqBinding::new(2, 1, 0x04),
+            IrqBinding::new(0, p(0), 0x01),
+            IrqBinding::new(1, p(0), 0x02),
+            IrqBinding::new(2, p(1), 0x04),
         ];
         assert_eq!(TABLE[0].irq_num, 0);
         assert_eq!(TABLE[1].event_bits, 0x02);
-        assert_eq!(TABLE[2].partition_id, 1);
+        assert_eq!(TABLE[2].partition_id, p(1));
     }
 
     // ---- lookup_binding tests ----
 
     const BINDINGS: [IrqBinding; 3] = [
-        IrqBinding::new(5, 0, 0x01),
-        IrqBinding::new(10, 1, 0x02),
-        IrqBinding::new(15, 2, 0x04),
+        IrqBinding::new(5, p(0), 0x01),
+        IrqBinding::new(10, p(1), 0x02),
+        IrqBinding::new(15, p(2), 0x04),
     ];
 
     #[test]
@@ -595,9 +595,9 @@ mod tests {
     #[test]
     fn lookup_binding_returns_first_match() {
         const DUPS: [IrqBinding; 3] = [
-            IrqBinding::new(7, 0, 0x01),
-            IrqBinding::new(7, 1, 0x02),
-            IrqBinding::new(7, 2, 0x04),
+            IrqBinding::new(7, p(0), 0x01),
+            IrqBinding::new(7, p(1), 0x02),
+            IrqBinding::new(7, p(2), 0x04),
         ];
         assert_eq!(lookup_binding(&DUPS, 7), Some(0));
     }
@@ -620,7 +620,7 @@ mod tests {
 
     #[test]
     fn build_direct_table_single_binding() {
-        const SINGLE: [IrqBinding; 1] = [IrqBinding::new(3, 0, 0x01)];
+        const SINGLE: [IrqBinding; 1] = [IrqBinding::new(3, p(0), 0x01)];
         const TABLE: [u8; 8] = build_direct_table::<8>(&SINGLE);
         assert_eq!(TABLE[3], 0);
         assert_eq!(TABLE[0], 0xFF);
@@ -630,9 +630,9 @@ mod tests {
     #[test]
     fn build_direct_table_multiple_with_gaps() {
         const MULTI: [IrqBinding; 3] = [
-            IrqBinding::new(1, 0, 0x01),
-            IrqBinding::new(5, 1, 0x02),
-            IrqBinding::new(7, 2, 0x04),
+            IrqBinding::new(1, p(0), 0x01),
+            IrqBinding::new(5, p(1), 0x02),
+            IrqBinding::new(7, p(2), 0x04),
         ];
         const TABLE: [u8; 10] = build_direct_table::<10>(&MULTI);
         assert_eq!(TABLE[1], 0);
@@ -649,7 +649,10 @@ mod tests {
 
     #[test]
     fn build_direct_table_out_of_range_ignored() {
-        const OOR: [IrqBinding; 2] = [IrqBinding::new(2, 0, 0x01), IrqBinding::new(15, 1, 0x02)];
+        const OOR: [IrqBinding; 2] = [
+            IrqBinding::new(2, p(0), 0x01),
+            IrqBinding::new(15, p(1), 0x02),
+        ];
         const TABLE: [u8; 8] = build_direct_table::<8>(&OOR);
         assert_eq!(TABLE[2], 0);
         for (i, &slot) in TABLE.iter().enumerate() {
@@ -669,9 +672,9 @@ mod tests {
     #[test]
     fn has_duplicate_irqs_true_for_duplicates() {
         const DUPS: [IrqBinding; 3] = [
-            IrqBinding::new(5, 0, 0x01),
-            IrqBinding::new(10, 1, 0x02),
-            IrqBinding::new(5, 2, 0x04),
+            IrqBinding::new(5, p(0), 0x01),
+            IrqBinding::new(10, p(1), 0x02),
+            IrqBinding::new(5, p(2), 0x04),
         ];
         assert!(has_duplicate_irqs(&DUPS));
     }
@@ -683,13 +686,16 @@ mod tests {
 
     #[test]
     fn has_duplicate_irqs_false_for_single() {
-        const ONE: [IrqBinding; 1] = [IrqBinding::new(3, 0, 0x01)];
+        const ONE: [IrqBinding; 1] = [IrqBinding::new(3, p(0), 0x01)];
         assert!(!has_duplicate_irqs(&ONE));
     }
 
     #[test]
     fn has_duplicate_irqs_adjacent_duplicates() {
-        const ADJ: [IrqBinding; 2] = [IrqBinding::new(8, 0, 0x01), IrqBinding::new(8, 1, 0x02)];
+        const ADJ: [IrqBinding; 2] = [
+            IrqBinding::new(8, p(0), 0x01),
+            IrqBinding::new(8, p(1), 0x02),
+        ];
         assert!(has_duplicate_irqs(&ADJ));
     }
 
@@ -697,13 +703,13 @@ mod tests {
     fn has_duplicate_irqs_usable_in_const() {
         const {
             assert!(!has_duplicate_irqs(&[
-                IrqBinding::new(5, 0, 0x01),
-                IrqBinding::new(10, 1, 0x02),
-                IrqBinding::new(15, 2, 0x04),
+                IrqBinding::new(5, p(0), 0x01),
+                IrqBinding::new(10, p(1), 0x02),
+                IrqBinding::new(15, p(2), 0x04),
             ]));
             assert!(has_duplicate_irqs(&[
-                IrqBinding::new(1, 0, 0x01),
-                IrqBinding::new(1, 1, 0x02),
+                IrqBinding::new(1, p(0), 0x01),
+                IrqBinding::new(1, p(1), 0x02),
             ]));
         }
     }
@@ -713,9 +719,9 @@ mod tests {
     #[test]
     fn has_invalid_partition_id_false_for_valid() {
         const TABLE: [IrqBinding; 3] = [
-            IrqBinding::new(0, 0, 0x01),
-            IrqBinding::new(1, 1, 0x02),
-            IrqBinding::new(2, 2, 0x04),
+            IrqBinding::new(0, p(0), 0x01),
+            IrqBinding::new(1, p(1), 0x02),
+            IrqBinding::new(2, p(2), 0x04),
         ];
         assert!(!has_invalid_partition_id(&TABLE, 4));
     }
@@ -723,9 +729,9 @@ mod tests {
     #[test]
     fn has_invalid_partition_id_true_for_out_of_range() {
         const TABLE: [IrqBinding; 3] = [
-            IrqBinding::new(0, 0, 0x01),
-            IrqBinding::new(1, 5, 0x02), // partition 5 >= max 4
-            IrqBinding::new(2, 1, 0x04),
+            IrqBinding::new(0, p(0), 0x01),
+            IrqBinding::new(1, p(5), 0x02), // partition 5 >= max 4
+            IrqBinding::new(2, p(1), 0x04),
         ];
         assert!(has_invalid_partition_id(&TABLE, 4));
     }
@@ -738,13 +744,13 @@ mod tests {
     #[test]
     fn has_invalid_partition_id_boundary_equal_is_invalid() {
         // partition_id == max_partitions is out of range
-        const TABLE: [IrqBinding; 1] = [IrqBinding::new(0, 4, 0x01)];
+        const TABLE: [IrqBinding; 1] = [IrqBinding::new(0, p(4), 0x01)];
         assert!(has_invalid_partition_id(&TABLE, 4));
     }
 
     #[test]
     fn has_invalid_partition_id_boundary_max_minus_one_is_valid() {
-        const TABLE: [IrqBinding; 1] = [IrqBinding::new(0, 3, 0x01)];
+        const TABLE: [IrqBinding; 1] = [IrqBinding::new(0, p(3), 0x01)];
         assert!(!has_invalid_partition_id(&TABLE, 4));
     }
 
@@ -752,10 +758,16 @@ mod tests {
     fn has_invalid_partition_id_usable_in_const() {
         const {
             assert!(!has_invalid_partition_id(
-                &[IrqBinding::new(0, 0, 0x01), IrqBinding::new(1, 1, 0x02),],
+                &[
+                    IrqBinding::new(0, p(0), 0x01),
+                    IrqBinding::new(1, p(1), 0x02),
+                ],
                 2,
             ));
-            assert!(has_invalid_partition_id(&[IrqBinding::new(0, 2, 0x01)], 2,));
+            assert!(has_invalid_partition_id(
+                &[IrqBinding::new(0, p(2), 0x01)],
+                2,
+            ));
         }
     }
 
@@ -763,22 +775,25 @@ mod tests {
 
     #[test]
     fn has_zero_event_bits_true_for_single_zero() {
-        const TABLE: [IrqBinding; 1] = [IrqBinding::new(0, 0, 0)];
+        const TABLE: [IrqBinding; 1] = [IrqBinding::new(0, p(0), 0)];
         assert!(has_zero_event_bits(&TABLE));
     }
 
     #[test]
     fn has_zero_event_bits_false_for_nonzero() {
-        const TABLE: [IrqBinding; 2] = [IrqBinding::new(0, 0, 0x01), IrqBinding::new(1, 1, 0x02)];
+        const TABLE: [IrqBinding; 2] = [
+            IrqBinding::new(0, p(0), 0x01),
+            IrqBinding::new(1, p(1), 0x02),
+        ];
         assert!(!has_zero_event_bits(&TABLE));
     }
 
     #[test]
     fn has_zero_event_bits_true_when_any_zero_in_multi() {
         const TABLE: [IrqBinding; 3] = [
-            IrqBinding::new(0, 0, 0x01),
-            IrqBinding::new(1, 1, 0),
-            IrqBinding::new(2, 0, 0x04),
+            IrqBinding::new(0, p(0), 0x01),
+            IrqBinding::new(1, p(1), 0),
+            IrqBinding::new(2, p(0), 0x04),
         ];
         assert!(has_zero_event_bits(&TABLE));
     }
@@ -791,8 +806,8 @@ mod tests {
     #[test]
     fn has_zero_event_bits_usable_in_const() {
         const {
-            assert!(has_zero_event_bits(&[IrqBinding::new(0, 0, 0)]));
-            assert!(!has_zero_event_bits(&[IrqBinding::new(0, 0, 1)]));
+            assert!(has_zero_event_bits(&[IrqBinding::new(0, p(0), 0)]));
+            assert!(!has_zero_event_bits(&[IrqBinding::new(0, p(0), 1)]));
         }
     }
 
@@ -921,10 +936,10 @@ mod tests {
     #[test]
     fn lookup_mixed_clear_models_preserves_variant() {
         const MIXED: [IrqBinding; 3] = [
-            IrqBinding::new(5, 0, 0x01), // PartitionAcks (default)
+            IrqBinding::new(5, p(0), 0x01), // PartitionAcks (default)
             IrqBinding::with_clear_model(
                 10,
-                1,
+                p(1),
                 0x02,
                 IrqClearModel::KernelClears(ClearStrategy::WriteRegister {
                     addr: 0xE000_E280,
@@ -933,7 +948,7 @@ mod tests {
             ),
             IrqBinding::with_clear_model(
                 15,
-                2,
+                p(2),
                 0x04,
                 IrqClearModel::KernelClears(ClearStrategy::ClearBit {
                     addr: 0x4001_0000,
@@ -1025,7 +1040,7 @@ mod tests {
         assert!(!woken, "running partition must not report woken");
 
         // Transition partition 1 to Waiting, then signal it.
-        events::event_wait(&mut t, 1, 0b0010);
+        events::event_wait(&mut t, p(1), 0b0010);
         let woken = signal_partition_inner(&mut t, 1, 0b0010);
         assert!(
             woken,
@@ -1054,9 +1069,9 @@ mod tests {
         // Exercise build_direct_table at runtime (not const) so that
         // llvm-cov instruments the function body.
         let bindings = [
-            IrqBinding::new(0, 0, 0x01),
-            IrqBinding::new(3, 1, 0x02),
-            IrqBinding::new(9, 2, 0x04), // out of range for N=8
+            IrqBinding::new(0, p(0), 0x01),
+            IrqBinding::new(3, p(1), 0x02),
+            IrqBinding::new(9, p(2), 0x04), // out of range for N=8
         ];
         let table: [u8; 8] = build_direct_table::<8>(&bindings);
         assert_eq!(table[0], 0, "IRQ 0 should map to binding index 0");
@@ -1089,7 +1104,7 @@ mod tests {
             .unwrap()
             .transition(PartitionState::Running)
             .unwrap();
-        events::event_wait(&mut t, 3, 0b0010);
+        events::event_wait(&mut t, p(3), 0b0010);
         assert_eq!(t.get(3).unwrap().state(), PartitionState::Waiting);
 
         let woke = signal_partition_inner(&mut t, 3, 0b0010);
@@ -1103,7 +1118,7 @@ mod tests {
         // change the partition's existing event flags.
         let mut t = tbl();
         // Put partition 0 into Waiting on bit 0.
-        events::event_wait(&mut t, 0, 0b0001);
+        events::event_wait(&mut t, p(0), 0b0001);
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
         assert_eq!(t.get(0).unwrap().event_flags(), 0);
 
@@ -1118,7 +1133,7 @@ mod tests {
         // First signal wakes; second signal with same bits must return
         // false (partition is now Ready, not Waiting).
         let mut t = tbl();
-        events::event_wait(&mut t, 0, 0b0001);
+        events::event_wait(&mut t, p(0), 0b0001);
         assert_eq!(t.get(0).unwrap().state(), PartitionState::Waiting);
 
         let woke1 = signal_partition_inner(&mut t, 0, 0b0001);

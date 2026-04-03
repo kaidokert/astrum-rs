@@ -175,7 +175,7 @@ fn main() -> ! {
                 stk,
                 entry_fns[i],
                 MpuRegion::new(0, 0, 0),
-                i as u8,
+                kernel::PartitionId::new(i as u32),
             )
             .expect("mem")
         });

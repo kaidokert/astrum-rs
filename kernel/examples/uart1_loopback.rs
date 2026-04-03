@@ -403,10 +403,20 @@ fn main() -> ! {
         let base1 = s1.0.as_ptr() as u32;
         // TODO: pass PartitionEntry instead of raw 0 once partitions have real entry functions
         let memories = [
-            ExternalPartitionMemory::new(&mut s0.0, 0, MpuRegion::new(base0, STACK_BYTES, 0), 0)
-                .expect("ext mem"),
-            ExternalPartitionMemory::new(&mut s1.0, 0, MpuRegion::new(base1, STACK_BYTES, 0), 1)
-                .expect("ext mem"),
+            ExternalPartitionMemory::new(
+                &mut s0.0,
+                0,
+                MpuRegion::new(base0, STACK_BYTES, 0),
+                kernel::PartitionId::new(0),
+            )
+            .expect("ext mem"),
+            ExternalPartitionMemory::new(
+                &mut s1.0,
+                0,
+                MpuRegion::new(base1, STACK_BYTES, 0),
+                kernel::PartitionId::new(1),
+            )
+            .expect("ext mem"),
         ];
         Kernel::<DemoConfig>::new(sched, &memories).expect("kernel creation")
     };

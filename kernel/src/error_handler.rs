@@ -118,7 +118,7 @@ impl From<FaultDetails> for ErrorStatus {
     fn from(fd: FaultDetails) -> Self {
         Self {
             kind: classify_cfsr(fd.cfsr),
-            failed_partition: fd.partition_id,
+            failed_partition: fd.partition_id.as_raw() as u8,
             faulting_addr: fd.mmfar,
             cfsr: fd.cfsr,
             faulting_pc: fd.faulting_pc,
@@ -130,6 +130,10 @@ impl From<FaultDetails> for ErrorStatus {
 mod tests {
     use super::*;
     use crate::fault::*;
+    use rtos_traits::ids::PartitionId;
+    fn pid(v: u32) -> PartitionId {
+        PartitionId::new(v)
+    }
 
     // ── FaultKind traits ───────────────────────────────────────────
 
@@ -238,7 +242,12 @@ mod tests {
 
     #[test]
     fn from_fault_details_memmanage() {
-        let fd = FaultDetails::new(3, CFSR_DACCVIOL | CFSR_MMARVALID, 0x2000_1000, 0x0800_0ABC);
+        let fd = FaultDetails::new(
+            pid(3),
+            CFSR_DACCVIOL | CFSR_MMARVALID,
+            0x2000_1000,
+            0x0800_0ABC,
+        );
         let es: ErrorStatus = fd.into();
         assert_eq!(es.kind(), FaultKind::MemManage);
         assert_eq!(es.failed_partition(), 3);
@@ -249,7 +258,12 @@ mod tests {
 
     #[test]
     fn from_fault_details_busfault() {
-        let fd = FaultDetails::new(1, CFSR_PRECISERR | CFSR_BFARVALID, 0x4000_0000, 0x0800_1000);
+        let fd = FaultDetails::new(
+            pid(1),
+            CFSR_PRECISERR | CFSR_BFARVALID,
+            0x4000_0000,
+            0x0800_1000,
+        );
         let es = ErrorStatus::from(fd);
         assert_eq!(es.kind(), FaultKind::BusFault);
         assert_eq!(es.failed_partition(), 1);
@@ -258,7 +272,7 @@ mod tests {
 
     #[test]
     fn from_fault_details_usagefault() {
-        let fd = FaultDetails::new(2, CFSR_UNDEFINSTR, 0, 0x0800_2000);
+        let fd = FaultDetails::new(pid(2), CFSR_UNDEFINSTR, 0, 0x0800_2000);
         let es = ErrorStatus::from(fd);
         assert_eq!(es.kind(), FaultKind::UsageFault);
         assert_eq!(es.faulting_pc(), 0x0800_2000);
@@ -266,7 +280,7 @@ mod tests {
 
     #[test]
     fn from_fault_details_stack_overflow() {
-        let fd = FaultDetails::new(0, CFSR_MSTKERR, 0, 0x0800_3000);
+        let fd = FaultDetails::new(pid(0), CFSR_MSTKERR, 0, 0x0800_3000);
         let es = ErrorStatus::from(fd);
         assert_eq!(es.kind(), FaultKind::StackOverflow);
         assert_eq!(es.failed_partition(), 0);
@@ -274,14 +288,14 @@ mod tests {
 
     #[test]
     fn from_fault_details_deadline_miss() {
-        let fd = FaultDetails::new(1, 0, 0, 0);
+        let fd = FaultDetails::new(pid(1), 0, 0, 0);
         let es = ErrorStatus::from(fd);
         assert_eq!(es.kind(), FaultKind::DeadlineMiss);
     }
 
     #[test]
     fn from_fault_details_preserves_all_fields() {
-        let fd = FaultDetails::new(7, CFSR_IBUSERR, 0xDEAD_BEEF, 0xCAFE_BABE);
+        let fd = FaultDetails::new(pid(7), CFSR_IBUSERR, 0xDEAD_BEEF, 0xCAFE_BABE);
         let es = ErrorStatus::from(fd);
         assert_eq!(es.failed_partition(), 7);
         assert_eq!(es.faulting_addr(), 0xDEAD_BEEF);

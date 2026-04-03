@@ -63,7 +63,12 @@ fn msg_send_blocks_and_wakes() {
 
     // Next send blocks partition 1
     let outcome = k.messages_mut().send(0, 1, &[99; 4]).unwrap();
-    assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: 1 });
+    assert_eq!(
+        outcome,
+        SendOutcome::SenderBlocked {
+            blocked: PartitionId::new(1)
+        }
+    );
     assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(Some(1)));
     assert_eq!(
         k.partitions().get(1).unwrap().state(),
@@ -76,7 +81,7 @@ fn msg_send_blocks_and_wakes() {
     assert_eq!(
         outcome,
         RecvOutcome::Received {
-            wake_sender: Some(1)
+            wake_sender: Some(PartitionId::new(1))
         }
     );
     assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(None));
@@ -93,7 +98,12 @@ fn msg_recv_blocks_and_wakes() {
     // Recv on empty queue blocks partition 0
     let mut buf = [0u8; 4];
     let outcome = k.messages_mut().recv(0, 0, &mut buf).unwrap();
-    assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: 0 });
+    assert_eq!(
+        outcome,
+        RecvOutcome::ReceiverBlocked {
+            blocked: PartitionId::new(0)
+        }
+    );
     assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(Some(0)));
     assert_eq!(
         k.partitions().get(0).unwrap().state(),
@@ -105,7 +115,7 @@ fn msg_recv_blocks_and_wakes() {
     assert_eq!(
         outcome,
         SendOutcome::Delivered {
-            wake_receiver: Some(0)
+            wake_receiver: Some(PartitionId::new(0))
         }
     );
     assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(None));
@@ -128,7 +138,12 @@ fn msg_send_blocks_sets_yield_requested() {
 
     // Next send blocks partition 1
     let outcome = k.messages_mut().send(0, 1, &[99; 4]).unwrap();
-    assert_eq!(outcome, SendOutcome::SenderBlocked { blocked: 1 });
+    assert_eq!(
+        outcome,
+        SendOutcome::SenderBlocked {
+            blocked: PartitionId::new(1)
+        }
+    );
     assert_eq!(apply_send_outcome(k.partitions_mut(), outcome), Ok(Some(1)));
     // Caller is responsible for triggering deschedule
     k.trigger_deschedule();
@@ -150,7 +165,12 @@ fn msg_recv_blocks_sets_yield_requested() {
     // Recv on empty queue blocks partition 0
     let mut buf = [0u8; 4];
     let outcome = k.messages_mut().recv(0, 0, &mut buf).unwrap();
-    assert_eq!(outcome, RecvOutcome::ReceiverBlocked { blocked: 0 });
+    assert_eq!(
+        outcome,
+        RecvOutcome::ReceiverBlocked {
+            blocked: PartitionId::new(0)
+        }
+    );
 
     // apply_recv_outcome calls trigger_deschedule internally
     assert_eq!(apply_recv_outcome(&mut k, outcome), Ok(Some(0)));

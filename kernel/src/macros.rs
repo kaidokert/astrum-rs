@@ -723,7 +723,7 @@ mod tests {
     fn make_irq_binding_2tuple_defaults_to_partition_acks() {
         let b = __make_irq_binding!(5, (0, 0x01));
         assert_eq!(b.irq_num, 5);
-        assert_eq!(b.partition_id, 0);
+        assert_eq!(b.partition_id, crate::PartitionId::new(0));
         assert_eq!(b.event_bits, 0x01);
         assert_eq!(
             b.clear_model,
@@ -741,7 +741,7 @@ mod tests {
         );
         let b = __make_irq_binding!(12, (1, 0x04, clear));
         assert_eq!(b.irq_num, 12);
-        assert_eq!(b.partition_id, 1);
+        assert_eq!(b.partition_id, crate::PartitionId::new(1));
         assert_eq!(b.event_bits, 0x04);
         assert_eq!(b.clear_model, clear);
     }
@@ -763,7 +763,7 @@ mod tests {
     #[test]
     fn make_irq_binding_2tuple_matches_irq_binding_new() {
         let from_macro = __make_irq_binding!(99, (3, 0xDEAD));
-        let direct = crate::irq_dispatch::IrqBinding::new(99, 3, 0xDEAD);
+        let direct = crate::irq_dispatch::IrqBinding::new(99, crate::PartitionId::new(3), 0xDEAD);
         assert_eq!(from_macro, direct);
     }
 
@@ -773,7 +773,7 @@ mod tests {
     fn make_irq_binding_handler_defaults_to_partition_acks() {
         let b = __make_irq_binding!(5, (0, 0x01, handler: test_custom_isr));
         assert_eq!(b.irq_num, 5);
-        assert_eq!(b.partition_id, 0);
+        assert_eq!(b.partition_id, crate::PartitionId::new(0));
         assert_eq!(b.event_bits, 0x01);
         assert_eq!(
             b.clear_model,
@@ -784,7 +784,7 @@ mod tests {
     #[test]
     fn make_irq_binding_handler_matches_irq_binding_new() {
         let from_macro = __make_irq_binding!(7, (1, 0x04, handler: test_custom_isr));
-        let direct = crate::irq_dispatch::IrqBinding::new(7, 1, 0x04);
+        let direct = crate::irq_dispatch::IrqBinding::new(7, crate::PartitionId::new(1), 0x04);
         assert_eq!(from_macro, direct);
     }
 
@@ -914,7 +914,7 @@ mod tests {
     fn make_irq_binding_clear_write_register_keyword() {
         let b = __make_irq_binding!(10, (0, 0x02, clear: WriteRegister(0x4000_1000, 0xAB)));
         assert_eq!(b.irq_num, 10);
-        assert_eq!(b.partition_id, 0);
+        assert_eq!(b.partition_id, crate::PartitionId::new(0));
         assert_eq!(b.event_bits, 0x02);
         assert_eq!(
             b.clear_model,
@@ -931,7 +931,7 @@ mod tests {
     fn make_irq_binding_clear_clearbit_keyword() {
         let b = __make_irq_binding!(20, (1, 0x08, clear: ClearBit(0x4000_2000, 5)));
         assert_eq!(b.irq_num, 20);
-        assert_eq!(b.partition_id, 1);
+        assert_eq!(b.partition_id, crate::PartitionId::new(1));
         assert_eq!(b.event_bits, 0x08);
         assert_eq!(
             b.clear_model,

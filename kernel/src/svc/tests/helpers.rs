@@ -56,6 +56,10 @@ pub fn frame4(r0: u32, r1: u32, r2: u32, r3: u32) -> ExceptionFrame {
     }
 }
 
+pub fn pid(v: u32) -> PartitionId {
+    PartitionId::new(v)
+}
+
 pub fn pcb(id: u8) -> PartitionControlBlock {
     let o = (id as u32) * 0x1000;
     PartitionControlBlock::new(

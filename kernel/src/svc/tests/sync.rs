@@ -89,7 +89,7 @@ fn mutex_lock_uses_caller_not_r2() {
     assert_eq!(ef.r0, 1, "MutexLock must acquire immediately");
     assert_eq!(
         k.mutexes().owner(0),
-        Ok(Some(0)),
+        Ok(Some(pid(0))),
         "mutex must be owned by partition 0 (not partition 1)"
     );
 }
@@ -104,7 +104,7 @@ fn mutex_unlock_uses_caller_not_r2() {
     // SAFETY: See module-level SAFETY docs for test dispatch justification.
     unsafe { k.dispatch(&mut ef) };
     assert_eq!(ef.r0, 1, "MutexLock must acquire");
-    assert_eq!(k.mutexes().owner(0), Ok(Some(0)));
+    assert_eq!(k.mutexes().owner(0), Ok(Some(pid(0))));
 
     // Attacker sets r2=1 to impersonate partition 1 during unlock.
     let mut ef = frame(crate::syscall::SYS_MTX_UNLOCK, 0, 1);
@@ -177,7 +177,7 @@ fn mutex_lock_unlock_dispatch() {
     // SAFETY: See module-level SAFETY docs for test dispatch justification.
     unsafe { k.dispatch(&mut ef) };
     assert_eq!(ef.r0, 1); // 1 = acquired immediately
-    assert_eq!(k.mutexes().owner(0), Ok(Some(0)));
+    assert_eq!(k.mutexes().owner(0), Ok(Some(pid(0))));
     let mut ef = frame(crate::syscall::SYS_MTX_UNLOCK, 0, 0);
     // SAFETY: See module-level SAFETY docs for test dispatch justification.
     unsafe { k.dispatch(&mut ef) };
@@ -196,7 +196,7 @@ fn dispatch_mutex_lock_blocking_triggers_deschedule() {
     assert!(!k.yield_requested());
 
     // Switch to partition 1 and attempt to lock the same mutex.
-    k.set_current_partition(1);
+    k.set_current_partition(pid(1));
     let mut ef = frame(crate::syscall::SYS_MTX_LOCK, 0, 1);
     // SAFETY: See module-level SAFETY docs for test dispatch justification.
     unsafe { k.dispatch(&mut ef) };
@@ -231,7 +231,7 @@ fn dispatch_mutex_lock_immediate_no_deschedule() {
     );
     assert_eq!(
         k.mutexes().owner(0),
-        Ok(Some(0)),
+        Ok(Some(pid(0))),
         "mutex must be owned by acquiring partition"
     );
 }

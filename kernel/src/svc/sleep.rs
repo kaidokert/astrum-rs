@@ -32,11 +32,10 @@ pub fn handle_sleep_ticks<const N: usize, const W: usize>(
     if sleep_queue.push(caller, expiry).is_err() {
         return SleepOutcome::Done(SvcError::WaitQueueFull.to_u32());
     }
-    let caller_u8 = caller.as_raw() as u8;
-    if !try_transition(pt, caller_u8, PartitionState::Waiting) {
+    if !try_transition(pt, caller, PartitionState::Waiting) {
         return SleepOutcome::Done(SvcError::TransitionFailed.to_u32());
     }
-    if let Some(pcb) = pt.get_mut(caller_u8 as usize) {
+    if let Some(pcb) = pt.get_mut(caller.as_raw() as usize) {
         pcb.set_sleep_until(expiry);
     }
     SleepOutcome::Deschedule(0)

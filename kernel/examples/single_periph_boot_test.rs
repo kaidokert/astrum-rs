@@ -55,15 +55,16 @@ kernel::define_unified_harness!(TestConfig, |tick, _k| {
         let free_slot_6 = HARNESS_STRATEGY.slot(6);
         let free_slot_7 = HARNESS_STRATEGY.slot(7);
 
-        let periph_ok = periph_slot.is_some_and(|d| d.base == GPIOA_BASE && d.owner == 0);
-        let ram_ok = ram_slot.is_some_and(|d| d.owner == 0);
+        let p0 = kernel::PartitionId::new(0);
+        let periph_ok = periph_slot.is_some_and(|d| d.base == GPIOA_BASE && d.owner == p0);
+        let ram_ok = ram_slot.is_some_and(|d| d.owner == p0);
         let free_ok = free_slot_6.is_none() && free_slot_7.is_none();
 
         if periph_ok && ram_ok && free_ok {
             hprintln!("single_periph_boot_test: slot layout OK");
             if let (Some(ps), Some(rs)) = (periph_slot, ram_slot) {
-                hprintln!("  R4(periph): base={:#010x} owner={}", ps.base, ps.owner,);
-                hprintln!("  R5(RAM):    base={:#010x} owner={}", rs.base, rs.owner,);
+                hprintln!("  R4(periph): base={:#010x} owner={:?}", ps.base, ps.owner,);
+                hprintln!("  R5(RAM):    base={:#010x} owner={:?}", rs.base, rs.owner,);
             }
             hprintln!("  R6: free, R7: free");
             RESULT.store(2, Ordering::Release);
@@ -153,7 +154,7 @@ fn main() -> ! {
                 s0,
                 EntryAddr::from_entry(p0_main as PartitionEntry),
                 MpuRegion::new(0, 0, 0),
-                0,
+                kernel::PartitionId::new(0),
             )
             .expect("mem 0")
             .with_peripheral_regions(&[MpuRegion::new(GPIOA_BASE, GPIOA_SIZE, 0)])
@@ -162,7 +163,7 @@ fn main() -> ! {
                 s1,
                 EntryAddr::from_entry(p1_main as PartitionEntry),
                 MpuRegion::new(0, 0, 0),
-                1,
+                kernel::PartitionId::new(1),
             )
             .expect("mem 1"),
         ];

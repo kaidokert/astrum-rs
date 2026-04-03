@@ -21,7 +21,7 @@ pub fn handle_bb_display<const N: usize, const S: usize, const M: usize, const W
     let woken = bb.display_blackboard(id.as_raw() as usize, data)?;
     for &w in woken.iter() {
         // TODO: log wake-transition failure when kernel tracing is available
-        let _ = try_transition(pt, w.as_raw() as u8, PartitionState::Ready);
+        let _ = try_transition(pt, w, PartitionState::Ready);
     }
     Ok(())
 }
@@ -41,7 +41,7 @@ pub fn handle_bb_read<const N: usize, const S: usize, const M: usize, const W: u
         }),
         ReadBlackboardOutcome::ReaderBlocked => {
             // TODO: log transition failure when kernel tracing is available
-            let _ = try_transition(pt, pid.as_raw() as u8, PartitionState::Waiting);
+            let _ = try_transition(pt, pid, PartitionState::Waiting);
             Ok(BbReadOutcome::Blocked)
         }
     }
