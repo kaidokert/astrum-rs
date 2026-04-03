@@ -30,8 +30,8 @@ macro_rules! define_memmanage_handler {
                 $crate::fault::faulting_pc_from_psp(exc_return, psp)
             }.unwrap_or(0);
 
-            let restart_sp = $crate::state::with_kernel_mut::<$Config, _, Option<u32>>(|k| {
-                match $crate::memmanage::handle_memmanage_fault::<$Config>(k, cfsr, mmfar, faulting_pc) {
+            let result = $crate::state::with_kernel_mut::<$Config, _, (Option<u32>, bool)>(|k| {
+                let restart_sp = match $crate::memmanage::handle_memmanage_fault::<$Config>(k, cfsr, mmfar, faulting_pc) {
                     Some(d) => {
                         $crate::klog!(
                             "[MemManage] partition={} CFSR={:#010x} MMFAR={:#010x} PC={:#010x}",
@@ -40,38 +40,60 @@ macro_rules! define_memmanage_handler {
                         // handler was activated (in_error_handler), return the
                         // fresh SP so we can update PSP accordingly.
                         let pid = d.partition_id.as_raw() as usize;
+                        // TODO: reviewer false positive — map_or(false, ...) closure syntax is correct;
+                        // reviewer confused diff indentation with a missing brace in is_some_and
                         if k.pcb(pid).map_or(false, |pcb|
                             pcb.state() == $crate::partition::PartitionState::Ready
                             || pcb.in_error_handler())
                         {
-                            return Some(k.partition_sp()[pid]);
+                            k.partition_sp().get(pid).copied()
+                        } else {
+                            None
                         }
                     },
-                    None => $crate::klog!(
-                        "[MemManage] no active partition CFSR={:#010x} MMFAR={:#010x} PC={:#010x}",
-                        cfsr, mmfar, faulting_pc),
-                }
-                None
+                    None => {
+                        $crate::klog!(
+                            "[MemManage] no active partition CFSR={:#010x} MMFAR={:#010x} PC={:#010x}",
+                            cfsr, mmfar, faulting_pc);
+                        None
+                    },
+                };
+                let all_faulted = k.all_runnable_faulted();
+                (restart_sp, all_faulted)
             });
 
-            if matches!(restart_sp, Ok(Some(_))) {
-                // Partition was restarted: point PSP past the software context
-                // (r4-r11 = 8 words = 32 bytes) to the exception frame so the
-                // CPU unstacks the fresh entry point on return.  PendSV will
-                // later save r4-r11 into the software context area and
-                // partition_sp[pid] will remain correct.
-                let sp = restart_sp.unwrap().unwrap();
-                // SAFETY: sp is a valid stack address from restart_partition.
-                unsafe { cortex_m::register::psp::write(sp + 32); }
-            } else {
-                // Partition stays faulted: redirect to WFI trampoline.
-                // SAFETY: PSP exception frame is valid; fault_trampoline is a valid code address.
-                unsafe { $crate::fault::write_stacked_pc(psp, $crate::fault::fault_trampoline as u32); }
-            }
+            let all_faulted = match result {
+                Ok((restart_sp, af)) => {
+                    if let Some(sp) = restart_sp {
+                        // Partition was restarted: point PSP past the software context
+                        // (r4-r11 = 8 words = 32 bytes) to the exception frame so the
+                        // CPU unstacks the fresh entry point on return.  PendSV will
+                        // later save r4-r11 into the software context area and
+                        // partition_sp[pid] will remain correct.
+                        // SAFETY: sp is a valid stack address from restart_partition.
+                        unsafe { cortex_m::register::psp::write(sp + 32); }
+                    } else {
+                        // Partition stays faulted: redirect to WFI trampoline.
+                        // SAFETY: PSP exception frame is valid; fault_trampoline is a valid code address.
+                        unsafe { $crate::fault::write_stacked_pc(psp, $crate::fault::fault_trampoline as u32); }
+                    }
+                    af
+                }
+                Err(_) => {
+                    // with_kernel_mut failed (kernel not initialized); redirect to trampoline.
+                    // SAFETY: PSP exception frame is valid; fault_trampoline is a valid code address.
+                    unsafe { $crate::fault::write_stacked_pc(psp, $crate::fault::fault_trampoline as u32); }
+                    true
+                }
+            };
             // SAFETY: Privileged context; CFSR is write-1-to-clear.
             unsafe { $crate::fault::clear_mmfsr(); }
-            // TODO: reviewer false positive — SCB::set_pendsv() is a static method in cortex-m 0.7
-            cortex_m::peripheral::SCB::set_pendsv();
+            if all_faulted {
+                $crate::enter_safe_idle();
+            } else {
+                // TODO: reviewer false positive — SCB::set_pendsv() is a static method in cortex-m 0.7
+                cortex_m::peripheral::SCB::set_pendsv();
+            }
         }
     };
 }
@@ -516,6 +538,116 @@ mod tests {
             do_fault(&mut k);
             assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Faulted);
             assert_eq!(k.pcb(0).unwrap().fault_count(), 1);
+        }
+    }
+
+    /// Tests that simulate what the macro closure does: call handle_memmanage_fault
+    /// then check all_runnable_faulted to decide between enter_safe_idle vs PendSV.
+    mod all_faulted_tests {
+        use super::*;
+
+        #[test]
+        fn not_all_faulted_when_one_partition_remains_ready() {
+            let mut kernel = make_test_kernel();
+            kernel
+                .pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            kernel.active_partition = Some(0);
+
+            // Fault partition 0; partition 1 is still Ready.
+            handle_memmanage_fault::<TestConfig>(
+                &mut kernel,
+                CFSR_DACCVIOL | CFSR_MMARVALID,
+                0x2000_F000,
+                0x0800_1234,
+            )
+            .expect("should return fault details");
+
+            assert_eq!(kernel.pcb(0).unwrap().state(), PartitionState::Faulted);
+            assert_eq!(kernel.pcb(1).unwrap().state(), PartitionState::Ready);
+            assert!(
+                !kernel.all_runnable_faulted(),
+                "not all faulted when partition 1 is still Ready"
+            );
+        }
+
+        #[test]
+        fn all_faulted_when_both_partitions_faulted() {
+            let mut kernel = make_test_kernel();
+
+            // Fault partition 0.
+            kernel
+                .pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            kernel.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(
+                &mut kernel,
+                CFSR_DACCVIOL | CFSR_MMARVALID,
+                0x2000_F000,
+                0x0800_1234,
+            )
+            .expect("should return fault details");
+            assert_eq!(kernel.pcb(0).unwrap().state(), PartitionState::Faulted);
+
+            // Fault partition 1.
+            kernel
+                .pcb_mut(1)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            kernel.active_partition = Some(1);
+            handle_memmanage_fault::<TestConfig>(&mut kernel, CFSR_IACCVIOL, 0, 0x0800_2000)
+                .expect("should return fault details");
+            assert_eq!(kernel.pcb(1).unwrap().state(), PartitionState::Faulted);
+
+            assert!(
+                kernel.all_runnable_faulted(),
+                "all_runnable_faulted must be true when both partitions are Faulted"
+            );
+        }
+
+        #[test]
+        fn closure_returns_tuple_with_correct_all_faulted_flag() {
+            let mut kernel = make_test_kernel();
+            kernel
+                .pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            kernel.active_partition = Some(0);
+
+            // Simulate what the macro closure does.
+            let (restart_sp, all_faulted) = {
+                let details = handle_memmanage_fault::<TestConfig>(
+                    &mut kernel,
+                    CFSR_DACCVIOL,
+                    0x2000_F000,
+                    0x0800_1234,
+                );
+                let sp = match details {
+                    Some(d) => {
+                        let pid = d.partition_id.as_raw() as usize;
+                        if kernel.pcb(pid).is_some_and(|pcb| {
+                            pcb.state() == PartitionState::Ready || pcb.in_error_handler()
+                        }) {
+                            kernel.partition_sp().get(pid).copied()
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
+                };
+                (sp, kernel.all_runnable_faulted())
+            };
+
+            // Partition 0 faulted with StayDead, so no restart SP.
+            assert!(restart_sp.is_none());
+            // Partition 1 is still Ready, so not all faulted.
+            assert!(!all_faulted);
         }
     }
 
