@@ -654,6 +654,9 @@ pub enum MpuError {
     PeripheralRegionInvalid { base: u32, size: u32 },
     /// MPU cache has already been sealed; mutation rejected.
     CacheAlreadySealed,
+    /// An internal invariant was violated (e.g. index out of bounds despite
+    /// prior bounds check).
+    InternalError,
 }
 
 impl MpuError {
@@ -679,6 +682,7 @@ impl MpuError {
             Self::DisabledRegionInvalid { .. } => 14,
             Self::PeripheralRegionInvalid { .. } => 15,
             Self::CacheAlreadySealed => 16,
+            Self::InternalError => 17,
         }
     }
 }
@@ -727,6 +731,7 @@ impl core::fmt::Display for MpuError {
                 )
             }
             Self::CacheAlreadySealed => write!(f, "MPU cache already sealed"),
+            Self::InternalError => write!(f, "internal invariant violation"),
         }
     }
 }
@@ -2522,13 +2527,14 @@ mod tests {
             (MpuError::DisabledRegionInvalid { base: 0, size: 0 }, 14),
             (MpuError::PeripheralRegionInvalid { base: 0, size: 0 }, 15),
             (MpuError::CacheAlreadySealed, 16),
+            (MpuError::InternalError, 17),
         ];
         // Verify each variant maps to its expected value.
         for (variant, expected) in variants {
             assert_eq!(variant.discriminant(), *expected, "{:?}", variant);
         }
         // Verify uniqueness: no two variants share a discriminant.
-        let mut seen = [false; 17]; // indices 1..=16
+        let mut seen = [false; 18]; // indices 1..=17
         for (variant, _) in variants {
             let d = variant.discriminant() as usize;
             assert!(!seen[d], "duplicate discriminant {d}");

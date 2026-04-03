@@ -1168,6 +1168,7 @@ pub fn describe_buf_error(detail: u32) -> &'static str {
         0x10E => "Mpu:DisabledRegionInvalid",
         0x10F => "Mpu:PeripheralRegionInvalid",
         0x110 => "Mpu:CacheAlreadySealed",
+        0x111 => "Mpu:InternalError",
         _ => "Unknown",
     }
 }
@@ -1967,7 +1968,7 @@ mod tests {
         assert_eq!(describe_buf_error(9), "Unknown");
         // 0x100 is the Mpu offset base, not a valid sub-error
         assert_eq!(describe_buf_error(0x100), "Unknown");
-        // 0x111 is past the last Mpu sub-error
-        assert_eq!(describe_buf_error(0x111), "Unknown");
+        // 0x112 is past the last Mpu sub-error
+        assert_eq!(describe_buf_error(0x112), "Unknown");
     }
 }

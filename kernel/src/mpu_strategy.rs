@@ -512,7 +512,7 @@ impl<const N: usize> DynamicStrategy<N> {
     #[cfg(debug_assertions)]
     pub fn debug_verify_cache_consistency(&self, part: &crate::partition::PartitionControlBlock) {
         let reserved = self.peripheral_reserved_for(part.id());
-        let check_count = reserved.min(3);
+        let check_count = reserved.min(MAX_PERIPHERAL_REGIONS);
         let cached = self.cached_peripheral_regions(part.id());
         for (ci, region) in part
             .peripheral_regions()
@@ -573,16 +573,20 @@ impl<const N: usize> DynamicStrategy<N> {
         part_id: PartitionId,
     ) -> Result<usize, MpuError> {
         let (base, size, rasr) = region;
-        let (slot_idx, delta) = if desc_idx < reserved.min(3) {
+        let (slot_idx, delta) = if desc_idx < reserved.min(MAX_PERIPHERAL_REGIONS) {
             with_cs(|cs| {
-                self.slots.borrow(cs).borrow_mut()[desc_idx] = Some(WindowDescriptor {
+                let slots = &mut self.slots.borrow(cs).borrow_mut();
+                // TODO(panic-free): InternalError is generic; consider a more specific variant
+                let slot = slots.get_mut(desc_idx).ok_or(MpuError::InternalError)?;
+                *slot = Some(WindowDescriptor {
                     base,
                     size,
                     permissions: rasr,
                     owner: part_id,
                     rbar: slot_rbar(base, desc_idx),
                 });
-            });
+                Ok::<(), MpuError>(())
+            })?;
             (desc_idx, 1)
         } else {
             let rn = self.add_window(base, size, rasr, part_id)?;
@@ -611,8 +615,10 @@ impl<const N: usize> DynamicStrategy<N> {
         partitions: &[crate::partition::PartitionControlBlock],
     ) -> usize {
         // Deduplicate by (base, size).  Stores (base, size, slot_idx, rasr).
-        // Capacity 8 accommodates up to 4 partitions × 2 unique peripherals
-        // each (worst case: all distinct).
+        // TODO: capacity should be derived from MAX_PARTITIONS *
+        // MAX_PERIPHERAL_REGIONS instead of hardcoded 8.  Deferred:
+        // requires adding a MAX_PARTITIONS constant and propagating it
+        // through the type system.
         let mut seen: heapless::Vec<(u32, u32, usize, u32), 8> = heapless::Vec::new();
         let mut wired = 0usize;
 
@@ -705,7 +711,7 @@ impl<const N: usize> DynamicStrategy<N> {
         reserved: usize,
         part_id: PartitionId,
     ) -> Option<WindowDescriptor> {
-        if desc_idx >= reserved.min(3) {
+        if desc_idx >= reserved.min(MAX_PERIPHERAL_REGIONS) {
             return None;
         }
         let &(_, _, slot_idx, _) = seen.iter().find(|(b, s, _, _)| *b == base && *s == size)?;
