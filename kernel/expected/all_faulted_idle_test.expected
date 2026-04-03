@@ -1,0 +1,4 @@
+# mode: contains
+all_faulted_idle_test: start
+KERNEL: all partitions faulted
+all_faulted_idle_test: PASS

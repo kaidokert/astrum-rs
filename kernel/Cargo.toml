@@ -502,6 +502,10 @@ name = "fault_restart_exhaust_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "all_faulted_idle_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "error_handler_test"
 required-features = ["qemu", "log-semihosting"]
 
