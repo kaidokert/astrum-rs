@@ -144,8 +144,8 @@ fn compute_peripheral_rasr(size: u32) -> u32 {
     )
 }
 
-/// Per-partition pre-computed (RBAR, RASR) pairs for peripheral regions R4-R5.
-type PeripheralCache<const N: usize> = [[(u32, u32); 2]; N];
+/// Per-partition pre-computed (RBAR, RASR) pairs for peripheral regions R4-R6.
+type PeripheralCache<const N: usize> = [[(u32, u32); 3]; N];
 
 /// Per-partition private-RAM (RBAR, RASR) descriptor, indexed by partition_id.
 type PartitionRamCache<const N: usize> = [Option<(u32, u32)>; N];
@@ -229,9 +229,10 @@ impl<const N: usize> DynamicStrategy<N> {
     /// Create a new strategy with all slots empty and a peripheral cache
     /// sized for `N` partitions.
     pub const fn with_partition_count() -> Self {
-        const DISABLED: [(u32, u32); 2] = [
+        const DISABLED: [(u32, u32); 3] = [
             disabled_pair(DYNAMIC_REGION_BASE),
             disabled_pair(DYNAMIC_REGION_BASE + 1),
+            disabled_pair(DYNAMIC_REGION_BASE + 2),
         ];
         Self {
             slots: Mutex::new(RefCell::new([None; DYNAMIC_SLOT_COUNT])),
@@ -307,9 +308,6 @@ impl<const N: usize> DynamicStrategy<N> {
                 };
             }
             // Override peripheral-reserved slots 0..reserved from cache.
-            // TODO: if reserved ever exceeds 2, the fallback default array size
-            // (2) will leave slots 2..reserved filled from shared slots instead
-            // of disabled/peripherals. Revisit when >2 peripheral slots needed.
             if reserved >= 2 {
                 let pcache = self.peripheral_cache.borrow(cs);
                 let pcache = pcache.borrow();
@@ -319,6 +317,7 @@ impl<const N: usize> DynamicStrategy<N> {
                     .unwrap_or([
                         disabled_pair(DYNAMIC_REGION_BASE),
                         disabled_pair(DYNAMIC_REGION_BASE + 1),
+                        disabled_pair(DYNAMIC_REGION_BASE + 2),
                     ]);
                 for (dst, val) in out
                     .iter_mut()
@@ -385,7 +384,7 @@ impl<const N: usize> DynamicStrategy<N> {
     pub fn cache_peripherals(
         &self,
         partition_id: PartitionId,
-        descriptors: [Option<WindowDescriptor>; 2],
+        descriptors: [Option<WindowDescriptor>; 3],
     ) {
         let idx = partition_id.as_raw() as usize;
         if idx >= N {
@@ -414,12 +413,13 @@ impl<const N: usize> DynamicStrategy<N> {
     /// switch to overwrite the reserved peripheral slots (R4-R5) with the
     /// incoming partition's cached values.  Partitions without peripherals
     /// receive disabled pairs (RASR = 0).
-    pub fn cached_peripheral_regions(&self, partition_id: PartitionId) -> [(u32, u32); 2] {
+    pub fn cached_peripheral_regions(&self, partition_id: PartitionId) -> [(u32, u32); 3] {
         let idx = partition_id.as_raw() as usize;
         if idx >= N {
             return [
                 disabled_pair(DYNAMIC_REGION_BASE),
                 disabled_pair(DYNAMIC_REGION_BASE + 1),
+                disabled_pair(DYNAMIC_REGION_BASE + 2),
             ];
         }
         with_cs(|cs| self.peripheral_cache.borrow(cs).borrow()[idx])
@@ -433,7 +433,7 @@ impl<const N: usize> DynamicStrategy<N> {
     #[cfg(debug_assertions)]
     pub fn debug_verify_cache_consistency(&self, part: &crate::partition::PartitionControlBlock) {
         let reserved = self.peripheral_reserved_for(part.id());
-        let check_count = reserved.min(2);
+        let check_count = reserved.min(3);
         let cached = self.cached_peripheral_regions(part.id());
         for (ci, region) in part
             .peripheral_regions()
@@ -494,7 +494,7 @@ impl<const N: usize> DynamicStrategy<N> {
         part_id: PartitionId,
     ) -> Result<usize, MpuError> {
         let (base, size, rasr) = region;
-        let (slot_idx, delta) = if desc_idx < reserved.min(2) {
+        let (slot_idx, delta) = if desc_idx < reserved.min(3) {
             with_cs(|cs| {
                 self.slots.borrow(cs).borrow_mut()[desc_idx] = Some(WindowDescriptor {
                     base,
@@ -539,7 +539,7 @@ impl<const N: usize> DynamicStrategy<N> {
 
         for part in partitions.iter() {
             let reserved = self.peripheral_reserved_for(part.id());
-            let mut part_descs: [Option<WindowDescriptor>; 2] = [None; 2];
+            let mut part_descs: [Option<WindowDescriptor>; 3] = [None; 3];
             let mut desc_idx = 0usize;
 
             for region in part.peripheral_regions().iter() {
@@ -552,7 +552,7 @@ impl<const N: usize> DynamicStrategy<N> {
                     .iter()
                     .find(|(b, s, _, _)| *b == base && *s == size)
                     .copied();
-                if prior.is_some() && desc_idx >= 2 {
+                if prior.is_some() && desc_idx >= 3 {
                     continue;
                 }
                 let rasr = if let Some((_, _, _, stored)) = prior {
@@ -625,7 +625,7 @@ impl<const N: usize> DynamicStrategy<N> {
         reserved: usize,
         part_id: PartitionId,
     ) -> Option<WindowDescriptor> {
-        if desc_idx >= reserved.min(2) {
+        if desc_idx >= reserved.min(3) {
             return None;
         }
         let &(_, _, slot_idx, _) = seen.iter().find(|(b, s, _, _)| *b == base && *s == size)?;
@@ -2097,6 +2097,7 @@ mod tests {
                 owner: pid(0),
                 rbar: 0,
             }),
+            None,
         ];
         ds.cache_peripherals(pid(0), descs);
         let got = ds.cached_peripheral_regions(pid(0));
@@ -2109,7 +2110,8 @@ mod tests {
         let ds = DynamicStrategy::new();
         let disabled_r4 = disabled_pair(DYNAMIC_REGION_BASE);
         let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
-        let disabled = [disabled_r4, disabled_r5];
+        let disabled_r6 = disabled_pair(DYNAMIC_REGION_BASE + 2);
+        let disabled = [disabled_r4, disabled_r5, disabled_r6];
         assert_eq!(ds.cached_peripheral_regions(pid(0)), disabled);
         assert_eq!(ds.cached_peripheral_regions(pid(3)), disabled);
         // Out-of-range partition IDs also return disabled pairs.
@@ -2127,6 +2129,7 @@ mod tests {
                 owner: pid(1),
                 rbar: 0,
             }),
+            None,
             None,
         ];
         ds.cache_peripherals(pid(1), first);
@@ -2149,6 +2152,7 @@ mod tests {
                 owner: pid(1),
                 rbar: 0,
             }),
+            None,
         ];
         ds.cache_peripherals(pid(1), second);
         let got2 = ds.cached_peripheral_regions(pid(1));
@@ -2377,6 +2381,7 @@ mod tests {
                     rbar: bad_rbar,
                 }),
                 None,
+                None,
             ],
         );
 
@@ -2420,6 +2425,7 @@ mod tests {
                     rbar: good_rbar,
                 }),
                 None,
+                None,
             ],
         );
 
@@ -2455,7 +2461,10 @@ mod tests {
     #[test]
     fn cached_peripheral_regions_one_cached() {
         let ds = DynamicStrategy::new();
-        ds.cache_peripherals(pid(0), [Some(periph_desc(0x4000_0000, 4096, pid(0))), None]);
+        ds.cache_peripherals(
+            pid(0),
+            [Some(periph_desc(0x4000_0000, 4096, pid(0))), None, None],
+        );
         let r = ds.cached_peripheral_regions(pid(0));
         assert_eq!(
             r[0],
@@ -2472,6 +2481,7 @@ mod tests {
             [
                 Some(periph_desc(0x4000_0000, 4096, pid(2))),
                 Some(periph_desc(0x4001_0000, 256, pid(2))),
+                None,
             ],
         );
         let r = ds.cached_peripheral_regions(pid(2));
@@ -2493,6 +2503,7 @@ mod tests {
         let disabled = [
             disabled_pair(DYNAMIC_REGION_BASE),
             disabled_pair(DYNAMIC_REGION_BASE + 1),
+            disabled_pair(DYNAMIC_REGION_BASE + 2),
         ];
         assert_eq!(ds.cached_peripheral_regions(pid(0)), disabled);
         assert_eq!(ds.cached_peripheral_regions(pid(255)), disabled);
@@ -3103,6 +3114,7 @@ mod tests {
         let ds = DynamicStrategy::<6>::with_partition_count();
         let disabled_r4 = disabled_pair(DYNAMIC_REGION_BASE);
         let disabled_r5 = disabled_pair(DYNAMIC_REGION_BASE + 1);
+        let disabled_r6 = disabled_pair(DYNAMIC_REGION_BASE + 2);
 
         // Cache a peripheral for each of the 6 partitions.
         for pid in 0u32..6 {
@@ -3115,6 +3127,7 @@ mod tests {
                     owner: PartitionId::new(pid),
                     rbar: 0,
                 }),
+                None,
                 None,
             ];
             ds.cache_peripherals(PartitionId::new(pid), descs);
@@ -3130,6 +3143,7 @@ mod tests {
                 "partition {pid} R4 must hold its peripheral"
             );
             assert_eq!(got[1], disabled_r5, "partition {pid} R5 must be disabled");
+            assert_eq!(got[2], disabled_r6, "partition {pid} R6 must be disabled");
         }
 
         // Specifically check partition_id=5 (highest valid index).
@@ -3169,6 +3183,7 @@ mod tests {
                     owner: PartitionId::new(pid),
                     rbar: 0,
                 }),
+                None,
                 None,
             ];
             ds.cache_peripherals(PartitionId::new(pid), descs);
@@ -3695,6 +3710,74 @@ mod tests {
                 "slot {} RASR must be 0 for out-of-range partition_id",
                 i
             );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 3-entry peripheral cache tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn peripheral_cache_stores_and_retrieves_three_pairs() {
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let descs = [
+            Some(periph_desc(0x4000_0000, 4096, pid(0))),
+            Some(periph_desc(0x4001_0000, 256, pid(0))),
+            Some(periph_desc(0x4002_0000, 1024, pid(0))),
+        ];
+        ds.cache_peripherals(pid(0), descs);
+        let got = ds.cached_peripheral_regions(pid(0));
+        assert_eq!(
+            got[0],
+            (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096)),
+            "cache[0] must hold 4KiB peripheral at 0x4000_0000"
+        );
+        assert_eq!(
+            got[1],
+            (build_rbar(0x4001_0000, 5).unwrap(), periph_rasr(256)),
+            "cache[1] must hold 256B peripheral at 0x4001_0000"
+        );
+        assert_eq!(
+            got[2],
+            (build_rbar(0x4002_0000, 6).unwrap(), periph_rasr(1024)),
+            "cache[2] must hold 1KiB peripheral at 0x4002_0000"
+        );
+    }
+
+    #[test]
+    fn cached_peripheral_regions_returns_three_entries_for_reserved_3() {
+        // Partition with reserved=3: directly populate cache via
+        // cache_peripherals and verify all 3 entries are retrievable.
+        let ds = DynamicStrategy::<2>::with_partition_count();
+        let (rb, rs) = data_region(0x2000_0000, 4096, 7);
+        ds.configure_partition(pid(0), &[(rb, rs)], 3).unwrap();
+        assert_eq!(ds.peripheral_reserved_for(pid(0)), 3);
+
+        let descs = [
+            Some(periph_desc(0x4000_0000, 4096, pid(0))),
+            Some(periph_desc(0x4001_0000, 256, pid(0))),
+            Some(periph_desc(0x4002_0000, 1024, pid(0))),
+        ];
+        ds.cache_peripherals(pid(0), descs);
+
+        let cached = ds.cached_peripheral_regions(pid(0));
+        assert_eq!(
+            cached[0],
+            (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096)),
+            "cache[0] must hold 4KiB peripheral"
+        );
+        assert_eq!(
+            cached[1],
+            (build_rbar(0x4001_0000, 5).unwrap(), periph_rasr(256)),
+            "cache[1] must hold 256B peripheral"
+        );
+        assert_eq!(
+            cached[2],
+            (build_rbar(0x4002_0000, 6).unwrap(), periph_rasr(1024)),
+            "cache[2] must hold 1KiB peripheral"
+        );
+        for (i, &(_rbar, rasr)) in cached.iter().enumerate() {
+            assert_ne!(rasr, 0, "cache[{i}] RASR must be non-zero");
         }
     }
 }
