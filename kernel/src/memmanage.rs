@@ -649,6 +649,224 @@ mod tests {
             // Partition 1 is still Ready, so not all faulted.
             assert!(!all_faulted);
         }
+
+        /// After faulting all partitions where one has WarmRestart policy,
+        /// all_runnable_faulted() is false because the restarted partition is Ready.
+        // Note: requires 32-bit target because WarmRestart reinitializes the stack frame
+        // using 32-bit addresses, which segfaults on 64-bit hosts.
+        #[cfg(target_pointer_width = "32")]
+        #[test]
+        fn not_all_faulted_when_warm_restart_recovers() {
+            use crate::partition::FaultPolicy;
+
+            let mut sched = ScheduleTable::new();
+            sched.add(ScheduleEntry::new(0, 10)).unwrap();
+            sched.add(ScheduleEntry::new(1, 10)).unwrap();
+            sched.add_system_window(1).unwrap();
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let m = MpuRegion::new(0, 0, 0);
+            let mems = [
+                ExternalPartitionMemory::from_aligned_stack(
+                    &mut s0,
+                    0x0800_1001,
+                    m,
+                    PartitionId::new(0),
+                )
+                .unwrap()
+                .with_fault_policy(FaultPolicy::WarmRestart { max: 3 }),
+                ExternalPartitionMemory::from_aligned_stack(
+                    &mut s1,
+                    0x0800_2001,
+                    m,
+                    PartitionId::new(1),
+                )
+                .unwrap(),
+            ];
+            let mut kernel =
+                crate::svc::Kernel::<TestConfig>::new(sched, &mems).expect("kernel init");
+
+            // Fault partition 0 (WarmRestart): auto-restarts to Ready.
+            kernel
+                .pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            kernel.active_partition = Some(0);
+            handle_memmanage_fault::<TestConfig>(
+                &mut kernel,
+                CFSR_DACCVIOL,
+                0x2000_F000,
+                0x0800_1234,
+            )
+            .expect("should return fault details");
+            assert_eq!(
+                kernel.pcb(0).unwrap().state(),
+                PartitionState::Ready,
+                "WarmRestart partition must auto-restart to Ready"
+            );
+
+            // Fault partition 1 (StayDead default): stays Faulted.
+            kernel
+                .pcb_mut(1)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            kernel.active_partition = Some(1);
+            handle_memmanage_fault::<TestConfig>(&mut kernel, CFSR_IACCVIOL, 0, 0x0800_2000)
+                .expect("should return fault details");
+            assert_eq!(kernel.pcb(1).unwrap().state(), PartitionState::Faulted);
+
+            // Partition 0 is Ready (restarted), so not all faulted.
+            assert!(
+                !kernel.all_runnable_faulted(),
+                "not all faulted: partition 0 was auto-restarted to Ready"
+            );
+        }
+
+        /// 4-partition config: 1-of-N faulted returns false, N-1 faulted returns false,
+        /// all N faulted returns true.
+        // Note: no #[cfg(target_pointer_width = "32")] needed here — StayDead policy
+        // does not reinitialize stack frames, so no 32-bit pointer dereference occurs.
+        #[test]
+        fn four_partitions_n_minus_1_false_all_n_true() {
+            struct FourConfig;
+            impl KernelConfig for FourConfig {
+                const N: usize = 4;
+                const SCHED: usize = 8;
+                const S: usize = 2;
+                const SW: usize = 2;
+                const MS: usize = 2;
+                const MW: usize = 2;
+                const QS: usize = 2;
+                const QD: usize = 4;
+                const QM: usize = 16;
+                const QW: usize = 2;
+                const SP: usize = 2;
+                const SM: usize = 16;
+                const BS: usize = 2;
+                const BM: usize = 16;
+                const BW: usize = 2;
+                const BP: usize = 4;
+                const BZ: usize = 32;
+                const DR: usize = 4;
+                kernel_config_types!();
+            }
+
+            let mut sched = ScheduleTable::new();
+            for i in 0..4u8 {
+                sched.add(ScheduleEntry::new(i, 10)).unwrap();
+            }
+            sched.add_system_window(1).unwrap();
+            let (mut s0, mut s1, mut s2, mut s3) = (
+                AlignedStack256B::default(),
+                AlignedStack256B::default(),
+                AlignedStack256B::default(),
+                AlignedStack256B::default(),
+            );
+            let m = MpuRegion::new(0, 0, 0);
+            let mems = [
+                ExternalPartitionMemory::from_aligned_stack(
+                    &mut s0,
+                    0x0800_1001,
+                    m,
+                    PartitionId::new(0),
+                )
+                .unwrap(),
+                ExternalPartitionMemory::from_aligned_stack(
+                    &mut s1,
+                    0x0800_2001,
+                    m,
+                    PartitionId::new(1),
+                )
+                .unwrap(),
+                ExternalPartitionMemory::from_aligned_stack(
+                    &mut s2,
+                    0x0800_3001,
+                    m,
+                    PartitionId::new(2),
+                )
+                .unwrap(),
+                ExternalPartitionMemory::from_aligned_stack(
+                    &mut s3,
+                    0x0800_4001,
+                    m,
+                    PartitionId::new(3),
+                )
+                .unwrap(),
+            ];
+            let mut kernel =
+                crate::svc::Kernel::<FourConfig>::new(sched, &mems).expect("kernel init");
+
+            // Fault partition 0 (1 of N): all_runnable_faulted must be false.
+            kernel
+                .pcb_mut(0)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            kernel.active_partition = Some(0);
+            handle_memmanage_fault::<FourConfig>(
+                &mut kernel,
+                CFSR_DACCVIOL,
+                0x2000_0000,
+                0x0800_0000,
+            )
+            .expect("should return fault details");
+            assert_eq!(kernel.pcb(0).unwrap().state(), PartitionState::Faulted);
+            assert!(
+                !kernel.all_runnable_faulted(),
+                "1 of N faulted must return false"
+            );
+
+            // Fault partitions 1 and 2 (N-1 = 3 of 4 total).
+            for pid in 1..3u8 {
+                kernel
+                    .pcb_mut(pid as usize)
+                    .unwrap()
+                    .transition(PartitionState::Running)
+                    .unwrap();
+                kernel.active_partition = Some(pid);
+                handle_memmanage_fault::<FourConfig>(
+                    &mut kernel,
+                    CFSR_DACCVIOL,
+                    0x2000_0000 + (pid as u32) * 0x1000,
+                    0x0800_0000 + (pid as u32) * 0x1000,
+                )
+                .expect("should return fault details");
+                assert_eq!(
+                    kernel.pcb(pid as usize).unwrap().state(),
+                    PartitionState::Faulted,
+                );
+            }
+
+            // N-1 faulted: partition 3 is still Ready.
+            assert_eq!(kernel.pcb(3).unwrap().state(), PartitionState::Ready);
+            assert!(
+                !kernel.all_runnable_faulted(),
+                "N-1 faulted must return false"
+            );
+
+            // Fault the last partition (partition 3).
+            kernel
+                .pcb_mut(3)
+                .unwrap()
+                .transition(PartitionState::Running)
+                .unwrap();
+            kernel.active_partition = Some(3);
+            handle_memmanage_fault::<FourConfig>(
+                &mut kernel,
+                CFSR_DACCVIOL,
+                0x2000_3000,
+                0x0800_3000,
+            )
+            .expect("should return fault details");
+            assert_eq!(kernel.pcb(3).unwrap().state(), PartitionState::Faulted);
+
+            // All N faulted.
+            assert!(
+                kernel.all_runnable_faulted(),
+                "all N faulted must return true"
+            );
+        }
     }
 
     #[cfg(target_pointer_width = "32")]
