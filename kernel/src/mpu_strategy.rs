@@ -144,6 +144,54 @@ fn compute_peripheral_rasr(size: u32) -> u32 {
     )
 }
 
+/// Verify that `partition_region_values` output contains no stale peripheral
+/// RASR bits after a context switch.
+///
+/// Rules checked for each slot index `0..DYNAMIC_SLOT_COUNT`:
+/// - **Within peripheral-reserved range** (`idx < reserved`) with a cached
+///   peripheral (non-zero cache RASR): output RASR must be non-zero.
+/// - **Beyond peripheral-reserved range** (`idx > reserved`, i.e. not the
+///   RAM slot at `idx == reserved`): output RASR must be zero **or** the
+///   slot must hold a shared window owned by this partition.
+#[cfg(debug_assertions)]
+fn debug_assert_no_stale_regions(
+    out: &[(u32, u32); DYNAMIC_SLOT_COUNT],
+    partition_id: PartitionId,
+    reserved: usize,
+    cache: &[(u32, u32); 3],
+    slots: &[Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT],
+) {
+    for idx in 0..DYNAMIC_SLOT_COUNT {
+        let rasr = out[idx].1;
+        if idx < reserved {
+            // Peripheral-reserved slot with a cached peripheral: RASR must be active.
+            if idx < cache.len() && cache[idx].1 != 0 {
+                assert!(
+                    rasr != 0,
+                    "stale MPU: slot {idx} has cached peripheral but RASR=0 \
+                     for partition {}",
+                    partition_id.as_raw(),
+                );
+            }
+        } else if idx != reserved {
+            // Beyond peripheral-reserved range and not the RAM slot.
+            // RASR must be zero OR slot must hold a window visible to
+            // this partition (owned by it, or shared from another
+            // partition outside that owner's peripheral-reserved range).
+            if rasr != 0 {
+                let is_visible_window = slots.get(idx).and_then(|s| s.as_ref()).is_some();
+                assert!(
+                    is_visible_window,
+                    "stale MPU: slot {idx} has non-zero RASR={rasr:#x} \
+                     but no window descriptor for partition {}",
+                    partition_id.as_raw(),
+                );
+            }
+        }
+        // idx == reserved is the RAM slot — not checked here.
+    }
+}
+
 /// Per-partition pre-computed (RBAR, RASR) pairs for peripheral regions R4-R6.
 type PeripheralCache<const N: usize> = [[(u32, u32); 3]; N];
 
@@ -352,6 +400,20 @@ impl<const N: usize> DynamicStrategy<N> {
             // Override the disabled slot at `reserved` with this partition's RAM.
             if let Some(dst) = out.get_mut(reserved) {
                 *dst = ram_pair;
+            }
+            #[cfg(debug_assertions)]
+            {
+                let pcache = self.peripheral_cache.borrow(cs);
+                let pcache = pcache.borrow();
+                let cache = pcache
+                    .get(partition_id.as_raw() as usize)
+                    .copied()
+                    .unwrap_or([
+                        disabled_pair(DYNAMIC_REGION_BASE),
+                        disabled_pair(DYNAMIC_REGION_BASE + 1),
+                        disabled_pair(DYNAMIC_REGION_BASE + 2),
+                    ]);
+                debug_assert_no_stale_regions(&out, partition_id, reserved, &cache, &slots);
             }
             out
         })
@@ -3936,5 +3998,103 @@ mod tests {
         }
         let (rb1, rs1) = data_region(0x2000_8000, 4096, 7);
         assert_eq!(v1[3], (rb1, rs1), "R7 must be P1 RAM after switch-back");
+    }
+
+    // ------------------------------------------------------------------
+    // debug_assert_no_stale_regions
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn debug_assert_correct_config_passes_silently() {
+        // P0 reserved=2: slots 0,1 are peripherals, slot 2 is RAM, slot 3 disabled.
+        let cache = [
+            (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096)),
+            (build_rbar(0x4001_0000, 5).unwrap(), periph_rasr(256)),
+            disabled_pair(DYNAMIC_REGION_BASE + 2),
+        ];
+        let (rb, rs) = data_region(0x2000_0000, 4096, 6);
+        let out = [
+            cache[0],
+            cache[1],
+            (rb, rs), // RAM at slot 2
+            disabled_pair(DYNAMIC_REGION_BASE + 3),
+        ];
+        let slots: [Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT] = [None, None, None, None];
+        debug_assert_no_stale_regions(&out, pid(0), 2, &cache, &slots);
+    }
+
+    #[test]
+    #[should_panic(expected = "stale MPU: slot 3")]
+    fn debug_assert_catches_stale_peripheral_beyond_reserved() {
+        // P0 reserved=2 but slot 3 has a non-zero RASR with no window
+        // descriptor — this is a stale peripheral leak.
+        let cache = [
+            (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096)),
+            (build_rbar(0x4001_0000, 5).unwrap(), periph_rasr(256)),
+            disabled_pair(DYNAMIC_REGION_BASE + 2),
+        ];
+        let (rb, rs) = data_region(0x2000_0000, 4096, 6);
+        let stale_rasr = periph_rasr(1024);
+        let out = [
+            cache[0],
+            cache[1],
+            (rb, rs),                             // RAM at slot 2
+            (0x4002_0000 | (1 << 4), stale_rasr), // stale at slot 3
+        ];
+        let slots: [Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT] = [None, None, None, None];
+        debug_assert_no_stale_regions(&out, pid(0), 2, &cache, &slots);
+    }
+
+    #[test]
+    #[should_panic(expected = "stale MPU: slot 0")]
+    fn debug_assert_catches_zeroed_cached_peripheral() {
+        // P0 reserved=2 but slot 0 has RASR=0 despite a cached peripheral.
+        let cache = [
+            (build_rbar(0x4000_0000, 4).unwrap(), periph_rasr(4096)),
+            (build_rbar(0x4001_0000, 5).unwrap(), periph_rasr(256)),
+            disabled_pair(DYNAMIC_REGION_BASE + 2),
+        ];
+        let (rb, rs) = data_region(0x2000_0000, 4096, 6);
+        let out = [
+            disabled_pair(DYNAMIC_REGION_BASE), // stale: should have periph
+            cache[1],
+            (rb, rs),
+            disabled_pair(DYNAMIC_REGION_BASE + 3),
+        ];
+        let slots: [Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT] = [None, None, None, None];
+        debug_assert_no_stale_regions(&out, pid(0), 2, &cache, &slots);
+    }
+
+    #[test]
+    fn debug_assert_shared_window_beyond_reserved_is_ok() {
+        // P1 reserved=0, RAM at slot 0, slot 3 has a shared window from P0.
+        let cache = [
+            disabled_pair(DYNAMIC_REGION_BASE),
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+            disabled_pair(DYNAMIC_REGION_BASE + 2),
+        ];
+        let (rb, rs) = data_region(0x2000_0000, 4096, 4);
+        let win_rasr = build_rasr(
+            encode_size(256).unwrap(),
+            AP_RO_RO,
+            true,
+            (false, false, false),
+        );
+        let out = [
+            (rb, rs), // RAM at slot 0
+            disabled_pair(DYNAMIC_REGION_BASE + 1),
+            disabled_pair(DYNAMIC_REGION_BASE + 2),
+            (build_rbar(0x2000_2000, 7).unwrap(), win_rasr),
+        ];
+        let mut slots: [Option<WindowDescriptor>; DYNAMIC_SLOT_COUNT] = [None, None, None, None];
+        slots[3] = Some(WindowDescriptor {
+            base: 0x2000_2000,
+            size: 256,
+            permissions: win_rasr,
+            owner: pid(0),
+            rbar: build_rbar(0x2000_2000, 7).unwrap(),
+        });
+        // Must not panic — shared window is legitimate.
+        debug_assert_no_stale_regions(&out, pid(1), 0, &cache, &slots);
     }
 }
