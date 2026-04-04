@@ -23,7 +23,7 @@ use kernel::{
 };
 use rtos_traits::thread::SchedulingPolicy;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions1,
     SyncMinimal,
     MsgMinimal,

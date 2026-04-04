@@ -43,7 +43,7 @@ const MPU_REGION_SSI0: u32 = 3;
 static SPI_STATE: AtomicU32 = AtomicU32::new(0); // 0=pending, 1=done
 static SPI_SR: AtomicU32 = AtomicU32::new(0); // raw SR after write
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

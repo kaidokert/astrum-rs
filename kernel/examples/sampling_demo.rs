@@ -41,7 +41,7 @@ static DISPLAY_CYCLES: AtomicU32 = AtomicU32::new(0);
 /// Data integrity errors (display verifies status is 0 or 1)
 static DATA_ERRORS: AtomicU32 = AtomicU32::new(0);
 
-kernel::compose_kernel_config!(DemoConfig<kernel::Partitions4, kernel::SyncStandard, kernel::MsgStandard, kernel::PortsStandard, kernel::DebugEnabled>);
+kernel::kernel_config!(DemoConfig<kernel::Partitions4, kernel::SyncStandard, kernel::MsgStandard, kernel::PortsStandard, kernel::DebugEnabled>);
 
 // Use the unified harness macro (no_boot variant) with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.

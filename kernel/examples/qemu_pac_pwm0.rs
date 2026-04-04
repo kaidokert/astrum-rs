@@ -49,7 +49,7 @@ static RB: [AtomicU32; 6] = [
     AtomicU32::new(0),
 ];
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

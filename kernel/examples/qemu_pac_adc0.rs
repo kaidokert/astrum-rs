@@ -48,7 +48,7 @@ static ADC_STATE: AtomicU32 = AtomicU32::new(0);
 /// Raw SSFIFO0 result value after conversion.
 static ADC_RESULT: AtomicU32 = AtomicU32::new(0);
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

@@ -26,7 +26,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     Smoke4KConfig[kernel::partition_core::AlignedStack4K] < Partitions2,
     SyncMinimal,
     MsgMinimal,

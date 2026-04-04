@@ -40,7 +40,7 @@ const PWM_GENA_VAL: u32 = (3 << 2) | (2 << 6);
 /// Readback: [0..6]=G0_LOAD,G0_CMPA,G1_LOAD,G1_CMPA,G2_LOAD,G2_CMPA,ENABLE [7]=state.
 static RB: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

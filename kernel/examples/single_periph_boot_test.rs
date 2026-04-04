@@ -31,7 +31,7 @@ const GPIOA_BASE: u32 = 0x4000_4000;
 const GPIOA_SIZE: u32 = 4096;
 const STACK_WORDS: usize = 256;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 

@@ -37,7 +37,7 @@ static UART0_REGIONS: [MpuRegion; 1] = [MpuRegion::new(UART0_BASE, UART0_SIZE, 0
 /// State flag: 0 = not started, 1 = TX complete.
 static TX_STATE: AtomicU32 = AtomicU32::new(0);
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

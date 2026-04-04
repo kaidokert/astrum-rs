@@ -21,7 +21,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(IvtConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(IvtConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Bind two IRQs to partition 0.  The handlers will never fire (no
 // hardware triggers them in QEMU), but the vector table must link

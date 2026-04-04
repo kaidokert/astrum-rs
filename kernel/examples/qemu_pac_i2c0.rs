@@ -50,7 +50,7 @@ static I2C_STATE: AtomicU32 = AtomicU32::new(0);
 /// Raw MCS status register value after transaction attempt.
 static I2C_MCS_RAW: AtomicU32 = AtomicU32::new(0);
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

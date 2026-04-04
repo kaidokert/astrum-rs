@@ -49,7 +49,7 @@ static TIMER_TAMR: AtomicU32 = AtomicU32::new(0);
 static TIMER_TAILR: AtomicU32 = AtomicU32::new(0);
 static TIMER_TAMATCHR: AtomicU32 = AtomicU32::new(0);
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

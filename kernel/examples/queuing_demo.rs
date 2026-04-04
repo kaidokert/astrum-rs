@@ -35,7 +35,7 @@ const QUEUE_MSG_SIZE: usize = 4;
 //
 // Sized for 2 partitions, depth-4 queuing ports with 4-byte messages,
 // and moderate pool sizes for all resource types.
-kernel::compose_kernel_config!(DemoConfig<kernel::Partitions2, kernel::SyncStandard, kernel::MsgStandard, kernel::PortsSmall, kernel::DebugEnabled>);
+kernel::kernel_config!(DemoConfig<kernel::Partitions2, kernel::SyncStandard, kernel::MsgStandard, kernel::PortsSmall, kernel::DebugEnabled>);
 
 // ---------------------------------------------------------------------------
 // Command / response protocol constants
