@@ -154,16 +154,20 @@ mod integration {
 
         // Encodes (pid + 1) in high 16 bits and warm flag in low 16 bits.
         static HOOK_RECORD: AtomicU32 = AtomicU32::new(0);
+        // Counts how many times the hook was invoked.
+        static HOOK_CALL_COUNT: AtomicU32 = AtomicU32::new(0);
         // Serialize tests that share HOOK_RECORD to prevent parallel contamination.
         static LOCK: Mutex<()> = Mutex::new(());
 
         fn test_hook(pid: usize, warm: bool) {
+            HOOK_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
             let encoded = (((pid as u32) + 1) << 16) | (warm as u32);
             HOOK_RECORD.store(encoded, Ordering::SeqCst);
         }
 
         fn reset_hook() {
             HOOK_RECORD.store(0, Ordering::SeqCst);
+            HOOK_CALL_COUNT.store(0, Ordering::SeqCst);
         }
 
         fn read_hook() -> Option<(usize, bool)> {
@@ -189,6 +193,11 @@ mod integration {
             let (pid, warm) = read_hook().expect("hook must be called");
             assert_eq!(pid, 0);
             assert!(warm);
+            assert_eq!(
+                HOOK_CALL_COUNT.load(Ordering::SeqCst),
+                1,
+                "hook must be called exactly once"
+            );
         }
 
         #[test]
@@ -204,6 +213,11 @@ mod integration {
             let (pid, warm) = read_hook().expect("hook must be called");
             assert_eq!(pid, 0);
             assert!(!warm);
+            assert_eq!(
+                HOOK_CALL_COUNT.load(Ordering::SeqCst),
+                1,
+                "hook must be called exactly once"
+            );
         }
 
         #[test]
@@ -217,6 +231,11 @@ mod integration {
             do_fault(&mut k, 0);
             k.restart_partition(0, true).unwrap();
             assert!(read_hook().is_none(), "no hook should be called");
+            assert_eq!(
+                HOOK_CALL_COUNT.load(Ordering::SeqCst),
+                0,
+                "hook must not be called when None"
+            );
             assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Ready);
         }
     }
