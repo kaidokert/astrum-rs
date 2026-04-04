@@ -162,21 +162,30 @@ pub unsafe fn write_stacked_pc(psp: u32, new_pc: u32) {
     core::ptr::write_volatile(pc_ptr, new_pc);
 }
 
-/// Infinite WFI loop landing pad for faulted partitions. Never returns.
+/// Infinite idle loop landing pad for faulted partitions. Never returns.
+///
+/// Uses `nop` when `debug-no-wfi` is enabled (for QEMU compatibility),
+/// `wfi` otherwise.
 ///
 /// # Safety
 /// Only safe to branch here from a partition already set to `Faulted`.
 #[cfg(target_arch = "arm")]
-// TODO: reviewer false positive — #[unsafe(naked)] is correct for edition 2021 (see macros.rs)
 #[unsafe(naked)]
 pub unsafe extern "C" fn fault_trampoline() -> ! {
+    #[cfg(feature = "debug-no-wfi")]
+    // SAFETY: naked function with a trivial infinite-nop loop (debug mode).
+    core::arch::naked_asm!("0: nop", "   b 0b");
+    #[cfg(not(feature = "debug-no-wfi"))]
     // SAFETY: naked function with a trivial infinite-WFI loop.
-    core::arch::naked_asm!("0: wfi", "   b 0b")
+    core::arch::naked_asm!("0: wfi", "   b 0b");
 }
 
 /// Host stub for non-ARM testing — never actually called at runtime.
+///
+/// # Safety
+/// Only safe to branch here from a partition already set to `Faulted`.
 #[cfg(not(target_arch = "arm"))]
-pub extern "C" fn fault_trampoline() -> ! {
+pub unsafe extern "C" fn fault_trampoline() -> ! {
     loop {
         core::hint::spin_loop();
     }
@@ -263,6 +272,14 @@ mod tests {
             0xFFFF_FFFF
         );
         assert_eq!(CFSR_MMFSR_MASK & CFSR_BFSR_MASK, 0);
+    }
+
+    /// Compile-gate test: fault_trampoline exists under both configurations.
+    /// On non-ARM hosts, this verifies the host stub compiles and is callable.
+    #[test]
+    fn fault_trampoline_exists() {
+        // Verify the symbol exists and has the expected function-pointer type.
+        let _ptr: unsafe extern "C" fn() -> ! = fault_trampoline;
     }
 
     #[test]
