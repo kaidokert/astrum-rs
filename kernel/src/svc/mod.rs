@@ -1115,6 +1115,7 @@ where
                 stack_size: m.stack_size_bytes(),
                 fault_policy: m.fault_policy(),
                 error_handler: m.error_handler(),
+                on_restart: m.on_restart(),
             };
             configs
                 .push(cfg)
@@ -1245,6 +1246,7 @@ where
             pcb.set_r0_hint(c.r0_hint);
             pcb.set_fault_policy(c.fault_policy);
             pcb.set_error_handler(c.error_handler);
+            pcb.set_on_restart(c.on_restart);
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
             }

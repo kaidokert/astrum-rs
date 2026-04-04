@@ -23,7 +23,7 @@ const _: () = assert!(
 use crate::partition_core::StackStorage;
 pub use rtos_traits::partition::{
     EntryAddr, EntryPointFn, FaultPolicy, IsrHandler, MpuRegion, PartitionBody, PartitionEntry,
-    PartitionSpec,
+    PartitionSpec, RestartHook,
 };
 
 /// Default data-region RASR attributes: full read-write access with
@@ -111,6 +111,7 @@ pub enum RestartError {
 /// No component may cache a `*mut PartitionControlBlock` across the
 /// `store_kernel` move boundary — see bug 38-iguana.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(unpredictable_function_pointer_comparisons)]
 pub struct PartitionControlBlock {
     id: PartitionId,
     state: PartitionState,
@@ -166,6 +167,8 @@ pub struct PartitionControlBlock {
     /// Invariant: `run_count ≥ 1` once the partition has executed at least
     /// one tick.
     run_count: u32,
+    /// Optional callback invoked when the partition is restarted.
+    on_restart: Option<RestartHook>,
 }
 
 impl PartitionControlBlock {
@@ -204,6 +207,7 @@ impl PartitionControlBlock {
             error_handler: None,
             in_error_handler: false,
             run_count: 0,
+            on_restart: None,
         }
     }
 
@@ -287,6 +291,16 @@ impl PartitionControlBlock {
     /// Sets the error handler execution flag.
     pub fn set_in_error_handler(&mut self, active: bool) {
         self.in_error_handler = active;
+    }
+
+    /// Returns the restart hook callback, if registered.
+    pub fn on_restart(&self) -> Option<RestartHook> {
+        self.on_restart
+    }
+
+    /// Sets (or clears) the restart hook callback.
+    pub fn set_on_restart(&mut self, hook: Option<RestartHook>) {
+        self.on_restart = hook;
     }
 
     /// Replace peripheral regions via `&mut self` (post-creation setter).
@@ -638,6 +652,8 @@ pub(crate) struct PartitionConfig {
     pub(crate) fault_policy: FaultPolicy,
     /// Entry point address for the partition's error handler.
     pub(crate) error_handler: Option<u32>,
+    /// Optional callback invoked when the partition is restarted.
+    pub(crate) on_restart: Option<RestartHook>,
 }
 
 #[allow(dead_code)] // Methods used in #[cfg(test)] within this crate
@@ -659,6 +675,7 @@ impl PartitionConfig {
             stack_size: 0,
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
+            on_restart: None,
         }
     }
 
@@ -678,6 +695,7 @@ impl PartitionConfig {
             stack_size: 0,
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
+            on_restart: None,
         }
     }
 
@@ -699,6 +717,12 @@ impl PartitionConfig {
     /// Builder: set the error handler entry point address.
     pub(crate) fn with_error_handler(mut self, addr: u32) -> Self {
         self.error_handler = Some(addr);
+        self
+    }
+
+    /// Builder: set the restart hook callback.
+    pub(crate) fn with_on_restart(mut self, hook: RestartHook) -> Self {
+        self.on_restart = Some(hook);
         self
     }
 
@@ -1092,6 +1116,7 @@ pub struct ExternalPartitionMemory<'mem> {
     partition_id: PartitionId,
     fault_policy: FaultPolicy,
     error_handler: Option<u32>,
+    on_restart: Option<RestartHook>,
 }
 
 impl<'mem> ExternalPartitionMemory<'mem> {
@@ -1141,6 +1166,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
             partition_id,
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
+            on_restart: None,
         })
     }
 
@@ -1250,6 +1276,12 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         self
     }
 
+    /// Builder: set the restart hook callback.
+    pub fn with_on_restart(mut self, hook: RestartHook) -> Self {
+        self.on_restart = Some(hook);
+        self
+    }
+
     /// Build an `ExternalPartitionMemory` from a [`PartitionSpec`], applying
     /// all builder fields from the spec.
     pub fn from_spec<S: StackStorage>(
@@ -1270,6 +1302,9 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         }
         if let Some(handler) = spec.error_handler() {
             mem = mem.with_error_handler(handler);
+        }
+        if let Some(hook) = spec.on_restart() {
+            mem = mem.with_on_restart(hook);
         }
         Ok(mem)
     }
@@ -1294,6 +1329,9 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     }
     pub fn error_handler(&self) -> Option<u32> {
         self.error_handler
+    }
+    pub fn on_restart(&self) -> Option<RestartHook> {
+        self.on_restart
     }
     pub fn stack_base(&self) -> u32 {
         self.stack.as_ptr() as u32
@@ -2600,6 +2638,7 @@ mod tests {
             stack_size: 0,
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
+            on_restart: None,
         }
     }
 
@@ -4709,5 +4748,85 @@ mod tests {
         pcb.run_count = u32::MAX;
         pcb.increment_run_count();
         assert_eq!(pcb.run_count(), u32::MAX);
+    }
+
+    #[test]
+    fn pcb_on_restart_defaults_to_none() {
+        let pcb = make_pcb();
+        assert!(pcb.on_restart().is_none());
+    }
+
+    #[test]
+    fn pcb_on_restart_getter_setter_round_trip() {
+        fn my_hook(_pid: usize, _warm: bool) {}
+        let mut pcb = make_pcb();
+        pcb.set_on_restart(Some(my_hook));
+        assert!(pcb.on_restart().is_some());
+        let hook = pcb.on_restart().unwrap();
+        // Verify it's the same function pointer.
+        assert_eq!(hook as usize, my_hook as *const () as usize);
+        // Clear it.
+        pcb.set_on_restart(None);
+        assert!(pcb.on_restart().is_none());
+    }
+
+    #[test]
+    fn partition_config_on_restart_defaults_to_none() {
+        let cfg = PartitionConfig::new(
+            0,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        );
+        assert!(cfg.on_restart.is_none());
+    }
+
+    #[test]
+    fn partition_config_with_on_restart_builder() {
+        fn my_hook(_pid: usize, _warm: bool) {}
+        let cfg = PartitionConfig::new(
+            0,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 4096, 0x0306_0000),
+        )
+        .with_on_restart(my_hook);
+        assert!(cfg.on_restart.is_some());
+        assert_eq!(
+            cfg.on_restart.unwrap() as usize,
+            my_hook as *const () as usize
+        );
+    }
+
+    #[test]
+    fn external_partition_memory_on_restart_defaults_to_none() {
+        use crate::partition_core::AlignedStack256B;
+        let mut storage = AlignedStack256B::default();
+        let epm = ExternalPartitionMemory::from_aligned_stack(
+            &mut storage,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+            PartitionId::new(0),
+        )
+        .unwrap();
+        assert!(epm.on_restart().is_none());
+    }
+
+    #[test]
+    fn external_partition_memory_with_on_restart_builder() {
+        use crate::partition_core::AlignedStack256B;
+        fn my_hook(_pid: usize, _warm: bool) {}
+        let mut storage = AlignedStack256B::default();
+        let epm = ExternalPartitionMemory::from_aligned_stack(
+            &mut storage,
+            0x0800_0001u32,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+            PartitionId::new(0),
+        )
+        .unwrap()
+        .with_on_restart(my_hook);
+        assert!(epm.on_restart().is_some());
+        assert_eq!(
+            epm.on_restart().unwrap() as usize,
+            my_hook as *const () as usize
+        );
     }
 }
