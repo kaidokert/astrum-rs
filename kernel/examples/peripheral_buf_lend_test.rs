@@ -32,7 +32,7 @@ kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
-kernel::define_unified_harness!(TestConfig, |_tick, k| {
+kernel::define_harness!(TestConfig, |_tick, k| {
     if MIRROR.load(Ordering::Acquire) == 1 {
         let rid = RID.load(Ordering::Relaxed) as u8;
         if let Some(d) = k.dynamic_strategy.slot(rid) {

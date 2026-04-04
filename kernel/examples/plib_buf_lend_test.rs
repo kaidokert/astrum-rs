@@ -40,7 +40,7 @@ static P1_DATA: AtomicU32 = AtomicU32::new(0);
 static P1_DONE: AtomicU32 = AtomicU32::new(0);
 static LENT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_harness!(TestConfig, |tick, _k| {
     if P0_DONE.load(Ordering::Acquire) == 0 || P1_DONE.load(Ordering::Acquire) == 0 {
         if tick >= 50 {
             hprintln!("FAIL timeout");
@@ -127,7 +127,7 @@ fn main() -> ! {
     sched.add_system_window(1).expect("sys1");
     // SAFETY: called once from main before any interrupt handler runs.
     // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by
-    // `define_unified_harness!(@impl_compat)` as a module-level `static mut`,
+    // `define_harness!(@impl_compat)` as a module-level `static mut`,
     // so no `extern "C"` declaration is needed.
     let stacks = unsafe { &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NP]>() };
     // TODO: array destructuring is compile-time checked against NP; a mismatch

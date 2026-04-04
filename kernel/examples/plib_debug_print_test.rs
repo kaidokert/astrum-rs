@@ -23,7 +23,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -34,7 +34,7 @@ const TIMEOUT: u32 = 20;
 /// sys_debug_print result: Ok(0)→0, Err→e.to_u32().
 static PRINT_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_harness!(TestConfig, |tick, _k| {
     if tick < 5 {
         return;
     }

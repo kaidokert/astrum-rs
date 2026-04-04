@@ -29,7 +29,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -46,7 +46,7 @@ static ACK_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Last return code from sys_irq_ack (should be 0 on success).
 static LAST_ACK_RC: AtomicU32 = AtomicU32::new(0xFFFF_FFFF);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_harness!(TestConfig, |tick, _k| {
     // Pend IRQ 3 at ticks 2, 6, and 10 to drive three ack cycles.
     if tick == 2 || tick == 6 || tick == 10 {
         #[cfg(target_arch = "arm")]

@@ -48,7 +48,7 @@ static WHO_RAN: AtomicU32 = AtomicU32::new(NO_PARTITION);
 static LAST_SEEN: AtomicU32 = AtomicU32::new(NO_PARTITION);
 static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(Config, |tick, k| {
+kernel::define_harness!(Config, |tick, k| {
     // Pend PendSV on every tick to maximise preemption pressure.
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();

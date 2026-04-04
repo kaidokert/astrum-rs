@@ -54,7 +54,7 @@ static P0_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Incremented by partition 1 on every loop iteration.
 static P1_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(Config, |tick, _k| {
+kernel::define_harness!(Config, |tick, _k| {
     // Pend PendSV on every tick to maximise preemption pressure.
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();

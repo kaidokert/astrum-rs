@@ -19,7 +19,7 @@ use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions1, PortsTiny, S
 const NP: usize = 1;
 const STACK_WORDS: usize = 256;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -34,7 +34,7 @@ static TIMED_DATA: AtomicU32 = AtomicU32::new(NOT_YET);
 static PHASE1_DONE: AtomicU32 = AtomicU32::new(0);
 static RX_READY: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, |tick, k| {
+kernel::define_harness!(TestConfig, |tick, k| {
     // After non-blocking read completes, push data into UART-A RX.
     if PHASE1_DONE.load(Ordering::Acquire) == 1 && RX_READY.load(Ordering::Relaxed) == 0 {
         k.uart_pair.a.push_rx(&PAYLOAD);
@@ -109,7 +109,7 @@ fn main() -> ! {
     sched.add_system_window(1).expect("sys0");
     // SAFETY: called once from main before any interrupt handler runs.
     // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by
-    // `define_unified_harness!(@impl_compat)` as a module-level `static mut`.
+    // `define_harness!(@impl_compat)` as a module-level `static mut`.
     let stacks = unsafe { &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NP]>() };
     let [ref mut s0] = *stacks;
     let mpu = MpuRegion::new(0, 0, 0);

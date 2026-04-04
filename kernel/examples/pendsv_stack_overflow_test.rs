@@ -8,7 +8,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 kernel::kernel_config!(Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
-kernel::define_unified_harness!(Config, |tick, k| {
+kernel::define_harness!(Config, |tick, k| {
     if tick >= 10 && k.partition_sp().first() == Some(&kernel::partition_core::SP_SENTINEL_FAULT) {
         hprintln!("pendsv_stack_overflow_test: PASS");
         debug::exit(debug::EXIT_SUCCESS);

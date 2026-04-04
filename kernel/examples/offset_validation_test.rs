@@ -15,13 +15,13 @@ use kernel::{
 
 kernel::kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-kernel::define_unified_harness!(TestConfig);
+kernel::define_harness!(TestConfig);
 
 type K = Kernel<'static, TestConfig>;
 type C = <TestConfig as KernelConfig>::Core;
 
 // TODO: The offset symbols used below (KERNEL_CURRENT_PARTITION_OFFSET, etc.)
-// are `#[no_mangle] static usize` items emitted by `define_unified_harness!`.
+// are `#[no_mangle] static usize` items emitted by `define_harness!`.
 // They cannot be redeclared via `extern "C"` without causing duplicate-symbol
 // errors.  Ideally the macro would export them through an explicit public API
 // rather than relying on implicit `#[no_mangle]` visibility.
@@ -65,7 +65,7 @@ fn main() -> ! {
     // the actual linker-resolved values (not const-folded duplicates).
     //
     // SAFETY: Each symbol is a `#[no_mangle] static usize` emitted by
-    // `define_unified_harness!` and resolved by the linker to the
+    // `define_harness!` and resolved by the linker to the
     // corresponding struct-field byte offset.  Reading them via
     // `read_volatile` is safe because they are valid, aligned, initialised
     // `usize` values that live for the entire program lifetime.
