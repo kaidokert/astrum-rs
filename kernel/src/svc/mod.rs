@@ -2663,8 +2663,11 @@ where
         // (2) Clean up IPC state.
         self.cleanup_partition_ipc(pid);
 
-        // Read PCB fields needed for stack reinit.
+        // Read PCB fields needed for stack reinit; invoke on_restart hook if registered.
         let pcb = self.pcb(pid).ok_or(RestartError::InvalidPid)?;
+        if let Some(hook) = pcb.on_restart() {
+            hook(pid, warm);
+        }
         let entry = pcb.entry_point();
         let base = pcb.stack_base();
         let size = pcb.stack_size();

@@ -146,4 +146,78 @@ mod integration {
         assert_eq!(k.restart_partition(0, true), Err(RestartError::NotFaulted));
         assert_eq!(k.restart_partition(99, true), Err(RestartError::InvalidPid));
     }
+
+    mod on_restart_hook {
+        use super::*;
+        use core::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Mutex;
+
+        // Encodes (pid + 1) in high 16 bits and warm flag in low 16 bits.
+        static HOOK_RECORD: AtomicU32 = AtomicU32::new(0);
+        // Serialize tests that share HOOK_RECORD to prevent parallel contamination.
+        static LOCK: Mutex<()> = Mutex::new(());
+
+        fn test_hook(pid: usize, warm: bool) {
+            let encoded = (((pid as u32) + 1) << 16) | (warm as u32);
+            HOOK_RECORD.store(encoded, Ordering::SeqCst);
+        }
+
+        fn reset_hook() {
+            HOOK_RECORD.store(0, Ordering::SeqCst);
+        }
+
+        fn read_hook() -> Option<(usize, bool)> {
+            let v = HOOK_RECORD.load(Ordering::SeqCst);
+            if v == 0 {
+                return None;
+            }
+            let pid = ((v >> 16) - 1) as usize;
+            let warm = (v & 0xFFFF) != 0;
+            Some((pid, warm))
+        }
+
+        #[test]
+        fn warm_restart_calls_hook() {
+            let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            reset_hook();
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let (mut d0, mut d1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut k = mk(&mut s0, &mut s1, &mut d0, &mut d1);
+            k.pcb_mut(0).unwrap().set_on_restart(Some(test_hook));
+            do_fault(&mut k, 0);
+            k.restart_partition(0, true).unwrap();
+            let (pid, warm) = read_hook().expect("hook must be called");
+            assert_eq!(pid, 0);
+            assert!(warm);
+        }
+
+        #[test]
+        fn cold_restart_calls_hook() {
+            let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            reset_hook();
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let (mut d0, mut d1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut k = mk(&mut s0, &mut s1, &mut d0, &mut d1);
+            k.pcb_mut(0).unwrap().set_on_restart(Some(test_hook));
+            do_fault(&mut k, 0);
+            k.restart_partition(0, false).unwrap();
+            let (pid, warm) = read_hook().expect("hook must be called");
+            assert_eq!(pid, 0);
+            assert!(!warm);
+        }
+
+        #[test]
+        fn none_hook_is_noop() {
+            let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            reset_hook();
+            let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let (mut d0, mut d1) = (AlignedStack256B::default(), AlignedStack256B::default());
+            let mut k = mk(&mut s0, &mut s1, &mut d0, &mut d1);
+            // on_restart defaults to None — no hook set.
+            do_fault(&mut k, 0);
+            k.restart_partition(0, true).unwrap();
+            assert!(read_hook().is_none(), "no hook should be called");
+            assert_eq!(k.pcb(0).unwrap().state(), PartitionState::Ready);
+        }
+    }
 }
