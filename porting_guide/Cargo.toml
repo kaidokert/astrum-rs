@@ -6,13 +6,15 @@ edition = "2021"
 [dependencies]
 kernel = { path = "../kernel" }
 cortex-m = "0.7"
+cortex-m-rt = { version = "0.7", features = ["device"] }
+cortex-m-semihosting = { version = "0.5", optional = true }
 stm32f4xx-hal = { version = "0.23", features = ["stm32f407"], optional = true }
 nrf52840-hal = { version = "0.19", optional = true }
 
 [features]
 # Debug channel selection (pass through to kernel)
 log-rtt = ["kernel/log-rtt"]
-log-semihosting = ["kernel/log-semihosting"]
+log-semihosting = ["kernel/log-semihosting", "dep:cortex-m-semihosting"]
 log-swo = ["kernel/log-swo"]
 log-defmt = ["kernel/log-defmt"]
 
@@ -20,3 +22,7 @@ log-defmt = ["kernel/log-defmt"]
 board-qemu = ["kernel/qemu"]
 board-stm32f4-discovery = ["stm32f4xx-hal"]
 board-nrf52840-dk = ["nrf52840-hal"]
+
+[[example]]
+name = "00_context_switch"
+required-features = ["board-qemu", "log-semihosting"]
