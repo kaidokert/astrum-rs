@@ -26,7 +26,7 @@ const P1: u8 = 1;
 const MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 const STACK_WORDS: usize = 256;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 

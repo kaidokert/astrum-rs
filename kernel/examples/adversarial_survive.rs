@@ -39,7 +39,7 @@ use kernel::{
 // Kernel configuration (MPU enforcement off — we configure MPU manually)
 // ---------------------------------------------------------------------------
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 

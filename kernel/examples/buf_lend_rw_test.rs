@@ -27,7 +27,7 @@ const MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 const MODIFIED: [u8; 4] = [0xCA, 0xFE, 0xBA, 0xBE];
 const STACK_WORDS: usize = 256;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 

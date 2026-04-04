@@ -30,7 +30,7 @@ use kernel::{
 // schedule advance, klog, user hook) takes far longer than one period,
 // so SysTick naturally re-pends during execution — exactly the condition
 // that _detect_dropped_ticks! is designed to catch.
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions1,
     SyncMinimal,
     MsgMinimal,

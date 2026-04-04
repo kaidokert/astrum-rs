@@ -25,7 +25,7 @@ use kernel::{
     Partitions4, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions4, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 

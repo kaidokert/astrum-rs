@@ -39,7 +39,7 @@ static PERIPH_REGIONS: [MpuRegion; 1] = [MpuRegion::new(
 /// Result flag: 0 = not started, 1 = write+readback OK.
 static RESULT: AtomicU32 = AtomicU32::new(0);
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

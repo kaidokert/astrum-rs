@@ -40,7 +40,7 @@ const TIMER0_BASE: u32 = 0x4003_0000;
 const I2C0_BASE: u32 = 0x4002_0000;
 const PERIPH_SIZE: u32 = 4096;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 

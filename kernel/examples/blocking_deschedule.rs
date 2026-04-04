@@ -28,7 +28,7 @@ use kernel::{
     DebugEnabled, MsgSmall, PartitionBody, PartitionEntry, Partitions1, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(Cfg<Partitions1, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(Cfg<Partitions1, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
 
 // Use define_unified_kernel! which generates KERNEL static, dispatch_hook, and store_kernel
 kernel::define_unified_kernel!(Cfg, |k| {

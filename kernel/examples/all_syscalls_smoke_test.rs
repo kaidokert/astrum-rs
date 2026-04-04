@@ -17,7 +17,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsSmall, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsSmall, DebugEnabled>);
+kernel::kernel_config!(Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsSmall, DebugEnabled>);
 
 const TIMEOUT: u32 = 50;
 const ALL: u32 = (1 << 13) - 1;

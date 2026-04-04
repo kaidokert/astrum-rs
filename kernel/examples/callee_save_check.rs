@@ -14,7 +14,7 @@ use kernel::{
     PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(Cfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 static CHECKS: AtomicU32 = AtomicU32::new(0);
 static ERRORS: AtomicU32 = AtomicU32::new(0);
 kernel::define_unified_harness!(Cfg, |tick, _k| {

@@ -29,7 +29,7 @@ use kernel::{
     PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(Cfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 #[inline(always)]
 fn read_cyccnt() -> u32 {

@@ -37,7 +37,7 @@ use kernel::{
 //
 // Sized for 3 partitions, 1 semaphore, 1 blackboard (4-byte messages,
 // 3-deep wait queue), and minimal allocations for unused resource pools.
-kernel::compose_kernel_config!(DemoConfig<kernel::Partitions3, kernel::SyncStandard, kernel::MsgStandard, kernel::PortsSmall, kernel::DebugEnabled>);
+kernel::kernel_config!(DemoConfig<kernel::Partitions3, kernel::SyncStandard, kernel::MsgStandard, kernel::PortsSmall, kernel::DebugEnabled>);
 
 // ---------------------------------------------------------------------------
 // R0 packing helpers
