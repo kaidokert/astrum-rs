@@ -22,7 +22,7 @@ use kernel::{
 };
 use plib::SvcError;
 
-kernel::compose_kernel_config!(ErrTestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(ErrTestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // IRQ 0 → P0, IRQ 1 → P1 (both PartitionAcks).
 kernel::bind_interrupts!(ErrTestConfig, 70,
@@ -33,7 +33,7 @@ kernel::bind_interrupts!(ErrTestConfig, 70,
 /// Incremented after each error-path check passes.
 static CHECKS_PASSED: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(ErrTestConfig, |tick, _k| {
+kernel::define_harness!(ErrTestConfig, |tick, _k| {
     if tick >= 4 {
         let n = CHECKS_PASSED.load(Ordering::Acquire);
         if n >= 2 {

@@ -34,7 +34,7 @@ use kernel::{
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     ClearBitConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -53,7 +53,7 @@ const NUM_PARTITIONS: usize = 1;
 /// Incremented by the partition after each successful event_wait.
 static WAIT_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(ClearBitConfig, |tick, _k| {
+kernel::define_harness!(ClearBitConfig, |tick, _k| {
     if tick == 2 {
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(60));

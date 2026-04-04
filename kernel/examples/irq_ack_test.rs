@@ -26,7 +26,7 @@ use kernel::{
     SyncMinimal,
 };
 
-kernel::compose_kernel_config!(AckTestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(AckTestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Bind IRQ 0 → partition 0, event bit 0x01 (PartitionAcks default).
 kernel::bind_interrupts!(AckTestConfig, 70,
@@ -38,7 +38,7 @@ const NUM_PARTITIONS: usize = 1;
 /// Incremented by the partition after each successful wait+ack cycle.
 static ACK_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(AckTestConfig, |tick, _k| {
+kernel::define_harness!(AckTestConfig, |tick, _k| {
     if tick == 2 || tick == 6 {
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));

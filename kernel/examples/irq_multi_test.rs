@@ -25,7 +25,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(MultiIrqConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(MultiIrqConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Bind IRQ 0 → partition 0, event 0x01; IRQ 1 → partition 1, event 0x02.
 kernel::bind_interrupts!(MultiIrqConfig, 70,
@@ -39,7 +39,7 @@ static P0_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Incremented by partition 1 after each successful `event_wait` return.
 static P1_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(MultiIrqConfig, |tick, _k| {
+kernel::define_harness!(MultiIrqConfig, |tick, _k| {
     if tick == 2 {
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));

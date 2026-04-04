@@ -20,7 +20,7 @@ use kernel::{
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -43,7 +43,7 @@ static DISPATCH_COUNT: AtomicU32 = AtomicU32::new(0);
 /// 0 = not acked, 1 = partition acked, 2 = disable verified immediate.
 static PHASE: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(Cfg, |tick, _k| {
+kernel::define_harness!(Cfg, |tick, _k| {
     if tick == 2 {
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));

@@ -26,7 +26,7 @@ use kernel::{
     SyncMinimal,
 };
 
-kernel::compose_kernel_config!(StressConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(StressConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Bind IRQ 0 → partition 0, event bit 0x01 (PartitionAcks default).
 kernel::bind_interrupts!(StressConfig, 70,
@@ -40,7 +40,7 @@ const TIMEOUT_TICK: u32 = 30;
 /// Incremented by the partition after each successful wait+ack cycle.
 static ACK_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(StressConfig, |tick, _k| {
+kernel::define_harness!(StressConfig, |tick, _k| {
     // Pend IRQ 0 on every tick from tick 2 onward (continuous pressure).
     if tick >= 2 {
         #[cfg(target_arch = "arm")]

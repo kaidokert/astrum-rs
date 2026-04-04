@@ -17,7 +17,7 @@ use kernel::{
 #[allow(clippy::single_component_path_imports)]
 use plib;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     CustomHandlerConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -44,7 +44,7 @@ static ISR_COUNTER: AtomicU32 = AtomicU32::new(0);
 static P0_COUNT: AtomicU32 = AtomicU32::new(0);
 static P1_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(CustomHandlerConfig, |tick, _k| {
+kernel::define_harness!(CustomHandlerConfig, |tick, _k| {
     if tick == 2 {
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(60));

@@ -18,7 +18,7 @@ use kernel::{
     Partitions4, PortsTiny, StackStorage as _, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(IntegrationConfig<Partitions4, SyncMinimal, MsgStandard, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(IntegrationConfig<Partitions4, SyncMinimal, MsgStandard, PortsTiny, DebugEnabled>);
 
 static mut STACKS: [AlignedStack1K; IntegrationConfig::N] =
     [AlignedStack1K::ZERO; IntegrationConfig::N];
@@ -40,7 +40,7 @@ extern "C" fn p1_main() -> ! {
     }
 }
 
-kernel::define_unified_harness!(no_boot, IntegrationConfig, |tick, k| {
+kernel::define_harness!(no_boot, IntegrationConfig, |tick, k| {
     // Count context switches via SysTick ticks (sentinel MPU regions in QEMU
     // have size=0, so validate_mpu_region always fails — count ticks instead).
     SW.store(tick, Ordering::Release);
