@@ -4,8 +4,61 @@
 //! supporting O(1) lookup by `ThreadId` and O(N) insertion (linear scan for
 //! the first free slot).
 
+use crate::context;
+use crate::partition::EntryAddr;
 use rtos_traits::ids::ThreadId;
 use rtos_traits::thread::{SchedulingPolicy, ThreadControlBlock, ThreadState};
+
+/// Divide a partition's stack into `max_threads` equal sub-stacks, each
+/// aligned down to 8 bytes. Thread index 0 (the main thread) occupies the
+/// top (highest addresses) of the partition stack.
+///
+/// The top of the partition stack is aligned down to 8 bytes before dividing,
+/// so sub-stack boundaries are correct even when the input range is not
+/// pre-aligned.
+///
+/// Returns `Some((sub_stack_base, sub_stack_size))` for the requested thread,
+/// or `None` if `max_threads == 0`, `thread_index >= max_threads`, or
+/// arithmetic overflows.
+pub fn split_thread_stack(
+    partition_stack_base: u32,
+    partition_stack_size: u32,
+    thread_index: u32,
+    max_threads: u32,
+) -> Option<(u32, u32)> {
+    if max_threads == 0 || thread_index >= max_threads {
+        return None;
+    }
+    let top = partition_stack_base.checked_add(partition_stack_size)?;
+    let aligned_top = top & !7;
+    let usable = aligned_top.saturating_sub(partition_stack_base);
+    let sub_size = (usable / max_threads) & !7;
+    let offset = (thread_index.checked_add(1)?).checked_mul(sub_size)?;
+    let base = aligned_top.checked_sub(offset)?;
+    Some((base, sub_size))
+}
+
+/// Initialize a context-switch frame on a thread's sub-stack.
+///
+/// This is a thin wrapper around [`context::init_stack_frame`] that converts
+/// the returned word-index into an absolute stack pointer address.
+///
+/// `sub_stack` is a `&mut [u32]` slice covering the sub-stack region, and
+/// `sub_stack_base` is its absolute base address (as returned by
+/// [`split_thread_stack`]).
+///
+/// Returns the absolute stack pointer (byte address), or `None` if the
+/// sub-stack is too small for a context frame.
+pub fn init_thread_stack_frame(
+    sub_stack: &mut [u32],
+    sub_stack_base: u32,
+    entry_point: impl Into<EntryAddr>,
+    r0_arg: Option<u32>,
+) -> Option<u32> {
+    let frame_index = context::init_stack_frame(sub_stack, entry_point, r0_arg)?;
+    let byte_offset = (frame_index as u32).checked_mul(4)?;
+    sub_stack_base.checked_add(byte_offset)
+}
 
 /// Errors returned by [`ThreadTable`] operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -846,5 +899,167 @@ mod tests {
             table.init_main_thread(0x0800_0000, u32::MAX, 1, 0),
             Err(ThreadError::StackOverflow)
         );
+    }
+
+    // ── split_thread_stack tests ──────────────────────────────────
+
+    #[test]
+    fn split_1_thread_gets_full_stack() {
+        let base = 0x2000_0000u32;
+        let size = 1024u32;
+        let (sub_base, sub_size) = super::split_thread_stack(base, size, 0, 1).unwrap();
+        assert_eq!(sub_size, 1024);
+        assert_eq!(sub_base, base);
+    }
+
+    #[test]
+    fn split_2_threads_even() {
+        let base = 0x2000_0000u32;
+        let size = 1024u32;
+        let (b0, s0) = super::split_thread_stack(base, size, 0, 2).unwrap();
+        let (b1, s1) = super::split_thread_stack(base, size, 1, 2).unwrap();
+        // Each thread gets 512 bytes.
+        assert_eq!(s0, 512);
+        assert_eq!(s1, 512);
+        // Thread 0 (main) is at the top.
+        assert_eq!(b0, base + 512);
+        assert_eq!(b1, base);
+        // No overlap: b1 + s1 == b0.
+        assert_eq!(b1 + s1, b0);
+    }
+
+    #[test]
+    fn split_4_threads_quarters() {
+        let base = 0x2000_0000u32;
+        let size = 2048u32;
+        for i in 0..4u32 {
+            let (bi, si) = super::split_thread_stack(base, size, i, 4).unwrap();
+            assert_eq!(si, 512);
+            assert_eq!(bi, base + 2048 - (i + 1) * 512);
+            assert_eq!(bi % 8, 0, "sub-stack base not 8-byte aligned");
+        }
+        // Total sub-stack space == partition_stack_size.
+        assert_eq!(512 * 4, size);
+    }
+
+    #[test]
+    fn split_alignment_maintained_for_unaligned_size() {
+        let base = 0x2000_0000u32;
+        // Use truly unaligned sizes (not multiples of 8).
+        for &size in &[1001u32, 1007, 997] {
+            for i in 0..3u32 {
+                let (bi, si) = super::split_thread_stack(base, size, i, 3).unwrap();
+                assert_eq!(
+                    si % 8,
+                    0,
+                    "sub-stack size not 8-byte aligned for size={size}"
+                );
+                assert_eq!(
+                    bi % 8,
+                    0,
+                    "sub-stack base not 8-byte aligned for size={size}"
+                );
+            }
+            // Sub-stacks must not overlap.
+            let (b0, s0) = super::split_thread_stack(base, size, 0, 3).unwrap();
+            let (b1, s1) = super::split_thread_stack(base, size, 1, 3).unwrap();
+            let (b2, _s2) = super::split_thread_stack(base, size, 2, 3).unwrap();
+            assert!(
+                b2 + s0 <= b1,
+                "thread 2 and thread 1 overlap for size={size}"
+            );
+            assert!(
+                b1 + s1 <= b0,
+                "thread 1 and thread 0 overlap for size={size}"
+            );
+            // Total sub-stack space <= partition_stack_size.
+            assert!(s0 * 3 <= size);
+        }
+    }
+
+    #[test]
+    fn split_alignment_with_unaligned_base() {
+        // Base that is not 8-byte aligned: sub-stack tops must still be aligned.
+        let base = 0x2000_0003u32;
+        let size = 1024u32;
+        for i in 0..2u32 {
+            let (bi, si) = super::split_thread_stack(base, size, i, 2).unwrap();
+            assert_eq!(si % 8, 0, "sub-stack size not 8-byte aligned");
+            assert_eq!(bi % 8, 0, "sub-stack base not 8-byte aligned");
+            assert!(bi >= base, "sub-stack below partition base");
+            assert!(bi + si <= base + size, "sub-stack exceeds partition top");
+        }
+    }
+
+    #[test]
+    fn split_no_overlap_any_count() {
+        let base = 0x2000_0000u32;
+        let size = 4096u32;
+        for max in 1..=8u32 {
+            let mut prev_base = base + size;
+            for i in 0..max {
+                let (bi, si) = super::split_thread_stack(base, size, i, max).unwrap();
+                // Each sub-stack ends at or before the previous one starts.
+                assert!(bi + si <= prev_base, "overlap at max={max}, i={i}");
+                // All sub-stacks are within the partition stack.
+                assert!(bi >= base, "sub-stack below partition base");
+                assert!(bi + si <= base + size, "sub-stack exceeds partition top");
+                prev_base = bi;
+            }
+        }
+    }
+
+    #[test]
+    fn split_returns_none_on_zero_threads() {
+        assert!(super::split_thread_stack(0x2000_0000, 1024, 0, 0).is_none());
+    }
+
+    #[test]
+    fn split_returns_none_on_oob_index() {
+        assert!(super::split_thread_stack(0x2000_0000, 1024, 2, 2).is_none());
+    }
+
+    #[test]
+    fn split_returns_none_on_overflow() {
+        // base + size would exceed u32::MAX.
+        assert!(super::split_thread_stack(u32::MAX - 10, 100, 0, 1).is_none());
+    }
+
+    // ── init_thread_stack_frame tests ─────────────────────────────
+
+    #[cfg(not(feature = "fpu-context"))]
+    #[test]
+    fn init_thread_stack_frame_returns_absolute_sp() {
+        let mut stack = [0u32; 32];
+        let base = 0x2000_0000u32;
+        let sp = super::init_thread_stack_frame(&mut stack, base, 0x0800_0101u32, None).unwrap();
+        // init_stack_frame returns word index 16 (32 - 16 frame words).
+        // Absolute SP = base + 16 * 4 = base + 64.
+        assert_eq!(sp, base + 16 * 4);
+    }
+
+    #[cfg(not(feature = "fpu-context"))]
+    #[test]
+    fn init_thread_stack_frame_too_small_returns_none() {
+        let mut stack = [0u32; 4];
+        let result = super::init_thread_stack_frame(&mut stack, 0x2000_0000, 0x0800_0000u32, None);
+        assert!(result.is_none());
+    }
+
+    #[cfg(not(feature = "fpu-context"))]
+    #[test]
+    fn init_thread_stack_frame_writes_entry_and_r0() {
+        use crate::context::{SAVED_CONTEXT_WORDS, XPSR_THUMB};
+        let mut stack = [0xDEADu32; 32];
+        let base = 0x2000_1000u32;
+        let entry = 0x0800_0201u32;
+        let sp = super::init_thread_stack_frame(&mut stack, base, entry, Some(99)).unwrap();
+        let idx = ((sp - base) / 4) as usize;
+        // r0 = 99
+        assert_eq!(stack[idx + SAVED_CONTEXT_WORDS], 99);
+        // pc = entry
+        assert_eq!(stack[idx + SAVED_CONTEXT_WORDS + 6], entry);
+        // xpsr has Thumb bit
+        assert_eq!(stack[idx + SAVED_CONTEXT_WORDS + 7], XPSR_THUMB);
     }
 }
