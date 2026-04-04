@@ -11,7 +11,7 @@ boot path provides and how to observe errors.
 
 ### RTT Initializes Before `init_kernel()`
 
-The `define_unified_harness!` macro calls `init_rtt()` as the first
+The `define_harness!` macro calls `init_rtt()` as the first
 operation inside `init_kernel()`, before any partition or kernel
 configuration runs. This ensures that `klog!` output is routed to
 an RTT channel before validation occurs — so if `Kernel::new()` or
@@ -113,6 +113,55 @@ fn main() -> ! {
 
 The guard uses `Ordering::Relaxed` because boot runs single-threaded
 before the scheduler starts.
+
+### Pre-Init `rprintln!` Hazard
+
+**Warning:** Calling `rprintln!` before `init_rtt()` corrupts RAM and
+causes silent reset loops. The RTT control block is a static structure
+in SRAM; writing to it before `rtt_target::rtt_init_print!()` has
+initialized it overwrites arbitrary memory, which typically triggers a
+HardFault or data corruption that leads to an infinite boot loop with
+no diagnostic output.
+
+This bug was first identified during a hardware team BME280 I2C
+bring-up where early `rprintln!` debug prints (added before the harness
+macro ran) caused the board to silently reset on every boot. The
+failure was particularly difficult to diagnose because of stale RTT
+control block masking: if a previous run successfully initialized RTT,
+the control block magic bytes may persist in SRAM across a soft reset.
+The stale control block makes `rprintln!` appear to work on the *first*
+boot after a successful run, but fail on cold boot or after a power
+cycle — making the bug non-reproducible across examples and debug
+sessions.
+
+**`klog!` is safe before `init_rtt()`** — the `klog!` macro checks
+`is_rtt_initialized()` and silently no-ops if RTT has not been set up
+yet. All kernel-internal logging uses `klog!`, so the kernel itself
+will never trigger this bug.
+
+**Direct `rprintln!` in partition code is the caller's responsibility.**
+The kernel cannot guard against user code calling `rprintln!` directly.
+If your partition code uses `rprintln!` for debug output, you must
+ensure that `init_rtt()` has already been called (which `define_harness!`
+/ `init_kernel()` guarantees before any partition runs). The hazard
+arises only when `rprintln!` is called *outside* the harness — for
+example, in a custom `main()` before `init_kernel()`, or in a
+`#[pre_init]` function.
+
+**Safe pattern — use `klog!` or guard manually:**
+
+```rust
+// SAFE: klog! is always safe, even before init_rtt()
+klog!("early debug: x = {}", x);
+
+// SAFE: explicit guard before rprintln!
+if kernel::is_rtt_initialized() {
+    rprintln!("debug: x = {}", x);
+}
+
+// UNSAFE: rprintln! before init_rtt() — will corrupt RAM
+rprintln!("this will crash if RTT is not initialized");
+```
 
 ## MPU Enforcement and Build Profiles
 
@@ -285,7 +334,7 @@ partitioned RTOS context, choosing the wrong one causes subtle failures.
 
 `Peripherals::take()` sets a global `AtomicBool` to `true` on the first
 call and returns `None` on every subsequent call. The boot path
-(`main()` / `define_unified_harness!`) calls `take()` once in privileged
+(`main()` / `define_harness!`) calls `take()` once in privileged
 mode to configure the MPU, SCB priorities, and SysTick. After that, the
 `AtomicBool` is permanently set — any later `take()` from partition
 code, PendSV, or SysTick will return `None`.
