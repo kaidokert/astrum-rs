@@ -1,0 +1,6 @@
+# mode: contains
+last_partition_faults_test: start
+all_runnable_faulted=false OK
+intermediate OK
+KERNEL: all partitions faulted
+last_partition_faults_test: PASS

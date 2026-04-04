@@ -506,6 +506,10 @@ name = "all_faulted_idle_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "last_partition_faults_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "error_handler_test"
 required-features = ["qemu", "log-semihosting"]
 
