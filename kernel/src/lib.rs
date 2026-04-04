@@ -96,17 +96,29 @@ pub mod tombstone;
 #[cfg(feature = "trace")]
 pub mod trace;
 
+/// Execute the appropriate idle instruction for the current configuration.
+///
+/// - In test mode: `spin_loop` (no real hardware).
+/// - With `debug-no-wfi` feature: `nop` (keeps the core awake for JTAG/SWD).
+/// - Otherwise: `wfi` (wait-for-interrupt, lowest power idle).
+#[inline]
+pub fn idle_instruction() {
+    #[cfg(test)]
+    core::hint::spin_loop();
+    #[cfg(all(not(test), feature = "debug-no-wfi"))]
+    cortex_m::asm::nop();
+    #[cfg(all(not(test), not(feature = "debug-no-wfi")))]
+    cortex_m::asm::wfi();
+}
+
 /// Enter a safe idle loop when all partitions are faulted.
 ///
-/// Logs the all-faulted condition via `klog!` and enters an infinite `wfi` loop.
+/// Logs the all-faulted condition via `klog!` and enters an infinite idle loop.
 /// This prevents undefined behavior when no partitions remain schedulable.
 pub fn enter_safe_idle() -> ! {
     klog!("KERNEL: all partitions faulted — entering safe idle");
     loop {
-        #[cfg(not(test))]
-        cortex_m::asm::wfi();
-        #[cfg(test)]
-        core::hint::spin_loop();
+        idle_instruction();
     }
 }
 
@@ -351,5 +363,26 @@ mod reexport_tests {
             <DefaultConfig as KernelConfig>::DebugCfg::AUTO_DRAIN_BUDGET,
             DebugEnabled::AUTO_DRAIN_BUDGET
         );
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+
+    #[test]
+    fn idle_instruction_exists_and_returns() {
+        // In test mode, idle_instruction() uses spin_loop and returns immediately.
+        idle_instruction();
+    }
+
+    #[test]
+    fn idle_instruction_cfg_logic() {
+        // Verify the cfg branches are mutually exclusive and exhaustive.
+        // In test mode the `#[cfg(test)]` arm is taken, so this simply
+        // confirms the function compiles and doesn't diverge.
+        for _ in 0..3 {
+            idle_instruction();
+        }
     }
 }

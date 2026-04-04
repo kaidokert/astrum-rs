@@ -632,6 +632,9 @@ trace = ["dep:rtos-trace", "dep:systemview-target", "dep:rtt-target", "dep:criti
 # Write panic diagnostics into a .noinit tombstone before the panic backend runs.
 panic-tombstone = []
 
+# Replace WFI with NOP in idle loops (useful for debugging under JTAG/SWD).
+debug-no-wfi = []
+
 
 [target.'cfg(not(target_arch = "arm"))'.dependencies]
 loom = { version = "0.7", optional = true }
