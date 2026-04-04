@@ -306,3 +306,187 @@ fn dispatch_get_partition_run_count_matches_pcb() {
     unsafe { k.dispatch(&mut ef) };
     assert_eq!(ef.r0, 0, "dispatch run_count for P0 must be 0");
 }
+
+// ── Intra-partition thread schedule tests ─────────────────────────────
+
+use rtos_traits::ids::ThreadId;
+use rtos_traits::thread::{ThreadControlBlock, ThreadState};
+
+/// Build a 2-partition kernel where P0 has 2 threads with distinct SPs.
+/// Returns (kernel, thread_0_sp, thread_1_sp).
+fn kernel_2p_multithread() -> (Kernel<'static, TestConfig>, u32, u32) {
+    let mut schedule = ScheduleTable::<4>::new();
+    schedule.add(ScheduleEntry::new(0, 4)).unwrap();
+    schedule.add(ScheduleEntry::new(1, 4)).unwrap();
+    schedule.add_system_window(1).unwrap();
+    schedule.start();
+
+    let mut stk0 = AlignedStack1K::default();
+    let mut stk1 = AlignedStack1K::default();
+    let mems = [
+        ExternalPartitionMemory::from_aligned_stack(
+            &mut stk0,
+            0x0800_0001,
+            MpuRegion::new(0x2000_0000, 4096, 0),
+            pid(0),
+        )
+        .unwrap(),
+        ExternalPartitionMemory::from_aligned_stack(
+            &mut stk1,
+            0x0800_1001,
+            MpuRegion::new(0x2000_1000, 4096, 0),
+            pid(1),
+        )
+        .unwrap(),
+    ];
+    let mut k = kernel_from_ext(schedule, &mems);
+
+    // Transition P0 to Running and set as active.
+    k.partitions_mut()
+        .get_mut(0)
+        .unwrap()
+        .transition(PartitionState::Running)
+        .unwrap();
+    k.active_partition = Some(0);
+
+    // Record thread 0's original SP (set by init_main_thread during PCB construction).
+    let t0_sp = k
+        .partitions()
+        .get(0)
+        .unwrap()
+        .thread_table()
+        .get(ThreadId::new(0))
+        .unwrap()
+        .stack_pointer;
+
+    // Add a second thread to P0's thread table with a distinct SP.
+    let t1_sp = 0x2000_0200;
+    let tcb1 = ThreadControlBlock {
+        stack_pointer: t1_sp,
+        id: ThreadId::new(1),
+        state: ThreadState::Ready,
+        priority: 1,
+        stack_base: 0x2000_0000,
+        stack_size: 512,
+        entry_point: 0x0800_0100,
+        r0_arg: 0,
+    };
+    k.partitions_mut()
+        .get_mut(0)
+        .unwrap()
+        .thread_table_mut()
+        .add_thread(tcb1)
+        .unwrap();
+
+    // Set partition_sp[0] to thread 0's SP (simulating PendSV restore).
+    k.set_sp(0, t0_sp);
+
+    (k, t0_sp, t1_sp)
+}
+
+#[test]
+fn intra_thread_schedule_updates_partition_sp() {
+    let (mut k, t0_sp, t1_sp) = kernel_2p_multithread();
+
+    // Before advance: partition_sp[0] == thread 0's SP.
+    assert_eq!(k.get_sp(0), Some(t0_sp));
+
+    // Advance intra-thread schedule: should switch from thread 0 → thread 1.
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(switched, "must return true when thread changes");
+
+    // After advance: partition_sp[0] should be thread 1's SP.
+    assert_eq!(
+        k.get_sp(0),
+        Some(t1_sp),
+        "partition_sp must reflect incoming thread's SP"
+    );
+
+    // Outgoing thread 0's TCB.stack_pointer should have been saved.
+    let saved_sp = k
+        .partitions()
+        .get(0)
+        .unwrap()
+        .thread_table()
+        .get(ThreadId::new(0))
+        .unwrap()
+        .stack_pointer;
+    assert_eq!(
+        saved_sp, t0_sp,
+        "outgoing thread's TCB must have partition_sp saved"
+    );
+}
+
+#[test]
+fn intra_thread_schedule_single_thread_no_change() {
+    // P1 has only 1 thread (default). advance_intra_thread_schedule should be a no-op.
+    let mut k = kernel_2p();
+    let original_sp = k.get_sp(0).unwrap();
+
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(!switched, "single-threaded partition must return false");
+
+    assert_eq!(
+        k.get_sp(0),
+        Some(original_sp),
+        "single-threaded partition must not change partition_sp"
+    );
+}
+
+#[test]
+fn intra_thread_schedule_round_robin_cycle() {
+    let (mut k, t0_sp, t1_sp) = kernel_2p_multithread();
+
+    // Advance 1: thread 0 → thread 1
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(switched, "first advance must switch threads");
+    assert_eq!(k.get_sp(0), Some(t1_sp));
+
+    // Advance 2: thread 1 → thread 0
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(switched, "second advance must switch back");
+    assert_eq!(
+        k.get_sp(0),
+        Some(t0_sp),
+        "round-robin must cycle back to thread 0"
+    );
+}
+
+#[test]
+fn intra_thread_schedule_no_active_partition_is_noop() {
+    let (mut k, _t0_sp, _t1_sp) = kernel_2p_multithread();
+    let sp_before = k.get_sp(0).unwrap();
+    k.active_partition = None;
+
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(!switched, "no active partition must return false");
+
+    // partition_sp unchanged.
+    assert_eq!(k.get_sp(0), Some(sp_before));
+}
+
+#[test]
+fn intra_thread_schedule_saves_outgoing_sp_before_advance() {
+    let (mut k, _t0_sp, _t1_sp) = kernel_2p_multithread();
+
+    // Set partition_sp to a distinct value (simulating PSP drift during execution).
+    let drifted_sp = 0x2000_0ABC;
+    k.set_sp(0, drifted_sp);
+
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(switched, "must switch when multiple runnable threads exist");
+
+    // Outgoing thread 0's TCB should have the drifted SP saved.
+    let saved = k
+        .partitions()
+        .get(0)
+        .unwrap()
+        .thread_table()
+        .get(ThreadId::new(0))
+        .unwrap()
+        .stack_pointer;
+    assert_eq!(
+        saved, drifted_sp,
+        "outgoing thread must save the actual partition_sp value"
+    );
+}

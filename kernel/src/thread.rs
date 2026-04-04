@@ -142,6 +142,15 @@ impl<const MAX: usize> ThreadTable<MAX> {
         self.threads.iter().filter(|s| s.is_some()).count()
     }
 
+    /// Number of threads in the `Ready` or `Running` state (schedulable).
+    pub fn runnable_count(&self) -> usize {
+        self.threads
+            .iter()
+            .flatten()
+            .filter(|tcb| matches!(tcb.state, ThreadState::Ready | ThreadState::Running))
+            .count()
+    }
+
     /// Maximum number of threads this table can hold.
     pub const fn capacity(&self) -> usize {
         MAX

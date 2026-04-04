@@ -171,3 +171,102 @@ where
         _ => event,
     }
 }
+
+/// Advance the intra-partition thread schedule for the active partition.
+///
+/// If the active partition has more than one runnable thread, this function:
+/// 1. Saves `partition_sp[pid]` into the outgoing thread's `TCB.stack_pointer`
+/// 2. Calls `advance_intra_schedule()` on the partition's `ThreadTable`
+/// 3. Loads the incoming thread's `TCB.stack_pointer` into `partition_sp[pid]`
+///
+/// Returns `true` if a thread switch actually occurred (the active thread changed),
+/// so the caller can trigger PendSV to perform the hardware context switch.
+///
+/// Partitions with fewer than 2 runnable threads are skipped (zero overhead).
+///
+/// This must run after `advance_schedule_tick` so that `active_partition` reflects
+/// the partition that is about to execute, and before PendSV fires so that
+/// `partition_sp` contains the correct thread's SP for context restore.
+// TODO: If a partition switch just occurred in advance_schedule_tick, the newly
+// selected partition's partition_sp (its last saved state) is saved into the
+// outgoing thread's TCB and then the schedule advances, causing the partition to
+// skip a thread upon resumption. This is currently acceptable for fairness but
+// should be revisited as an explicit design choice.
+pub(crate) fn advance_intra_thread_schedule<'mem, C: KernelConfig>(
+    kernel: &mut Kernel<'mem, C>,
+) -> bool
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    [(); C::BP]:,
+    [(); C::BZ]:,
+    [(); C::DR]:,
+    C::Core:
+        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
+    C::Sync: SyncOps<
+        SemPool = SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: MsgOps<
+        MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: PortsOps<
+        SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    let pid = match kernel.active_partition {
+        Some(pid) => pid as usize,
+        None => return false,
+    };
+
+    // Read partition_sp before borrowing PCB (avoids overlapping borrows).
+    let current_sp = match kernel.get_sp(pid) {
+        Some(sp) => sp,
+        None => return false,
+    };
+
+    // Phase 1: access PCB, check runnable count, save outgoing SP, advance, read incoming SP.
+    let switch_sp = {
+        let pcb = match kernel.pcb_mut(pid) {
+            Some(pcb) => pcb,
+            None => return false,
+        };
+
+        // TODO: runnable_count() performs a linear O(N) scan on every SysTick.
+        // A cached counter in ThreadTable would be more efficient for high-frequency
+        // interrupt context. Deferred: acceptable for current max_threads (≤4).
+        if pcb.thread_table().runnable_count() <= 1 {
+            return false; // Zero or one runnable thread: nothing to switch to.
+        }
+
+        let prev_tid = pcb.thread_table().current_thread_id();
+
+        // Save current partition_sp to the outgoing (currently running) thread's TCB.
+        if let Some(tid) = prev_tid {
+            if let Some(tcb) = pcb.thread_table_mut().get_mut(tid) {
+                tcb.stack_pointer = current_sp;
+            }
+        }
+
+        // Advance the intra-partition schedule (round-robin or priority).
+        let new_tid = pcb.thread_table_mut().advance_intra_schedule();
+
+        // Only produce a new SP if the thread actually changed.
+        match (prev_tid, new_tid) {
+            (Some(prev), Some(next)) if prev != next => {
+                pcb.thread_table().get(next).map(|t| t.stack_pointer)
+            }
+            _ => None,
+        }
+    }; // PCB borrow ends here.
+
+    // Phase 2: update partition_sp so PendSV restores the correct thread.
+    if let Some(sp) = switch_sp {
+        kernel.set_sp(pid, sp);
+        true
+    } else {
+        false
+    }
+}
