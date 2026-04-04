@@ -86,11 +86,11 @@ macro_rules! __kexit_impl {
 #[cfg(klog_backend = "rtt")]
 macro_rules! __kexit_impl {
     (success) => {{
-        rtt_target::rprintln!("TEST PASSED");
+        $crate::klog!("TEST PASSED");
         cortex_m::asm::bkpt();
     }};
     (failure) => {{
-        rtt_target::rprintln!("TEST FAILED");
+        $crate::klog!("TEST FAILED");
         cortex_m::asm::bkpt();
     }};
 }
@@ -169,6 +169,24 @@ mod tests {
             }
         }
         // If we get here, macro expansion compiled successfully.
+    }
+
+    /// Verify kexit macro compiles under the RTT backend.
+    /// This test is only compiled when klog_backend="rtt", exercising the
+    /// klog!-delegating variant that host-mode tests (backend="none") cannot reach.
+    #[cfg(klog_backend = "rtt")]
+    #[test]
+    fn kexit_rtt_variant_compiles() {
+        fn _check_success() {
+            if false {
+                kexit!(success);
+            }
+        }
+        fn _check_failure() {
+            if false {
+                kexit!(failure);
+            }
+        }
     }
 
     /// Verify all three __kexit_impl cfg gates are mutually exclusive.
