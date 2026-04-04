@@ -1,6 +1,6 @@
 //! QEMU integration test: verify boot banner output.
 //!
-//! Boots a single-partition kernel via `define_unified_harness!` and checks
+//! Boots a single-partition kernel via `define_harness!` and checks
 //! that the boot banner (`=== kernel v0.1.0 ===`) was printed before the
 //! SysTick hook fires.  The partition itself is a trivial NOP loop.
 //!
@@ -27,8 +27,8 @@ const TIMEOUT_TICKS: u32 = 20;
 /// Partition signals it ran at least once.
 static PARTITION_RAN: AtomicBool = AtomicBool::new(false);
 
-kernel::define_unified_harness!(BannerConfig, |tick, _k| {
-    // The boot banner is printed by define_unified_harness! during boot(),
+kernel::define_harness!(BannerConfig, |tick, _k| {
+    // The boot banner is printed by define_harness! during boot(),
     // before the scheduler starts.  By the time SysTick fires, the banner
     // has already been emitted.  We just need the partition to have run
     // (proving the kernel actually booted) before we declare PASS.

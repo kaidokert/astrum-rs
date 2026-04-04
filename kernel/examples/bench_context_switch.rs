@@ -55,7 +55,7 @@ const TIMEOUT_TICKS: u32 = 500;
 
 const SENTINEL_A: u32 = 42.0_f32.to_bits();
 
-kernel::define_unified_harness!(Cfg, |tick, _k| {
+kernel::define_harness!(Cfg, |tick, _k| {
     let now = read_cyccnt();
     let work_fpu = WORK_FPU.load(Ordering::Relaxed);
     let work_nofpu = WORK_NOFPU.load(Ordering::Relaxed);

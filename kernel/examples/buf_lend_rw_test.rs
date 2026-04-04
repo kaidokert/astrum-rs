@@ -34,7 +34,7 @@ kernel::kernel_config!(
 // The SVC handler stores MPU windows in `kernel.dynamic_strategy`, but PendSV
 // reads from the harness-generated HARNESS_STRATEGY.  The SysTick hook below
 // mirrors the window so PendSV programs the correct MPU region for P1.
-kernel::define_unified_harness!(TestConfig, |_tick, k| {
+kernel::define_harness!(TestConfig, |_tick, k| {
     if MIRROR.load(Ordering::Acquire) == 1 {
         let rid = RID.load(Ordering::Relaxed) as u8;
         if let Some(d) = k.dynamic_strategy.slot(rid) {

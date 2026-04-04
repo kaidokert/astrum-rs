@@ -33,14 +33,14 @@ use kernel::{
 /// Test name for reporting.
 const TEST_NAME: &str = "write_control";
 
-kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsMinimal, DebugEnabled>);
+kernel::kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsMinimal, DebugEnabled>);
 
 const NUM_PARTITIONS: usize = TestConfig::N;
 
 // 0 = pending, 1 = pass, 2 = fail (partition not unpriv), 3 = fail (escalated)
 static RESULT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_harness!(TestConfig, |tick, _k| {
     let r = RESULT.load(Ordering::Acquire);
     if r == 1 {
         hprintln!("{}: nPRIV unchanged (write ignored) — PASS", TEST_NAME);

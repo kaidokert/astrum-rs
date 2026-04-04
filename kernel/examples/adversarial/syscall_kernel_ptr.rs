@@ -48,7 +48,7 @@ const TEST_NAME: &str = "syscall_kernel_ptr";
 
 const NUM_PARTITIONS: usize = 1;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,
@@ -64,7 +64,7 @@ kernel::compose_kernel_config!(
 static SVC_RESULT: AtomicU32 = AtomicU32::new(0);
 static SVC_DONE: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_harness!(TestConfig, |tick, _k| {
     if SVC_DONE.load(Ordering::Acquire) == 1 {
         let result = SVC_RESULT.load(Ordering::Acquire);
         if result == EXPECTED_ERROR {

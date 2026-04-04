@@ -27,7 +27,7 @@ fn fail() -> ! {
         cortex_m::asm::wfi();
     }
 }
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_harness!(TestConfig, |tick, _k| {
     let r = RESULT.load(Ordering::Acquire);
     if r == PASS {
         hprintln!("buf_lend_addr_test: PASS");

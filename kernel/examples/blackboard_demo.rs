@@ -73,7 +73,7 @@ static DATA_ERRORS: AtomicU32 = AtomicU32::new(0);
 
 // Use the unified harness macro with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.
-kernel::define_unified_harness!(DemoConfig, |tick, _k| {
+kernel::define_harness!(DemoConfig, |tick, _k| {
     // Check progress every 10 ticks
     if tick.is_multiple_of(10) {
         let round = CONFIG_ROUND.load(Ordering::Acquire);

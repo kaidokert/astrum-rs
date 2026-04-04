@@ -24,7 +24,7 @@ const ALL: u32 = (1 << 13) - 1;
 static DONE: AtomicU32 = AtomicU32::new(0);
 static FAIL: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(Cfg, |tick, _k| {
+kernel::define_harness!(Cfg, |tick, _k| {
     let (done, fail) = (DONE.load(Ordering::Acquire), FAIL.load(Ordering::Acquire));
     if fail != 0 {
         hprintln!("all_syscalls_smoke_test: FAIL f={:#x} d={:#x}", fail, done);

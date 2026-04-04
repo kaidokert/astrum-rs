@@ -47,7 +47,7 @@ const NUM_PARTITIONS: usize = 2;
 /// Stack size in bytes (1 KiB, matches AlignedStack1K).
 const STACK_SIZE: u32 = AlignedStack1K::SIZE_BYTES as u32;
 
-kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsSmall, DebugEnabled>);
+kernel::kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsSmall, DebugEnabled>);
 
 static SVC_RESULT: AtomicU32 = AtomicU32::new(0);
 static SVC_DONE: AtomicU32 = AtomicU32::new(0);
@@ -55,7 +55,7 @@ static SVC_DONE: AtomicU32 = AtomicU32::new(0);
 /// Set by main() before boot, read by p0_main_body.
 static P0_ARG: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_harness!(TestConfig, |tick, _k| {
     if SVC_DONE.load(Ordering::Acquire) == 1 {
         let result = SVC_RESULT.load(Ordering::Acquire);
         if result == EXPECTED_ERROR {
