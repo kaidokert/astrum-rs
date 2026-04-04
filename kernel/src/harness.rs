@@ -582,17 +582,6 @@ macro_rules! define_harness {
     };
 }
 
-/// **Deprecated**: use [`define_harness!`] instead.
-///
-/// This macro forwards all arguments to `define_harness!` and exists only
-/// for backwards compatibility. It will be removed in a future release.
-#[macro_export]
-macro_rules! define_unified_harness {
-    ($($tt:tt)*) => {
-        $crate::define_harness!($($tt)*);
-    };
-}
-
 // Unit tests: the define_harness! macro emits global_asm (via
 // define_pendsv!) and an #[exception] handler, which are only
 // meaningful on ARM targets. Correctness is verified by the QEMU
