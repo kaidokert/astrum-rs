@@ -91,6 +91,69 @@ impl<const MAX: usize> ThreadTable<MAX> {
         self.scheduling_policy
     }
 
+    /// Pick the highest-priority Ready thread (static priority scheduling).
+    ///
+    /// Lowest priority number = highest priority.  On tie, the thread with
+    /// the lower `ThreadId` wins (deterministic tie-breaking).
+    /// Returns `None` when no Ready thread exists.
+    pub fn pick_next_priority(&self) -> Option<ThreadId> {
+        let mut best: Option<&ThreadControlBlock> = None;
+        for tcb in self.threads.iter().flatten() {
+            if tcb.state != ThreadState::Ready {
+                continue;
+            }
+            best = Some(match best {
+                None => tcb,
+                Some(prev) => {
+                    if tcb.priority < prev.priority
+                        || (tcb.priority == prev.priority && tcb.id.as_raw() < prev.id.as_raw())
+                    {
+                        tcb
+                    } else {
+                        prev
+                    }
+                }
+            });
+        }
+        best.map(|tcb| tcb.id)
+    }
+
+    /// Advance the static-priority schedule by one step.
+    ///
+    /// 1. Transition the current Running thread to Ready.
+    /// 2. Pick the highest-priority Ready thread via [`pick_next_priority`].
+    /// 3. Transition that thread to Running and update `current_thread`.
+    ///
+    /// Returns the `ThreadId` of the newly running thread, or `None` if no
+    /// Ready thread was found (in which case the current thread is restored
+    /// to Running).
+    pub fn advance_priority(&mut self) -> Option<ThreadId> {
+        // Demote current thread from Running to Ready (if it is Running).
+        let cur = self.current_thread as usize;
+        if let Some(ref mut tcb) = self.threads.get_mut(cur).and_then(|s| s.as_mut()) {
+            if tcb.state == ThreadState::Running {
+                tcb.state = ThreadState::Ready;
+            }
+        }
+
+        if let Some(next_id) = self.pick_next_priority() {
+            let idx = next_id.as_raw() as usize;
+            if let Some(Some(ref mut tcb)) = self.threads.get_mut(idx) {
+                tcb.state = ThreadState::Running;
+                self.current_thread = next_id.as_raw();
+                return Some(next_id);
+            }
+        }
+
+        // No ready thread — restore current thread to Running if it was demoted.
+        if let Some(ref mut tcb) = self.threads.get_mut(cur).and_then(|s| s.as_mut()) {
+            if tcb.state == ThreadState::Ready {
+                tcb.state = ThreadState::Running;
+            }
+        }
+        None
+    }
+
     /// Pick the next Ready thread using round-robin order.
     ///
     /// Starting from the thread after `current_thread`, scan forward (wrapping
@@ -482,5 +545,142 @@ mod tests {
     fn advance_rr_empty_table_returns_none() {
         let mut table = ThreadTable::<4>::new(SchedulingPolicy::RoundRobin);
         assert_eq!(table.advance_round_robin(), None);
+    }
+
+    // ── Static-priority scheduler tests ────────────────────────────
+
+    /// Helper: build a table with threads at given priorities, thread 0 Running.
+    fn make_priority_table(priorities: &[u8]) -> ThreadTable<8> {
+        let mut table = ThreadTable::<8>::new(SchedulingPolicy::StaticPriority);
+        for (i, &prio) in priorities.iter().enumerate() {
+            table.add_thread(make_tcb(i as u8, prio)).unwrap();
+        }
+        if !priorities.is_empty() {
+            table.get_mut(ThreadId::new(0)).unwrap().state = ThreadState::Running;
+            table.current_thread = 0;
+        }
+        table
+    }
+
+    #[test]
+    fn pick_priority_high_over_low() {
+        // Thread 0: Running (prio 5), Thread 1: Ready (prio 1), Thread 2: Ready (prio 3)
+        let table = make_priority_table(&[5, 1, 3]);
+        // Lowest number = highest priority → thread 1 (prio 1).
+        assert_eq!(table.pick_next_priority(), Some(ThreadId::new(1)));
+    }
+
+    #[test]
+    fn pick_priority_tiebreak_lower_id() {
+        // All Ready threads at same priority — lower ID wins.
+        let mut table = make_priority_table(&[2, 2, 2]);
+        // Thread 0 is Running, threads 1 and 2 are Ready with equal prio.
+        assert_eq!(table.pick_next_priority(), Some(ThreadId::new(1)));
+
+        // Make thread 0 Ready too (simulate no current running).
+        table.get_mut(ThreadId::new(0)).unwrap().state = ThreadState::Ready;
+        assert_eq!(table.pick_next_priority(), Some(ThreadId::new(0)));
+    }
+
+    #[test]
+    fn pick_priority_suspended_high_falls_through() {
+        // Thread 0: Running (prio 5), Thread 1: Suspended (prio 0), Thread 2: Ready (prio 3)
+        let mut table = make_priority_table(&[5, 0, 3]);
+        table.get_mut(ThreadId::new(1)).unwrap().state = ThreadState::Suspended;
+        // Thread 1 has highest priority but is Suspended → thread 2 selected.
+        assert_eq!(table.pick_next_priority(), Some(ThreadId::new(2)));
+    }
+
+    #[test]
+    fn pick_priority_empty_returns_none() {
+        let table = ThreadTable::<4>::new(SchedulingPolicy::StaticPriority);
+        assert_eq!(table.pick_next_priority(), None);
+    }
+
+    #[test]
+    fn pick_priority_all_stopped_returns_none() {
+        let mut table = make_priority_table(&[1, 2, 3]);
+        for i in 0..3u8 {
+            table.get_mut(ThreadId::new(i)).unwrap().state = ThreadState::Stopped;
+        }
+        assert_eq!(table.pick_next_priority(), None);
+    }
+
+    #[test]
+    fn advance_priority_selects_highest() {
+        // Thread 0: Running (prio 5), Thread 1: Ready (prio 1), Thread 2: Ready (prio 3)
+        let mut table = make_priority_table(&[5, 1, 3]);
+        let next = table.advance_priority().unwrap();
+        assert_eq!(next, ThreadId::new(1));
+        assert_eq!(
+            table.get(ThreadId::new(0)).unwrap().state,
+            ThreadState::Ready
+        );
+        assert_eq!(
+            table.get(ThreadId::new(1)).unwrap().state,
+            ThreadState::Running
+        );
+        assert_eq!(table.current_thread, 1);
+    }
+
+    #[test]
+    fn advance_priority_preemption() {
+        // High-priority thread always preempts: repeated advances keep it running.
+        let mut table = make_priority_table(&[5, 1, 3]);
+        // First advance: thread 1 (prio 1) takes over.
+        table.advance_priority();
+        assert_eq!(table.current_thread, 1);
+
+        // Second advance: thread 1 demoted to Ready, but it's still highest prio.
+        let next = table.advance_priority().unwrap();
+        assert_eq!(next, ThreadId::new(1));
+        assert_eq!(
+            table.get(ThreadId::new(1)).unwrap().state,
+            ThreadState::Running
+        );
+    }
+
+    #[test]
+    fn advance_priority_tiebreak() {
+        // Threads 1 and 2 both prio 0 (highest), thread 0 Running prio 5.
+        let mut table = make_priority_table(&[5, 0, 0]);
+        let next = table.advance_priority().unwrap();
+        // Lower ID wins the tie → thread 1.
+        assert_eq!(next, ThreadId::new(1));
+    }
+
+    #[test]
+    fn advance_priority_all_stopped_returns_none() {
+        let mut table = make_priority_table(&[1, 2]);
+        table.get_mut(ThreadId::new(0)).unwrap().state = ThreadState::Stopped;
+        table.get_mut(ThreadId::new(1)).unwrap().state = ThreadState::Stopped;
+        assert_eq!(table.advance_priority(), None);
+    }
+
+    #[test]
+    fn advance_priority_empty_returns_none() {
+        let mut table = ThreadTable::<4>::new(SchedulingPolicy::StaticPriority);
+        assert_eq!(table.advance_priority(), None);
+    }
+
+    #[test]
+    fn advance_priority_suspended_high_falls_to_lower() {
+        // Thread 0: Running prio 10, Thread 1: Suspended prio 0, Thread 2: Ready prio 5
+        let mut table = make_priority_table(&[10, 0, 5]);
+        table.get_mut(ThreadId::new(1)).unwrap().state = ThreadState::Suspended;
+        let next = table.advance_priority().unwrap();
+        assert_eq!(next, ThreadId::new(2));
+        assert_eq!(
+            table.get(ThreadId::new(0)).unwrap().state,
+            ThreadState::Ready
+        );
+        assert_eq!(
+            table.get(ThreadId::new(1)).unwrap().state,
+            ThreadState::Suspended
+        );
+        assert_eq!(
+            table.get(ThreadId::new(2)).unwrap().state,
+            ThreadState::Running
+        );
     }
 }
