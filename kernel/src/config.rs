@@ -1411,17 +1411,6 @@ macro_rules! kernel_config {
     };
 }
 
-/// **Deprecated** — use [`kernel_config!`] instead.
-///
-/// This macro forwards all arguments to `kernel_config!` and exists only
-/// for backward compatibility.  It will be removed in a future release.
-#[macro_export]
-macro_rules! compose_kernel_config {
-    ($($tt:tt)*) => {
-        $crate::kernel_config!($($tt)*);
-    };
-}
-
 // ── DefaultConfig: sensible defaults for quick prototyping ──────────────
 
 kernel_config!(pub DefaultConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
