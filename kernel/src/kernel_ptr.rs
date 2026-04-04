@@ -101,11 +101,9 @@ pub fn clear_kernel_ptr() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        compose_kernel_config, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
-    };
+    use crate::{kernel_config, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 
-    compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+    kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
     /// Mutex to serialize tests that share the global `KERNEL_PTR`.
     static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

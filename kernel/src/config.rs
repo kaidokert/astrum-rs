@@ -2081,9 +2081,9 @@ mod tests {
         assert_eq!(Partitions1::SCHEDULE_CAPACITY, 4);
     }
 
-    // ============ compose_kernel_config! tests ============
+    // ============ kernel_config! tests ============
 
-    compose_kernel_config!(ComposedConfig<Partitions2, SyncRich, MsgRich, PortsRich, DebugDisabled>);
+    kernel_config!(ComposedConfig<Partitions2, SyncRich, MsgRich, PortsRich, DebugDisabled>);
 
     #[test]
     fn composed_bridges_all_sub_configs() {
@@ -2116,7 +2116,7 @@ mod tests {
         assert_eq!(ComposedConfig::TICK_PERIOD_US, 1000);
     }
 
-    compose_kernel_config!(ComposedP1<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+    kernel_config!(ComposedP1<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
     #[test]
     fn composed_with_partitions1() {
@@ -2131,8 +2131,8 @@ mod tests {
         );
     }
 
-    // Compile-only: compose_kernel_config! works with Partitions3 and MsgSmall.
-    compose_kernel_config!(ComposedP3MsgSmall<Partitions3, SyncMinimal, MsgSmall, PortsTiny, DebugDisabled>);
+    // Compile-only: kernel_config! works with Partitions3 and MsgSmall.
+    kernel_config!(ComposedP3MsgSmall<Partitions3, SyncMinimal, MsgSmall, PortsTiny, DebugDisabled>);
 
     #[test]
     fn composed_with_partitions3_and_msg_small() {
@@ -2144,7 +2144,7 @@ mod tests {
         assert_eq!(ComposedP3MsgSmall::QW, 2);
     }
 
-    compose_kernel_config!(ComposedP4<Partitions4, SyncStandard, MsgStandard, PortsStandard, DebugEnabled>);
+    kernel_config!(ComposedP4<Partitions4, SyncStandard, MsgStandard, PortsStandard, DebugEnabled>);
 
     #[test]
     fn composed_with_partitions4() {
@@ -2174,7 +2174,7 @@ mod tests {
         );
     }
 
-    compose_kernel_config!(ComposedStdSmall<Partitions2, SyncStandard, MsgStandard, PortsSmall, DebugDisabled>);
+    kernel_config!(ComposedStdSmall<Partitions2, SyncStandard, MsgStandard, PortsSmall, DebugDisabled>);
 
     #[test]
     fn composed_std_small_runtime() {
@@ -2196,9 +2196,9 @@ mod tests {
         assert_eq!(ComposedStdSmall::BW, PortsSmall::BLACKBOARD_WAITQ);
     }
 
-    // ============ compose_kernel_config! override tests ============
+    // ============ kernel_config! override tests ============
 
-    compose_kernel_config!(
+    kernel_config!(
         ComposedMpuOverride < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2224,7 +2224,7 @@ mod tests {
         );
     }
 
-    compose_kernel_config!(
+    kernel_config!(
         ComposedDebugBufOverride < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2254,7 +2254,7 @@ mod tests {
         );
     }
 
-    compose_kernel_config!(
+    kernel_config!(
         ComposedDebugDrainOverride < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2280,7 +2280,7 @@ mod tests {
         );
     }
 
-    compose_kernel_config!(
+    kernel_config!(
         ComposedClockOverride < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2299,7 +2299,7 @@ mod tests {
         assert_eq!(ComposedClockOverride::SYSTICK_CYCLES, 32_000);
     }
 
-    compose_kernel_config!(
+    kernel_config!(
         ComposedSyncOverride < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2321,7 +2321,7 @@ mod tests {
     }
 
     // raw const-name assignment form: `S = 8;`
-    compose_kernel_config!(
+    kernel_config!(
         SyncRawNameOverride < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2341,9 +2341,9 @@ mod tests {
         assert_eq!(SyncRawNameOverride::MW, SyncMinimal::MUTEX_WAITQ);
     }
 
-    // ============ compose_kernel_config! msg override tests ============
+    // ============ kernel_config! msg override tests ============
 
-    compose_kernel_config!(
+    kernel_config!(
         ComposedMsgOverride < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2364,7 +2364,7 @@ mod tests {
         assert_eq!(ComposedMsgOverride::QW, MsgMinimal::QUEUE_WAITQ);
     }
 
-    compose_kernel_config!(
+    kernel_config!(
         MsgRawNameOverride < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2384,10 +2384,10 @@ mod tests {
         assert_eq!(MsgRawNameOverride::QW, MsgMinimal::QUEUE_WAITQ);
     }
 
-    // ============ compose_kernel_config! ports override tests ============
+    // ============ kernel_config! ports override tests ============
 
     // friendly-name + raw short-name overrides coexist; non-overridden fields bridge the preset.
-    compose_kernel_config!(
+    kernel_config!(
         PortsOverrideMixed < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2427,7 +2427,7 @@ mod tests {
         const MUTEX_WAITQ: usize = 8;
     }
 
-    compose_kernel_config!(
+    kernel_config!(
         CustomPresetConfig < CustomPartitions,
         CustomSync,
         MsgStandard,
@@ -2469,9 +2469,9 @@ mod tests {
         assert_eq!(CustomPresetConfig::TICK_PERIOD_US, 1000);
     }
 
-    // ============ compose_kernel_config! doc-attribute forwarding ============
+    // ============ kernel_config! doc-attribute forwarding ============
 
-    compose_kernel_config!(
+    kernel_config!(
         /// A documented composed config for testing attribute forwarding.
         DocComposedConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugDisabled>
     );
@@ -2482,10 +2482,10 @@ mod tests {
         assert_eq!(DocComposedConfig::N, 2);
     }
 
-    // ============ compose_kernel_config! custom stack type tests ============
+    // ============ kernel_config! custom stack type tests ============
 
     // With override block — uses AlignedStack4K custom stack type.
-    compose_kernel_config!(
+    kernel_config!(
         Composed4KStack[crate::partition_core::AlignedStack4K] < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2494,7 +2494,7 @@ mod tests {
     );
 
     // No-override form — uses AlignedStack4K with preset defaults.
-    compose_kernel_config!(Composed4KNoOverride [crate::partition_core::AlignedStack4K]
+    kernel_config!(Composed4KNoOverride [crate::partition_core::AlignedStack4K]
         <Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugDisabled>);
 
     #[test]
@@ -2534,11 +2534,11 @@ mod tests {
         );
     }
 
-    // ============ compose_kernel_config! comprehensive override tests ============
+    // ============ kernel_config! comprehensive override tests ============
 
     // Multi-domain override: one field from each of the 5 sub-config domains
     // plus non-sub-config fields (core_clock_hz, mpu_enforce) in a single block.
-    compose_kernel_config!(
+    kernel_config!(
         ComposedMultiDomain < Partitions3,
         SyncStandard,
         MsgSmall,
@@ -2597,8 +2597,8 @@ mod tests {
         assert_eq!(ComposedMultiDomain::SYSTICK_CYCLES, 48_000);
     }
 
-    // Dynamic-MPU overrides via compose_kernel_config!, cfg-gated.
-    compose_kernel_config!(
+    // Dynamic-MPU overrides via kernel_config!, cfg-gated.
+    kernel_config!(
         ComposedDynMpu < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2627,10 +2627,10 @@ mod tests {
         }
     }
 
-    // ============ compose_kernel_config! max_peripheral_regions override ============
+    // ============ kernel_config! max_peripheral_regions override ============
 
     // Config with custom max_peripheral_regions = 1.
-    compose_kernel_config!(
+    kernel_config!(
         ComposedMaxPeriphOne < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2641,7 +2641,7 @@ mod tests {
     );
 
     // Config without max_peripheral_regions override (should default to 3).
-    compose_kernel_config!(
+    kernel_config!(
         ComposedMaxPeriphDefault < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2690,7 +2690,7 @@ mod tests {
         }
     }
 
-    compose_kernel_config!(
+    kernel_config!(
         ComposedIrqOverride < Partitions2,
         SyncMinimal,
         MsgMinimal,
@@ -2706,7 +2706,7 @@ mod tests {
         assert_priority_order::<ComposedIrqOverride>();
     }
 
-    compose_kernel_config!(
+    kernel_config!(
         ComposedMinAppIrqOverride < Partitions2,
         SyncMinimal,
         MsgMinimal,
