@@ -96,7 +96,7 @@ extern "C" fn p1_entry() -> ! {
     }
 }
 
-kernel::define_unified_harness!(no_boot, TestConfig, |tick, _k| {
+kernel::define_harness!(no_boot, TestConfig, |tick, _k| {
     if TIMER_STATE.load(Ordering::Acquire) == 1 {
         let tar = TIMER_TAR.load(Ordering::Acquire);
         let ctl = TIMER_CTL.load(Ordering::Acquire);

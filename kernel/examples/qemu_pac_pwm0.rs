@@ -104,7 +104,7 @@ extern "C" fn p1_entry() -> ! {
     }
 }
 
-kernel::define_unified_harness!(no_boot, TestConfig, |tick, _k| {
+kernel::define_harness!(no_boot, TestConfig, |tick, _k| {
     if RB[5].load(Ordering::Acquire) == 1 {
         let load = RB[0].load(Ordering::Acquire);
         let cmpa = RB[1].load(Ordering::Acquire);

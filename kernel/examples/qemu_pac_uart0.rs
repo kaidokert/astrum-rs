@@ -77,7 +77,7 @@ extern "C" fn p1_entry() -> ! {
     }
 }
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_harness!(TestConfig, |tick, _k| {
     let state = TX_STATE.load(Ordering::Acquire);
     if state == 1 {
         hprintln!("qemu_pac_uart0: PASS partition TX complete");

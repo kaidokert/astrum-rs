@@ -36,7 +36,7 @@ const PASS_TICK: u32 = 5;
 /// Tick counter used by SysTick hook to verify liveness.
 static TICK_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(IvtConfig, |tick, _k| {
+kernel::define_harness!(IvtConfig, |tick, _k| {
     TICK_COUNT.store(tick, Ordering::Release);
     if tick >= PASS_TICK {
         hprintln!("qemu_custom_ivt: PASS (tick={})", tick);

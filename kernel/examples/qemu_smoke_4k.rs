@@ -46,7 +46,7 @@ static P0_YIELD_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 /// Partition 1 stores SYS_YIELD return code here.
 static P1_YIELD_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 
-kernel::define_unified_harness!(Smoke4KConfig, |tick, _k| {
+kernel::define_harness!(Smoke4KConfig, |tick, _k| {
     let p0 = P0_YIELD_RC.load(Ordering::Acquire);
     let p1 = P1_YIELD_RC.load(Ordering::Acquire);
 
