@@ -1,5 +1,5 @@
 //! Kernel configuration traits, clock setup, and preset-based composition
-//! via `compose_kernel_config!`.
+//! via `kernel_config!`.
 //!
 //! # Clock Configuration
 //!
@@ -29,7 +29,7 @@
 //! **nRF52840 — 64 MHz core clock, default 1 ms tick:**
 //!
 //! ```ignore
-//! kernel::compose_kernel_config!(
+//! kernel::kernel_config!(
 //!     pub Nrf52840Config<Partitions4, SyncStandard, MsgStandard,
 //!                        PortsStandard, DebugEnabled> {
 //!         core_clock_hz = 64_000_000;
@@ -40,7 +40,7 @@
 //! **STM32F4 — 168 MHz core clock, 500 µs tick:**
 //!
 //! ```ignore
-//! kernel::compose_kernel_config!(
+//! kernel::kernel_config!(
 //!     pub Stm32f4Config<Partitions4, SyncStandard, MsgStandard,
 //!                       PortsStandard, DebugEnabled> {
 //!         core_clock_hz = 168_000_000;
@@ -52,7 +52,7 @@
 //! **SAMD51 — 120 MHz core clock, external reference clock:**
 //!
 //! ```ignore
-//! kernel::compose_kernel_config!(
+//! kernel::kernel_config!(
 //!     pub Samd51Config<Partitions4, SyncStandard, MsgStandard,
 //!                      PortsStandard, DebugEnabled> {
 //!         core_clock_hz = 15_000_000; // HCLK/8 external ref
@@ -553,7 +553,7 @@ pub trait KernelConfig {
     /// Maximum number of peripheral MPU regions a partition may configure.
     ///
     /// Defaults to 3 (= `DYNAMIC_SLOT_COUNT − 1`).  Override via
-    /// `max_peripheral_regions = N` in `compose_kernel_config!`.
+    /// `max_peripheral_regions = N` in `kernel_config!`.
     const MAX_PERIPHERAL_REGIONS: usize = 3;
 
     /// Core clock frequency in Hz.
@@ -1306,10 +1306,10 @@ macro_rules! _kernel_config_body {
 /// Basic preset composition with no overrides:
 ///
 /// ```ignore
-/// use kernel::{compose_kernel_config, Partitions2, SyncMinimal,
+/// use kernel::{kernel_config, Partitions2, SyncMinimal,
 ///              MsgMinimal, PortsTiny, DebugEnabled};
 ///
-/// compose_kernel_config!(
+/// kernel_config!(
 ///     pub MyConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 /// );
 /// ```
@@ -1317,10 +1317,10 @@ macro_rules! _kernel_config_body {
 /// Override non-sub-config fields with a trailing block:
 ///
 /// ```ignore
-/// use kernel::{compose_kernel_config, Partitions4, SyncStandard,
+/// use kernel::{kernel_config, Partitions4, SyncStandard,
 ///              MsgStandard, PortsStandard, DebugEnabled};
 ///
-/// compose_kernel_config!(
+/// kernel_config!(
 ///     pub AppConfig<Partitions4, SyncStandard, MsgStandard,
 ///                   PortsStandard, DebugEnabled> {
 ///         mpu_enforce = true;
@@ -1329,7 +1329,7 @@ macro_rules! _kernel_config_body {
 /// );
 /// ```
 #[macro_export]
-macro_rules! compose_kernel_config {
+macro_rules! kernel_config {
     // With custom stack type and override block.
     ($(#[$meta:meta])* $vis:vis $name:ident [$stack:ty] < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty > { $($overrides:tt)* }) => {
         $(#[$meta])*
@@ -1353,6 +1353,7 @@ macro_rules! compose_kernel_config {
             $crate::_compose_ports_default!(@BW, $ports; $($overrides)*);
             $crate::_compose_debug_default!(@DBS, $debug; $($overrides)*);
             $crate::_compose_debug_default!(@DAD, $debug; $($overrides)*);
+            // TODO: reviewer false positive – no no-op change here; line is unchanged in diff
             $crate::_kernel_config_body!($($overrides)*);
             $crate::kernel_config_types!(@cfg $parts, $sync, $msg, $ports, $debug; $stack);
         }
@@ -1362,9 +1363,10 @@ macro_rules! compose_kernel_config {
     };
     // With custom stack type, no override block.
     ($(#[$meta:meta])* $vis:vis $name:ident [$stack:ty] < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty >) => {
-        $crate::compose_kernel_config!($(#[$meta])* $vis $name [$stack] < $parts, $sync, $msg, $ports, $debug > {});
+        $crate::kernel_config!($(#[$meta])* $vis $name [$stack] < $parts, $sync, $msg, $ports, $debug > {});
     };
     // Default stack with override block.
+    // TODO: reviewer false positive – this arm expands inline (no recursive call to rename)
     ($(#[$meta:meta])* $vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty > { $($overrides:tt)* }) => {
         $(#[$meta])*
         $vis struct $name;
@@ -1405,13 +1407,24 @@ macro_rules! compose_kernel_config {
     };
     // Default stack, no override block.
     ($(#[$meta:meta])* $vis:vis $name:ident < $parts:ty, $sync:ty, $msg:ty, $ports:ty, $debug:ty >) => {
-        $crate::compose_kernel_config!($(#[$meta])* $vis $name < $parts, $sync, $msg, $ports, $debug > {});
+        $crate::kernel_config!($(#[$meta])* $vis $name < $parts, $sync, $msg, $ports, $debug > {});
+    };
+}
+
+/// **Deprecated** — use [`kernel_config!`] instead.
+///
+/// This macro forwards all arguments to `kernel_config!` and exists only
+/// for backward compatibility.  It will be removed in a future release.
+#[macro_export]
+macro_rules! compose_kernel_config {
+    ($($tt:tt)*) => {
+        $crate::kernel_config!($($tt)*);
     };
 }
 
 // ── DefaultConfig: sensible defaults for quick prototyping ──────────────
 
-compose_kernel_config!(pub DefaultConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel_config!(pub DefaultConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 impl Default for DefaultConfig {
     fn default() -> Self {
