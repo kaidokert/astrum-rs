@@ -272,6 +272,40 @@ impl<const MAX: usize> ThreadTable<MAX> {
         }
     }
 
+    /// Stop all threads in the table by setting their state to `Stopped`.
+    ///
+    /// This is used when a partition faults — all threads must be stopped
+    /// before the error handler (if any) runs as thread 0.
+    pub fn stop_all_threads(&mut self) {
+        for slot in self.threads.iter_mut().flatten() {
+            slot.state = ThreadState::Stopped;
+        }
+    }
+
+    /// Reset the thread table for a partition restart.
+    ///
+    /// 1. Clear all thread slots except slot 0 (removing child threads).
+    /// 2. Re-initialize thread 0 as `Running` with the given entry point
+    ///    and full stack (as if freshly booted).
+    /// 3. Reset `current_thread` to 0.
+    ///
+    /// Returns `Err(ThreadError::TableFull)` only if `MAX == 0`.
+    /// Returns `Err(ThreadError::StackOverflow)` if `stack_base + stack_size` overflows.
+    pub fn reset_for_restart(
+        &mut self,
+        entry_point: u32,
+        stack_base: u32,
+        stack_size: u32,
+        r0: u32,
+    ) -> Result<(), ThreadError> {
+        // Clear all child thread slots (1..MAX).
+        for slot in self.threads.iter_mut().skip(1) {
+            *slot = None;
+        }
+        // Re-initialize thread 0 (overwrites existing slot 0).
+        self.init_main_thread(entry_point, stack_base, stack_size, r0)
+    }
+
     /// Create thread 0 as the partition's main thread.
     ///
     /// This is the default thread that exists for backward compatibility —
@@ -912,6 +946,103 @@ mod tests {
         assert_eq!(
             table.init_main_thread(0x0800_0000, u32::MAX, 1, 0),
             Err(ThreadError::StackOverflow)
+        );
+    }
+
+    // ── stop_all_threads tests ──────────────────────────────────
+
+    #[test]
+    fn stop_all_threads_marks_all_stopped() {
+        let mut table = make_rr_table::<3>();
+        // T0=Running, T1=Ready, T2=Ready
+        table.stop_all_threads();
+        for i in 0..3u8 {
+            assert_eq!(
+                table.get(ThreadId::new(i)).unwrap().state,
+                ThreadState::Stopped
+            );
+        }
+    }
+
+    #[test]
+    fn stop_all_threads_with_mixed_states() {
+        let mut table = make_rr_table::<4>();
+        table.get_mut(ThreadId::new(1)).unwrap().state = ThreadState::Suspended;
+        table.get_mut(ThreadId::new(2)).unwrap().state = ThreadState::Stopped;
+        table.stop_all_threads();
+        for i in 0..4u8 {
+            assert_eq!(
+                table.get(ThreadId::new(i)).unwrap().state,
+                ThreadState::Stopped
+            );
+        }
+    }
+
+    #[test]
+    fn stop_all_threads_empty_table_is_noop() {
+        let mut table = ThreadTable::<4>::new(SchedulingPolicy::RoundRobin);
+        table.stop_all_threads(); // should not panic
+        assert_eq!(table.thread_count(), 0);
+    }
+
+    // ── reset_for_restart tests ──────────────────────────────────
+
+    #[test]
+    fn reset_for_restart_clears_child_threads() {
+        let mut table = make_rr_table::<4>();
+        // All 4 slots occupied
+        assert_eq!(table.thread_count(), 4);
+
+        table
+            .reset_for_restart(0x0800_0000, 0x2000_0000, 1024, 42)
+            .unwrap();
+
+        // Only thread 0 remains
+        assert_eq!(table.thread_count(), 1);
+        assert!(table.get(ThreadId::new(1)).is_none());
+        assert!(table.get(ThreadId::new(2)).is_none());
+        assert!(table.get(ThreadId::new(3)).is_none());
+    }
+
+    #[test]
+    fn reset_for_restart_reinits_thread_0_as_running() {
+        let mut table = make_rr_table::<4>();
+        table.get_mut(ThreadId::new(0)).unwrap().state = ThreadState::Stopped;
+
+        table
+            .reset_for_restart(0x0800_ABCD, 0x2000_1000, 512, 99)
+            .unwrap();
+
+        let t0 = table.get(ThreadId::new(0)).unwrap();
+        assert_eq!(t0.state, ThreadState::Running);
+        assert_eq!(t0.entry_point, 0x0800_ABCD);
+        assert_eq!(t0.stack_base, 0x2000_1000);
+        assert_eq!(t0.stack_size, 512);
+        assert_eq!(t0.r0_arg, 99);
+        assert_eq!(t0.stack_pointer, 0x2000_1000 + 512);
+        assert_eq!(table.current_thread, 0);
+    }
+
+    #[test]
+    fn reset_for_restart_preserves_scheduling_policy() {
+        let mut table = ThreadTable::<4>::new(SchedulingPolicy::StaticPriority);
+        table.add_thread(make_tcb(0, 1)).unwrap();
+        table.add_thread(make_tcb(1, 2)).unwrap();
+
+        table
+            .reset_for_restart(0x0800_0000, 0x2000_0000, 1024, 0)
+            .unwrap();
+
+        assert_eq!(table.scheduling_policy(), SchedulingPolicy::StaticPriority);
+    }
+
+    #[test]
+    fn reset_for_restart_zero_capacity_returns_err() {
+        use super::ThreadError;
+        let mut table = ThreadTable::<0>::new(SchedulingPolicy::RoundRobin);
+        assert_eq!(
+            table.reset_for_restart(0x0800_0000, 0x2000_0000, 1024, 0),
+            Err(ThreadError::TableFull)
         );
     }
 

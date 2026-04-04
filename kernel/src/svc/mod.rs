@@ -2678,6 +2678,7 @@ where
     pub fn fault_partition(&mut self, pid: usize) {
         if let Some(pcb) = self.pcb_mut(pid) {
             let _ = pcb.transition(crate::partition::PartitionState::Faulted);
+            pcb.thread_table_mut().stop_all_threads();
         }
         if let Some(sp_slot) = self.partition_sp_mut().get_mut(pid) {
             *sp_slot = crate::partition_core::SP_SENTINEL_FAULT;
@@ -2748,6 +2749,11 @@ where
 
         // (6-9) Update PCB fields and transition state.
         let pcb = self.pcb_mut(pid).ok_or(RestartError::InvalidPid)?;
+        // Reset thread table: stop all child threads, re-init thread 0.
+        pcb.thread_table_mut()
+            .reset_for_restart(entry.raw(), base, size, r0)
+            .map_err(|_| RestartError::StackInitFailed)?;
+
         pcb.set_start_condition(if warm {
             crate::partition::StartCondition::WarmRestart
         } else {

@@ -147,6 +147,114 @@ mod integration {
         assert_eq!(k.restart_partition(99, true), Err(RestartError::InvalidPid));
     }
 
+    #[test]
+    fn restart_with_threads_resets_to_single_main_thread() {
+        use rtos_traits::ids::ThreadId;
+        use rtos_traits::thread::{ThreadControlBlock, ThreadState};
+
+        let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+        let (mut d0, mut d1) = (AlignedStack256B::default(), AlignedStack256B::default());
+        let mut k = mk(&mut s0, &mut s1, &mut d0, &mut d1);
+
+        // Add 2 child threads to partition 0's thread table (total 3 threads).
+        {
+            let tt = k.pcb_mut(0).unwrap().thread_table_mut();
+            tt.add_thread(ThreadControlBlock {
+                stack_pointer: 0x2000_1000,
+                id: ThreadId::new(0),
+                state: ThreadState::Ready,
+                priority: 1,
+                stack_base: 0x2000_0800,
+                stack_size: 256,
+                entry_point: 0x0800_3001,
+                r0_arg: 0,
+            })
+            .unwrap();
+            tt.add_thread(ThreadControlBlock {
+                stack_pointer: 0x2000_2000,
+                id: ThreadId::new(0),
+                state: ThreadState::Suspended,
+                priority: 2,
+                stack_base: 0x2000_1800,
+                stack_size: 256,
+                entry_point: 0x0800_4001,
+                r0_arg: 0,
+            })
+            .unwrap();
+            assert_eq!(tt.thread_count(), 3);
+        }
+
+        // Fault and restart.
+        do_fault(&mut k, 0);
+
+        // After fault, all threads should be stopped.
+        {
+            let tt = k.pcb(0).unwrap().thread_table();
+            for i in 0..3u8 {
+                assert_eq!(
+                    tt.get(ThreadId::new(i)).unwrap().state,
+                    ThreadState::Stopped,
+                    "thread {i} must be Stopped after fault"
+                );
+            }
+        }
+
+        k.restart_partition(0, true).unwrap();
+
+        // After restart: only thread 0 exists, in Running state.
+        let tt = k.pcb(0).unwrap().thread_table();
+        assert_eq!(tt.thread_count(), 1, "only main thread should remain");
+        let t0 = tt.get(ThreadId::new(0)).unwrap();
+        assert_eq!(t0.state, ThreadState::Running);
+        assert!(tt.get(ThreadId::new(1)).is_none());
+        assert!(tt.get(ThreadId::new(2)).is_none());
+    }
+
+    #[test]
+    fn fault_stops_all_threads() {
+        use rtos_traits::ids::ThreadId;
+        use rtos_traits::thread::{ThreadControlBlock, ThreadState};
+
+        let (mut s0, mut s1) = (AlignedStack256B::default(), AlignedStack256B::default());
+        let (mut d0, mut d1) = (AlignedStack256B::default(), AlignedStack256B::default());
+        let mut k = mk(&mut s0, &mut s1, &mut d0, &mut d1);
+
+        // Add a child thread.
+        {
+            let tt = k.pcb_mut(0).unwrap().thread_table_mut();
+            tt.add_thread(ThreadControlBlock {
+                stack_pointer: 0x2000_1000,
+                id: ThreadId::new(0),
+                state: ThreadState::Ready,
+                priority: 1,
+                stack_base: 0x2000_0800,
+                stack_size: 256,
+                entry_point: 0x0800_3001,
+                r0_arg: 0,
+            })
+            .unwrap();
+            assert_eq!(tt.thread_count(), 2);
+        }
+
+        // Transition to Running so we can fault.
+        k.pcb_mut(0)
+            .unwrap()
+            .transition(PartitionState::Running)
+            .unwrap();
+        k.fault_partition(0);
+
+        // All threads must be Stopped.
+        let tt = k.pcb(0).unwrap().thread_table();
+        assert_eq!(
+            tt.get(ThreadId::new(0)).unwrap().state,
+            ThreadState::Stopped
+        );
+        assert_eq!(
+            tt.get(ThreadId::new(1)).unwrap().state,
+            ThreadState::Stopped
+        );
+    }
+
     mod on_restart_hook {
         use super::*;
         use core::sync::atomic::{AtomicU32, Ordering};
