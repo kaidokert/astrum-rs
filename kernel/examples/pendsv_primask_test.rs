@@ -24,7 +24,7 @@ use kernel::{
 };
 
 // Fast SysTick: 12 MHz * 83 µs / 1e6 = 996 cycles per tick.
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     Config < Partitions2,
     SyncMinimal,
     MsgMinimal,

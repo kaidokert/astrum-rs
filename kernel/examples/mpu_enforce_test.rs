@@ -30,7 +30,7 @@ const REGION_SZ: u32 = 1024;
 
 static mut STACKS: [AlignedStack1K; TestConfig::N] = [AlignedStack1K::ZERO; TestConfig::N];
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

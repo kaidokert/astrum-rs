@@ -24,7 +24,7 @@ use plib;
 static P0_COUNTER: AtomicU32 = AtomicU32::new(0);
 static P1_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

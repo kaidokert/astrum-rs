@@ -25,7 +25,7 @@ use kernel::{
 const NP: usize = 2;
 const REGION_SZ: u32 = 1024;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

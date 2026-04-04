@@ -35,7 +35,7 @@ const MIN_ITERS: u32 = 3;
 
 // MPU_ENFORCE=true is broken on QEMU <=6.2 (IACCVIOL on exception stacking).
 // We verify cached MPU regions are data-correct via on-the-fly comparison.
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions2,
     SyncMinimal,
     MsgMinimal,

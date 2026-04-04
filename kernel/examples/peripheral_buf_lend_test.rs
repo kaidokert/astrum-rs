@@ -28,7 +28,7 @@ const UART0_BASE: u32 = 0x4000_C000;
 const UART0_SIZE: u32 = 4096;
 const STACK_WORDS: usize = 256;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 

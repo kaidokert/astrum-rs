@@ -21,7 +21,7 @@ use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, S
 const NP: usize = 2;
 const STACK_WORDS: usize = 256;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
