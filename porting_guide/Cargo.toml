@@ -5,6 +5,9 @@ edition = "2021"
 
 [dependencies]
 kernel = { path = "../kernel" }
+cortex-m = "0.7"
+stm32f4xx-hal = { version = "0.23", features = ["stm32f407"], optional = true }
+nrf52840-hal = { version = "0.19", optional = true }
 
 [features]
 # Debug channel selection (pass through to kernel)
@@ -15,5 +18,5 @@ log-defmt = ["kernel/log-defmt"]
 
 # Board support
 board-qemu = ["kernel/qemu"]
-board-stm32f4-discovery = []
-board-nrf52840-dk = []
+board-stm32f4-discovery = ["stm32f4xx-hal"]
+board-nrf52840-dk = ["nrf52840-hal"]
