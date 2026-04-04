@@ -48,6 +48,7 @@ impl core::fmt::Display for PartitionId {
 }
 
 define_id!(BufferSlotId, u8);
+define_id!(ThreadId, u8);
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EventMask(u32);
@@ -169,6 +170,7 @@ mod tests {
     test_id!(device, DeviceId, u8, 4u8);
     test_id!(partition, PartitionId, u32, 1u32);
     test_id!(buffer_slot, BufferSlotId, u8, 3u8);
+    test_id!(thread, ThreadId, u8, 5u8);
     mod event_mask {
         use super::*;
 

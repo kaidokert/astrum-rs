@@ -14,4 +14,5 @@ pub mod partition;
 pub mod register;
 pub mod spi;
 pub mod syscall;
+pub mod thread;
 pub mod uart;
