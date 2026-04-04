@@ -416,11 +416,11 @@ mod tests {
     fn pcb_stack_limit_offset_aligned_and_in_range() {
         let offset = super::PCB_STACK_LIMIT_OFFSET;
 
-        // Must be within the first 256 bytes of PCB so that short-offset
-        // addressing modes remain available in the PendSV handler.
+        // Must be within Thumb2 imm12 range (4096) so that register-offset
+        // addressing modes remain available in PendSV handler assembly.
         assert!(
-            offset < 256,
-            "PCB_STACK_LIMIT_OFFSET ({offset}) must be within the first 256 bytes of PCB"
+            offset < 4096,
+            "PCB_STACK_LIMIT_OFFSET ({offset}) must be within 4096 bytes of PCB start"
         );
 
         // Must be word-aligned (offset % 4 == 0) so that PendSV can use

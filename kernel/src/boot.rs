@@ -1389,6 +1389,7 @@ mod tests {
                 fault_policy: crate::partition::FaultPolicy::StayDead,
                 error_handler: None,
                 on_restart: None,
+                scheduling_policy: rtos_traits::thread::SchedulingPolicy::RoundRobin,
             },
             PartitionConfig {
                 id: 1,
@@ -1402,6 +1403,7 @@ mod tests {
                 fault_policy: crate::partition::FaultPolicy::StayDead,
                 error_handler: None,
                 on_restart: None,
+                scheduling_policy: rtos_traits::thread::SchedulingPolicy::RoundRobin,
             },
         ];
 

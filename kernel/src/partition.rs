@@ -1,9 +1,11 @@
 use heapless::Vec;
 use rtos_traits::ids::PartitionId;
+use rtos_traits::thread::SchedulingPolicy;
 
 #[cfg(feature = "partition-debug")]
 use crate::debug::DebugBuffer;
 use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
+use crate::thread::ThreadTable;
 
 /// Maximum number of peripheral regions a partition may configure.
 ///
@@ -171,6 +173,8 @@ pub struct PartitionControlBlock {
     run_count: u32,
     /// Optional callback invoked when the partition is restarted.
     on_restart: Option<RestartHook>,
+    /// Per-partition thread table (max 4 threads per partition).
+    thread_table: ThreadTable<4>,
 }
 
 impl PartitionControlBlock {
@@ -181,13 +185,18 @@ impl PartitionControlBlock {
         stack_pointer: u32,
         mpu_region: MpuRegion,
     ) -> Self {
+        let entry_point = entry_point.into();
+        let stack_size = stack_pointer.wrapping_sub(stack_base);
+        let mut thread_table = ThreadTable::new(SchedulingPolicy::RoundRobin);
+        // Ignore error: ThreadTable<4> always has room for slot 0.
+        let _ = thread_table.init_main_thread(entry_point.raw(), stack_base, stack_size, 0);
         Self {
             id: PartitionId::new(id as u32),
             state: PartitionState::Ready,
             stack_pointer,
-            entry_point: entry_point.into(),
+            entry_point,
             stack_base,
-            stack_size: stack_pointer.wrapping_sub(stack_base),
+            stack_size,
             mpu_region,
             event_flags: 0,
             event_wait_mask: 0,
@@ -210,6 +219,7 @@ impl PartitionControlBlock {
             in_error_handler: false,
             run_count: 0,
             on_restart: None,
+            thread_table,
         }
     }
 
@@ -303,6 +313,21 @@ impl PartitionControlBlock {
     /// Sets (or clears) the restart hook callback.
     pub fn set_on_restart(&mut self, hook: Option<RestartHook>) {
         self.on_restart = hook;
+    }
+
+    /// Returns a reference to the per-partition thread table.
+    pub fn thread_table(&self) -> &ThreadTable<4> {
+        &self.thread_table
+    }
+
+    /// Returns a mutable reference to the per-partition thread table.
+    pub fn thread_table_mut(&mut self) -> &mut ThreadTable<4> {
+        &mut self.thread_table
+    }
+
+    /// Sets the intra-partition scheduling policy on the thread table.
+    pub fn set_scheduling_policy(&mut self, policy: SchedulingPolicy) {
+        self.thread_table.set_scheduling_policy(policy);
     }
 
     /// Replace peripheral regions via `&mut self` (post-creation setter).
@@ -656,6 +681,8 @@ pub(crate) struct PartitionConfig {
     pub(crate) error_handler: Option<u32>,
     /// Optional callback invoked when the partition is restarted.
     pub(crate) on_restart: Option<RestartHook>,
+    /// Intra-partition scheduling policy (round-robin or static priority).
+    pub(crate) scheduling_policy: SchedulingPolicy,
 }
 
 #[allow(dead_code)] // Methods used in #[cfg(test)] within this crate
@@ -678,6 +705,7 @@ impl PartitionConfig {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            scheduling_policy: SchedulingPolicy::RoundRobin,
         }
     }
 
@@ -698,6 +726,7 @@ impl PartitionConfig {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            scheduling_policy: SchedulingPolicy::RoundRobin,
         }
     }
 
@@ -1119,6 +1148,7 @@ pub struct ExternalPartitionMemory<'mem> {
     fault_policy: FaultPolicy,
     error_handler: Option<u32>,
     on_restart: Option<RestartHook>,
+    scheduling_policy: SchedulingPolicy,
 }
 
 impl<'mem> ExternalPartitionMemory<'mem> {
@@ -1169,6 +1199,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            scheduling_policy: SchedulingPolicy::RoundRobin,
         })
     }
 
@@ -1284,6 +1315,12 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         self
     }
 
+    /// Builder: set the intra-partition scheduling policy.
+    pub fn with_scheduling_policy(mut self, policy: SchedulingPolicy) -> Self {
+        self.scheduling_policy = policy;
+        self
+    }
+
     /// Build an `ExternalPartitionMemory` from a [`PartitionSpec`], applying
     /// all builder fields from the spec.
     pub fn from_spec<S: StackStorage>(
@@ -1308,6 +1345,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         if let Some(hook) = spec.on_restart() {
             mem = mem.with_on_restart(hook);
         }
+        mem = mem.with_scheduling_policy(spec.scheduling_policy());
         Ok(mem)
     }
 
@@ -1334,6 +1372,9 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     }
     pub fn on_restart(&self) -> Option<RestartHook> {
         self.on_restart
+    }
+    pub fn scheduling_policy(&self) -> SchedulingPolicy {
+        self.scheduling_policy
     }
     pub fn stack_base(&self) -> u32 {
         self.stack.as_ptr() as u32
@@ -2625,6 +2666,52 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // ThreadTable integration in PCB
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn pcb_thread_table_default_policy_and_main_thread() {
+        use rtos_traits::ids::ThreadId;
+        let pcb = make_pcb();
+        assert_eq!(
+            pcb.thread_table().scheduling_policy(),
+            SchedulingPolicy::RoundRobin
+        );
+        let tcb = pcb.thread_table().get(ThreadId::new(0)).unwrap();
+        assert_eq!(tcb.state, rtos_traits::thread::ThreadState::Running);
+        assert_eq!(tcb.entry_point, 0x0800_0000);
+        assert_eq!(tcb.stack_base, 0x2000_0000);
+        assert_eq!(tcb.stack_size, 0x0400);
+        assert_eq!(tcb.stack_pointer, 0x2000_0400);
+    }
+
+    #[test]
+    fn pcb_set_scheduling_policy() {
+        let mut pcb = make_pcb();
+        pcb.set_scheduling_policy(SchedulingPolicy::StaticPriority);
+        assert_eq!(
+            pcb.thread_table().scheduling_policy(),
+            SchedulingPolicy::StaticPriority
+        );
+        pcb.thread_table_mut()
+            .set_scheduling_policy(SchedulingPolicy::RoundRobin);
+        assert_eq!(
+            pcb.thread_table().scheduling_policy(),
+            SchedulingPolicy::RoundRobin
+        );
+    }
+
+    #[test]
+    fn partition_config_scheduling_policy_defaults() {
+        let cfg = PartitionConfig::new(0, 0x0800_0001u32, MpuRegion::new(0, 0, 0));
+        assert_eq!(cfg.scheduling_policy, SchedulingPolicy::RoundRobin);
+        assert_eq!(
+            PartitionConfig::sentinel(0).scheduling_policy,
+            SchedulingPolicy::RoundRobin
+        );
+    }
+
+    // ------------------------------------------------------------------
     // PartitionConfig::validate
     // ------------------------------------------------------------------
 
@@ -2641,6 +2728,7 @@ mod tests {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            scheduling_policy: SchedulingPolicy::RoundRobin,
         }
     }
 

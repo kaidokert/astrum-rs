@@ -23,6 +23,7 @@ pub enum ThreadError {
 /// `MAX` is a const-generic that determines the maximum number of threads.
 /// The table uses a flat `[Option<ThreadControlBlock>; MAX]` array so that
 /// `ThreadId::as_raw()` is a direct index — no searching required.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadTable<const MAX: usize> {
     threads: [Option<ThreadControlBlock>; MAX],
     current_thread: u8,
@@ -91,6 +92,11 @@ impl<const MAX: usize> ThreadTable<MAX> {
     /// The scheduling policy configured for this table.
     pub fn scheduling_policy(&self) -> SchedulingPolicy {
         self.scheduling_policy
+    }
+
+    /// Update the scheduling policy without disturbing existing threads.
+    pub fn set_scheduling_policy(&mut self, policy: SchedulingPolicy) {
+        self.scheduling_policy = policy;
     }
 
     /// Pick the highest-priority Ready thread (static priority scheduling).

@@ -1116,6 +1116,7 @@ where
                 fault_policy: m.fault_policy(),
                 error_handler: m.error_handler(),
                 on_restart: m.on_restart(),
+                scheduling_policy: m.scheduling_policy(),
             };
             configs
                 .push(cfg)
@@ -1247,6 +1248,7 @@ where
             pcb.set_fault_policy(c.fault_policy);
             pcb.set_error_handler(c.error_handler);
             pcb.set_on_restart(c.on_restart);
+            pcb.set_scheduling_policy(c.scheduling_policy);
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
             }
