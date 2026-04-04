@@ -14,6 +14,8 @@ pub enum ThreadError {
     TableFull,
     /// The given thread ID does not refer to a valid thread.
     InvalidThread,
+    /// Stack base + size overflows the address space.
+    StackOverflow,
 }
 
 /// Fixed-capacity table of thread control blocks.
@@ -183,6 +185,56 @@ impl<const MAX: usize> ThreadTable<MAX> {
             }
         }
         None
+    }
+
+    /// Advance the intra-partition schedule by one step, dispatching to the
+    /// correct policy implementation based on `self.scheduling_policy`.
+    ///
+    /// Returns the `ThreadId` of the newly running thread, or `None` if no
+    /// Ready thread was found.
+    pub fn advance_intra_schedule(&mut self) -> Option<ThreadId> {
+        match self.scheduling_policy {
+            SchedulingPolicy::RoundRobin => self.advance_round_robin(),
+            SchedulingPolicy::StaticPriority => self.advance_priority(),
+        }
+    }
+
+    /// Create thread 0 as the partition's main thread.
+    ///
+    /// This is the default thread that exists for backward compatibility —
+    /// partitions with no explicit thread creation still work.  The main
+    /// thread is placed in slot 0 with priority 0 and `Running` state.
+    /// `stack_pointer` is set to `stack_base + stack_size` (a sentinel value
+    /// that is patched at boot).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ThreadError::TableFull` if `MAX == 0` (no room for a thread).
+    /// Returns `ThreadError::StackOverflow` if `stack_base + stack_size` overflows.
+    pub fn init_main_thread(
+        &mut self,
+        entry_point: u32,
+        stack_base: u32,
+        stack_size: u32,
+        r0: u32,
+    ) -> Result<(), ThreadError> {
+        let slot = self.threads.get_mut(0).ok_or(ThreadError::TableFull)?;
+        let stack_pointer = stack_base
+            .checked_add(stack_size)
+            .ok_or(ThreadError::StackOverflow)?;
+        let tcb = ThreadControlBlock {
+            stack_pointer,
+            id: ThreadId::new(0),
+            state: ThreadState::Running,
+            priority: 0,
+            stack_base,
+            stack_size,
+            entry_point,
+            r0_arg: r0,
+        };
+        *slot = Some(tcb);
+        self.current_thread = 0;
+        Ok(())
     }
 
     /// Advance the round-robin schedule by one step.
@@ -681,6 +733,112 @@ mod tests {
         assert_eq!(
             table.get(ThreadId::new(2)).unwrap().state,
             ThreadState::Running
+        );
+    }
+
+    // ── advance_intra_schedule dispatch tests ─────────────────────
+
+    #[test]
+    fn advance_intra_schedule_rr_uses_round_robin() {
+        let mut table = make_rr_table::<3>();
+        // T0=Running, T1=Ready, T2=Ready — RR should pick T1 next.
+        let next = table.advance_intra_schedule().unwrap();
+        assert_eq!(next, ThreadId::new(1));
+        assert_eq!(table.current_thread, 1);
+
+        // Next advance picks T2 (round-robin order, not priority).
+        let next = table.advance_intra_schedule().unwrap();
+        assert_eq!(next, ThreadId::new(2));
+        assert_eq!(table.current_thread, 2);
+    }
+
+    #[test]
+    fn advance_intra_schedule_priority_uses_priority_logic() {
+        // Thread 0: Running prio 5, Thread 1: Ready prio 1, Thread 2: Ready prio 3
+        let mut table = make_priority_table(&[5, 1, 3]);
+        let next = table.advance_intra_schedule().unwrap();
+        // Highest priority (lowest number) = thread 1 (prio 1).
+        assert_eq!(next, ThreadId::new(1));
+        assert_eq!(table.current_thread, 1);
+
+        // Thread 1 keeps winning because it has the highest priority.
+        let next = table.advance_intra_schedule().unwrap();
+        assert_eq!(next, ThreadId::new(1));
+    }
+
+    #[test]
+    fn advance_intra_schedule_empty_returns_none() {
+        let mut rr = ThreadTable::<4>::new(SchedulingPolicy::RoundRobin);
+        assert_eq!(rr.advance_intra_schedule(), None);
+
+        let mut sp = ThreadTable::<4>::new(SchedulingPolicy::StaticPriority);
+        assert_eq!(sp.advance_intra_schedule(), None);
+    }
+
+    // ── init_main_thread tests ────────────────────────────────────
+
+    #[test]
+    fn init_main_thread_creates_running_thread_at_index_0() {
+        let mut table = ThreadTable::<4>::new(SchedulingPolicy::RoundRobin);
+        table
+            .init_main_thread(0x0800_0000, 0x2000_0000, 1024, 42)
+            .unwrap();
+
+        assert_eq!(table.thread_count(), 1);
+        let tcb = table.get(ThreadId::new(0)).unwrap();
+        assert_eq!(tcb.id, ThreadId::new(0));
+        assert_eq!(tcb.state, ThreadState::Running);
+        assert_eq!(tcb.priority, 0);
+        assert_eq!(tcb.entry_point, 0x0800_0000);
+        assert_eq!(tcb.stack_base, 0x2000_0000);
+        assert_eq!(tcb.stack_size, 1024);
+        assert_eq!(tcb.stack_pointer, 0x2000_0000 + 1024);
+        assert_eq!(tcb.r0_arg, 42);
+        assert_eq!(table.current_thread, 0);
+    }
+
+    #[test]
+    fn init_main_thread_only_slot_0_occupied() {
+        let mut table = ThreadTable::<4>::new(SchedulingPolicy::StaticPriority);
+        table
+            .init_main_thread(0x0800_0000, 0x2000_0000, 512, 0)
+            .unwrap();
+
+        // Exactly one thread at index 0; slots 1-3 are empty.
+        assert_eq!(table.thread_count(), 1);
+        assert!(table.get(ThreadId::new(0)).is_some());
+        assert!(table.get(ThreadId::new(1)).is_none());
+        assert!(table.get(ThreadId::new(2)).is_none());
+        assert!(table.get(ThreadId::new(3)).is_none());
+    }
+
+    #[test]
+    fn init_main_thread_stack_pointer_sentinel() {
+        let mut table = ThreadTable::<2>::new(SchedulingPolicy::RoundRobin);
+        let base = 0x2000_4000u32;
+        let size = 2048u32;
+        table.init_main_thread(0x0800_0000, base, size, 0).unwrap();
+        assert_eq!(
+            table.get(ThreadId::new(0)).unwrap().stack_pointer,
+            base + size
+        );
+    }
+
+    #[test]
+    fn init_main_thread_returns_err_on_zero_capacity() {
+        let mut table = ThreadTable::<0>::new(SchedulingPolicy::RoundRobin);
+        assert_eq!(
+            table.init_main_thread(0x0800_0000, 0x2000_0000, 1024, 0),
+            Err(ThreadError::TableFull)
+        );
+    }
+
+    #[test]
+    fn init_main_thread_returns_err_on_stack_overflow() {
+        let mut table = ThreadTable::<4>::new(SchedulingPolicy::RoundRobin);
+        assert_eq!(
+            table.init_main_thread(0x0800_0000, u32::MAX, 1, 0),
+            Err(ThreadError::StackOverflow)
         );
     }
 }
