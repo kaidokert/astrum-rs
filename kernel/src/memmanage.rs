@@ -30,6 +30,14 @@ macro_rules! define_memmanage_handler {
                 $crate::fault::faulting_pc_from_psp(exc_return, psp)
             }.unwrap_or(0);
 
+            // Force completion of any lazy FPU state preservation so the
+            // software context frame on the stack is complete before we
+            // inspect or modify it.
+            #[cfg(feature = "fpu-context")]
+            // SAFETY: Privileged handler context; harmless read of FPSCR
+            // forces the hardware to complete lazy FPU stacking.
+            unsafe { $crate::fault::flush_fpu_lazy_state(); }
+
             let result = $crate::state::with_kernel_mut::<$Config, _, (Option<u32>, bool)>(|k| {
                 let restart_sp = match $crate::memmanage::handle_memmanage_fault::<$Config>(k, cfsr, mmfar, faulting_pc) {
                     Some(d) => {
@@ -65,13 +73,14 @@ macro_rules! define_memmanage_handler {
             let all_faulted = match result {
                 Ok((restart_sp, af)) => {
                     if let Some(sp) = restart_sp {
-                        // Partition was restarted: point PSP past the software context
-                        // (r4-r11 = 8 words = 32 bytes) to the exception frame so the
-                        // CPU unstacks the fresh entry point on return.  PendSV will
-                        // later save r4-r11 into the software context area and
-                        // partition_sp[pid] will remain correct.
+                        // Partition was restarted: point PSP past the software-saved
+                        // context to the exception frame so the CPU unstacks the fresh
+                        // entry point on return.  SOFTWARE_CONTEXT_BYTES accounts for
+                        // r4-r11 (32 B) and, when fpu-context is enabled, s16-s31
+                        // (64 B) for a total of 96 B.  PendSV will later save the
+                        // callee-saved registers back into this area.
                         // SAFETY: sp is a valid stack address from restart_partition.
-                        unsafe { cortex_m::register::psp::write(sp + 32); }
+                        unsafe { cortex_m::register::psp::write(sp + $crate::context::SOFTWARE_CONTEXT_BYTES); }
                     } else {
                         // Partition stays faulted: redirect to WFI trampoline.
                         // SAFETY: PSP exception frame is valid; fault_trampoline is a valid code address.

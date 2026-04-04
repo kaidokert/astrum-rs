@@ -2437,8 +2437,10 @@ where
                         // Update PSP to the hardware exception frame so the
                         // exception return resumes at the partition's fresh
                         // entry point.  partition_sp points to the full
-                        // context frame [r4-r11 | exception_frame]; PSP must
-                        // skip the software-saved registers (8 words).
+                        // context frame; PSP must skip the software-saved
+                        // registers.  SOFTWARE_CONTEXT_BYTES accounts for
+                        // r4-r11 (32 B) and, when fpu-context is enabled,
+                        // s16-s31 (64 B) for a total of 96 B.
                         #[cfg(target_arch = "arm")]
                         {
                             let new_sp = match self.partition_sp().get(pid) {
@@ -2448,11 +2450,11 @@ where
                                     return;
                                 }
                             };
-                            let exc_frame_sp =
-                                new_sp + (crate::context::SAVED_CONTEXT_WORDS as u32 * 4);
+                            let exc_frame_sp = new_sp + crate::context::SOFTWARE_CONTEXT_BYTES;
                             // SAFETY: exc_frame_sp is the freshly initialised
-                            // stack from restart_partition, offset past r4-r11
-                            // to the hardware exception frame.  Writing PSP in
+                            // stack from restart_partition, offset past the
+                            // software-saved context to the hardware exception
+                            // frame.  Writing PSP in
                             // Handler mode is safe; it takes effect on the next
                             // exception return to Thread mode.
                             unsafe { cortex_m::register::psp::write(exc_frame_sp) };
