@@ -97,3 +97,133 @@ single 8 KiB region covers both — reducing the peripheral count from 2 to 1
 and freeing one slot for a buffer window. This requires the peripherals to be
 naturally aligned to the combined power-of-two size (an ARMv7-M MPU
 constraint).
+
+## 4. Context Switch Behavior
+
+On every context switch, the PendSV handler reprograms **all four dynamic
+slots** (R4–R7) by calling `partition_region_values()` on the
+`DynamicStrategy`. This function computes the complete `[(RBAR, RASR);
+DYNAMIC_SLOT_COUNT]` output for the incoming partition, drawing from three
+sources:
+
+1. **Peripheral cache** — per-partition pre-computed `(RBAR, RASR)` pairs
+   stored in `PeripheralCache`. Slots `0..reserved` are overridden from this
+   cache so each partition sees exactly its own peripheral MMIO regions.
+
+2. **RAM slot** — the partition's private data region is placed at slot index
+   `reserved` (i.e. immediately after the peripheral slots).
+
+3. **Shared windows** — any `buf_lend` windows occupying the remaining slots
+   are carried forward from the global `slots[]` array, with visibility
+   filtering so a partition cannot see another partition's peripheral-reserved
+   slots.
+
+### Stale-region zeroing requirement
+
+When partition P0 has `reserved = 3` peripheral slots and partition P1 has
+`reserved = 1`, a context switch from P0 to P1 leaves P0's peripheral data in
+hardware regions R5 and R6 unless those slots are explicitly cleared. Stale
+MMIO permissions from a previous partition are a **security violation** — the
+incoming partition must never inherit access to peripherals it does not own.
+
+The fix (Bug 40-koala, subtask 112) adds an explicit zeroing pass in
+`partition_region_values()`:
+
+```rust
+// Disable stale peripheral slots between this partition's
+// reserved count and the maximum reserved across all partitions.
+let max_reserved = pr.iter().copied().max().unwrap_or(0);
+for idx in reserved..=max_reserved {
+    if let Some(dst) = out.get_mut(idx) {
+        let region = DYNAMIC_REGION_BASE as u32 + idx as u32;
+        *dst = disabled_pair(region as u8);
+    }
+}
+```
+
+Every slot from index `reserved` through `max_reserved` is set to
+`disabled_pair()` — which writes `RASR = 0`, disabling the MPU region — before
+the RAM slot overwrites index `reserved` with the partition's own data region.
+This guarantees that no peripheral RASR bits survive a context switch to a
+partition with fewer peripheral reservations.
+
+### Debug verification
+
+In debug builds (`cfg(debug_assertions)`), `debug_assert_no_stale_regions()`
+runs after `partition_region_values()` computes its output. It checks two
+invariants:
+
+- **Peripheral-reserved slots** (`idx < reserved`) with a cached peripheral
+  must have `RASR != 0` (the peripheral is actively mapped).
+- **Slots beyond the reserved range** (`idx > reserved`, excluding the RAM
+  slot) must have `RASR == 0` unless a shared window descriptor exists for
+  that slot — otherwise the slot contains stale data from a previous partition.
+
+## 5. Porting Guidance
+
+### Checking MPU region count
+
+Before porting to a new Cortex-M target, read the `MPU_TYPE` register's
+`DREGION` field (bits 15:8) to determine how many MPU regions the hardware
+provides:
+
+```rust
+let mpu_type = core::ptr::read_volatile(0xE000_ED90 as *const u32);
+let dregion = (mpu_type >> 8) & 0xFF;
+```
+
+| Core        | Architecture | Typical DREGION | Total regions |
+|-------------|-------------|-----------------|---------------|
+| Cortex-M3   | ARMv7-M     | 8               | 8             |
+| Cortex-M4   | ARMv7-M     | 8               | 8             |
+| Cortex-M7   | ARMv7-M     | 8 or 16         | 8 or 16       |
+| Cortex-M33  | ARMv8-M     | 8 or 16         | 8 or 16       |
+
+### 8-region strategy (M3/M4)
+
+The current kernel targets 8-region devices (QEMU lm3s6965evb, Cortex-M3).
+With 4 static base regions (R0–R3) and `DYNAMIC_SLOT_COUNT = 4`, the ceiling
+is 3 peripheral regions and 0 buffer windows, or 0 peripherals and 3 buffer
+windows. This is the tightest configuration and the one all current tests
+validate.
+
+### 16-region strategy (M7/M33)
+
+On a 16-region device, the static base regions remain at R0–R3 and
+`DYNAMIC_SLOT_COUNT` rises to 12. To extend:
+
+1. Change `DYNAMIC_SLOT_COUNT` in `mpu_strategy.rs` from 4 to 12.
+2. Update `MAX_PERIPHERAL_REGIONS` in `partition.rs` to the new
+   `DYNAMIC_SLOT_COUNT - RAM_SLOT_COUNT` (= 11). The compile-time assertion
+   will enforce consistency.
+3. Widen `PeripheralCache` and all `[(u32, u32); MAX_PERIPHERAL_REGIONS]`
+   arrays — these are derived from the constant so they resize automatically.
+4. Extend `BOOT_WIRE_LIMIT` — also derived from the constants.
+5. Re-run the full test suite. The `debug_assert_no_stale_regions()` check
+   will validate the wider slot range automatically.
+
+The constant-driven design means most changes propagate from adjusting two
+numbers. The primary porting risk is ensuring the target's MPU region alignment
+and size constraints match ARMv7-M rules (power-of-two size >= 32, base
+aligned to size). ARMv8-M relaxes this to arbitrary base/limit pairs, which
+would require a different `build_rbar`/`build_rasr` implementation.
+
+### Peripheral cache sizing
+
+The peripheral cache was originally 2 entries per partition (matching an older
+`PERIPHERAL_RESERVED_SLOTS = 2` constant). Bug 41-llama (subtask 111) expanded
+it to 3 entries to match `MAX_PERIPHERAL_REGIONS`, enabling partitions to use
+all 3 available peripheral slots. The old 2-entry cache silently dropped the
+third peripheral, causing it to be unmapped after the first context switch. On
+a 16-region device, the cache would grow to `MAX_PERIPHERAL_REGIONS` entries
+(up to 11), but the per-partition memory cost remains small since each entry is
+only 8 bytes (one `(u32, u32)` pair).
+
+## References
+
+- [MPU Bundling Design](../mpu-bundling-design.md) — combining adjacent
+  peripherals into single MPU regions to recover dynamic slots.
+- [Precompute MPU Registers](../precompute-mpu-registers.md) — boot-time
+  precomputation of RBAR/RASR pairs into `cached_base_regions`.
+- [Architecture Overview](../architecture.md) — system-level architecture
+  including memory ownership model and partition lifecycle.
