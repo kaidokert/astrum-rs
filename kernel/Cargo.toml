@@ -510,6 +510,10 @@ name = "last_partition_faults_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "restart_hook_test"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "error_handler_test"
 required-features = ["qemu", "log-semihosting"]
 

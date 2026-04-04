@@ -42,6 +42,7 @@ EXAMPLES=(
     builder_periph_test
     all_faulted_idle_test
     last_partition_faults_test
+    restart_hook_test
 )
 
 CUSTOM_IVT_EXAMPLES=(
