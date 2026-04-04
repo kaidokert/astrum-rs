@@ -3,7 +3,7 @@ use crate::svc::SvcError;
 #[cfg(target_pointer_width = "32")]
 use crate::thread::init_thread_stack_frame;
 use crate::thread::{split_thread_stack, ThreadError};
-use rtos_traits::ids::PartitionId;
+use rtos_traits::ids::{PartitionId, ThreadId};
 use rtos_traits::thread::{ThreadControlBlock, ThreadState};
 
 /// Handle the SYS_THREAD_CREATE syscall.
@@ -88,6 +88,91 @@ pub fn handle_thread_create<const N: usize>(
         Ok(id) => id.as_raw() as u32,
         Err(ThreadError::TableFull) => SvcError::OperationFailed.to_u32(),
         Err(_) => SvcError::OperationFailed.to_u32(),
+    }
+}
+
+/// Validate a raw u32 thread ID and look up the corresponding TCB mutably.
+fn get_tcb_mut<const N: usize>(
+    partitions: &mut PartitionTable<N>,
+    caller: PartitionId,
+    thread_id_raw: u32,
+) -> Result<&mut ThreadControlBlock, u32> {
+    if thread_id_raw > u8::MAX as u32 {
+        return Err(SvcError::InvalidResource.to_u32());
+    }
+    let pcb = partitions
+        .get_mut(caller.as_raw() as usize)
+        .ok_or(SvcError::InvalidPartition.to_u32())?;
+    let tid = ThreadId::new(thread_id_raw as u8);
+    pcb.thread_table_mut()
+        .get_mut(tid)
+        .ok_or(SvcError::InvalidResource.to_u32())
+}
+
+/// Handle SYS_THREAD_SUSPEND: transitions Ready/Running -> Suspended.
+pub fn handle_thread_suspend<const N: usize>(
+    partitions: &mut PartitionTable<N>,
+    caller: PartitionId,
+    thread_id_raw: u32,
+) -> u32 {
+    let tcb = match get_tcb_mut(partitions, caller, thread_id_raw) {
+        Ok(tcb) => tcb,
+        Err(e) => return e,
+    };
+    match tcb.state {
+        ThreadState::Ready | ThreadState::Running => {
+            tcb.state = ThreadState::Suspended;
+            0
+        }
+        _ => SvcError::InvalidParameter.to_u32(),
+    }
+}
+
+/// Handle SYS_THREAD_RESUME: transitions Suspended -> Ready.
+pub fn handle_thread_resume<const N: usize>(
+    partitions: &mut PartitionTable<N>,
+    caller: PartitionId,
+    thread_id_raw: u32,
+) -> u32 {
+    let tcb = match get_tcb_mut(partitions, caller, thread_id_raw) {
+        Ok(tcb) => tcb,
+        Err(e) => return e,
+    };
+    match tcb.state {
+        ThreadState::Suspended => {
+            tcb.state = ThreadState::Ready;
+            0
+        }
+        _ => SvcError::InvalidParameter.to_u32(),
+    }
+}
+
+/// Handle SYS_THREAD_STOP: transitions any -> Stopped (idempotent).
+pub fn handle_thread_stop<const N: usize>(
+    partitions: &mut PartitionTable<N>,
+    caller: PartitionId,
+    thread_id_raw: u32,
+) -> u32 {
+    let tcb = match get_tcb_mut(partitions, caller, thread_id_raw) {
+        Ok(tcb) => tcb,
+        Err(e) => return e,
+    };
+    tcb.state = ThreadState::Stopped;
+    0
+}
+
+/// Handle SYS_THREAD_GET_ID: returns the current thread ID for the caller.
+pub fn handle_thread_get_id<const N: usize>(
+    partitions: &PartitionTable<N>,
+    caller: PartitionId,
+) -> u32 {
+    let pcb = match partitions.get(caller.as_raw() as usize) {
+        Some(pcb) => pcb,
+        None => return SvcError::InvalidPartition.to_u32(),
+    };
+    match pcb.thread_table().current_thread_id() {
+        Some(id) => id.as_raw() as u32,
+        None => SvcError::InvalidResource.to_u32(),
     }
 }
 
@@ -254,5 +339,141 @@ mod tests {
             XPSR_THUMB,
             "xPSR should have thumb bit set"
         );
+    }
+
+    fn thread_state(pt: &PartitionTable<4>, tid: u8) -> ThreadState {
+        pt.get(0)
+            .unwrap()
+            .thread_table()
+            .get(ThreadId::new(tid))
+            .unwrap()
+            .state
+    }
+
+    #[test]
+    fn suspend_valid_transitions() {
+        let mut pt = make_pt();
+        // Suspend Running thread (main thread 0)
+        assert_eq!(handle_thread_suspend(&mut pt, pid(0), 0), 0);
+        assert_eq!(thread_state(&pt, 0), ThreadState::Suspended);
+
+        // Create a Ready thread and suspend it
+        let mut pt = make_pt();
+        let tid = handle_thread_create(&mut pt, pid(0), 0x0800_1000, 5, 0);
+        assert!(!SvcError::is_error(tid));
+        assert_eq!(handle_thread_suspend(&mut pt, pid(0), tid), 0);
+        assert_eq!(thread_state(&pt, tid as u8), ThreadState::Suspended);
+    }
+
+    #[test]
+    fn suspend_invalid_states_and_args() {
+        let mut pt = make_pt();
+        let tid = handle_thread_create(&mut pt, pid(0), 0x0800_1000, 5, 0);
+        assert!(!SvcError::is_error(tid));
+        // Suspend then try again (Suspended -> err)
+        assert_eq!(handle_thread_suspend(&mut pt, pid(0), tid), 0);
+        assert!(SvcError::is_error(handle_thread_suspend(
+            &mut pt,
+            pid(0),
+            tid
+        )));
+        // Stop then try suspend (Stopped -> err)
+        let mut pt = make_pt();
+        let tid = handle_thread_create(&mut pt, pid(0), 0x0800_1000, 5, 0);
+        assert!(!SvcError::is_error(tid));
+        assert_eq!(handle_thread_stop(&mut pt, pid(0), tid), 0);
+        assert!(SvcError::is_error(handle_thread_suspend(
+            &mut pt,
+            pid(0),
+            tid
+        )));
+        // Invalid thread / partition
+        assert!(SvcError::is_error(handle_thread_suspend(
+            &mut pt,
+            pid(0),
+            99
+        )));
+        assert!(SvcError::is_error(handle_thread_suspend(
+            &mut pt,
+            pid(99),
+            0
+        )));
+    }
+
+    #[test]
+    fn resume_valid_transition() {
+        let mut pt = make_pt();
+        let tid = handle_thread_create(&mut pt, pid(0), 0x0800_1000, 5, 0);
+        assert!(!SvcError::is_error(tid));
+        assert_eq!(handle_thread_suspend(&mut pt, pid(0), tid), 0);
+        assert_eq!(handle_thread_resume(&mut pt, pid(0), tid), 0);
+        assert_eq!(thread_state(&pt, tid as u8), ThreadState::Ready);
+    }
+
+    #[test]
+    fn resume_invalid_states_and_args() {
+        let mut pt = make_pt();
+        let tid = handle_thread_create(&mut pt, pid(0), 0x0800_1000, 5, 0);
+        assert!(!SvcError::is_error(tid));
+        // Resume Ready -> err
+        assert!(SvcError::is_error(handle_thread_resume(
+            &mut pt,
+            pid(0),
+            tid
+        )));
+        // Resume Running -> err
+        assert!(SvcError::is_error(handle_thread_resume(&mut pt, pid(0), 0)));
+        // Resume Stopped -> err
+        assert_eq!(handle_thread_stop(&mut pt, pid(0), tid), 0);
+        assert!(SvcError::is_error(handle_thread_resume(
+            &mut pt,
+            pid(0),
+            tid
+        )));
+        // Invalid thread / partition
+        assert!(SvcError::is_error(handle_thread_resume(
+            &mut pt,
+            pid(0),
+            99
+        )));
+        assert!(SvcError::is_error(handle_thread_resume(
+            &mut pt,
+            pid(99),
+            0
+        )));
+    }
+
+    #[test]
+    fn stop_transitions_and_errors() {
+        // Stop from Ready
+        let mut pt = make_pt();
+        let tid = handle_thread_create(&mut pt, pid(0), 0x0800_1000, 5, 0);
+        assert!(!SvcError::is_error(tid));
+        assert_eq!(handle_thread_stop(&mut pt, pid(0), tid), 0);
+        assert_eq!(thread_state(&pt, tid as u8), ThreadState::Stopped);
+        // Stop from Running
+        let mut pt = make_pt();
+        assert_eq!(handle_thread_stop(&mut pt, pid(0), 0), 0);
+        assert_eq!(thread_state(&pt, 0), ThreadState::Stopped);
+        // Stop from Suspended
+        let mut pt = make_pt();
+        let tid = handle_thread_create(&mut pt, pid(0), 0x0800_1000, 5, 0);
+        assert!(!SvcError::is_error(tid));
+        assert_eq!(handle_thread_suspend(&mut pt, pid(0), tid), 0);
+        assert_eq!(handle_thread_stop(&mut pt, pid(0), tid), 0);
+        assert_eq!(thread_state(&pt, tid as u8), ThreadState::Stopped);
+        // Already stopped -> idempotent success
+        assert_eq!(handle_thread_stop(&mut pt, pid(0), tid), 0);
+        assert!(SvcError::is_error(handle_thread_stop(&mut pt, pid(0), 99)));
+        assert!(SvcError::is_error(handle_thread_stop(&mut pt, pid(99), 0)));
+    }
+
+    #[test]
+    fn get_id_valid_and_invalid() {
+        let pt = make_pt();
+        let r = handle_thread_get_id(&pt, pid(0));
+        assert!(!SvcError::is_error(r));
+        assert_eq!(r, 0);
+        assert!(SvcError::is_error(handle_thread_get_id(&pt, pid(99))));
     }
 }

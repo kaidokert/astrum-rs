@@ -945,6 +945,18 @@ pub fn dispatch_syscall<const N: usize>(
             frame.r2 as u8,
             frame.r3,
         ),
+        Some(SyscallId::ThreadSuspend) => {
+            thread::handle_thread_suspend(partitions, PartitionId::new(caller as u32), frame.r1)
+        }
+        Some(SyscallId::ThreadResume) => {
+            thread::handle_thread_resume(partitions, PartitionId::new(caller as u32), frame.r1)
+        }
+        Some(SyscallId::ThreadStop) => {
+            thread::handle_thread_stop(partitions, PartitionId::new(caller as u32), frame.r1)
+        }
+        Some(SyscallId::ThreadGetId) => {
+            thread::handle_thread_get_id(partitions, PartitionId::new(caller as u32))
+        }
         Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
     };
@@ -2502,6 +2514,18 @@ where
                 arg2 as u8,
                 arg3,
             ),
+            Some(SyscallId::ThreadSuspend) => {
+                thread::handle_thread_suspend(self.core.partitions_mut(), caller_pid, arg1)
+            }
+            Some(SyscallId::ThreadResume) => {
+                thread::handle_thread_resume(self.core.partitions_mut(), caller_pid, arg1)
+            }
+            Some(SyscallId::ThreadStop) => {
+                thread::handle_thread_stop(self.core.partitions_mut(), caller_pid, arg1)
+            }
+            Some(SyscallId::ThreadGetId) => {
+                thread::handle_thread_get_id(self.core.partitions(), caller_pid)
+            }
             #[allow(unreachable_patterns)]
             Some(_) => SvcError::InvalidSyscall.to_u32(),
             None => SvcError::InvalidSyscall.to_u32(),
