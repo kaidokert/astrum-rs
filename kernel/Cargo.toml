@@ -518,6 +518,10 @@ name = "restart_hook_cold_test"
 required-features = ["qemu", "log-semihosting"]
 
 [[example]]
+name = "qemu_thread_rr"
+required-features = ["qemu", "log-semihosting"]
+
+[[example]]
 name = "error_handler_test"
 required-features = ["qemu", "log-semihosting"]
 
