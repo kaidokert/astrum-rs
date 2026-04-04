@@ -43,3 +43,7 @@ required-features = ["board-qemu", "log-semihosting"]
 [[example]]
 name = "04_schedule_table"
 required-features = ["board-qemu", "log-semihosting"]
+
+[[example]]
+name = "05_sampling_port"
+required-features = ["board-qemu", "log-semihosting"]
