@@ -249,7 +249,7 @@ macro_rules! define_unified_harness {
                     let dyn_region = pcb.cached_dynamic_region();
                     let periph_reserved = pcb.peripheral_regions().len();
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
-                        &HARNESS_STRATEGY, rtos_traits::ids::PartitionId::new(pid as u32), &[dyn_region], periph_reserved,
+                        &HARNESS_STRATEGY, $crate::PartitionId::new(pid as u32), &[dyn_region], periph_reserved,
                     )
                     // TODO: preserves only a static string; consider logging the
                     // underlying strategy error once we have a boot-time log sink.
@@ -279,7 +279,7 @@ macro_rules! define_unified_harness {
                     let other_dyn = other_pcb.cached_dynamic_region();
                     let other_periph = other_pcb.peripheral_regions().len();
                     $crate::mpu_strategy::MpuStrategy::configure_partition(
-                        &HARNESS_STRATEGY, rtos_traits::ids::PartitionId::new(other_pid as u32), &[other_dyn], other_periph,
+                        &HARNESS_STRATEGY, $crate::PartitionId::new(other_pid as u32), &[other_dyn], other_periph,
                     ).map_err(|_| "failed to configure non-boot partition")?;
                 }
 
@@ -366,7 +366,7 @@ macro_rules! define_unified_harness {
             // Write per-partition R4-R7 strategy regions
             // (peripherals, RAM, cross-partition filtering) and re-enable.
             if <$Config as $crate::config::KernelConfig>::MPU_ENFORCE {
-                let values = HARNESS_STRATEGY.partition_region_values(rtos_traits::ids::PartitionId::new(pid as u32));
+                let values = HARNESS_STRATEGY.partition_region_values($crate::PartitionId::new(pid as u32));
                 for &(rbar, rasr) in &values {
                     $crate::mpu::configure_region(&p.MPU, rbar, rasr);
                 }
@@ -444,7 +444,7 @@ macro_rules! define_unified_harness {
             let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
-                let mem = ExternalPartitionMemory::from_spec(stk, spec, rtos_traits::ids::PartitionId::new(i as u32))
+                let mem = ExternalPartitionMemory::from_spec(stk, spec, $crate::PartitionId::new(i as u32))
                     .map_err(|e| {
                         $crate::klog!("init_kernel failed: {:?}", e);
                         $crate::harness::BootError::KernelInit(e)
@@ -544,7 +544,7 @@ macro_rules! define_unified_harness {
             let mut memories: heapless::Vec<ExternalPartitionMemory<'_>,
                 { <$Config as $crate::config::KernelConfig>::N }> = heapless::Vec::new();
             for (i, (stk, spec)) in stacks.iter_mut().zip(entries.iter()).enumerate() {
-                let mem = ExternalPartitionMemory::from_spec(stk, spec, rtos_traits::ids::PartitionId::new(i as u32))
+                let mem = ExternalPartitionMemory::from_spec(stk, spec, $crate::PartitionId::new(i as u32))
                     .map_err(|e| {
                         $crate::klog!("init_kernel failed: {:?}", e);
                         $crate::harness::BootError::KernelInit(e)
