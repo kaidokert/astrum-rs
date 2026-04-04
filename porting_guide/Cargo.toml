@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 kernel = { path = "../kernel" }
+plib = { path = "../plib" }
 cortex-m = "0.7"
 cortex-m-rt = { version = "0.7", features = ["device"] }
 cortex-m-semihosting = { version = "0.5", optional = true }
@@ -46,4 +47,8 @@ required-features = ["board-qemu", "log-semihosting"]
 
 [[example]]
 name = "05_sampling_port"
+required-features = ["board-qemu", "log-semihosting"]
+
+[[example]]
+name = "06_kernel_minimal"
 required-features = ["board-qemu", "log-semihosting"]
