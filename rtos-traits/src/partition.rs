@@ -6,6 +6,11 @@ pub type PartitionBody = extern "C" fn(u32) -> !;
 pub type PartitionEntry = extern "C" fn() -> !;
 /// Signature for an interrupt service routine handler.
 pub type IsrHandler = unsafe extern "C" fn();
+/// Callback invoked when a partition is restarted.
+///
+/// `pid` is the partition index and `warm` is `true` for a warm restart
+/// (state preserved) or `false` for a cold restart (full reset).
+pub type RestartHook = fn(pid: usize, warm: bool);
 
 /// A partition descriptor: entry point address paired with its `r0` argument.
 ///
@@ -22,6 +27,7 @@ pub struct PartitionSpec {
     peripherals: &'static [MpuRegion],
     fault_policy: FaultPolicy,
     error_handler: Option<u32>,
+    on_restart: Option<RestartHook>,
 }
 
 impl PartitionSpec {
@@ -34,6 +40,7 @@ impl PartitionSpec {
             peripherals: &[],
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
+            on_restart: None,
         }
     }
     /// Create a spec from a [`PartitionEntry`] fn pointer with `r0 = 0`.
@@ -71,6 +78,9 @@ impl PartitionSpec {
     pub const fn error_handler(&self) -> Option<u32> {
         self.error_handler
     }
+    pub const fn on_restart(&self) -> Option<RestartHook> {
+        self.on_restart
+    }
 
     // -- builder methods --
 
@@ -98,6 +108,10 @@ impl PartitionSpec {
         self.error_handler = Some(addr);
         self
     }
+    pub const fn with_restart_hook(mut self, hook: RestartHook) -> Self {
+        self.on_restart = Some(hook);
+        self
+    }
 
     /// Construct a `PartitionSpec` from a raw `u32` entry-point address.
     ///
@@ -114,6 +128,7 @@ impl PartitionSpec {
             peripherals: &[],
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
+            on_restart: None,
         }
     }
 }
@@ -690,6 +705,7 @@ mod tests {
             peripherals: &[],
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
+            on_restart: None,
         }
     }
 
@@ -705,6 +721,7 @@ mod tests {
         assert!(spec.peripherals().is_empty());
         assert_eq!(spec.fault_policy(), FaultPolicy::StayDead);
         assert!(spec.error_handler().is_none());
+        assert!(spec.on_restart().is_none());
     }
 
     /// Verify that `PartitionSpec::entry()` also defaults the new fields.
@@ -717,6 +734,7 @@ mod tests {
         assert!(spec.peripherals().is_empty());
         assert_eq!(spec.fault_policy(), FaultPolicy::StayDead);
         assert!(spec.error_handler().is_none());
+        assert!(spec.on_restart().is_none());
     }
 
     #[test]
@@ -781,5 +799,35 @@ mod tests {
         assert_eq!(spec.peripherals().len(), 2);
         assert_eq!(spec.fault_policy(), FaultPolicy::ColdRestart { max: 5 });
         assert_eq!(spec.error_handler(), Some(0x0800_3000));
+        assert!(spec.on_restart().is_none());
+    }
+
+    fn sample_restart_hook(pid: usize, warm: bool) {
+        let _ = (pid, warm);
+    }
+
+    #[test]
+    fn spec_with_restart_hook() {
+        let hook: RestartHook = sample_restart_hook;
+        let spec = base_spec().with_restart_hook(hook);
+        let got = spec.on_restart().expect("on_restart should be Some");
+        // Verify round-trip: the returned fn pointer matches the one we set.
+        got(0, true);
+        assert_eq!(
+            got as *const () as usize,
+            sample_restart_hook as *const () as usize
+        );
+    }
+
+    #[test]
+    fn default_spec_has_no_restart_hook() {
+        let spec = base_spec();
+        assert!(spec.on_restart().is_none());
+    }
+
+    #[test]
+    fn from_raw_entry_has_no_restart_hook() {
+        let spec = PartitionSpec::from_raw_entry(0x0800_0000, 0);
+        assert!(spec.on_restart().is_none());
     }
 }
