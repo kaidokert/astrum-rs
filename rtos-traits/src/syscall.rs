@@ -52,6 +52,18 @@ pub const SYS_GET_PARTITION_RUN_COUNT: u32 = 45;
 pub const SYS_GET_MAJOR_FRAME_COUNT: u32 = 46;
 /// Get schedule info: returns (major_frame_ticks in r0, num_partitions in r1).
 pub const SYS_GET_SCHEDULE_INFO: u32 = 47;
+/// Thread create: r1=entry_point, r2=stack_ptr, r3=priority. Returns thread_id in r0.
+pub const SYS_THREAD_CREATE: u32 = 50;
+/// Thread start: r1=thread_id. Returns 0 on success.
+pub const SYS_THREAD_START: u32 = 51;
+/// Thread stop: r1=thread_id. Returns 0 on success.
+pub const SYS_THREAD_STOP: u32 = 52;
+/// Thread suspend: r1=thread_id. Returns 0 on success.
+pub const SYS_THREAD_SUSPEND: u32 = 53;
+/// Thread resume: r1=thread_id. Returns 0 on success.
+pub const SYS_THREAD_RESUME: u32 = 54;
+/// Thread get ID: returns current thread_id in r0.
+pub const SYS_THREAD_GET_ID: u32 = 55;
 
 // ── Feature-gated syscall numbers ─────────────────────────────────────
 
@@ -136,6 +148,12 @@ mod tests {
         ),
         ("SYS_GET_MAJOR_FRAME_COUNT", SYS_GET_MAJOR_FRAME_COUNT, 46),
         ("SYS_GET_SCHEDULE_INFO", SYS_GET_SCHEDULE_INFO, 47),
+        ("SYS_THREAD_CREATE", SYS_THREAD_CREATE, 50),
+        ("SYS_THREAD_START", SYS_THREAD_START, 51),
+        ("SYS_THREAD_STOP", SYS_THREAD_STOP, 52),
+        ("SYS_THREAD_SUSPEND", SYS_THREAD_SUSPEND, 53),
+        ("SYS_THREAD_RESUME", SYS_THREAD_RESUME, 54),
+        ("SYS_THREAD_GET_ID", SYS_THREAD_GET_ID, 55),
     ];
 
     #[test]
@@ -156,7 +174,7 @@ mod tests {
 
     #[test]
     fn base_constant_count() {
-        assert_eq!(BASE_SYSCALLS.len(), 34);
+        assert_eq!(BASE_SYSCALLS.len(), 40);
     }
 
     /// Dynamic-MPU syscall constants: (name, actual, expected).

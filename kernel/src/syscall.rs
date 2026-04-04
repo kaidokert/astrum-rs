@@ -9,7 +9,9 @@ pub use rtos_traits::syscall::{
     SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV,
     SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS,
     SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART, SYS_REQUEST_STOP, SYS_SAMPLING_READ,
-    SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_YIELD,
+    SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_THREAD_CREATE,
+    SYS_THREAD_GET_ID, SYS_THREAD_RESUME, SYS_THREAD_START, SYS_THREAD_STOP, SYS_THREAD_SUSPEND,
+    SYS_YIELD,
 };
 
 // Buffer and device syscall numbers — defined in rtos-traits, re-exported here.
@@ -74,6 +76,12 @@ pub enum SyscallId {
     GetPartitionRunCount,
     GetMajorFrameCount,
     GetScheduleInfo,
+    ThreadCreate,
+    ThreadStart,
+    ThreadStop,
+    ThreadSuspend,
+    ThreadResume,
+    ThreadGetId,
     #[cfg(feature = "partition-debug")]
     DebugNotify,
     #[cfg(feature = "partition-debug")]
@@ -135,6 +143,12 @@ impl SyscallId {
             SYS_GET_PARTITION_RUN_COUNT => Some(Self::GetPartitionRunCount),
             SYS_GET_MAJOR_FRAME_COUNT => Some(Self::GetMajorFrameCount),
             SYS_GET_SCHEDULE_INFO => Some(Self::GetScheduleInfo),
+            SYS_THREAD_CREATE => Some(Self::ThreadCreate),
+            SYS_THREAD_START => Some(Self::ThreadStart),
+            SYS_THREAD_STOP => Some(Self::ThreadStop),
+            SYS_THREAD_SUSPEND => Some(Self::ThreadSuspend),
+            SYS_THREAD_RESUME => Some(Self::ThreadResume),
+            SYS_THREAD_GET_ID => Some(Self::ThreadGetId),
             #[cfg(feature = "partition-debug")]
             SYS_DEBUG_NOTIFY => Some(Self::DebugNotify),
             #[cfg(feature = "partition-debug")]
@@ -194,6 +208,12 @@ impl SyscallId {
             Self::GetPartitionRunCount => "get_partition_run_count",
             Self::GetMajorFrameCount => "get_major_frame_count",
             Self::GetScheduleInfo => "get_schedule_info",
+            Self::ThreadCreate => "thread_create",
+            Self::ThreadStart => "thread_start",
+            Self::ThreadStop => "thread_stop",
+            Self::ThreadSuspend => "thread_suspend",
+            Self::ThreadResume => "thread_resume",
+            Self::ThreadGetId => "thread_get_id",
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => "debug_notify",
             #[cfg(feature = "partition-debug")]
@@ -252,6 +272,12 @@ impl SyscallId {
             Self::GetPartitionRunCount => SYS_GET_PARTITION_RUN_COUNT,
             Self::GetMajorFrameCount => SYS_GET_MAJOR_FRAME_COUNT,
             Self::GetScheduleInfo => SYS_GET_SCHEDULE_INFO,
+            Self::ThreadCreate => SYS_THREAD_CREATE,
+            Self::ThreadStart => SYS_THREAD_START,
+            Self::ThreadStop => SYS_THREAD_STOP,
+            Self::ThreadSuspend => SYS_THREAD_SUSPEND,
+            Self::ThreadResume => SYS_THREAD_RESUME,
+            Self::ThreadGetId => SYS_THREAD_GET_ID,
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => SYS_DEBUG_NOTIFY,
             #[cfg(feature = "partition-debug")]
@@ -314,6 +340,12 @@ mod tests {
         (SYS_GET_PARTITION_RUN_COUNT, SyscallId::GetPartitionRunCount),
         (SYS_GET_MAJOR_FRAME_COUNT, SyscallId::GetMajorFrameCount),
         (SYS_GET_SCHEDULE_INFO, SyscallId::GetScheduleInfo),
+        (SYS_THREAD_CREATE, SyscallId::ThreadCreate),
+        (SYS_THREAD_START, SyscallId::ThreadStart),
+        (SYS_THREAD_STOP, SyscallId::ThreadStop),
+        (SYS_THREAD_SUSPEND, SyscallId::ThreadSuspend),
+        (SYS_THREAD_RESUME, SyscallId::ThreadResume),
+        (SYS_THREAD_GET_ID, SyscallId::ThreadGetId),
         #[cfg(feature = "partition-debug")]
         (SYS_DEBUG_NOTIFY, SyscallId::DebugNotify),
     ];
@@ -352,6 +384,10 @@ mod tests {
         assert_eq!(SyscallId::from_u32(46), Some(SyscallId::GetMajorFrameCount));
         assert_eq!(SyscallId::from_u32(47), Some(SyscallId::GetScheduleInfo));
         assert_eq!(SyscallId::from_u32(48), None);
+        assert_eq!(SyscallId::from_u32(49), None);
+        assert_eq!(SyscallId::from_u32(50), Some(SyscallId::ThreadCreate));
+        assert_eq!(SyscallId::from_u32(55), Some(SyscallId::ThreadGetId));
+        assert_eq!(SyscallId::from_u32(56), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -362,9 +398,9 @@ mod tests {
         // distinct variant; here we just verify we have the expected count.
         // Base: 45, +1 for partition-debug
         #[cfg(not(feature = "partition-debug"))]
-        assert_eq!(ALL_VARIANTS.len(), 48);
+        assert_eq!(ALL_VARIANTS.len(), 54);
         #[cfg(feature = "partition-debug")]
-        assert_eq!(ALL_VARIANTS.len(), 49);
+        assert_eq!(ALL_VARIANTS.len(), 55);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);
