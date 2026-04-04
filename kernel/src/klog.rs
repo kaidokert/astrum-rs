@@ -97,7 +97,7 @@ macro_rules! __kexit_impl {
 macro_rules! __kexit_impl {
     ($_status:ident) => {
         loop {
-            cortex_m::asm::wfi();
+            $crate::idle_instruction();
         }
     };
 }
