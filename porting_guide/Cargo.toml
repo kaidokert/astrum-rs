@@ -26,3 +26,7 @@ board-nrf52840-dk = ["nrf52840-hal"]
 [[example]]
 name = "00_context_switch"
 required-features = ["board-qemu", "log-semihosting"]
+
+[[example]]
+name = "01_mpu_static"
+required-features = ["board-qemu", "log-semihosting"]
