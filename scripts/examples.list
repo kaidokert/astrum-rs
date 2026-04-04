@@ -43,6 +43,7 @@ EXAMPLES=(
     all_faulted_idle_test
     last_partition_faults_test
     restart_hook_test
+    restart_hook_cold_test
 )
 
 CUSTOM_IVT_EXAMPLES=(
