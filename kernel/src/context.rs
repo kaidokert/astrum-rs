@@ -107,6 +107,25 @@ const FPU_HW_EXTENDED_WORDS: usize = 18;
 #[cfg(feature = "fpu-context")]
 pub const FPU_CONTEXT_FRAME_WORDS: usize = 50;
 
+// ---------------------------------------------------------------------------
+// SOFTWARE_CONTEXT_BYTES — total software-saved context size in bytes
+// ---------------------------------------------------------------------------
+
+/// Total software-saved context size in bytes.
+///
+/// With `fpu-context`: (16 + 8) × 4 = 96 bytes (s16-s31 + r4-r11).
+/// Without: 8 × 4 = 32 bytes (r4-r11 only).
+///
+/// Defined in the kernel crate (not in a macro expansion) per macro hygiene
+/// constraints (bug 45-pelican).
+#[cfg(feature = "fpu-context")]
+pub const SOFTWARE_CONTEXT_BYTES: u32 =
+    (FPU_SAVED_CONTEXT_WORDS as u32 + SAVED_CONTEXT_WORDS as u32) * 4;
+
+/// Total software-saved context size in bytes (r4-r11 only, no FPU).
+#[cfg(not(feature = "fpu-context"))]
+pub const SOFTWARE_CONTEXT_BYTES: u32 = SAVED_CONTEXT_WORDS as u32 * 4;
+
 // TODO: populate FpuSavedContext through a type-safe interface instead of raw offset writes
 
 /// Write an initial context-switch frame at the top of `stack` so PendSV can
@@ -386,6 +405,23 @@ mod tests {
     fn init_stack_frame_fpu_too_small() {
         let mut small = [0u32; FPU_CONTEXT_FRAME_WORDS - 1];
         assert!(init_stack_frame(&mut small, 0x100, None).is_none());
+    }
+
+    #[cfg(not(feature = "fpu-context"))]
+    #[test]
+    fn software_context_bytes_without_fpu() {
+        assert_eq!(SOFTWARE_CONTEXT_BYTES, SAVED_CONTEXT_WORDS as u32 * 4);
+        assert_eq!(SOFTWARE_CONTEXT_BYTES, 32);
+    }
+
+    #[cfg(feature = "fpu-context")]
+    #[test]
+    fn software_context_bytes_with_fpu() {
+        assert_eq!(
+            SOFTWARE_CONTEXT_BYTES,
+            (FPU_SAVED_CONTEXT_WORDS + SAVED_CONTEXT_WORDS) as u32 * 4
+        );
+        assert_eq!(SOFTWARE_CONTEXT_BYTES, 96);
     }
 
     /// Validates IEEE 754 bit patterns used by hw_fpu_isolation example.
