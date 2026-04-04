@@ -30,3 +30,7 @@ required-features = ["board-qemu", "log-semihosting"]
 [[example]]
 name = "01_mpu_static"
 required-features = ["board-qemu", "log-semihosting"]
+
+[[example]]
+name = "02_mpu_dynamic"
+required-features = ["board-qemu", "log-semihosting"]
