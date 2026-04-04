@@ -2676,6 +2676,7 @@ where
         let mpu_size = pcb.mpu_region().size();
 
         // (3) Cold restart: zero the partition's RAM region.
+        // TODO: if the stack is ever placed outside the MPU region, add separate stack zeroing here.
         if !warm && mpu_size > 0 {
             // SAFETY: mpu_base/mpu_size come from the validated PCB MPU region;
             // the kernel owns partition memory exclusively while the partition
