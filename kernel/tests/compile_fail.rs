@@ -19,5 +19,4 @@ fn compile_fail_tests() {
     let t = trybuild::TestCases::new();
     t.pass("tests/ui/pass_*.rs");
     t.compile_fail("tests/ui/fail_*.rs");
-    t.compile_fail("tests/ui/oversized_partition_config.rs");
 }

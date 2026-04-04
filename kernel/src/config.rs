@@ -1284,63 +1284,6 @@ macro_rules! _kernel_config_body {
     };
 }
 
-/// # Deprecated — use `compose_kernel_config!` instead
-///
-/// This macro is **soft-deprecated**. New code should use
-/// [`compose_kernel_config!`], which builds a [`KernelConfig`] from
-/// reusable sub-config presets with compile-time validation.
-///
-/// `kernel_config!` is retained as a **low-level escape hatch** for cases
-/// that require direct `const` control over individual fields not covered
-/// by any existing preset.
-///
-/// ---
-///
-/// Generates a config struct, `impl KernelConfig`, and the associated type
-/// aliases from just the non-default overrides.
-///
-/// The macro also generates an inherent `impl` block that re-exports every
-/// trait constant, so callers can write `MyConfig::SCHED` without importing
-/// the [`KernelConfig`] trait.
-///
-/// # Forms
-///
-/// - `kernel_config!(Name { const N: usize = 2; ... })` — uses
-///   [`AlignedStack1K`](crate::partition_core::AlignedStack1K).
-/// - `kernel_config!(Name [StackType] { const N: usize = 2; ... })` — uses
-///   the provided stack type.
-///
-/// The macro body accepts any items valid inside an `impl` block, including
-/// `#[cfg(...)]` attributes on individual constants.
-///
-/// Doc-attributes (`///`) placed before the struct name are forwarded to
-/// the generated struct definition.
-#[macro_export]
-macro_rules! kernel_config {
-    ($(#[$meta:meta])* $vis:vis $name:ident { $($body:tt)* }) => {
-        $(#[$meta])*
-        $vis struct $name;
-        impl $crate::config::KernelConfig for $name {
-            $crate::_kernel_config_body!($($body)*);
-            $crate::kernel_config_types!();
-        }
-        $crate::_kernel_config_inherent_consts!($vis $name);
-        const _: () = $crate::config::assert_priority_order::<$name>();
-        const _: () = $crate::config::assert_systick_reload::<$name>();
-    };
-    ($(#[$meta:meta])* $vis:vis $name:ident [$stack:ty] { $($body:tt)* }) => {
-        $(#[$meta])*
-        $vis struct $name;
-        impl $crate::config::KernelConfig for $name {
-            $crate::_kernel_config_body!($($body)*);
-            $crate::kernel_config_types!($stack);
-        }
-        $crate::_kernel_config_inherent_consts!($vis $name);
-        const _: () = $crate::config::assert_priority_order::<$name>();
-        const _: () = $crate::config::assert_systick_reload::<$name>();
-    };
-}
-
 /// Composes a [`KernelConfig`] from five sub-config preset types.
 ///
 /// Each type parameter must implement the corresponding sub-config trait:
@@ -2013,130 +1956,8 @@ mod tests {
         assert_eq!(DebugDisabled::AUTO_DRAIN_BUDGET, 0);
     }
 
-    // ============ kernel_config! macro tests ============
+    // ============ _kernel_config_field! macro tests ============
 
-    kernel_config!(MacroDefaultsOnly { const N: usize = 2; });
-
-    #[test]
-    fn kernel_config_macro_defaults_only() {
-        assert_eq!(MacroDefaultsOnly::N, 2);
-        assert_eq!(MacroDefaultsOnly::SCHED, 4);
-        assert_eq!(MacroDefaultsOnly::S, 1);
-        assert_eq!(MacroDefaultsOnly::SW, 1);
-        assert_eq!(MacroDefaultsOnly::MS, 1);
-        assert_eq!(MacroDefaultsOnly::MW, 1);
-        assert_eq!(MacroDefaultsOnly::QS, 1);
-        assert_eq!(MacroDefaultsOnly::QD, 1);
-        assert_eq!(MacroDefaultsOnly::QM, 1);
-        assert_eq!(MacroDefaultsOnly::QW, 1);
-        assert_eq!(MacroDefaultsOnly::CORE_CLOCK_HZ, 12_000_000);
-        assert_eq!(MacroDefaultsOnly::TICK_PERIOD_US, 1000);
-    }
-
-    kernel_config!(MacroWithOverrides {
-        const N: usize = 4;
-        const SCHED: usize = 8;
-        const S: usize = 4;
-        const SW: usize = 2;
-        const CORE_CLOCK_HZ: u32 = 64_000_000;
-    });
-
-    #[test]
-    fn kernel_config_macro_with_overrides() {
-        assert_eq!(MacroWithOverrides::N, 4);
-        assert_eq!(MacroWithOverrides::SCHED, 8);
-        assert_eq!(MacroWithOverrides::S, 4);
-        assert_eq!(MacroWithOverrides::SW, 2);
-        assert_eq!(MacroWithOverrides::CORE_CLOCK_HZ, 64_000_000);
-        // Non-overridden constants retain defaults.
-        assert_eq!(MacroWithOverrides::MS, 1);
-        assert_eq!(MacroWithOverrides::MW, 1);
-        assert_eq!(MacroWithOverrides::TICK_PERIOD_US, 1000);
-    }
-
-    kernel_config!(MacroCustomStack [crate::partition_core::AlignedStack4K] {
-        const N: usize = 2;
-    });
-
-    #[test]
-    fn kernel_config_macro_custom_stack() {
-        assert_eq!(MacroCustomStack::N, 2);
-        // Defaults still apply for non-overridden constants.
-        assert_eq!(MacroCustomStack::SCHED, 4);
-        assert_eq!(MacroCustomStack::S, 1);
-        // Verify the type compiles by constructing the Core type.
-        let _core = <MacroCustomStack as KernelConfig>::Core::default();
-    }
-
-    // ============ kernel_config! visibility modifier tests ============
-    //
-    // These tests use a child module to verify that visibility modifiers are
-    // actually forwarded.  A `pub` config and its constants should be
-    // accessible from a sibling/parent module, while a private (default-vis)
-    // config should not leak out of the defining module.
-
-    /// Child module that defines configs with different visibilities.
-    mod vis_test {
-        // Public config — struct and inherent consts are `pub`.
-        kernel_config!(pub PubConfig { const N: usize = 2; });
-
-        // `pub(crate)` config.
-        kernel_config!(pub(crate) PubCrateConfig { const N: usize = 3; });
-
-        // `pub` config with custom stack type.
-        kernel_config!(pub PubStackConfig [crate::partition_core::AlignedStack4K] {
-            const N: usize = 2;
-        });
-
-        // `pub(crate)` config with custom stack type.
-        kernel_config!(pub(crate) PubCrateStackConfig [crate::partition_core::AlignedStack4K] {
-            const N: usize = 4;
-        });
-
-        // Private (default) config — should only be accessible within this module.
-        kernel_config!(PrivateConfig { const N: usize = 5; });
-
-        #[test]
-        fn private_config_accessible_inside_defining_module() {
-            assert_eq!(PrivateConfig::N, 5);
-            assert_eq!(PrivateConfig::SCHED, 4);
-        }
-    }
-
-    /// Access `pub` and `pub(crate)` configs from the parent module to prove
-    /// visibility is actually forwarded through the struct *and* the inherent
-    /// constants.
-    #[test]
-    fn pub_config_accessible_from_parent() {
-        assert_eq!(vis_test::PubConfig::N, 2);
-        assert_eq!(vis_test::PubConfig::SCHED, 4);
-        assert_eq!(vis_test::PubConfig::CORE_CLOCK_HZ, 12_000_000);
-    }
-
-    #[test]
-    fn pub_crate_config_accessible_from_parent() {
-        assert_eq!(vis_test::PubCrateConfig::N, 3);
-        assert_eq!(vis_test::PubCrateConfig::SCHED, 4);
-        assert_eq!(vis_test::PubCrateConfig::CORE_CLOCK_HZ, 12_000_000);
-    }
-
-    #[test]
-    fn pub_stack_config_accessible_from_parent() {
-        assert_eq!(vis_test::PubStackConfig::N, 2);
-        assert_eq!(vis_test::PubStackConfig::SCHED, 4);
-    }
-
-    #[test]
-    fn pub_crate_stack_config_accessible_from_parent() {
-        assert_eq!(vis_test::PubCrateStackConfig::N, 4);
-        assert_eq!(vis_test::PubCrateStackConfig::SCHED, 4);
-    }
-
-    // NOTE: `vis_test::PrivateConfig` is intentionally *not* referenced here.
-    // It is private to `vis_test` and would fail to compile if accessed from
-    // this parent module, confirming that default (private) visibility works.
-    // TODO: add a compile_fail doctest for PrivateConfig once trybuild or
-    // compile_fail infrastructure is set up for this crate.
     struct FieldMacroConfig;
     impl KernelConfig for FieldMacroConfig {
         _kernel_config_field!(partitions = 3);
@@ -2197,52 +2018,6 @@ mod tests {
         assert_eq!(FieldMacroConfig::DEBUG_AUTO_DRAIN_BUDGET, 512);
     }
 
-    // ============ _kernel_config_body! TT-muncher tests ============
-
-    kernel_config!(FieldSyntaxConfig {
-        partitions = 3;
-        schedule_capacity = 6;
-        semaphores = 2;
-        semaphore_waitq = 2;
-        mutexes = 3;
-        mutex_waitq = 3;
-        core_clock_hz = 48_000_000;
-        tick_period_us = 500;
-    });
-
-    #[test]
-    fn field_syntax_config_values() {
-        assert_eq!(FieldSyntaxConfig::N, 3);
-        assert_eq!(FieldSyntaxConfig::SCHED, 6);
-        assert_eq!(FieldSyntaxConfig::S, 2);
-        assert_eq!(FieldSyntaxConfig::SW, 2);
-        assert_eq!(FieldSyntaxConfig::MS, 3);
-        assert_eq!(FieldSyntaxConfig::MW, 3);
-        assert_eq!(FieldSyntaxConfig::CORE_CLOCK_HZ, 48_000_000);
-        assert_eq!(FieldSyntaxConfig::TICK_PERIOD_US, 500);
-        // Non-overridden fields retain defaults.
-        assert_eq!(FieldSyntaxConfig::QS, 1);
-        assert_eq!(FieldSyntaxConfig::SP, 1);
-    }
-
-    kernel_config!(MixedSyntaxConfig {
-        partitions = 2;
-        const SCHED: usize = 4;
-        semaphores = 8;
-        const CORE_CLOCK_HZ: u32 = 64_000_000;
-    });
-
-    #[test]
-    fn mixed_syntax_config_values() {
-        assert_eq!(MixedSyntaxConfig::N, 2);
-        assert_eq!(MixedSyntaxConfig::SCHED, 4);
-        assert_eq!(MixedSyntaxConfig::S, 8);
-        assert_eq!(MixedSyntaxConfig::CORE_CLOCK_HZ, 64_000_000);
-        // Non-overridden fields retain defaults.
-        assert_eq!(MixedSyntaxConfig::MS, 1);
-        assert_eq!(MixedSyntaxConfig::TICK_PERIOD_US, 1000);
-    }
-
     // ============ Feature-gated field alias tests ============
 
     struct FeatureGatedFieldConfig;
@@ -2283,36 +2058,6 @@ mod tests {
     fn msg_size_field_aliases_expand_correctly() {
         assert_eq!(FieldMsgSizeConfig::SM, 128);
         assert_eq!(FieldMsgSizeConfig::BM, 256);
-    }
-
-    kernel_config!(FeatureGatedE2EConfig {
-        partitions = 2;
-        semaphores = 4;
-        buffer_pool_regions = 8;
-        buffer_zone_size = 64;
-        dynamic_regions = 6;
-        system_window_max_gap_ticks = 50;
-        debug_buffer_size = 512;
-        core_clock_hz = 48_000_000;
-    });
-
-    #[test]
-    fn feature_gated_kernel_config_e2e() {
-        assert_eq!(FeatureGatedE2EConfig::N, 2);
-        assert_eq!(FeatureGatedE2EConfig::S, 4);
-        assert_eq!(FeatureGatedE2EConfig::CORE_CLOCK_HZ, 48_000_000);
-        // Non-overridden fields retain defaults.
-        assert_eq!(FeatureGatedE2EConfig::SCHED, 4);
-        {
-            assert_eq!(FeatureGatedE2EConfig::BP, 8);
-            assert_eq!(FeatureGatedE2EConfig::BZ, 64);
-            assert_eq!(FeatureGatedE2EConfig::DR, 6);
-            assert_eq!(FeatureGatedE2EConfig::SYSTEM_WINDOW_MAX_GAP_TICKS, 50);
-        }
-        #[cfg(feature = "partition-debug")]
-        {
-            assert_eq!(FeatureGatedE2EConfig::DEBUG_BUFFER_SIZE, 512);
-        }
     }
 
     // ============ Partitions1 preset tests ============

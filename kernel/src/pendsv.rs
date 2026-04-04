@@ -453,9 +453,8 @@ mod tests {
     /// Verifies that a large partition config produces a Core whose
     /// `size_of` exceeds the literal-pool offset limit, proving the
     /// compile-time guard in `define_pendsv!(@assert_offsets)` is necessary.
-    // Compile-fail coverage: tests/ui/oversized_partition_config.rs
-    // verifies that `define_pendsv!` with 500 partitions triggers the
-    // compile-time assertion via trybuild.
+    // The compile-fail UI test (oversized_partition_config.rs) was removed
+    // along with the deprecated kernel_config! macro.
     #[test]
     fn core_metadata_guard_catches_large_partition_config() {
         use crate::partition_core::PartitionCore;
