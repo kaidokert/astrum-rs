@@ -1,6 +1,6 @@
 //! Shared runtime harness for QEMU demo examples.
 //!
-//! The [`define_unified_harness!`] macro emits the boilerplate statics, SVC
+//! The [`define_harness!`] macro emits the boilerplate statics, SVC
 //! linkage, PendSV context-switch handler, SysTick exception handler,
 //! and a safe `boot()` function that every multi-partition example
 //! would otherwise duplicate.
@@ -8,7 +8,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! kernel::define_unified_harness!(DemoConfig);
+//! kernel::define_harness!(DemoConfig);
 //! ```
 //!
 //! This generates:
@@ -166,12 +166,12 @@ macro_rules! partition_stacks {
 ///
 /// Basic form (standard scheduler):
 /// ```ignore
-/// kernel::define_unified_harness!(DemoConfig);
+/// kernel::define_harness!(DemoConfig);
 /// ```
 ///
 /// Extended form with SysTick hook for test verification:
 /// ```ignore
-/// kernel::define_unified_harness!(DemoConfig, |tick, k| {
+/// kernel::define_harness!(DemoConfig, |tick, k| {
 ///     // tick: current tick count (u32)
 ///     // k: &mut Kernel<'mem, Config>
 ///     if tick == 10 { /* verify something */ }
@@ -185,32 +185,32 @@ macro_rules! partition_stacks {
 /// type has alignment equal to its size, as required by the Cortex-M MPU.
 /// A compile-time assertion in `PartitionCore::new()` verifies this invariant.
 #[macro_export]
-macro_rules! define_unified_harness {
+macro_rules! define_harness {
     // ── Public arms ──────────────────────────────────────────────
     // Basic form: no SysTick hook (legacy: caller must call init_kernel + boot separately)
     ($Config:ty) => {
-        $crate::define_unified_harness!(@impl_compat $Config, |_tick, _k| {});
+        $crate::define_harness!(@impl_compat $Config, |_tick, _k| {});
     };
     // Extended form: with SysTick hook (legacy: caller must call init_kernel + boot separately)
     ($Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_unified_harness!(@impl_compat $Config, |$tick, $k| $hook);
+        $crate::define_harness!(@impl_compat $Config, |$tick, $k| $hook);
     };
     // no_boot form: handlers only, caller uses kernel::boot directly
     (no_boot, $Config:ty) => {
-        $crate::define_unified_harness!(@handlers $Config, |_tick, _k| {});
+        $crate::define_harness!(@handlers $Config, |_tick, _k| {});
     };
     // no_boot form with SysTick hook
     (no_boot, $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
+        $crate::define_harness!(@handlers $Config, |$tick, $k| $hook);
     };
     // Full form: boot() calls init_kernel() internally with the provided schedule and entries.
     // $sched and $entries are expressions evaluated inside boot()'s body.
     ($Config:ty, $sched:expr, $entries:expr) => {
-        $crate::define_unified_harness!(@impl $Config, $sched, $entries, |_tick, _k| {});
+        $crate::define_harness!(@impl $Config, $sched, $entries, |_tick, _k| {});
     };
     // Full form with SysTick hook
     ($Config:ty, $sched:expr, $entries:expr, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_unified_harness!(@impl $Config, $sched, $entries, |$tick, $k| $hook);
+        $crate::define_harness!(@impl $Config, $sched, $entries, |$tick, $k| $hook);
     };
     // Internal: handlers only (SysTick, PendSV, SVC linkage, kernel state)
     (@handlers $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
@@ -405,7 +405,7 @@ macro_rules! define_unified_harness {
     // Internal: full implementation with boot() calling init_kernel() internally.
     // $sched and $entries are macro-level expressions pasted into boot()'s body.
     (@impl $Config:ty, $sched:expr, $entries:expr, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
+        $crate::define_harness!(@handlers $Config, |$tick, $k| $hook);
 
         /// Partition stacks backed by `AlignedStack1K`; used by `init_kernel()` to build PCBs.
         ///
@@ -499,7 +499,7 @@ macro_rules! define_unified_harness {
     // TODO: consider renaming @impl_compat to @impl_legacy once legacy callers are migrated.
     // Internal: legacy implementation (handlers + boot function, caller calls init_kernel separately)
     (@impl_compat $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_unified_harness!(@handlers $Config, |$tick, $k| $hook);
+        $crate::define_harness!(@handlers $Config, |$tick, $k| $hook);
 
         /// Partition stacks backed by `AlignedStack1K`; used by `init_kernel()` to build PCBs.
         ///
@@ -582,7 +582,18 @@ macro_rules! define_unified_harness {
     };
 }
 
-// Unit tests: the define_unified_harness! macro emits global_asm (via
+/// **Deprecated**: use [`define_harness!`] instead.
+///
+/// This macro forwards all arguments to `define_harness!` and exists only
+/// for backwards compatibility. It will be removed in a future release.
+#[macro_export]
+macro_rules! define_unified_harness {
+    ($($tt:tt)*) => {
+        $crate::define_harness!($($tt)*);
+    };
+}
+
+// Unit tests: the define_harness! macro emits global_asm (via
 // define_pendsv!) and an #[exception] handler, which are only
 // meaningful on ARM targets. Correctness is verified by the QEMU
 // integration tests (sampling_demo, queuing_demo, blackboard_demo).
@@ -677,7 +688,7 @@ mod tests {
 
     // ============ MPU_ENFORCE gating tests ============
     //
-    // The define_unified_harness! macro emits __boot_mpu_init and
+    // The define_harness! macro emits __boot_mpu_init and
     // __pendsv_program_mpu with MPU_ENFORCE-based gating.  These
     // functions require ARM peripherals, so we test the gating
     // pattern itself using helper functions that mirror the exact
@@ -755,11 +766,9 @@ mod tests {
     #[test]
     fn ticks_dropped_detection_logic() {
         use crate::svc::Kernel;
-        use crate::{
-            compose_kernel_config, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal,
-        };
+        use crate::{kernel_config, DebugEnabled, MsgMinimal, Partitions2, PortsTiny, SyncMinimal};
 
-        compose_kernel_config!(TdTestCfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+        kernel_config!(TdTestCfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
         let mut k = Kernel::<TdTestCfg>::default();
         assert_eq!(k.ticks_dropped(), 0, "counter must start at zero");
@@ -997,7 +1006,7 @@ mod tests {
     /// Verify that non-default fault_policy, data MPU region, and error_handler
     /// set on `PartitionSpec` builders reach the resulting PCB after
     /// `ExternalPartitionMemory::from_spec` (the same path used by the
-    /// production `define_unified_harness!` macro).
+    /// production `define_harness!` macro).
     #[test]
     fn partition_spec_builder_fields_reach_pcb() {
         use crate::partition::{ExternalPartitionMemory, FaultPolicy, MpuRegion, PartitionSpec};
