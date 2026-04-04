@@ -40,6 +40,8 @@ EXAMPLES=(
     error_handler_test
     run_count_test
     builder_periph_test
+    all_faulted_idle_test
+    last_partition_faults_test
 )
 
 CUSTOM_IVT_EXAMPLES=(
