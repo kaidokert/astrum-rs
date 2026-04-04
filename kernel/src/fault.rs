@@ -191,6 +191,38 @@ pub unsafe extern "C" fn fault_trampoline() -> ! {
     }
 }
 
+/// Force the hardware to complete any pending FPU lazy state preservation.
+///
+/// Reading FPSCR via `vmrs` triggers the lazy stacking engine to flush
+/// s0–s15 into the exception frame (clears FPCCR.LSPACT). This **must**
+/// be called before `restart_partition` reinitialises the stack, otherwise
+/// a deferred s0–s15 write could corrupt the fresh init frame.
+///
+/// # Safety
+/// Must be called from privileged mode (e.g., inside a fault handler)
+/// while the FPU is enabled.
+#[cfg(all(feature = "fpu-context", target_arch = "arm"))]
+#[inline(always)]
+pub unsafe fn flush_fpu_lazy_state() {
+    // SAFETY: Caller guarantees privileged mode with FPU enabled.
+    // Reading FPSCR forces completion of any pending lazy save.
+    core::arch::asm!(
+        "vmrs {tmp}, fpscr",
+        tmp = out(reg) _,
+        options(nomem, nostack, preserves_flags),
+    );
+}
+
+/// Host-mode no-op stub for non-ARM targets.
+///
+/// # Safety
+/// No-op on host; mirrors the ARM version's contract.
+#[cfg(all(feature = "fpu-context", not(target_arch = "arm")))]
+#[inline(always)]
+pub unsafe fn flush_fpu_lazy_state() {
+    // No FPU lazy stacking on host — nothing to flush.
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +335,14 @@ mod tests {
         // SAFETY: Never dereferences — returns None for MSP EXC_RETURN.
         let pc = unsafe { faulting_pc_from_psp(0xFFFF_FFF9, 0x2000_0000) };
         assert_eq!(pc, None);
+    }
+
+    /// Verify flush_fpu_lazy_state is callable on host (no-op stub).
+    #[cfg(feature = "fpu-context")]
+    #[test]
+    fn flush_fpu_lazy_state_callable() {
+        // SAFETY: host-mode no-op stub; safe to call.
+        unsafe { flush_fpu_lazy_state() };
     }
 
     #[cfg(target_pointer_width = "32")]
