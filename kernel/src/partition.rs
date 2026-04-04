@@ -10,6 +10,8 @@ use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
 /// When the `dynamic-mpu` feature is active, `mpu_strategy` statically
 /// asserts that `DYNAMIC_SLOT_COUNT − RAM_SLOT_COUNT` equals this value,
 /// keeping partition limits and MPU capacity in sync.
+///
+/// See `notes/architecture/mpu-slot-allocation.md` for the full slot allocation rationale.
 pub const MAX_PERIPHERAL_REGIONS: usize = 3;
 
 /// Storage type for peripheral MPU regions.  Capacity is tied to

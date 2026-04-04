@@ -96,6 +96,7 @@ fn slot_rbar(base: u32, slot_index: usize) -> u32 {
 }
 
 /// Number of dynamic region slots (R4 through R7).
+/// See `notes/architecture/mpu-slot-allocation.md` for the full slot allocation rationale.
 const DYNAMIC_SLOT_COUNT: usize = 4;
 
 /// Number of dynamic slots permanently occupied by partition RAM.
