@@ -142,6 +142,11 @@ impl<const MAX: usize> ThreadTable<MAX> {
         self.threads.iter().filter(|s| s.is_some()).count()
     }
 
+    /// Maximum number of threads this table can hold.
+    pub const fn capacity(&self) -> usize {
+        MAX
+    }
+
     /// The scheduling policy configured for this table.
     pub fn scheduling_policy(&self) -> SchedulingPolicy {
         self.scheduling_policy

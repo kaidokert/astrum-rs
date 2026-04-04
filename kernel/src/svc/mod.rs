@@ -15,6 +15,7 @@ pub mod sampling;
 pub mod scheduler;
 pub mod sleep;
 pub mod sync;
+pub mod thread;
 
 use core::cell::RefCell;
 use core::marker::PhantomData;
@@ -937,6 +938,13 @@ pub fn dispatch_syscall<const N: usize>(
         }
         Some(SyscallId::GetMajorFrameCount) => SvcError::InvalidSyscall.to_u32(),
         Some(SyscallId::GetScheduleInfo) => SvcError::InvalidSyscall.to_u32(),
+        Some(SyscallId::ThreadCreate) => thread::handle_thread_create(
+            partitions,
+            PartitionId::new(caller as u32),
+            frame.r1,
+            frame.r2 as u8,
+            frame.r3,
+        ),
         Some(_) => SvcError::InvalidSyscall.to_u32(),
         None => SvcError::InvalidSyscall.to_u32(),
     };
@@ -2487,6 +2495,13 @@ where
                 let caller_id = caller_pid;
                 self::irq::handle_irq_ack(self.irq_bindings, caller_id, irq_num)
             }
+            Some(SyscallId::ThreadCreate) => thread::handle_thread_create(
+                self.core.partitions_mut(),
+                caller_pid,
+                arg1,
+                arg2 as u8,
+                arg3,
+            ),
             #[allow(unreachable_patterns)]
             Some(_) => SvcError::InvalidSyscall.to_u32(),
             None => SvcError::InvalidSyscall.to_u32(),
