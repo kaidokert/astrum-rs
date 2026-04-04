@@ -3319,6 +3319,7 @@ mod tests {
     mod scheduler;
     mod sleep;
     mod sync;
+    mod thread;
 
     pub use super::*;
     pub use crate::config::KernelConfig;
