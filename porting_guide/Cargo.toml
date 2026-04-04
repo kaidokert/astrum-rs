@@ -1,0 +1,19 @@
+[package]
+name = "porting_guide"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kernel = { path = "../kernel" }
+
+[features]
+# Debug channel selection (pass through to kernel)
+log-rtt = ["kernel/log-rtt"]
+log-semihosting = ["kernel/log-semihosting"]
+log-swo = ["kernel/log-swo"]
+log-defmt = ["kernel/log-defmt"]
+
+# Board support
+board-qemu = ["kernel/qemu"]
+board-stm32f4-discovery = []
+board-nrf52840-dk = []

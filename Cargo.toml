@@ -1,5 +1,5 @@
 [workspace]
-members = ["kernel", "plib", "rtos-traits", "bsp-nrf52840", "bsp-stm32f4", "bsp-atsamd51"]
+members = ["kernel", "plib", "rtos-traits", "bsp-nrf52840", "bsp-stm32f4", "bsp-atsamd51", "porting_guide"]
 resolver = "2"
 
 # Dev profile: debug symbols with basic optimisation (opt-level = 1).
