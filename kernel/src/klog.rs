@@ -14,7 +14,11 @@ macro_rules! __klog_impl {
 #[macro_export]
 #[cfg(klog_backend = "rtt")]
 macro_rules! __klog_impl {
-    ($($arg:tt)*) => { rtt_target::rprintln!($($arg)*); };
+    ($($arg:tt)*) => {
+        if $crate::is_rtt_initialized() {
+            rtt_target::rprintln!($($arg)*);
+        }
+    };
 }
 
 // TODO: The SWO implementation uses cortex_m::interrupt::free around write_fmt.
@@ -127,6 +131,23 @@ mod tests {
     fn klog_compiles() {
         klog!("test");
         klog!("fmt: {}", 42);
+    }
+
+    #[test]
+    fn is_rtt_initialized_returns_false_before_init() {
+        // On host builds (klog_backend=none), RTT is never initialized,
+        // so is_rtt_initialized() must return false.
+        assert!(!crate::is_rtt_initialized());
+    }
+
+    /// klog! before init_rtt() must not panic or crash.
+    /// On host (backend=none) this is inherently safe, but validates the
+    /// macro compiles and the is_rtt_initialized guard path exists.
+    #[test]
+    fn klog_before_init_rtt_is_safe() {
+        // Do NOT call init_rtt() first — this is the point of the test.
+        klog!("pre-init message");
+        klog!("pre-init fmt: {}", 123);
     }
 
     /// Verify kexit macro expansion compiles for both variants.

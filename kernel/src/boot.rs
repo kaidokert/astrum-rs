@@ -15,8 +15,9 @@ use crate::{
 
 /// Tracks whether RTT has already been initialized.
 ///
-/// `Relaxed` ordering is sufficient because RTT init runs single-threaded
-/// at boot before the scheduler starts.
+/// Uses `Release`/`Acquire` ordering so that an interrupt handler observing
+/// `true` via `is_rtt_initialized()` is guaranteed to also see the fully
+/// initialized RTT channel.
 // TODO: RTT_INITIALIZED is global state; unit tests calling init_rtt are not
 // isolated from each other when run in the same process.  Consider resetting
 // the flag in a test helper if order-dependent failures appear.
@@ -29,10 +30,11 @@ static RTT_INITIALIZED: core::sync::atomic::AtomicBool = core::sync::atomic::Ato
 /// Public so the harness macro can call it before `init_kernel()`.
 #[cfg(klog_backend = "rtt")]
 pub fn init_rtt() {
-    if RTT_INITIALIZED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+    if RTT_INITIALIZED.load(core::sync::atomic::Ordering::Acquire) {
         return;
     }
     rtt_target::rtt_init_print!();
+    RTT_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
 }
 
 /// No-op RTT init for non-RTT backends.
@@ -41,6 +43,20 @@ pub fn init_rtt() {
 /// Public so the harness macro can call it before `init_kernel()`.
 #[cfg(not(klog_backend = "rtt"))]
 pub fn init_rtt() {}
+
+/// Returns `true` if the RTT logging channel has been initialized.
+///
+/// On non-RTT backends this always returns `false`.
+#[cfg(klog_backend = "rtt")]
+pub fn is_rtt_initialized() -> bool {
+    RTT_INITIALIZED.load(core::sync::atomic::Ordering::Acquire)
+}
+
+/// Non-RTT variant: always returns `false`.
+#[cfg(not(klog_backend = "rtt"))]
+pub fn is_rtt_initialized() -> bool {
+    false
+}
 
 /// Print a boot banner with crate name and version via `klog!`.
 ///

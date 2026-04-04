@@ -97,6 +97,8 @@ pub mod tombstone;
 #[cfg(feature = "trace")]
 pub mod trace;
 
+pub use boot::is_rtt_initialized;
+
 /// Execute the appropriate idle instruction for the current configuration.
 ///
 /// - In test mode: `spin_loop` (no real hardware).
