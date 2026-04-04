@@ -97,7 +97,7 @@ pub type TickHandlerFn<C> = fn(&mut Kernel<'_, C>, u64);
 ///
 /// # Note
 ///
-/// For examples that need a custom SysTick hook, use `define_unified_harness!`
+/// For examples that need a custom SysTick hook, use `define_harness!`
 /// with the extended form instead, or use `register_handler()` to add a callback.
 /// Inner ISR wrapper: emit isr_enter, run the provided closure, emit isr_exit.
 ///
