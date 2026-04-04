@@ -668,7 +668,7 @@ where
     // TODO: SCB::set_pendsv() is a static method in cortex-m 0.7; cannot call on instance.
     SCB::set_pendsv();
     loop {
-        cortex_m::asm::wfi();
+        crate::idle_instruction();
     }
 }
 
