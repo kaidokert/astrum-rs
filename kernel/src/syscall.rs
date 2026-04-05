@@ -9,9 +9,13 @@ pub use rtos_traits::syscall::{
     SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV,
     SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS,
     SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART, SYS_REQUEST_STOP, SYS_SAMPLING_READ,
-    SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_THREAD_CREATE,
-    SYS_THREAD_GET_ID, SYS_THREAD_RESUME, SYS_THREAD_START, SYS_THREAD_STOP, SYS_THREAD_SUSPEND,
-    SYS_YIELD,
+    SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_YIELD,
+};
+
+#[cfg(feature = "intra-threads")]
+pub use rtos_traits::syscall::{
+    SYS_THREAD_CREATE, SYS_THREAD_GET_ID, SYS_THREAD_RESUME, SYS_THREAD_START, SYS_THREAD_STOP,
+    SYS_THREAD_SUSPEND,
 };
 
 // Buffer and device syscall numbers — defined in rtos-traits, re-exported here.
@@ -76,11 +80,17 @@ pub enum SyscallId {
     GetPartitionRunCount,
     GetMajorFrameCount,
     GetScheduleInfo,
+    #[cfg(feature = "intra-threads")]
     ThreadCreate,
+    #[cfg(feature = "intra-threads")]
     ThreadStart,
+    #[cfg(feature = "intra-threads")]
     ThreadStop,
+    #[cfg(feature = "intra-threads")]
     ThreadSuspend,
+    #[cfg(feature = "intra-threads")]
     ThreadResume,
+    #[cfg(feature = "intra-threads")]
     ThreadGetId,
     #[cfg(feature = "partition-debug")]
     DebugNotify,
@@ -143,11 +153,17 @@ impl SyscallId {
             SYS_GET_PARTITION_RUN_COUNT => Some(Self::GetPartitionRunCount),
             SYS_GET_MAJOR_FRAME_COUNT => Some(Self::GetMajorFrameCount),
             SYS_GET_SCHEDULE_INFO => Some(Self::GetScheduleInfo),
+            #[cfg(feature = "intra-threads")]
             SYS_THREAD_CREATE => Some(Self::ThreadCreate),
+            #[cfg(feature = "intra-threads")]
             SYS_THREAD_START => Some(Self::ThreadStart),
+            #[cfg(feature = "intra-threads")]
             SYS_THREAD_STOP => Some(Self::ThreadStop),
+            #[cfg(feature = "intra-threads")]
             SYS_THREAD_SUSPEND => Some(Self::ThreadSuspend),
+            #[cfg(feature = "intra-threads")]
             SYS_THREAD_RESUME => Some(Self::ThreadResume),
+            #[cfg(feature = "intra-threads")]
             SYS_THREAD_GET_ID => Some(Self::ThreadGetId),
             #[cfg(feature = "partition-debug")]
             SYS_DEBUG_NOTIFY => Some(Self::DebugNotify),
@@ -208,11 +224,17 @@ impl SyscallId {
             Self::GetPartitionRunCount => "get_partition_run_count",
             Self::GetMajorFrameCount => "get_major_frame_count",
             Self::GetScheduleInfo => "get_schedule_info",
+            #[cfg(feature = "intra-threads")]
             Self::ThreadCreate => "thread_create",
+            #[cfg(feature = "intra-threads")]
             Self::ThreadStart => "thread_start",
+            #[cfg(feature = "intra-threads")]
             Self::ThreadStop => "thread_stop",
+            #[cfg(feature = "intra-threads")]
             Self::ThreadSuspend => "thread_suspend",
+            #[cfg(feature = "intra-threads")]
             Self::ThreadResume => "thread_resume",
+            #[cfg(feature = "intra-threads")]
             Self::ThreadGetId => "thread_get_id",
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => "debug_notify",
@@ -272,11 +294,17 @@ impl SyscallId {
             Self::GetPartitionRunCount => SYS_GET_PARTITION_RUN_COUNT,
             Self::GetMajorFrameCount => SYS_GET_MAJOR_FRAME_COUNT,
             Self::GetScheduleInfo => SYS_GET_SCHEDULE_INFO,
+            #[cfg(feature = "intra-threads")]
             Self::ThreadCreate => SYS_THREAD_CREATE,
+            #[cfg(feature = "intra-threads")]
             Self::ThreadStart => SYS_THREAD_START,
+            #[cfg(feature = "intra-threads")]
             Self::ThreadStop => SYS_THREAD_STOP,
+            #[cfg(feature = "intra-threads")]
             Self::ThreadSuspend => SYS_THREAD_SUSPEND,
+            #[cfg(feature = "intra-threads")]
             Self::ThreadResume => SYS_THREAD_RESUME,
+            #[cfg(feature = "intra-threads")]
             Self::ThreadGetId => SYS_THREAD_GET_ID,
             #[cfg(feature = "partition-debug")]
             Self::DebugNotify => SYS_DEBUG_NOTIFY,
@@ -340,11 +368,17 @@ mod tests {
         (SYS_GET_PARTITION_RUN_COUNT, SyscallId::GetPartitionRunCount),
         (SYS_GET_MAJOR_FRAME_COUNT, SyscallId::GetMajorFrameCount),
         (SYS_GET_SCHEDULE_INFO, SyscallId::GetScheduleInfo),
+        #[cfg(feature = "intra-threads")]
         (SYS_THREAD_CREATE, SyscallId::ThreadCreate),
+        #[cfg(feature = "intra-threads")]
         (SYS_THREAD_START, SyscallId::ThreadStart),
+        #[cfg(feature = "intra-threads")]
         (SYS_THREAD_STOP, SyscallId::ThreadStop),
+        #[cfg(feature = "intra-threads")]
         (SYS_THREAD_SUSPEND, SyscallId::ThreadSuspend),
+        #[cfg(feature = "intra-threads")]
         (SYS_THREAD_RESUME, SyscallId::ThreadResume),
+        #[cfg(feature = "intra-threads")]
         (SYS_THREAD_GET_ID, SyscallId::ThreadGetId),
         #[cfg(feature = "partition-debug")]
         (SYS_DEBUG_NOTIFY, SyscallId::DebugNotify),
@@ -385,8 +419,23 @@ mod tests {
         assert_eq!(SyscallId::from_u32(47), Some(SyscallId::GetScheduleInfo));
         assert_eq!(SyscallId::from_u32(48), None);
         assert_eq!(SyscallId::from_u32(49), None);
-        assert_eq!(SyscallId::from_u32(50), Some(SyscallId::ThreadCreate));
-        assert_eq!(SyscallId::from_u32(55), Some(SyscallId::ThreadGetId));
+        #[cfg(feature = "intra-threads")]
+        {
+            assert_eq!(
+                SyscallId::from_u32(SYS_THREAD_CREATE),
+                Some(SyscallId::ThreadCreate)
+            );
+            assert_eq!(
+                SyscallId::from_u32(SYS_THREAD_GET_ID),
+                Some(SyscallId::ThreadGetId)
+            );
+        }
+        #[cfg(not(feature = "intra-threads"))]
+        {
+            use rtos_traits::syscall::{SYS_THREAD_CREATE, SYS_THREAD_GET_ID};
+            assert_eq!(SyscallId::from_u32(SYS_THREAD_CREATE), None);
+            assert_eq!(SyscallId::from_u32(SYS_THREAD_GET_ID), None);
+        }
         assert_eq!(SyscallId::from_u32(56), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
@@ -396,11 +445,18 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        // Base: 45, +1 for partition-debug
-        #[cfg(not(feature = "partition-debug"))]
-        assert_eq!(ALL_VARIANTS.len(), 54);
-        #[cfg(feature = "partition-debug")]
-        assert_eq!(ALL_VARIANTS.len(), 55);
+        // Base: 48, +6 for intra-threads, +1 for partition-debug
+        let expected =
+            48 + if cfg!(feature = "intra-threads") {
+                6
+            } else {
+                0
+            } + if cfg!(feature = "partition-debug") {
+                1
+            } else {
+                0
+            };
+        assert_eq!(ALL_VARIANTS.len(), expected);
         // Spot-check boundary values.
         assert_eq!(SYS_YIELD, 0);
         assert_eq!(SYS_BB_CLEAR, 19);
@@ -446,5 +502,59 @@ mod tests {
                 assert_ne!(a, b, "duplicate syscall name: {a}");
             }
         }
+    }
+
+    /// Thread syscall numbers return None when intra-threads is off.
+    #[test]
+    #[cfg(not(feature = "intra-threads"))]
+    fn thread_syscalls_return_none_without_feature() {
+        use rtos_traits::syscall::{
+            SYS_THREAD_CREATE, SYS_THREAD_GET_ID, SYS_THREAD_RESUME, SYS_THREAD_START,
+            SYS_THREAD_STOP, SYS_THREAD_SUSPEND,
+        };
+        for num in [
+            SYS_THREAD_CREATE,
+            SYS_THREAD_START,
+            SYS_THREAD_STOP,
+            SYS_THREAD_SUSPEND,
+            SYS_THREAD_RESUME,
+            SYS_THREAD_GET_ID,
+        ] {
+            assert_eq!(
+                SyscallId::from_u32(num),
+                None,
+                "thread syscall {num} should be None without intra-threads"
+            );
+        }
+    }
+
+    /// Thread syscall numbers return Some when intra-threads is on.
+    #[test]
+    #[cfg(feature = "intra-threads")]
+    fn thread_syscalls_return_some_with_feature() {
+        assert_eq!(
+            SyscallId::from_u32(SYS_THREAD_CREATE),
+            Some(SyscallId::ThreadCreate)
+        );
+        assert_eq!(
+            SyscallId::from_u32(SYS_THREAD_START),
+            Some(SyscallId::ThreadStart)
+        );
+        assert_eq!(
+            SyscallId::from_u32(SYS_THREAD_STOP),
+            Some(SyscallId::ThreadStop)
+        );
+        assert_eq!(
+            SyscallId::from_u32(SYS_THREAD_SUSPEND),
+            Some(SyscallId::ThreadSuspend)
+        );
+        assert_eq!(
+            SyscallId::from_u32(SYS_THREAD_RESUME),
+            Some(SyscallId::ThreadResume)
+        );
+        assert_eq!(
+            SyscallId::from_u32(SYS_THREAD_GET_ID),
+            Some(SyscallId::ThreadGetId)
+        );
     }
 }
