@@ -224,7 +224,7 @@ type PartitionRamCache<const N: usize> = [Option<(u32, u32)>; N];
 /// - **Dynamic window (R7):** allocated at runtime by
 ///   [`add_window`](MpuStrategy::add_window).
 ///
-/// The `desc_idx < reserved.min(2)` guard in
+/// The `desc_idx < reserved.min(MAX_PERIPHERAL_REGIONS)` guard in
 /// [`try_wire_region`](Self::try_wire_region) ensures peripherals handled
 /// by the per-partition cache do NOT consume dynamic slots needed by
 /// `sys_buf_lend`.
@@ -2780,7 +2780,7 @@ mod tests {
         // 3 partitions, each with 1 unique peripheral, reserved=2.
         // Partitions 0 and 1 fill the two reserved slots (R4, R5) via
         // the `wired < reserved` branch.  Partition 2's peripheral hits
-        // the NEW `desc_idx < reserved.min(2)` branch: it is cached but
+        // the NEW `desc_idx < reserved.min(MAX_PERIPHERAL_REGIONS)` branch: it is cached but
         // NOT wired, so `wired` stays at 2 and no dynamic window slot
         // is consumed.
         let ds = DynamicStrategy::new();
