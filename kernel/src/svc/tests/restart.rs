@@ -147,6 +147,7 @@ mod integration {
         assert_eq!(k.restart_partition(99, true), Err(RestartError::InvalidPid));
     }
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn restart_with_threads_resets_to_single_main_thread() {
         use rtos_traits::ids::ThreadId;
@@ -210,6 +211,7 @@ mod integration {
         assert!(tt.get(ThreadId::new(2)).is_none());
     }
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn fault_stops_all_threads() {
         use rtos_traits::ids::ThreadId;
