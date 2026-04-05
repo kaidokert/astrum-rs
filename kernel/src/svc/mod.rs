@@ -1142,6 +1142,7 @@ where
                 fault_policy: m.fault_policy(),
                 error_handler: m.error_handler(),
                 on_restart: m.on_restart(),
+                #[cfg(feature = "intra-threads")]
                 scheduling_policy: m.scheduling_policy(),
             };
             configs

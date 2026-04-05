@@ -1405,6 +1405,7 @@ mod tests {
                 fault_policy: crate::partition::FaultPolicy::StayDead,
                 error_handler: None,
                 on_restart: None,
+                #[cfg(feature = "intra-threads")]
                 scheduling_policy: rtos_traits::thread::SchedulingPolicy::RoundRobin,
             },
             PartitionConfig {
@@ -1419,6 +1420,7 @@ mod tests {
                 fault_policy: crate::partition::FaultPolicy::StayDead,
                 error_handler: None,
                 on_restart: None,
+                #[cfg(feature = "intra-threads")]
                 scheduling_policy: rtos_traits::thread::SchedulingPolicy::RoundRobin,
             },
         ];

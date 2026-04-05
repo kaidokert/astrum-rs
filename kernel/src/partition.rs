@@ -1,5 +1,6 @@
 use heapless::Vec;
 use rtos_traits::ids::PartitionId;
+#[cfg(feature = "intra-threads")]
 use rtos_traits::thread::SchedulingPolicy;
 
 #[cfg(feature = "partition-debug")]
@@ -695,7 +696,7 @@ pub(crate) struct PartitionConfig {
     /// Optional callback invoked when the partition is restarted.
     pub(crate) on_restart: Option<RestartHook>,
     /// Intra-partition scheduling policy (round-robin or static priority).
-    #[cfg_attr(not(feature = "intra-threads"), allow(dead_code))]
+    #[cfg(feature = "intra-threads")]
     pub(crate) scheduling_policy: SchedulingPolicy,
 }
 
@@ -719,6 +720,7 @@ impl PartitionConfig {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            #[cfg(feature = "intra-threads")]
             scheduling_policy: SchedulingPolicy::RoundRobin,
         }
     }
@@ -740,6 +742,7 @@ impl PartitionConfig {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            #[cfg(feature = "intra-threads")]
             scheduling_policy: SchedulingPolicy::RoundRobin,
         }
     }
@@ -1162,6 +1165,7 @@ pub struct ExternalPartitionMemory<'mem> {
     fault_policy: FaultPolicy,
     error_handler: Option<u32>,
     on_restart: Option<RestartHook>,
+    #[cfg(feature = "intra-threads")]
     scheduling_policy: SchedulingPolicy,
 }
 
@@ -1213,6 +1217,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            #[cfg(feature = "intra-threads")]
             scheduling_policy: SchedulingPolicy::RoundRobin,
         })
     }
@@ -1330,6 +1335,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     }
 
     /// Builder: set the intra-partition scheduling policy.
+    #[cfg(feature = "intra-threads")]
     pub fn with_scheduling_policy(mut self, policy: SchedulingPolicy) -> Self {
         self.scheduling_policy = policy;
         self
@@ -1359,7 +1365,10 @@ impl<'mem> ExternalPartitionMemory<'mem> {
         if let Some(hook) = spec.on_restart() {
             mem = mem.with_on_restart(hook);
         }
-        mem = mem.with_scheduling_policy(spec.scheduling_policy());
+        #[cfg(feature = "intra-threads")]
+        {
+            mem = mem.with_scheduling_policy(spec.scheduling_policy());
+        }
         Ok(mem)
     }
 
@@ -1387,6 +1396,7 @@ impl<'mem> ExternalPartitionMemory<'mem> {
     pub fn on_restart(&self) -> Option<RestartHook> {
         self.on_restart
     }
+    #[cfg(feature = "intra-threads")]
     pub fn scheduling_policy(&self) -> SchedulingPolicy {
         self.scheduling_policy
     }
@@ -2717,6 +2727,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn partition_config_scheduling_policy_defaults() {
         let cfg = PartitionConfig::new(0, 0x0800_0001u32, MpuRegion::new(0, 0, 0));
@@ -2744,6 +2755,7 @@ mod tests {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            #[cfg(feature = "intra-threads")]
             scheduling_policy: SchedulingPolicy::RoundRobin,
         }
     }

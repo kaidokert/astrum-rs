@@ -1,5 +1,6 @@
 //! Partition-level type definitions shared between kernel and plib.
 
+#[cfg(feature = "intra-threads")]
 use crate::thread::SchedulingPolicy;
 
 /// Signature for a partition body function that receives an argument in `r0`.
@@ -30,7 +31,9 @@ pub struct PartitionSpec {
     fault_policy: FaultPolicy,
     error_handler: Option<u32>,
     on_restart: Option<RestartHook>,
+    #[cfg(feature = "intra-threads")]
     scheduling_policy: SchedulingPolicy,
+    #[cfg(feature = "intra-threads")]
     max_threads: u8,
 }
 
@@ -45,7 +48,9 @@ impl PartitionSpec {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            #[cfg(feature = "intra-threads")]
             scheduling_policy: SchedulingPolicy::RoundRobin,
+            #[cfg(feature = "intra-threads")]
             max_threads: 1,
         }
     }
@@ -87,9 +92,11 @@ impl PartitionSpec {
     pub const fn on_restart(&self) -> Option<RestartHook> {
         self.on_restart
     }
+    #[cfg(feature = "intra-threads")]
     pub const fn scheduling_policy(&self) -> SchedulingPolicy {
         self.scheduling_policy
     }
+    #[cfg(feature = "intra-threads")]
     pub const fn max_threads(&self) -> u8 {
         self.max_threads
     }
@@ -124,10 +131,12 @@ impl PartitionSpec {
         self.on_restart = Some(hook);
         self
     }
+    #[cfg(feature = "intra-threads")]
     pub const fn with_scheduling_policy(mut self, policy: SchedulingPolicy) -> Self {
         self.scheduling_policy = policy;
         self
     }
+    #[cfg(feature = "intra-threads")]
     pub const fn with_max_threads(mut self, max: u8) -> Self {
         self.max_threads = max;
         self
@@ -149,7 +158,9 @@ impl PartitionSpec {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            #[cfg(feature = "intra-threads")]
             scheduling_policy: SchedulingPolicy::RoundRobin,
+            #[cfg(feature = "intra-threads")]
             max_threads: 1,
         }
     }
@@ -728,7 +739,9 @@ mod tests {
             fault_policy: FaultPolicy::StayDead,
             error_handler: None,
             on_restart: None,
+            #[cfg(feature = "intra-threads")]
             scheduling_policy: SchedulingPolicy::RoundRobin,
+            #[cfg(feature = "intra-threads")]
             max_threads: 1,
         }
     }
@@ -746,8 +759,11 @@ mod tests {
         assert_eq!(spec.fault_policy(), FaultPolicy::StayDead);
         assert!(spec.error_handler().is_none());
         assert!(spec.on_restart().is_none());
-        assert_eq!(spec.scheduling_policy(), SchedulingPolicy::RoundRobin);
-        assert_eq!(spec.max_threads(), 1);
+        #[cfg(feature = "intra-threads")]
+        {
+            assert_eq!(spec.scheduling_policy(), SchedulingPolicy::RoundRobin);
+            assert_eq!(spec.max_threads(), 1);
+        }
     }
 
     /// Verify that `PartitionSpec::entry()` also defaults the new fields.
@@ -761,8 +777,11 @@ mod tests {
         assert_eq!(spec.fault_policy(), FaultPolicy::StayDead);
         assert!(spec.error_handler().is_none());
         assert!(spec.on_restart().is_none());
-        assert_eq!(spec.scheduling_policy(), SchedulingPolicy::RoundRobin);
-        assert_eq!(spec.max_threads(), 1);
+        #[cfg(feature = "intra-threads")]
+        {
+            assert_eq!(spec.scheduling_policy(), SchedulingPolicy::RoundRobin);
+            assert_eq!(spec.max_threads(), 1);
+        }
     }
 
     #[test]
@@ -861,18 +880,21 @@ mod tests {
 
     // --- scheduling_policy and max_threads tests ---
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn default_scheduling_policy_is_round_robin() {
         let spec = base_spec();
         assert_eq!(spec.scheduling_policy(), SchedulingPolicy::RoundRobin);
     }
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn default_max_threads_is_one() {
         let spec = base_spec();
         assert_eq!(spec.max_threads(), 1);
     }
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn from_raw_entry_defaults_scheduling_policy_and_max_threads() {
         let spec = PartitionSpec::from_raw_entry(0x0800_0000, 0);
@@ -880,18 +902,21 @@ mod tests {
         assert_eq!(spec.max_threads(), 1);
     }
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn with_scheduling_policy_sets_static_priority() {
         let spec = base_spec().with_scheduling_policy(SchedulingPolicy::StaticPriority);
         assert_eq!(spec.scheduling_policy(), SchedulingPolicy::StaticPriority);
     }
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn with_max_threads_sets_value() {
         let spec = base_spec().with_max_threads(4);
         assert_eq!(spec.max_threads(), 4);
     }
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn builder_chaining_with_scheduling_and_threads() {
         let spec = base_spec()

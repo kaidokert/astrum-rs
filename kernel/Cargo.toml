@@ -640,7 +640,7 @@ panic-tombstone = []
 debug-no-wfi = []
 
 # Intra-partition threading (multiple threads within a single partition).
-intra-threads = []
+intra-threads = ["rtos-traits/intra-threads"]
 
 
 [target.'cfg(not(target_arch = "arm"))'.dependencies]
