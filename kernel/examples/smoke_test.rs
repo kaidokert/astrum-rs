@@ -2,7 +2,7 @@
 //!
 //! Single-partition baseline that validates the shortest kernel lifecycle:
 //!
-//! 1. Kernel boots with one partition via `define_unified_harness!`.
+//! 1. Kernel boots with one partition via `define_kernel!`.
 //! 2. Partition calls SYS_YIELD, stores the return code (0 = success).
 //! 3. SysTick callback checks the return code and exits via `kexit!`.
 //!
@@ -22,7 +22,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(SmokeConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(SmokeConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 const TIMEOUT_TICKS: u32 = 20;
 
@@ -35,7 +35,7 @@ const NOT_YET: u32 = 0xDEAD_C0DE;
 /// Partition stores SYS_YIELD return code here.
 static YIELD_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 
-kernel::define_unified_harness!(SmokeConfig, |tick, _k| {
+kernel::define_kernel!(SmokeConfig, |tick, _k| {
     let rc = YIELD_RC.load(Ordering::Acquire);
 
     if rc == NOT_YET {

@@ -18,7 +18,7 @@ use kernel::{
     StackStorage as _, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     Config < Partitions2,
     SyncMinimal,
     MsgMinimal,
@@ -39,7 +39,7 @@ static COUNTS: [AtomicU32; NUM_PARTITIONS] = [AtomicU32::new(0), AtomicU32::new(
 /// (meaning the assembly clear failed).
 static BASEPRI_VIOLATION: AtomicBool = AtomicBool::new(false);
 
-kernel::define_unified_harness!(Config, |tick, _k| {
+kernel::define_kernel!(Config, |tick, _k| {
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();
 

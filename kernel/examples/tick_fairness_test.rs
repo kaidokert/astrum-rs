@@ -19,7 +19,7 @@ use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, S
 const STACK_WORDS: usize = 256;
 
 // Fast SysTick: 12 MHz * 83 µs / 1e6 ≈ 996 cycles per tick.
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     Config < Partitions2,
     SyncMinimal,
     MsgMinimal,
@@ -50,7 +50,7 @@ fn load_counts() -> (u32, u32, u32, u32) {
     (c0, c1, min, max)
 }
 
-kernel::define_unified_harness!(Config, |tick, _k| {
+kernel::define_kernel!(Config, |tick, _k| {
     // Pend PendSV on every tick to maximise preemption pressure.
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();
@@ -114,7 +114,7 @@ fn main() -> ! {
 
     // SAFETY: called once from main before any interrupt handler runs.
     // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by
-    // `define_unified_harness!(@impl_compat)` as a module-level `static mut`.
+    // `define_kernel!(@impl_compat)` as a module-level `static mut`.
     let stacks = unsafe {
         &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NUM_PARTITIONS]>()
     };

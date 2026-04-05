@@ -12,7 +12,7 @@
 #![feature(generic_const_exprs)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
-use cortex_m_rt::{entry, exception}; // `exception` is used by `define_unified_harness!` macro expansion
+use cortex_m_rt::{entry, exception}; // `exception` is used by `define_kernel!` macro expansion
 use cortex_m_semihosting::hprintln;
 #[allow(unused_imports)]
 use kernel::kpanic as _;
@@ -23,7 +23,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions3, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     Config<Partitions3, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -37,7 +37,7 @@ const TIMEOUT_TICK: u32 = 60;
 static P0_YIELDS: AtomicU32 = AtomicU32::new(0);
 static P1_SEM_ERR: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(Config, |tick, k| {
+kernel::define_kernel!(Config, |tick, k| {
     if tick >= CHECK_TICK {
         let yields = P0_YIELDS.load(Ordering::Acquire);
         if yields == 0 {

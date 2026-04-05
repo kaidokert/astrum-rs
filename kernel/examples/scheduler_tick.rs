@@ -29,7 +29,7 @@ static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 static ACTIVE_PID: AtomicU32 = AtomicU32::new(u32::MAX);
 const MAX_SWITCHES: u32 = 6;
 
-kernel::define_unified_harness!(TestConfig, |_tick, k| {
+kernel::define_kernel!(TestConfig, |_tick, k| {
     use kernel::partition::PartitionState;
     // Verify post-switch state: harness already called advance_schedule_tick + set_next_partition.
     let pid = k.next_partition();

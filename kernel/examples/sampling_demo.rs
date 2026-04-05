@@ -46,7 +46,7 @@ kernel::kernel_config!(DemoConfig<kernel::Partitions4, kernel::SyncStandard, ker
 // Use the unified harness macro (no_boot variant) with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.
 // We call kernel::boot directly instead of the macro-generated boot().
-kernel::define_unified_harness!(no_boot, DemoConfig, |tick, _k| {
+kernel::define_kernel!(no_boot, DemoConfig, |tick, _k| {
     // Check progress every 10 ticks
     if tick.is_multiple_of(10) {
         let sensor = SENSOR_VALUE.load(Ordering::Acquire);

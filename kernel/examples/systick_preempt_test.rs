@@ -19,7 +19,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(Config<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(Config<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Bind IRQ 0 → partition 0, event bit 0x01.
 kernel::bind_interrupts!(Config, 70,
@@ -31,7 +31,7 @@ static PEND_VERIFIED: AtomicU32 = AtomicU32::new(0);
 /// Incremented by the partition after each successful event_wait return.
 static WAIT_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(Config, |tick, _k| {
+kernel::define_kernel!(Config, |tick, _k| {
     if tick == 2 {
         // Software-trigger IRQ 0 while inside SysTick handler.
         #[cfg(target_arch = "arm")]

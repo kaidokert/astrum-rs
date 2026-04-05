@@ -18,7 +18,7 @@ use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, S
 
 const STACK_WORDS: usize = 256;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -40,7 +40,7 @@ static P0_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Non-zero if P1's sem_wait syscall failed (stores error code).
 static P1_SEM_ERR: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(Config, |tick, k| {
+kernel::define_kernel!(Config, |tick, k| {
     if tick >= CHECK_TICK {
         let p0_ran = P0_COUNT.load(Ordering::Acquire);
         if p0_ran == 0 {
@@ -122,7 +122,7 @@ fn main() -> ! {
 
     // SAFETY: called once from main before any interrupt handler runs.
     // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by
-    // `define_unified_harness!(@impl_compat)` as a module-level `static mut`.
+    // `define_kernel!(@impl_compat)` as a module-level `static mut`.
     let stacks = unsafe {
         &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NUM_PARTITIONS]>()
     };

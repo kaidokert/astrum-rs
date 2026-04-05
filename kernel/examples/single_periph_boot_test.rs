@@ -44,7 +44,7 @@ static RESULT: AtomicU32 = AtomicU32::new(0);
 
 const TIMEOUT_TICK: u32 = 50;
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let r = RESULT.load(Ordering::Acquire);
     if r == 1 {
         // P0 confirmed GPIO read succeeded.  Now verify DynamicStrategy
@@ -136,10 +136,10 @@ fn main() -> ! {
     sched.add_system_window(1).expect("sys1");
 
     // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by
-    // `define_unified_harness!` macro expansion at module scope; no extern block needed.
+    // `define_kernel!` macro expansion at module scope; no extern block needed.
     let mut k = {
         // SAFETY: `__PARTITION_STACKS` is a `static mut [AlignedStack1K; NP]` defined
-        // by `define_unified_harness!` at module scope.  `AlignedStack1K` is 1024 bytes
+        // by `define_kernel!` at module scope.  `AlignedStack1K` is 1024 bytes
         // (256 × u32) with 1024-byte alignment, so casting to `[[u32; STACK_WORDS]; NP]`
         // preserves size and satisfies alignment (u32 align ≤ 1024).  Called once from
         // main before interrupts are enabled, guaranteeing exclusive access.
