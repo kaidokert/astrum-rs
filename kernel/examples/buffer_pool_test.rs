@@ -1,4 +1,4 @@
-// Not migrated to define_unified_harness! — this test requires direct kernel
+// Not migrated to define_kernel! — this test requires direct kernel
 // access in SysTick to call BufferPool::lend_to_partition and revoke_from_all,
 // verify MPU window state via DynamicStrategy, and coordinate the multi-phase
 // alloc→lend→read→revoke lifecycle using atomic flags. The test verifies

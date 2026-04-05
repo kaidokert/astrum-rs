@@ -74,7 +74,7 @@ extern "C" fn p3_entry() -> ! {
 
 const TIMEOUT_TICKS: u32 = 200;
 
-kernel::define_harness!(TestConfig, |tick, k| {
+kernel::define_kernel!(TestConfig, |tick, k| {
     // Backup: if the MemManage handler's safe-idle path somehow didn't
     // trigger, this catches all-faulted from the SysTick side.
     if k.all_runnable_faulted() {

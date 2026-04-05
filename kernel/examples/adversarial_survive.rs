@@ -103,7 +103,7 @@ const SURVIVE_TICKS: u32 = 10;
 /// Hard timeout to prevent hanging.
 const TIMEOUT_TICKS: u32 = 200;
 
-kernel::define_harness!(TestConfig, |tick, k| {
+kernel::define_kernel!(TestConfig, |tick, k| {
     let p1_state = k.pcb(1).map(|pcb| pcb.state());
 
     if p1_state == Some(PartitionState::Faulted) {

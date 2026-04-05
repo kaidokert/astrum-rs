@@ -31,7 +31,7 @@ kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
-kernel::define_unified_harness!(TestConfig, |_tick, _k| {});
+kernel::define_kernel!(TestConfig, |_tick, _k| {});
 
 static SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
 static TRANSFERRED: AtomicU32 = AtomicU32::new(0);

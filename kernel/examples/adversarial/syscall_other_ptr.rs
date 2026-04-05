@@ -55,7 +55,7 @@ static SVC_DONE: AtomicU32 = AtomicU32::new(0);
 /// Set by main() before boot, read by p0_main_body.
 static P0_ARG: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     if SVC_DONE.load(Ordering::Acquire) == 1 {
         let result = SVC_RESULT.load(Ordering::Acquire);
         if result == EXPECTED_ERROR {

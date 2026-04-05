@@ -39,7 +39,7 @@ fn fail(msg: &str) -> ! {
     }
 }
 
-kernel::define_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let r = RESULT.load(Ordering::Acquire);
     if r == PASS {
         hprintln!("buf_error_test: PASS");

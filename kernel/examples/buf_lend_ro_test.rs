@@ -32,7 +32,7 @@ kernel::kernel_config!(
 
 // Mirror dynamic strategy window to HARNESS_STRATEGY so PendSV
 // programs the correct AP_RO_RO MPU region for P1.
-kernel::define_harness!(TestConfig, |_tick, k| {
+kernel::define_kernel!(TestConfig, |_tick, k| {
     if MIRROR.load(Ordering::Acquire) == 1 {
         let rid = RID.load(Ordering::Relaxed) as u8;
         if let Some(d) = k.dynamic_strategy.slot(rid) {

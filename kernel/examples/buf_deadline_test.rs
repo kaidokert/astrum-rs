@@ -38,7 +38,7 @@ fn fail() -> ! {
     }
 }
 
-kernel::define_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     TICKS.store(tick, Ordering::Release);
     let r = RESULT.load(Ordering::Acquire);
     if r == PASS {

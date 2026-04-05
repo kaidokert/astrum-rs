@@ -44,7 +44,7 @@ fn fail() -> ! {
 /// Hard timeout — should never be reached.
 const TIMEOUT_TICK: u32 = 30;
 
-kernel::define_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let r = RESULT.load(Ordering::Acquire);
     if r == PASS {
         hprintln!("buf_align_boot_test: PASS");

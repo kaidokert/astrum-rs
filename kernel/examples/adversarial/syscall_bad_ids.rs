@@ -57,7 +57,7 @@ const NUM_PARTITIONS: usize = TestConfig::N;
 // 0 = pending, 1 = pass, 2 = fail (EVT_SET), 3 = fail (QUEUING_SEND)
 static RESULT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let r = RESULT.load(Ordering::Acquire);
     if r == 1 {
         hprintln!("{}: PASS", TEST_NAME);
