@@ -102,7 +102,7 @@ fn handler_safe_base_regions(stack_base: u32, stack_size: u32) -> [(u32, u32); 4
     ]
 }
 
-kernel::define_harness!(no_boot, TestConfig, |tick, k| {
+kernel::define_kernel!(no_boot, TestConfig, |tick, k| {
     use core::sync::atomic::{AtomicU32, Ordering};
     static VERIFIED: [AtomicU32; NP] = [AtomicU32::new(0), AtomicU32::new(0)];
 

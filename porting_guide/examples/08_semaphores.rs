@@ -35,7 +35,7 @@ fn halt_with(code: u32) -> ! {
     }
 }
 
-kernel::define_harness!(Cfg, |tick, _k| {
+kernel::define_kernel!(Cfg, |tick, _k| {
     let err = ERROR.load(Ordering::Acquire);
     if err != 0 {
         klog!("08_semaphores: FAIL error ({:#x})", err);

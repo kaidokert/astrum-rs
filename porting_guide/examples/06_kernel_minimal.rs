@@ -1,4 +1,4 @@
-//! First example using the full kernel API: `kernel_config!`, `define_harness!`,
+//! First example using the full kernel API: `kernel_config!`, `define_kernel!`,
 //! and `Kernel::new`.
 //!
 //! This is the critical transition from bare-metal (examples 00–05) to
@@ -8,7 +8,7 @@
 //!
 //! # Known Pitfall — accessor function type mismatch
 //!
-//! `define_harness!` generates exception handlers (`SysTick`, `PendSV`,
+//! `define_kernel!` generates exception handlers (`SysTick`, `PendSV`,
 //! `MemoryManagement`) that access the kernel via
 //! `state::with_kernel_mut::<Config, _, _>`.  The `Config` type parameter
 //! **must** match the concrete config used by `kernel_config!`.  If you
@@ -65,7 +65,7 @@ static YIELD_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 
 // ── SysTick hook (runs every tick inside the kernel critical section) ──
 
-kernel::define_harness!(Cfg, |tick, _k| {
+kernel::define_kernel!(Cfg, |tick, _k| {
     let rc = YIELD_RC.load(Ordering::Acquire);
 
     if rc == NOT_YET {

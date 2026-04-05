@@ -35,7 +35,7 @@ kernel::kernel_config!(
 static P0_TICKS: AtomicU32 = AtomicU32::new(0);
 static P1_TICKS: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(Cfg, |tick, k| {
+kernel::define_kernel!(Cfg, |tick, k| {
     match k.current_partition as usize {
         0 => {
             P0_TICKS.fetch_add(1, Ordering::Relaxed);

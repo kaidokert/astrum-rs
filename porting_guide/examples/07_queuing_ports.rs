@@ -62,7 +62,7 @@ static SEND_COUNT: AtomicU32 = AtomicU32::new(0);
 
 // ── SysTick hook ───────────────────────────────────────────────────
 
-kernel::define_harness!(Cfg, |tick, _k| {
+kernel::define_kernel!(Cfg, |tick, _k| {
     let err = DATA_ERROR.load(Ordering::Acquire);
     if err != 0 {
         klog!("07_queuing_ports: FAIL data error (code={:#x})", err);

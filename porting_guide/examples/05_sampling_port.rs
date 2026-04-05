@@ -58,7 +58,7 @@ static CONSUMER_LAST: AtomicU32 = AtomicU32::new(0);
 /// Set to 1 if consumer detects an out-of-order value.
 static ORDER_VIOLATION: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(Cfg, |tick, _k| {
+kernel::define_kernel!(Cfg, |tick, _k| {
     let count = CONSUMER_COUNT.load(Ordering::Acquire);
     let last = CONSUMER_LAST.load(Ordering::Acquire);
     let violation = ORDER_VIOLATION.load(Ordering::Acquire);

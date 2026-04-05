@@ -36,7 +36,7 @@ fn halt_with(code: u32) -> ! {
     }
 }
 
-kernel::define_harness!(Cfg, |tick, _k| {
+kernel::define_kernel!(Cfg, |tick, _k| {
     let err = ERROR.load(Ordering::Acquire);
     if err != 0 {
         klog!("09_full_demo: FAIL error ({:#x})", err);

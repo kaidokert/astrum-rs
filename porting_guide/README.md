@@ -30,7 +30,7 @@ Fix your debug channel first.
 | 03 | `03_svc_handler` | SVC voluntary yield coexisting with SysTick preemption | ≥4 SVC yields + ≥4 SysTick preemptions, both partitions advance |
 | 04 | `04_schedule_table` | Deterministic time-slice scheduling (ScheduleTable, major frame) | 3 major frames complete; P0≥12 ticks, P1≥6 ticks |
 | 05 | `05_sampling_port` | Raw inter-partition communication via atomics | Consumer receives ≥10 distinct in-order values |
-| 06 | `06_kernel_minimal` | Full kernel API boot (`Kernel::new`, `define_harness!`, `SYS_YIELD`) | SYS_YIELD returns 0 (success) |
+| 06 | `06_kernel_minimal` | Full kernel API boot (`Kernel::new`, `define_kernel!`, `SYS_YIELD`) | SYS_YIELD returns 0 (success) |
 | 07 | `07_queuing_ports` | Kernel queuing port IPC with sequence validation | 50+ messages exchanged, no corruption or reordering |
 | 08 | `08_semaphores` | Semaphore-based synchronization between two partitions | 10+ signal/wait cycles completed |
 | 09 | `09_full_demo` | Combined scheduling + sampling + queuing + semaphores (3 partitions) | All IPC channels active, 3+ major frames |
