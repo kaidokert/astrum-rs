@@ -52,3 +52,7 @@ required-features = ["board-qemu", "log-semihosting"]
 [[example]]
 name = "06_kernel_minimal"
 required-features = ["board-qemu", "log-semihosting"]
+
+[[example]]
+name = "07_queuing_ports"
+required-features = ["board-qemu", "log-semihosting"]
