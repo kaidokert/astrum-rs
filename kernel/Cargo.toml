@@ -519,7 +519,7 @@ required-features = ["qemu", "log-semihosting"]
 
 [[example]]
 name = "qemu_thread_rr"
-required-features = ["qemu", "log-semihosting"]
+required-features = ["qemu", "log-semihosting", "intra-threads"]
 
 [[example]]
 name = "error_handler_test"
@@ -638,6 +638,9 @@ panic-tombstone = []
 
 # Replace WFI with NOP in idle loops (useful for debugging under JTAG/SWD).
 debug-no-wfi = []
+
+# Intra-partition threading (multiple threads within a single partition).
+intra-threads = []
 
 
 [target.'cfg(not(target_arch = "arm"))'.dependencies]
