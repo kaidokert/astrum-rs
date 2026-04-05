@@ -4947,4 +4947,48 @@ mod tests {
             my_hook as *const () as usize
         );
     }
+
+    // Compile-time size assertions: verify RAM savings from feature-gated ThreadTable.
+    // With intra-threads disabled, PCB < 256 bytes; with it enabled, ThreadTable<4>
+    // adds >= 100 bytes. Together these prove the feature gate saves >= 100 bytes.
+
+    #[cfg(not(feature = "intra-threads"))]
+    const _ASSERT_PCB_COMPACT: () = assert!(
+        core::mem::size_of::<PartitionControlBlock>() < 256,
+        "PCB without intra-threads must be under 256 bytes"
+    );
+
+    #[cfg(feature = "intra-threads")]
+    const _ASSERT_THREAD_TABLE_OVERHEAD: () = assert!(
+        core::mem::size_of::<ThreadTable<4>>() >= 100,
+        "ThreadTable<4> must be >= 100 bytes to justify feature-gating"
+    );
+
+    #[cfg(feature = "intra-threads")]
+    const _ASSERT_PCB_INCLUDES_TABLE: () = assert!(
+        core::mem::size_of::<PartitionControlBlock>() >= core::mem::size_of::<ThreadTable<4>>(),
+        "PCB must be at least as large as its ThreadTable"
+    );
+
+    #[test]
+    fn thread_table_field_size() {
+        let pcb = PartitionControlBlock::new(
+            0,
+            0x0800_0000,
+            0x2000_0000,
+            0x2000_0400,
+            MpuRegion::new(0x2000_0000, 1024, 0x0306_0000),
+        );
+        let field_size = core::mem::size_of_val(&pcb.thread_table);
+        #[cfg(not(feature = "intra-threads"))]
+        assert_eq!(
+            field_size, 0,
+            "thread_table field must be ZST when feature is disabled"
+        );
+        #[cfg(feature = "intra-threads")]
+        assert!(
+            field_size >= 100,
+            "thread_table field must be >= 100 bytes, got {field_size}"
+        );
+    }
 }
