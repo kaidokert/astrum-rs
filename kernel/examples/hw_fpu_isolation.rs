@@ -23,7 +23,7 @@ use kernel::{
     PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(Cfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 /// Successful iterations for partition A.
 static CHECKS_A: AtomicU32 = AtomicU32::new(0);
@@ -35,7 +35,7 @@ static ERRORS: AtomicU32 = AtomicU32::new(0);
 const REQUIRED_CHECKS: u32 = 4;
 const TIMEOUT_TICKS: u32 = 200;
 
-kernel::define_unified_harness!(Cfg, |tick, _k| {
+kernel::define_kernel!(Cfg, |tick, _k| {
     let a = CHECKS_A.load(Ordering::Acquire);
     let b = CHECKS_B.load(Ordering::Acquire);
     let err = ERRORS.load(Ordering::Acquire);

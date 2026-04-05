@@ -23,7 +23,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions3, PortsSmall, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig < Partitions3,
     SyncMinimal,
     MsgMinimal,
@@ -73,7 +73,7 @@ extern "C" fn p1_entry() -> ! {
 
 // --- Harness (privileged SysTick context) ---
 
-kernel::define_unified_harness!(TestConfig, |tick, k| {
+kernel::define_kernel!(TestConfig, |tick, k| {
     // Health monitor needs partition_liveness_frames (5) * major_frame (16) = 80 ticks
     // before it can report Ok. Start polling after that window.
     if tick < 100 {

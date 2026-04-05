@@ -113,7 +113,7 @@ const STABLE_DEAD_TICKS: u32 = 15;
 /// Hard timeout.
 const TIMEOUT_TICKS: u32 = 300;
 
-kernel::define_unified_harness!(TestConfig, |tick, k| {
+kernel::define_kernel!(TestConfig, |tick, k| {
     let p0_state = k.pcb(0).map(|pcb| pcb.state());
     let run_count = P0_RUN_COUNT.load(Ordering::Acquire);
     let start_cond = P0_START_COND.load(Ordering::Acquire);

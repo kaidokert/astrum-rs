@@ -5,7 +5,7 @@
 //! This example isolates and validates the boot sequence used by the unified
 //! kernel harness. It manually constructs and initializes all boot components
 //! (stacks, kernel, schedule, partition configs) without relying on the
-//! `define_unified_harness!` macro. This allows debugging boot issues by
+//! `define_kernel!` macro. This allows debugging boot issues by
 //! providing detailed semihosting output at each step.
 //!
 //! # Architecture
@@ -48,7 +48,7 @@ use kernel::{
 
 kernel::kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-// Manual stacks (not using define_unified_harness!)
+// Manual stacks (not using define_kernel!)
 const STACK_WORDS: usize = 256;
 #[repr(C, align(1024))]
 struct AlignedStack([u32; STACK_WORDS]);

@@ -22,14 +22,14 @@ use kernel::{
 };
 #[allow(unused_imports)]
 use kernel::kpanic as _;
-kernel::compose_kernel_config!(Cfg<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(Cfg<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>);
 static mut STACKS: [AlignedStack1K; Cfg::N] = [AlignedStack1K::ZERO; Cfg::N];
 static P0_SENT: AtomicU32 = AtomicU32::new(0);
 static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);
 static PARTS_RAN: AtomicU32 = AtomicU32::new(0);
 static SRC_PORT: AtomicU32 = AtomicU32::new(0);
 static DST_PORT: AtomicU32 = AtomicU32::new(0);
-kernel::define_unified_harness!(no_boot, Cfg, |tick, k| {
+kernel::define_kernel!(no_boot, Cfg, |tick, k| {
     let addr = k as *const _ as usize;
     // TODO: align_of_val is a tautology (references are always naturally aligned).
     // Restore an MPU-aware alignment check once the kernel exposes its required

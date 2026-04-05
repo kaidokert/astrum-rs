@@ -30,7 +30,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 /// Latest SYS_GET_TIME reading from the partition (0 = not yet read).
 static TIME_READING: AtomicU32 = AtomicU32::new(0);
@@ -38,7 +38,7 @@ static TIME_READING: AtomicU32 = AtomicU32::new(0);
 static FIRST_NONZERO: AtomicU32 = AtomicU32::new(0);
 
 // Use the unified harness macro with SysTick hook for verification.
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     match tick {
         // By tick 5, the partition should have read a non-zero time.
         5 => {

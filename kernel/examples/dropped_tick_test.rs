@@ -45,7 +45,7 @@ const CHECK_TICK: u32 = 10;
 /// Hard timeout to avoid hanging if detection never fires.
 const TIMEOUT_TICKS: u32 = 200;
 
-kernel::define_unified_harness!(TestConfig, |tick, k| {
+kernel::define_kernel!(TestConfig, |tick, k| {
     // The harness already calls _detect_dropped_ticks!(k) in the SysTick
     // handler before this hook runs (harness.rs:408).  We just need to
     // check the counter — no manual ICSR manipulation required.
