@@ -582,38 +582,6 @@ macro_rules! define_kernel {
     };
 }
 
-/// Deprecated alias for [`define_kernel!`].
-///
-/// Use `define_kernel!` instead. This alias exists only for backward
-/// compatibility and will be removed in a future release.
-#[macro_export]
-macro_rules! define_harness {
-    // Basic form
-    ($Config:ty) => {
-        $crate::define_kernel!($Config);
-    };
-    // Extended form with SysTick hook
-    ($Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_kernel!($Config, |$tick, $k| $hook);
-    };
-    // no_boot form
-    (no_boot, $Config:ty) => {
-        $crate::define_kernel!(no_boot, $Config);
-    };
-    // no_boot form with SysTick hook
-    (no_boot, $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_kernel!(no_boot, $Config, |$tick, $k| $hook);
-    };
-    // Full form: schedule + entries + boot
-    ($Config:ty, $sched:expr, $entries:expr) => {
-        $crate::define_kernel!($Config, $sched, $entries);
-    };
-    // Full form with SysTick hook
-    ($Config:ty, $sched:expr, $entries:expr, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_kernel!($Config, $sched, $entries, |$tick, $k| $hook);
-    };
-}
-
 // Unit tests: the define_kernel! macro emits global_asm (via
 // define_pendsv!) and an #[exception] handler, which are only
 // meaningful on ARM targets. Correctness is verified by the QEMU
