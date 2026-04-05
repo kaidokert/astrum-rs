@@ -56,7 +56,7 @@ Failure at any step prints a diagnostic and exits with `EXIT_FAILURE`.
 
 ## 4. Test Harness
 
-The `define_unified_harness!` SysTick hook drives the test:
+The `define_kernel!` SysTick hook drives the test:
 
 | Tick | Action |
 |------|--------|

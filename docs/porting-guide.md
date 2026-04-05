@@ -11,7 +11,7 @@ boot path provides and how to observe errors.
 
 ### RTT Initializes Before `init_kernel()`
 
-The `define_harness!` macro calls `init_rtt()` as the first
+The `define_kernel!` macro calls `init_rtt()` as the first
 operation inside `init_kernel()`, before any partition or kernel
 configuration runs. This ensures that `klog!` output is routed to
 an RTT channel before validation occurs — so if `Kernel::new()` or
@@ -142,7 +142,7 @@ will never trigger this bug.
 **Direct `rprintln!` in partition code is the caller's responsibility.**
 The kernel cannot guard against user code calling `rprintln!` directly.
 If your partition code uses `rprintln!` for debug output, you must
-ensure that `init_rtt()` has already been called (which `define_harness!`
+ensure that `init_rtt()` has already been called (which `define_kernel!`
 / `init_kernel()` guarantees before any partition runs). The hazard
 arises only when `rprintln!` is called *outside* the harness — for
 example, in a custom `main()` before `init_kernel()`, or in a
@@ -334,7 +334,7 @@ partitioned RTOS context, choosing the wrong one causes subtle failures.
 
 `Peripherals::take()` sets a global `AtomicBool` to `true` on the first
 call and returns `None` on every subsequent call. The boot path
-(`main()` / `define_harness!`) calls `take()` once in privileged
+(`main()` / `define_kernel!`) calls `take()` once in privileged
 mode to configure the MPU, SCB priorities, and SysTick. After that, the
 `AtomicBool` is permanently set — any later `take()` from partition
 code, PendSV, or SysTick will return `None`.
