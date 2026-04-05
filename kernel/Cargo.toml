@@ -642,6 +642,9 @@ debug-no-wfi = []
 # Intra-partition threading (multiple threads within a single partition).
 intra-threads = ["rtos-traits/intra-threads"]
 
+# Property-based testing gate (host-mode only).
+proptest = []
+
 
 [target.'cfg(not(target_arch = "arm"))'.dependencies]
 loom = { version = "0.7", optional = true }
@@ -658,3 +661,6 @@ trybuild = "1"
 
 [target.'cfg(not(target_arch = "arm"))'.dev-dependencies.loom]
 version = "0.7"
+
+[target.'cfg(not(target_arch = "arm"))'.dev-dependencies.proptest]
+version = "1"
