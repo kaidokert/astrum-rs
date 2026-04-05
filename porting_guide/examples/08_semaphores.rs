@@ -101,7 +101,7 @@ fn main() -> ! {
         PartitionSpec::new(waiter as PartitionEntry, 0),
     ];
     let mut k = init_kernel(sched, &entries).expect("init_kernel");
-    k.semaphores_mut().add(Semaphore::new(0, 0)).expect("sem");
+    k.semaphores_mut().add(Semaphore::new(0, 1)).expect("sem");
     store_kernel(&mut k);
     match boot(p).expect("08_semaphores: boot") {}
 }

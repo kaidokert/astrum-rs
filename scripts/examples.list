@@ -103,3 +103,18 @@ HEALTH_PARTITION_EXAMPLES=(
     health_partition_test
     health_stall_detect_test
 )
+
+# Porting guide examples (00-09) demonstrate progressive board bring-up
+# steps from bare-metal context switching through full kernel IPC.
+PORTING_GUIDE_EXAMPLES=(
+    00_context_switch
+    01_mpu_static
+    02_mpu_dynamic
+    03_svc_handler
+    04_schedule_table
+    05_sampling_port
+    06_kernel_minimal
+    07_queuing_ports
+    08_semaphores
+    09_full_demo
+)

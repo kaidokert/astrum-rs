@@ -147,7 +147,7 @@ fn main() -> ! {
         PartitionSpec::new(monitor as PartitionEntry, 0),
     ];
     let mut k = init_kernel(sched, &entries).expect("init_kernel");
-    k.semaphores_mut().add(Semaphore::new(0, 0)).expect("sem");
+    k.semaphores_mut().add(Semaphore::new(0, 1)).expect("sem");
     let qs = k
         .queuing_mut()
         .create_port(PortDirection::Source)
