@@ -172,6 +172,7 @@ where
     }
 }
 
+#[cfg(feature = "intra-threads")]
 /// Advance the intra-partition thread schedule for the active partition.
 ///
 /// If the active partition has more than one runnable thread, this function:

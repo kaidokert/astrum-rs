@@ -309,10 +309,13 @@ fn dispatch_get_partition_run_count_matches_pcb() {
 
 // ── Intra-partition thread schedule tests ─────────────────────────────
 
+#[cfg(feature = "intra-threads")]
 use rtos_traits::ids::ThreadId;
+#[cfg(feature = "intra-threads")]
 use rtos_traits::thread::{ThreadControlBlock, ThreadState};
 
 /// Build a 2-partition kernel where P0 has 2 threads with distinct SPs.
+#[cfg(feature = "intra-threads")]
 /// Returns (kernel, thread_0_sp, thread_1_sp).
 fn kernel_2p_multithread() -> (Kernel<'static, TestConfig>, u32, u32) {
     let mut schedule = ScheduleTable::<4>::new();
@@ -384,6 +387,7 @@ fn kernel_2p_multithread() -> (Kernel<'static, TestConfig>, u32, u32) {
     (k, t0_sp, t1_sp)
 }
 
+#[cfg(feature = "intra-threads")]
 #[test]
 fn intra_thread_schedule_updates_partition_sp() {
     let (mut k, t0_sp, t1_sp) = kernel_2p_multithread();
@@ -417,6 +421,7 @@ fn intra_thread_schedule_updates_partition_sp() {
     );
 }
 
+#[cfg(feature = "intra-threads")]
 #[test]
 fn intra_thread_schedule_single_thread_no_change() {
     // P1 has only 1 thread (default). advance_intra_thread_schedule should be a no-op.
@@ -433,6 +438,7 @@ fn intra_thread_schedule_single_thread_no_change() {
     );
 }
 
+#[cfg(feature = "intra-threads")]
 #[test]
 fn intra_thread_schedule_round_robin_cycle() {
     let (mut k, t0_sp, t1_sp) = kernel_2p_multithread();
@@ -452,6 +458,7 @@ fn intra_thread_schedule_round_robin_cycle() {
     );
 }
 
+#[cfg(feature = "intra-threads")]
 #[test]
 fn intra_thread_schedule_no_active_partition_is_noop() {
     let (mut k, _t0_sp, _t1_sp) = kernel_2p_multithread();
@@ -465,6 +472,7 @@ fn intra_thread_schedule_no_active_partition_is_noop() {
     assert_eq!(k.get_sp(0), Some(sp_before));
 }
 
+#[cfg(feature = "intra-threads")]
 #[test]
 fn intra_thread_schedule_saves_outgoing_sp_before_advance() {
     let (mut k, _t0_sp, _t1_sp) = kernel_2p_multithread();

@@ -15,6 +15,7 @@ pub mod sampling;
 pub mod scheduler;
 pub mod sleep;
 pub mod sync;
+#[cfg(feature = "intra-threads")]
 pub mod thread;
 
 use core::cell::RefCell;
@@ -938,6 +939,7 @@ pub fn dispatch_syscall<const N: usize>(
         }
         Some(SyscallId::GetMajorFrameCount) => SvcError::InvalidSyscall.to_u32(),
         Some(SyscallId::GetScheduleInfo) => SvcError::InvalidSyscall.to_u32(),
+        #[cfg(feature = "intra-threads")]
         Some(SyscallId::ThreadCreate) => thread::handle_thread_create(
             partitions,
             PartitionId::new(caller as u32),
@@ -945,15 +947,19 @@ pub fn dispatch_syscall<const N: usize>(
             frame.r2 as u8,
             frame.r3,
         ),
+        #[cfg(feature = "intra-threads")]
         Some(SyscallId::ThreadSuspend) => {
             thread::handle_thread_suspend(partitions, PartitionId::new(caller as u32), frame.r1)
         }
+        #[cfg(feature = "intra-threads")]
         Some(SyscallId::ThreadResume) => {
             thread::handle_thread_resume(partitions, PartitionId::new(caller as u32), frame.r1)
         }
+        #[cfg(feature = "intra-threads")]
         Some(SyscallId::ThreadStop) => {
             thread::handle_thread_stop(partitions, PartitionId::new(caller as u32), frame.r1)
         }
+        #[cfg(feature = "intra-threads")]
         Some(SyscallId::ThreadGetId) => {
             thread::handle_thread_get_id(partitions, PartitionId::new(caller as u32))
         }
@@ -1268,6 +1274,7 @@ where
             pcb.set_fault_policy(c.fault_policy);
             pcb.set_error_handler(c.error_handler);
             pcb.set_on_restart(c.on_restart);
+            #[cfg(feature = "intra-threads")]
             pcb.set_scheduling_policy(c.scheduling_policy);
             if core.partitions_mut().add(pcb).is_err() {
                 return Err(ConfigError::PartitionTableFull);
@@ -2509,6 +2516,7 @@ where
                 let caller_id = caller_pid;
                 self::irq::handle_irq_ack(self.irq_bindings, caller_id, irq_num)
             }
+            #[cfg(feature = "intra-threads")]
             Some(SyscallId::ThreadCreate) => thread::handle_thread_create(
                 self.core.partitions_mut(),
                 caller_pid,
@@ -2516,15 +2524,19 @@ where
                 arg2 as u8,
                 arg3,
             ),
+            #[cfg(feature = "intra-threads")]
             Some(SyscallId::ThreadSuspend) => {
                 thread::handle_thread_suspend(self.core.partitions_mut(), caller_pid, arg1)
             }
+            #[cfg(feature = "intra-threads")]
             Some(SyscallId::ThreadResume) => {
                 thread::handle_thread_resume(self.core.partitions_mut(), caller_pid, arg1)
             }
+            #[cfg(feature = "intra-threads")]
             Some(SyscallId::ThreadStop) => {
                 thread::handle_thread_stop(self.core.partitions_mut(), caller_pid, arg1)
             }
+            #[cfg(feature = "intra-threads")]
             Some(SyscallId::ThreadGetId) => {
                 thread::handle_thread_get_id(self.core.partitions(), caller_pid)
             }
@@ -2680,6 +2692,7 @@ where
     pub fn fault_partition(&mut self, pid: usize) {
         if let Some(pcb) = self.pcb_mut(pid) {
             let _ = pcb.transition(crate::partition::PartitionState::Faulted);
+            #[cfg(feature = "intra-threads")]
             pcb.thread_table_mut().stop_all_threads();
         }
         if let Some(sp_slot) = self.partition_sp_mut().get_mut(pid) {
@@ -2752,6 +2765,7 @@ where
         // (6-9) Update PCB fields and transition state.
         let pcb = self.pcb_mut(pid).ok_or(RestartError::InvalidPid)?;
         // Reset thread table: stop all child threads, re-init thread 0.
+        #[cfg(feature = "intra-threads")]
         pcb.thread_table_mut()
             .reset_for_restart(entry.raw(), base, size, r0)
             .map_err(|_| RestartError::StackInitFailed)?;
@@ -3321,6 +3335,7 @@ mod tests {
     mod scheduler;
     mod sleep;
     mod sync;
+    #[cfg(feature = "intra-threads")]
     mod thread;
 
     pub use super::*;

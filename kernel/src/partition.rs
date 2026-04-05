@@ -5,6 +5,7 @@ use rtos_traits::thread::SchedulingPolicy;
 #[cfg(feature = "partition-debug")]
 use crate::debug::DebugBuffer;
 use crate::mpu::{validate_mpu_region, MpuError, AP_FULL_ACCESS, RASR_AP_SHIFT};
+#[cfg(feature = "intra-threads")]
 use crate::thread::ThreadTable;
 
 /// Maximum number of peripheral regions a partition may configure.
@@ -174,7 +175,10 @@ pub struct PartitionControlBlock {
     /// Optional callback invoked when the partition is restarted.
     on_restart: Option<RestartHook>,
     /// Per-partition thread table (max 4 threads per partition).
+    #[cfg(feature = "intra-threads")]
     thread_table: ThreadTable<4>,
+    #[cfg(not(feature = "intra-threads"))]
+    thread_table: (),
 }
 
 impl PartitionControlBlock {
@@ -187,9 +191,15 @@ impl PartitionControlBlock {
     ) -> Self {
         let entry_point = entry_point.into();
         let stack_size = stack_pointer.wrapping_sub(stack_base);
-        let mut thread_table = ThreadTable::new(SchedulingPolicy::RoundRobin);
-        // Ignore error: ThreadTable<4> always has room for slot 0.
-        let _ = thread_table.init_main_thread(entry_point.raw(), stack_base, stack_size, 0);
+        #[cfg(feature = "intra-threads")]
+        let thread_table = {
+            let mut tt = ThreadTable::new(SchedulingPolicy::RoundRobin);
+            // Ignore error: ThreadTable<4> always has room for slot 0.
+            let _ = tt.init_main_thread(entry_point.raw(), stack_base, stack_size, 0);
+            tt
+        };
+        #[cfg(not(feature = "intra-threads"))]
+        let thread_table = ();
         Self {
             id: PartitionId::new(id as u32),
             state: PartitionState::Ready,
@@ -316,16 +326,19 @@ impl PartitionControlBlock {
     }
 
     /// Returns a reference to the per-partition thread table.
+    #[cfg(feature = "intra-threads")]
     pub fn thread_table(&self) -> &ThreadTable<4> {
         &self.thread_table
     }
 
     /// Returns a mutable reference to the per-partition thread table.
+    #[cfg(feature = "intra-threads")]
     pub fn thread_table_mut(&mut self) -> &mut ThreadTable<4> {
         &mut self.thread_table
     }
 
     /// Sets the intra-partition scheduling policy on the thread table.
+    #[cfg(feature = "intra-threads")]
     pub fn set_scheduling_policy(&mut self, policy: SchedulingPolicy) {
         self.thread_table.set_scheduling_policy(policy);
     }
@@ -682,6 +695,7 @@ pub(crate) struct PartitionConfig {
     /// Optional callback invoked when the partition is restarted.
     pub(crate) on_restart: Option<RestartHook>,
     /// Intra-partition scheduling policy (round-robin or static priority).
+    #[cfg_attr(not(feature = "intra-threads"), allow(dead_code))]
     pub(crate) scheduling_policy: SchedulingPolicy,
 }
 
@@ -2669,6 +2683,7 @@ mod tests {
     // ThreadTable integration in PCB
     // ------------------------------------------------------------------
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn pcb_thread_table_default_policy_and_main_thread() {
         use rtos_traits::ids::ThreadId;
@@ -2685,6 +2700,7 @@ mod tests {
         assert_eq!(tcb.stack_pointer, 0x2000_0400);
     }
 
+    #[cfg(feature = "intra-threads")]
     #[test]
     fn pcb_set_scheduling_policy() {
         let mut pcb = make_pcb();

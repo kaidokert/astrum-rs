@@ -91,6 +91,7 @@ pub mod svc;
 pub mod sync_pools;
 pub mod syscall;
 pub mod systick;
+#[cfg(feature = "intra-threads")]
 pub mod thread;
 pub mod tick;
 pub mod tombstone;

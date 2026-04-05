@@ -313,13 +313,16 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
     // Advance intra-partition thread schedule for the active partition.
     // Must run after advance_schedule_tick (active_partition is up to date)
     // and before PendSV fires (partition_sp must reflect the active thread).
-    let thread_switched = crate::svc::scheduler::advance_intra_thread_schedule(kernel);
-    if thread_switched {
-        // TODO: reviewer false positive — SCB::set_pendsv() is a static method in cortex-m 0.7;
-        // it is safe (no `unsafe` block needed) and panic-free. See identical usage at line 288
-        // and throughout the codebase (harness.rs, boot.rs, irq_dispatch.rs, svc/mod.rs).
-        #[cfg(not(test))]
-        cortex_m::peripheral::SCB::set_pendsv();
+    #[cfg(feature = "intra-threads")]
+    {
+        let thread_switched = crate::svc::scheduler::advance_intra_thread_schedule(kernel);
+        if thread_switched {
+            // TODO: reviewer false positive — SCB::set_pendsv() is a static method in cortex-m 0.7;
+            // it is safe (no `unsafe` block needed) and panic-free. See identical usage at line 288
+            // and throughout the codebase (harness.rs, boot.rs, irq_dispatch.rs, svc/mod.rs).
+            #[cfg(not(test))]
+            cortex_m::peripheral::SCB::set_pendsv();
+        }
     }
 
     enter_idle_if_needed(
