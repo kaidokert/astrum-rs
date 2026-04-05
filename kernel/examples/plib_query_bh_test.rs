@@ -32,7 +32,7 @@ use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions1, PortsTiny, S
 const NP: usize = 1;
 const STACK_WORDS: usize = 256;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -53,7 +53,7 @@ static RESET_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Set to 1 once the stale flag (r1) has been observed as non-zero.
 static STALE_SEEN: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     if tick >= 20 {
         let calls = CALL_COUNT.load(Ordering::Acquire);
         let max = MAX_TICKS.load(Ordering::Acquire);
@@ -138,7 +138,7 @@ fn main() -> ! {
 
     // SAFETY: called once from main before any interrupt handler runs.
     // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by
-    // `define_unified_harness!(@impl_compat)` as a module-level `static mut`.
+    // `define_kernel!(@impl_compat)` as a module-level `static mut`.
     let stacks = unsafe { &mut *(&raw mut __PARTITION_STACKS).cast::<[[u32; STACK_WORDS]; NP]>() };
     let [ref mut s0] = *stacks;
     let mpu = MpuRegion::new(0, 0, 0);

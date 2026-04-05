@@ -20,7 +20,7 @@ use kernel::{DebugEnabled, MsgSmall, PartitionEntry, Partitions2, PortsTiny, Syn
 const NP: usize = 2;
 const STACK_WORDS: usize = 256;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>
 );
 
@@ -34,7 +34,7 @@ static SEND_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static RECV_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static RECV_DATA: AtomicU32 = AtomicU32::new(NOT_YET);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let sr = SEND_RC.load(Ordering::Acquire);
     let rr = RECV_RC.load(Ordering::Acquire);
 

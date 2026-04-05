@@ -95,7 +95,7 @@ static WORKER_TIMED_OK: AtomicU32 = AtomicU32::new(0);
 
 // Use the unified harness macro with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.
-kernel::define_harness!(DemoConfig, |tick, _k| {
+kernel::define_kernel!(DemoConfig, |tick, _k| {
     // Check progress every 10 ticks
     if tick.is_multiple_of(10) {
         let delivered = CMD_DELIVERED.load(Ordering::Acquire);

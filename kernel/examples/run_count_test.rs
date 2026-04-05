@@ -73,7 +73,7 @@ extern "C" fn p1_entry() -> ! {
 
 // --- Harness (privileged SysTick context) ---
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let rc0 = P0_RUN_COUNT.load(Ordering::Acquire);
     let rc1 = P1_RUN_COUNT.load(Ordering::Acquire);
 

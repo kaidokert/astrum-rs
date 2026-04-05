@@ -93,7 +93,7 @@ extern "C" fn p1_entry() -> ! {
 
 const TIMEOUT_TICKS: u32 = 300;
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     if P0_VERIFIED.load(Ordering::SeqCst) {
         hprintln!("restart_hook_test: PASS");
         kernel::kexit!(success);
@@ -187,7 +187,7 @@ fn main() -> ! {
         PartitionSpec::new(p1_entry as PartitionEntry, 0),
     ];
     // TODO: reviewer false positive — init_kernel, store_kernel, boot are generated
-    // by define_unified_harness! macro, not imported.
+    // by define_kernel! macro, not imported.
     let mut k = init_kernel(sched, &parts).expect("init_kernel");
 
     // Configure P0 with WarmRestart policy and restart hook.

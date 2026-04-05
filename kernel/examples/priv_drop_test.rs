@@ -27,14 +27,14 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(TestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 /// Partition stores CONTROL reading here; 0 = not yet read.
 static CONTROL_VAL: AtomicU32 = AtomicU32::new(0);
 /// Set to 1 once the partition has stored its reading.
 static DONE: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     if DONE.load(Ordering::Acquire) == 1 {
         let control = CONTROL_VAL.load(Ordering::Acquire);
         let npriv = control & 1;

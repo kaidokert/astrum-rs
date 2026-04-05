@@ -20,7 +20,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -31,7 +31,7 @@ const NOT_YET: u32 = 0xDEAD_C0DE;
 static P0_SIGNAL_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static P1_WAIT_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let p0_signal = P0_SIGNAL_RC.load(Ordering::Acquire);
     let p1_wait = P1_WAIT_RC.load(Ordering::Acquire);
 

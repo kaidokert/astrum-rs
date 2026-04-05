@@ -16,7 +16,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -30,7 +30,7 @@ static POST_TIME: AtomicU32 = AtomicU32::new(NOT_YET);
 static SLEEP_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static SAW_WAITING: AtomicBool = AtomicBool::new(false);
 
-kernel::define_unified_harness!(TestConfig, |tick, k| {
+kernel::define_kernel!(TestConfig, |tick, k| {
     let rc = SLEEP_RC.load(Ordering::Acquire);
 
     if rc == NOT_YET {

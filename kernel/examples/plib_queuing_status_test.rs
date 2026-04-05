@@ -16,7 +16,7 @@ use kernel::{
 use kernel::{
     svc::Kernel, DebugEnabled, MsgSmall, PartitionEntry, Partitions1, PortsSmall, SyncMinimal,
 };
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions1, SyncMinimal, MsgSmall, PortsSmall, DebugEnabled>
 );
 
@@ -25,7 +25,7 @@ const STACK_WORDS: usize = 256;
 const NOT_YET: u32 = 0xDEAD_C0DE;
 static SEND_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static STATUS_RC: AtomicU32 = AtomicU32::new(NOT_YET);
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let s = SEND_RC.load(Ordering::Acquire);
     let st = STATUS_RC.load(Ordering::Acquire);
     if s == NOT_YET || st == NOT_YET {

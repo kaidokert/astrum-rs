@@ -19,7 +19,7 @@ use kernel::{DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsSmall, 
 const NP: usize = 2;
 const STACK_WORDS: usize = 256;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsSmall, DebugEnabled>
 );
 
@@ -33,7 +33,7 @@ static WRITE_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static READ_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static READ_DATA: AtomicU32 = AtomicU32::new(NOT_YET);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let wr = WRITE_RC.load(Ordering::Acquire);
     let rd = READ_RC.load(Ordering::Acquire);
 

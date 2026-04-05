@@ -26,7 +26,7 @@ use kernel::{
     DebugEnabled, MsgSmall, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled>
 );
 
@@ -44,7 +44,7 @@ static RECV_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 /// Received 4 bytes packed as a little-endian u32.
 static RECV_DATA: AtomicU32 = AtomicU32::new(NOT_YET);
 
-kernel::define_unified_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let send = SEND_RC.load(Ordering::Acquire);
     let recv = RECV_RC.load(Ordering::Acquire);
 
