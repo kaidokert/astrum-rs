@@ -1,4 +1,4 @@
-// Not migrated to define_unified_harness! — this example requires direct MPU
+// Not migrated to define_kernel! — this example requires direct MPU
 // register readback in SysTick to verify that PendSV correctly programmed R4.
 // The verification logic must access RBAR_ADDR_MASK and compare against
 // partition-specific base addresses after each context switch. The standard

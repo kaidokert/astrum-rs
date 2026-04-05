@@ -40,7 +40,7 @@ const TIMEOUT_TICK: u32 = 30;
 /// Incremented by the partition after each successful wait+ack cycle.
 static ACK_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(StressConfig, |tick, _k| {
+kernel::define_kernel!(StressConfig, |tick, _k| {
     // Pend IRQ 0 on every tick from tick 2 onward (continuous pressure).
     if tick >= 2 {
         #[cfg(target_arch = "arm")]

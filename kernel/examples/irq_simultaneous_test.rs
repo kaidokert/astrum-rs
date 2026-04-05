@@ -15,7 +15,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(SimulIrqConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(SimulIrqConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Bind IRQ 0 → partition 0, event 0x01; IRQ 1 → partition 1, event 0x02.
 kernel::bind_interrupts!(SimulIrqConfig, 70,
@@ -29,7 +29,7 @@ static P0_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Incremented by partition 1 after each successful `event_wait` return.
 static P1_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(SimulIrqConfig, |tick, _k| {
+kernel::define_kernel!(SimulIrqConfig, |tick, _k| {
     // Verify counts are still zero before pending (no spurious early delivery).
     if tick == 1 {
         let c0 = P0_COUNT.load(Ordering::Acquire);

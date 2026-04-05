@@ -39,7 +39,7 @@ static P0_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Incremented by partition 1 after each successful `event_wait` return.
 static P1_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(MultiIrqConfig, |tick, _k| {
+kernel::define_kernel!(MultiIrqConfig, |tick, _k| {
     if tick == 2 {
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));

@@ -68,7 +68,7 @@ extern "C" fn p1_entry() -> ! {
 
 const TIMEOUT_TICKS: u32 = 300;
 
-kernel::define_unified_harness!(TestConfig, |tick, k| {
+kernel::define_kernel!(TestConfig, |tick, k| {
     let p0_state = k.pcb(0).map(|pcb| pcb.state());
     let p1_state = k.pcb(1).map(|pcb| pcb.state());
     let all_faulted = k.all_runnable_faulted();

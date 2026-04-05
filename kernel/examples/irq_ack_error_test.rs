@@ -33,7 +33,7 @@ kernel::bind_interrupts!(ErrTestConfig, 70,
 /// Incremented after each error-path check passes.
 static CHECKS_PASSED: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(ErrTestConfig, |tick, _k| {
+kernel::define_kernel!(ErrTestConfig, |tick, _k| {
     if tick >= 4 {
         let n = CHECKS_PASSED.load(Ordering::Acquire);
         if n >= 2 {

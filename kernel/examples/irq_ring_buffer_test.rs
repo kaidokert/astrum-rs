@@ -51,7 +51,7 @@ unsafe extern "C" fn ring_buffer_isr() {
 // the IrqNr(0) NVIC calls below.
 kernel::bind_interrupts!(Cfg, 70, 0 => (0, 0x01, handler: ring_buffer_isr));
 
-kernel::define_harness!(Cfg, |tick, _k| {
+kernel::define_kernel!(Cfg, |tick, _k| {
     if tick == 2 {
         PAYLOAD_IDX.store(0, Ordering::Relaxed);
         #[cfg(target_arch = "arm")]

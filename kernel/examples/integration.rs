@@ -40,7 +40,7 @@ extern "C" fn p1_main() -> ! {
     }
 }
 
-kernel::define_harness!(no_boot, IntegrationConfig, |tick, k| {
+kernel::define_kernel!(no_boot, IntegrationConfig, |tick, k| {
     // Count context switches via SysTick ticks (sentinel MPU regions in QEMU
     // have size=0, so validate_mpu_region always fails — count ticks instead).
     SW.store(tick, Ordering::Release);

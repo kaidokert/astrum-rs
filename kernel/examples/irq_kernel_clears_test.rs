@@ -53,7 +53,7 @@ const NUM_PARTITIONS: usize = 1;
 /// Incremented by the partition after each successful event_wait.
 static WAIT_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(KClearsConfig, |tick, _k| {
+kernel::define_kernel!(KClearsConfig, |tick, _k| {
     if tick == 2 {
         // NVIC::pend is a static method (no self receiver needed).
         #[cfg(target_arch = "arm")]

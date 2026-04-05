@@ -32,7 +32,7 @@ kernel::kernel_config!(
     DebugEnabled > {}
 );
 
-kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
+kernel::define_kernel!(no_boot, TestConfig, |tick, k| {
     if tick > 2 {
         let pid = k.current_partition() as usize;
         if let Some(pcb) = k.partitions().get(pid) {

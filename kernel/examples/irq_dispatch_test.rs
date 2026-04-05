@@ -42,7 +42,7 @@ const NUM_PARTITIONS: usize = 1;
 /// Incremented by the partition after each successful `SYS_EVT_WAIT` return.
 static WAIT_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(IrqTestConfig, |tick, _k| {
+kernel::define_kernel!(IrqTestConfig, |tick, _k| {
     if tick == 2 {
         // Software-trigger IRQ 0.  The dispatch handler will call
         // signal_partition_from_isr which sets event 0x01 on partition 0.

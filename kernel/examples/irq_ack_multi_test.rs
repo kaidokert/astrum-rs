@@ -25,7 +25,7 @@ const NUM_PARTITIONS: usize = 2;
 static P0_ACK: AtomicU32 = AtomicU32::new(0);
 static P1_ACK: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(AckMultiConfig, |tick, _k| {
+kernel::define_kernel!(AckMultiConfig, |tick, _k| {
     if tick == 2 {
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));

@@ -15,7 +15,7 @@ use kernel::{
     SyncMinimal,
 };
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     UnboundConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -28,7 +28,7 @@ const NUM_PARTITIONS: usize = 1;
 
 static WAIT_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(UnboundConfig, |tick, _k| {
+kernel::define_kernel!(UnboundConfig, |tick, _k| {
     if tick == 2 {
         // Software-pend unbound IRQ 10 — must be a safe no-op.
         #[cfg(target_arch = "arm")]
