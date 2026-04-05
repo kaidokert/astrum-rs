@@ -166,12 +166,12 @@ macro_rules! partition_stacks {
 ///
 /// Basic form (standard scheduler):
 /// ```ignore
-/// kernel::define_harness!(DemoConfig);
+/// kernel::define_kernel!(DemoConfig);
 /// ```
 ///
 /// Extended form with SysTick hook for test verification:
 /// ```ignore
-/// kernel::define_harness!(DemoConfig, |tick, k| {
+/// kernel::define_kernel!(DemoConfig, |tick, k| {
 ///     // tick: current tick count (u32)
 ///     // k: &mut Kernel<'mem, Config>
 ///     if tick == 10 { /* verify something */ }
@@ -709,7 +709,7 @@ mod tests {
 
     // ============ MPU_ENFORCE gating tests ============
     //
-    // The define_harness! macro emits __boot_mpu_init and
+    // The define_kernel! macro emits __boot_mpu_init and
     // __pendsv_program_mpu with MPU_ENFORCE-based gating.  These
     // functions require ARM peripherals, so we test the gating
     // pattern itself using helper functions that mirror the exact
@@ -1027,7 +1027,7 @@ mod tests {
     /// Verify that non-default fault_policy, data MPU region, and error_handler
     /// set on `PartitionSpec` builders reach the resulting PCB after
     /// `ExternalPartitionMemory::from_spec` (the same path used by the
-    /// production `define_harness!` macro).
+    /// production `define_kernel!` macro).
     #[test]
     fn partition_spec_builder_fields_reach_pcb() {
         use crate::partition::{ExternalPartitionMemory, FaultPolicy, MpuRegion, PartitionSpec};

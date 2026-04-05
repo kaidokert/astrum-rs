@@ -47,7 +47,7 @@ pub type SvcDispatchFn = unsafe extern "C" fn(&mut ExceptionFrame);
 // ---------------------------------------------------------------------------
 //
 // `Kernel` is constructed on the stack of a `-> !` function (via
-// `define_harness!`). Because the function never returns, the
+// `define_kernel!`). Because the function never returns, the
 // kernel lives for the program's lifetime. Its address is published via
 // `store_kernel_ptr` and accessed through `with_kernel` / `with_kernel_mut`.
 // ---------------------------------------------------------------------------

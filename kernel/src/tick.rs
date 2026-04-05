@@ -238,7 +238,7 @@ pub fn configure_systick(syst: &mut cortex_m::peripheral::SYST, reload: u32) {
 
 /// SysTick handler: advance schedule, trigger PendSV, expire timed waits.
 ///
-/// This function is called by the `define_harness!` macro's SysTick
+/// This function is called by the `define_kernel!` macro's SysTick
 /// exception handler. It advances the schedule, triggers PendSV on partition
 /// switches, and expires timed waits for blocking syscalls.
 ///
