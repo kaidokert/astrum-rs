@@ -1,6 +1,6 @@
 //! Shared runtime harness for QEMU demo examples.
 //!
-//! The [`define_harness!`] macro emits the boilerplate statics, SVC
+//! The [`define_kernel!`] macro emits the boilerplate statics, SVC
 //! linkage, PendSV context-switch handler, SysTick exception handler,
 //! and a safe `boot()` function that every multi-partition example
 //! would otherwise duplicate.
@@ -8,7 +8,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! kernel::define_harness!(DemoConfig);
+//! kernel::define_kernel!(DemoConfig);
 //! ```
 //!
 //! This generates:
@@ -185,32 +185,32 @@ macro_rules! partition_stacks {
 /// type has alignment equal to its size, as required by the Cortex-M MPU.
 /// A compile-time assertion in `PartitionCore::new()` verifies this invariant.
 #[macro_export]
-macro_rules! define_harness {
+macro_rules! define_kernel {
     // ── Public arms ──────────────────────────────────────────────
     // Basic form: no SysTick hook (legacy: caller must call init_kernel + boot separately)
     ($Config:ty) => {
-        $crate::define_harness!(@impl_compat $Config, |_tick, _k| {});
+        $crate::define_kernel!(@impl_compat $Config, |_tick, _k| {});
     };
     // Extended form: with SysTick hook (legacy: caller must call init_kernel + boot separately)
     ($Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_harness!(@impl_compat $Config, |$tick, $k| $hook);
+        $crate::define_kernel!(@impl_compat $Config, |$tick, $k| $hook);
     };
     // no_boot form: handlers only, caller uses kernel::boot directly
     (no_boot, $Config:ty) => {
-        $crate::define_harness!(@handlers $Config, |_tick, _k| {});
+        $crate::define_kernel!(@handlers $Config, |_tick, _k| {});
     };
     // no_boot form with SysTick hook
     (no_boot, $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_harness!(@handlers $Config, |$tick, $k| $hook);
+        $crate::define_kernel!(@handlers $Config, |$tick, $k| $hook);
     };
     // Full form: boot() calls init_kernel() internally with the provided schedule and entries.
     // $sched and $entries are expressions evaluated inside boot()'s body.
     ($Config:ty, $sched:expr, $entries:expr) => {
-        $crate::define_harness!(@impl $Config, $sched, $entries, |_tick, _k| {});
+        $crate::define_kernel!(@impl $Config, $sched, $entries, |_tick, _k| {});
     };
     // Full form with SysTick hook
     ($Config:ty, $sched:expr, $entries:expr, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_harness!(@impl $Config, $sched, $entries, |$tick, $k| $hook);
+        $crate::define_kernel!(@impl $Config, $sched, $entries, |$tick, $k| $hook);
     };
     // Internal: handlers only (SysTick, PendSV, SVC linkage, kernel state)
     (@handlers $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
@@ -405,7 +405,7 @@ macro_rules! define_harness {
     // Internal: full implementation with boot() calling init_kernel() internally.
     // $sched and $entries are macro-level expressions pasted into boot()'s body.
     (@impl $Config:ty, $sched:expr, $entries:expr, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_harness!(@handlers $Config, |$tick, $k| $hook);
+        $crate::define_kernel!(@handlers $Config, |$tick, $k| $hook);
 
         /// Partition stacks backed by `AlignedStack1K`; used by `init_kernel()` to build PCBs.
         ///
@@ -499,7 +499,7 @@ macro_rules! define_harness {
     // TODO: consider renaming @impl_compat to @impl_legacy once legacy callers are migrated.
     // Internal: legacy implementation (handlers + boot function, caller calls init_kernel separately)
     (@impl_compat $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
-        $crate::define_harness!(@handlers $Config, |$tick, $k| $hook);
+        $crate::define_kernel!(@handlers $Config, |$tick, $k| $hook);
 
         /// Partition stacks backed by `AlignedStack1K`; used by `init_kernel()` to build PCBs.
         ///
@@ -582,7 +582,39 @@ macro_rules! define_harness {
     };
 }
 
-// Unit tests: the define_harness! macro emits global_asm (via
+/// Deprecated alias for [`define_kernel!`].
+///
+/// Use `define_kernel!` instead. This alias exists only for backward
+/// compatibility and will be removed in a future release.
+#[macro_export]
+macro_rules! define_harness {
+    // Basic form
+    ($Config:ty) => {
+        $crate::define_kernel!($Config);
+    };
+    // Extended form with SysTick hook
+    ($Config:ty, |$tick:ident, $k:ident| $hook:block) => {
+        $crate::define_kernel!($Config, |$tick, $k| $hook);
+    };
+    // no_boot form
+    (no_boot, $Config:ty) => {
+        $crate::define_kernel!(no_boot, $Config);
+    };
+    // no_boot form with SysTick hook
+    (no_boot, $Config:ty, |$tick:ident, $k:ident| $hook:block) => {
+        $crate::define_kernel!(no_boot, $Config, |$tick, $k| $hook);
+    };
+    // Full form: schedule + entries + boot
+    ($Config:ty, $sched:expr, $entries:expr) => {
+        $crate::define_kernel!($Config, $sched, $entries);
+    };
+    // Full form with SysTick hook
+    ($Config:ty, $sched:expr, $entries:expr, |$tick:ident, $k:ident| $hook:block) => {
+        $crate::define_kernel!($Config, $sched, $entries, |$tick, $k| $hook);
+    };
+}
+
+// Unit tests: the define_kernel! macro emits global_asm (via
 // define_pendsv!) and an #[exception] handler, which are only
 // meaningful on ARM targets. Correctness is verified by the QEMU
 // integration tests (sampling_demo, queuing_demo, blackboard_demo).
