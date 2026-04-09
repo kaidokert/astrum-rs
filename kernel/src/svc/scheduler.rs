@@ -10,7 +10,42 @@ use crate::scheduler::ScheduleEvent;
 use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
 use crate::svc::{try_transition, Kernel};
+use core::sync::atomic::{AtomicU8, Ordering};
 use rtos_traits::ids::PartitionId;
+
+// ---------------------------------------------------------------------------
+// Pending thread-switch flag
+// ---------------------------------------------------------------------------
+
+/// Sentinel meaning "no thread switch pending".
+const NO_PENDING: u8 = 0xFF;
+
+/// Atomic flag holding the outgoing thread ID of a pending intra-partition
+/// thread switch, or `0xFF` when no switch is pending.
+static PENDING_THREAD_SWITCH: AtomicU8 = AtomicU8::new(NO_PENDING);
+
+/// Record that an intra-partition thread switch is pending for `outgoing_tid`.
+pub fn set_pending_thread_switch(outgoing_tid: u8) {
+    PENDING_THREAD_SWITCH.store(outgoing_tid, Ordering::Release);
+}
+
+/// Atomically read and clear the pending thread-switch flag.
+///
+/// Returns `Some(outgoing_tid)` if a switch was pending, or `None` if no
+/// switch was pending (the flag was already `0xFF`).
+pub fn take_pending_thread_switch() -> Option<u8> {
+    let val = PENDING_THREAD_SWITCH.swap(NO_PENDING, Ordering::AcqRel);
+    if val == NO_PENDING {
+        None
+    } else {
+        Some(val)
+    }
+}
+
+/// Check whether a thread switch is pending without consuming the flag.
+pub fn is_thread_switch_pending() -> bool {
+    PENDING_THREAD_SWITCH.load(Ordering::Acquire) != NO_PENDING
+}
 
 // TODO: The where clause duplicates the full Kernel bounds from svc.rs. This is
 // required by Rust because partitions()/schedule() are defined in the main impl

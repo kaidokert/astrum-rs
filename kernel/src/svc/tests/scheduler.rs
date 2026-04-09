@@ -1,5 +1,6 @@
 use super::*;
 use crate::partition_core::AlignedStack1K;
+use crate::svc::scheduler as svc_sched;
 use crate::syscall::SYS_GET_PARTITION_RUN_COUNT;
 
 /// Build a 2-partition kernel (P0, P1) with round-robin schedule (2 ticks each).
@@ -470,6 +471,62 @@ fn intra_thread_schedule_no_active_partition_is_noop() {
 
     // partition_sp unchanged.
     assert_eq!(k.get_sp(0), Some(sp_before));
+}
+
+// ── Pending thread-switch flag tests ───────────────────────────────────
+
+#[test]
+fn pending_thread_switch_initial_state_not_pending() {
+    // Consume any leftover state from other tests.
+    let _ = svc_sched::take_pending_thread_switch();
+    assert!(!svc_sched::is_thread_switch_pending());
+}
+
+#[test]
+fn pending_thread_switch_set_then_take() {
+    // Ensure clean state.
+    let _ = svc_sched::take_pending_thread_switch();
+
+    svc_sched::set_pending_thread_switch(3);
+    assert!(svc_sched::is_thread_switch_pending());
+
+    let val = svc_sched::take_pending_thread_switch();
+    assert_eq!(val, Some(3), "take must return the stored thread ID");
+
+    // After take, flag is cleared.
+    assert!(!svc_sched::is_thread_switch_pending());
+}
+
+#[test]
+fn pending_thread_switch_double_take_returns_none() {
+    let _ = svc_sched::take_pending_thread_switch();
+
+    svc_sched::set_pending_thread_switch(7);
+    assert_eq!(svc_sched::take_pending_thread_switch(), Some(7));
+    assert_eq!(
+        svc_sched::take_pending_thread_switch(),
+        None,
+        "second take must return None"
+    );
+}
+
+#[test]
+fn pending_thread_switch_is_pending_reflects_state() {
+    let _ = svc_sched::take_pending_thread_switch();
+
+    assert!(
+        !svc_sched::is_thread_switch_pending(),
+        "initially not pending"
+    );
+
+    svc_sched::set_pending_thread_switch(0);
+    assert!(svc_sched::is_thread_switch_pending(), "pending after set");
+
+    let _ = svc_sched::take_pending_thread_switch();
+    assert!(
+        !svc_sched::is_thread_switch_pending(),
+        "not pending after take"
+    );
 }
 
 #[cfg(feature = "intra-threads")]
