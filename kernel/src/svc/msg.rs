@@ -114,10 +114,7 @@ pub fn msg_error_to_svc(e: MsgError) -> u32 {
     match e {
         MsgError::InvalidQueue => SvcError::InvalidResource.to_u32(),
         MsgError::WaitQueueFull => SvcError::WaitQueueFull.to_u32(),
-        MsgError::SizeMismatch => {
-            crate::klog!("msg_error_to_svc: SizeMismatch");
-            SvcError::OperationFailed.to_u32()
-        }
+        MsgError::SizeMismatch => SvcError::OperationFailed.to_u32(),
     }
 }
 

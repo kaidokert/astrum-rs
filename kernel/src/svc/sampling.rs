@@ -40,18 +40,9 @@ pub unsafe fn handle_sampling_read<const S: usize, const M: usize>(
 pub fn sampling_error_to_svc(e: SamplingError) -> u32 {
     match e {
         SamplingError::InvalidPort => SvcError::InvalidResource.to_u32(),
-        SamplingError::DirectionViolation => {
-            crate::klog!("sampling_error_to_svc: DirectionViolation");
-            SvcError::OperationFailed.to_u32()
-        }
-        SamplingError::MessageTooLarge => {
-            crate::klog!("sampling_error_to_svc: MessageTooLarge");
-            SvcError::OperationFailed.to_u32()
-        }
-        SamplingError::PoolFull => {
-            crate::klog!("sampling_error_to_svc: PoolFull");
-            SvcError::OperationFailed.to_u32()
-        }
+        SamplingError::DirectionViolation => SvcError::OperationFailed.to_u32(),
+        SamplingError::MessageTooLarge => SvcError::OperationFailed.to_u32(),
+        SamplingError::PoolFull => SvcError::OperationFailed.to_u32(),
     }
 }
 
