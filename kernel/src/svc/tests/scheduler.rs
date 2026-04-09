@@ -414,8 +414,8 @@ fn intra_thread_schedule_sets_pending_flag() {
     let outgoing = svc_sched::take_pending_thread_switch();
     assert_eq!(
         outgoing,
-        Some(0),
-        "pending flag must hold outgoing thread ID 0"
+        Some((0, 0)),
+        "pending flag must hold (partition_id=0, outgoing_tid=0)"
     );
 
     // Outgoing thread 0's TCB.stack_pointer should have been saved.
@@ -462,16 +462,16 @@ fn intra_thread_schedule_round_robin_cycle() {
     assert!(switched, "first advance must switch threads");
     // partition_sp must NOT change (deferred to PendSV).
     assert_eq!(k.get_sp(0), Some(t0_sp));
-    // Pending flag set with outgoing thread 0.
-    assert_eq!(svc_sched::take_pending_thread_switch(), Some(0));
+    // Pending flag set with (partition_id=0, outgoing thread 0).
+    assert_eq!(svc_sched::take_pending_thread_switch(), Some((0, 0)));
 
     // Advance 2: thread 1 → thread 0
     let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
     assert!(switched, "second advance must switch back");
     // partition_sp still unchanged.
     assert_eq!(k.get_sp(0), Some(t0_sp));
-    // Pending flag set with outgoing thread 1.
-    assert_eq!(svc_sched::take_pending_thread_switch(), Some(1));
+    // Pending flag set with (partition_id=0, outgoing thread 1).
+    assert_eq!(svc_sched::take_pending_thread_switch(), Some((0, 1)));
 }
 
 #[cfg(feature = "intra-threads")]
@@ -502,11 +502,15 @@ fn pending_thread_switch_set_then_take() {
     // Ensure clean state.
     let _ = svc_sched::take_pending_thread_switch();
 
-    svc_sched::set_pending_thread_switch(3);
+    svc_sched::set_pending_thread_switch(1, 3);
     assert!(svc_sched::is_thread_switch_pending());
 
     let val = svc_sched::take_pending_thread_switch();
-    assert_eq!(val, Some(3), "take must return the stored thread ID");
+    assert_eq!(
+        val,
+        Some((1, 3)),
+        "take must return the stored (partition_id, thread_id)"
+    );
 
     // After take, flag is cleared.
     assert!(!svc_sched::is_thread_switch_pending());
@@ -516,8 +520,8 @@ fn pending_thread_switch_set_then_take() {
 fn pending_thread_switch_double_take_returns_none() {
     let _ = svc_sched::take_pending_thread_switch();
 
-    svc_sched::set_pending_thread_switch(7);
-    assert_eq!(svc_sched::take_pending_thread_switch(), Some(7));
+    svc_sched::set_pending_thread_switch(2, 7);
+    assert_eq!(svc_sched::take_pending_thread_switch(), Some((2, 7)));
     assert_eq!(
         svc_sched::take_pending_thread_switch(),
         None,
@@ -534,7 +538,7 @@ fn pending_thread_switch_is_pending_reflects_state() {
         "initially not pending"
     );
 
-    svc_sched::set_pending_thread_switch(0);
+    svc_sched::set_pending_thread_switch(0, 0);
     assert!(svc_sched::is_thread_switch_pending(), "pending after set");
 
     let _ = svc_sched::take_pending_thread_switch();
@@ -621,7 +625,7 @@ fn intra_thread_schedule_readvance_blocked_while_pending() {
 
     // Clear the pending flag — now advance should work again.
     let outgoing = svc_sched::take_pending_thread_switch();
-    assert_eq!(outgoing, Some(0));
+    assert_eq!(outgoing, Some((0, 0)));
 
     let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
     assert!(
@@ -709,5 +713,48 @@ fn apply_pending_thread_switch_noop_when_not_pending() {
     assert_eq!(
         t0_saved, t0_sp,
         "outgoing TCB must not be modified when no switch is pending"
+    );
+}
+
+#[cfg(feature = "intra-threads")]
+#[test]
+fn apply_pending_thread_switch_discards_stale_partition() {
+    let (mut k, t0_sp, _t1_sp) = kernel_2p_multithread();
+    // Clear any leftover pending state.
+    let _ = svc_sched::take_pending_thread_switch();
+
+    // Advance: schedules switch from thread 0 → thread 1 for partition 0.
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(switched, "advance must trigger a thread switch");
+
+    // Simulate a partition switch: active_partition changes from 0 to 1.
+    k.active_partition = Some(1);
+
+    // Apply: the pending flag was set for partition 0 but active is now 1.
+    // The stale switch must be discarded — no SP modifications.
+    crate::svc::scheduler::apply_pending_thread_switch(&mut k);
+
+    // partition_sp[0] must be unchanged (no stale write).
+    assert_eq!(
+        k.get_sp(0),
+        Some(t0_sp),
+        "stale switch must not modify partition_sp[0]"
+    );
+
+    // Thread 0's TCB.stack_pointer must be unchanged.
+    let t0_saved = k
+        .partitions()
+        .get(0)
+        .unwrap()
+        .thread_table()
+        .get(ThreadId::new(0))
+        .unwrap()
+        .stack_pointer;
+    assert_eq!(t0_saved, t0_sp, "stale switch must not modify outgoing TCB");
+
+    // Pending flag must have been consumed (cleared) even though it was discarded.
+    assert!(
+        !svc_sched::is_thread_switch_pending(),
+        "pending flag must be cleared after discard"
     );
 }

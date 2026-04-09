@@ -10,7 +10,7 @@ use crate::scheduler::ScheduleEvent;
 use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
 use crate::svc::{try_transition, Kernel};
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU16, Ordering};
 use rtos_traits::ids::PartitionId;
 #[cfg(feature = "intra-threads")]
 use rtos_traits::ids::ThreadId;
@@ -20,27 +20,34 @@ use rtos_traits::ids::ThreadId;
 // ---------------------------------------------------------------------------
 
 /// Sentinel meaning "no thread switch pending".
-const NO_PENDING: u8 = 0xFF;
+const NO_PENDING: u16 = 0xFFFF;
 
-/// Atomic flag holding the outgoing thread ID of a pending intra-partition
-/// thread switch, or `0xFF` when no switch is pending.
-static PENDING_THREAD_SWITCH: AtomicU8 = AtomicU8::new(NO_PENDING);
+/// Atomic flag holding a packed `(partition_id << 8) | thread_id` for a
+/// pending intra-partition thread switch, or `0xFFFF` when no switch is
+/// pending.  The partition ID guards against stale switches that were
+/// scheduled for a partition that is no longer active.
+static PENDING_THREAD_SWITCH: AtomicU16 = AtomicU16::new(NO_PENDING);
 
-/// Record that an intra-partition thread switch is pending for `outgoing_tid`.
-pub fn set_pending_thread_switch(outgoing_tid: u8) {
-    PENDING_THREAD_SWITCH.store(outgoing_tid, Ordering::Release);
+/// Record that an intra-partition thread switch is pending.
+///
+/// Packs `(partition_id << 8) | outgoing_tid` into the atomic flag.
+pub fn set_pending_thread_switch(partition_id: u8, outgoing_tid: u8) {
+    let packed = (partition_id as u16) << 8 | outgoing_tid as u16;
+    PENDING_THREAD_SWITCH.store(packed, Ordering::Release);
 }
 
 /// Atomically read and clear the pending thread-switch flag.
 ///
-/// Returns `Some(outgoing_tid)` if a switch was pending, or `None` if no
-/// switch was pending (the flag was already `0xFF`).
-pub fn take_pending_thread_switch() -> Option<u8> {
+/// Returns `Some((partition_id, outgoing_tid))` if a switch was pending,
+/// or `None` if no switch was pending (the flag was `0xFFFF`).
+pub fn take_pending_thread_switch() -> Option<(u8, u8)> {
     let val = PENDING_THREAD_SWITCH.swap(NO_PENDING, Ordering::AcqRel);
     if val == NO_PENDING {
         None
     } else {
-        Some(val)
+        let partition_id = (val >> 8) as u8;
+        let thread_id = (val & 0xFF) as u8;
+        Some((partition_id, thread_id))
     }
 }
 
@@ -288,7 +295,7 @@ where
 
     // Phase 2: set the pending flag so PendSV can perform the actual SP swap.
     if let Some(tid) = outgoing_tid {
-        set_pending_thread_switch(tid.into());
+        set_pending_thread_switch(pid as u8, tid.into());
         true
     } else {
         false
@@ -327,8 +334,8 @@ where
         BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     >,
 {
-    let outgoing_tid = match take_pending_thread_switch() {
-        Some(tid) => tid,
+    let (pending_pid, outgoing_tid) = match take_pending_thread_switch() {
+        Some(pair) => pair,
         None => return,
     };
 
@@ -336,6 +343,14 @@ where
         Some(pid) => pid as usize,
         None => return,
     };
+
+    // Discard stale switch: if the partition changed since the flag was set
+    // (e.g. SysTick set it for partition A, then a partition switch to B
+    // occurred before PendSV fired), applying it would corrupt the wrong
+    // partition's thread state.
+    if pending_pid as usize != pid {
+        return;
+    }
 
     // Read partition_sp[pid] — the live PSP that context_save just wrote.
     let saved_sp = match kernel.get_sp(pid) {
