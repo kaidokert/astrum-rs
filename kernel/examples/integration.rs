@@ -105,6 +105,7 @@ fn main() -> ! {
             )
             .unwrap()
         });
+        s.add_system_window(1).expect("sys window");
         Kernel::<IntegrationConfig>::new(s, &memories).unwrap()
     };
     let _ = k

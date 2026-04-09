@@ -20,7 +20,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use cortex_m::asm;
 #[allow(unused_imports)]
-use cortex_m_rt::exception; // needed by define_unified_harness! expansion
+use cortex_m_rt::exception; // needed by define_kernel! expansion
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
@@ -34,7 +34,6 @@ kernel::kernel_config!(
     MsgMinimal,
     PortsTiny,
     DebugEnabled > {
-        // IMPORTANT: Build with --release. Debug builds spin in PendSV.
         mpu_enforce = true;
     }
 );
@@ -76,7 +75,7 @@ const SURVIVE_TICKS: u32 = 10;
 const TIMEOUT_TICKS: u32 = 200;
 const REPORT_INTERVAL: u32 = 10;
 
-kernel::define_unified_harness!(TestConfig, |tick, k| {
+kernel::define_kernel!(TestConfig, |tick, k| {
     let p1_state = k.pcb(1).map(|pcb| pcb.state());
 
     // Periodic RTT status line so the user can observe P0 surviving.
@@ -179,7 +178,8 @@ fn main() -> ! {
 
     // TODO(panic-free): round_robin() fails only on zero-count args; these
     // are compile-time-knowable invariants but could use const-eval.
-    let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 2).expect("round_robin");
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 2).expect("round_robin");
+    sched.add_system_window(1).expect("sys window");
 
     let parts: [PartitionSpec; TestConfig::N] = [
         PartitionSpec::new(p0_entry as PartitionEntry, 0),

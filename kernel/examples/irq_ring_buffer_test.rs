@@ -42,7 +42,7 @@ unsafe extern "C" fn ring_buffer_isr() {
     // handler: form bypasses __irq_dispatch, so manual signal + mask are
     // required (not redundant).
     #[cfg(target_arch = "arm")]
-    kernel::irq_dispatch::signal_partition_from_isr::<Cfg>(0, 0x01);
+    kernel::irq_dispatch::signal_partition_from_isr::<Cfg>(0.into(), 0x01);
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::NVIC::mask(kernel::irq_dispatch::IrqNr(0));
 }
@@ -120,9 +120,11 @@ kernel::partition_trampoline!(p0_main => p0_body);
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("rb_test: take");
     hprintln!("rb_test: start");
-    let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("sched");
+    let mut sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("sched");
     let parts: [PartitionSpec; 1] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
-    init_kernel(sched, &parts).expect("irq_ring_buffer_test: init_kernel");
+    sched.add_system_window(1).expect("sys window");
+    let mut k = init_kernel(sched, &parts).expect("irq_ring_buffer_test: init_kernel");
+    store_kernel(&mut k);
     enable_bound_irqs(&mut p.NVIC, Cfg::IRQ_DEFAULT_PRIORITY).unwrap();
     match boot(p).expect("boot") {}
 }

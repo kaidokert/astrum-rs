@@ -30,7 +30,7 @@ const _: IsrHandler = custom_irq60_handler;
 unsafe extern "C" fn custom_irq60_handler() {
     ISR_COUNTER.fetch_add(1, Ordering::Relaxed);
     #[cfg(target_arch = "arm")]
-    kernel::irq_dispatch::signal_partition_from_isr::<CustomHandlerConfig>(0, 0x01);
+    kernel::irq_dispatch::signal_partition_from_isr::<CustomHandlerConfig>(0.into(), 0x01);
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::NVIC::mask(kernel::irq_dispatch::IrqNr(60));
 }
@@ -123,13 +123,15 @@ extern "C" fn p1_main() -> ! {
 fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("custom_handler: take");
     hprintln!("custom_handler: start");
-    let sched = ScheduleTable::<{ CustomHandlerConfig::SCHED }>::round_robin(2, 3)
+    let mut sched = ScheduleTable::<{ CustomHandlerConfig::SCHED }>::round_robin(2, 3)
         .expect("custom_handler: round_robin");
     let parts: [PartitionSpec; CustomHandlerConfig::N] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
-    init_kernel(sched, &parts).expect("irq_custom_handler_test: init_kernel");
+    sched.add_system_window(1).expect("sys window");
+    let mut k = init_kernel(sched, &parts).expect("irq_custom_handler_test: init_kernel");
+    store_kernel(&mut k);
     enable_bound_irqs(&mut p.NVIC, CustomHandlerConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     match boot(p).expect("custom_handler: boot") {}
 }

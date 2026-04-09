@@ -179,6 +179,7 @@ fn main() -> ! {
             )
             .expect("mem")
         });
+        sched.add_system_window(1).expect("sys window");
         Kernel::<DemoConfig>::new(sched, &memories).expect("kernel")
     };
 

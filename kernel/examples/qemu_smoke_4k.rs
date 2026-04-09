@@ -97,13 +97,14 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("qemu_smoke_4k: Peripherals::take");
     hprintln!("qemu_smoke_4k: start");
 
-    let sched = ScheduleTable::<{ Smoke4KConfig::SCHED }>::round_robin(2, 3)
+    let mut sched = ScheduleTable::<{ Smoke4KConfig::SCHED }>::round_robin(2, 3)
         .expect("qemu_smoke_4k: round_robin");
 
     let parts: [PartitionSpec; Smoke4KConfig::N] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
+    sched.add_system_window(1).expect("sys window");
     let mut k = init_kernel(sched, &parts).expect("qemu_smoke_4k: init_kernel");
     store_kernel(&mut k);
 
