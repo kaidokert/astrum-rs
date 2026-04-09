@@ -211,18 +211,18 @@ where
 /// Advance the intra-partition thread schedule for the active partition.
 ///
 /// If the active partition has more than one runnable thread, this function:
-/// 1. Saves `partition_sp[pid]` into the outgoing thread's `TCB.stack_pointer`
-/// 2. Calls `advance_intra_schedule()` on the partition's `ThreadTable`
-/// 3. Loads the incoming thread's `TCB.stack_pointer` into `partition_sp[pid]`
+/// 1. Returns false early if a thread switch is already pending (re-advance guard)
+/// 2. Saves `partition_sp[pid]` into the outgoing thread's `TCB.stack_pointer`
+/// 3. Calls `advance_intra_schedule()` on the partition's `ThreadTable`
+/// 4. Sets the pending thread-switch flag with the outgoing thread ID
 ///
-/// Returns `true` if a thread switch actually occurred (the active thread changed),
+/// The actual SP swap into `partition_sp` is deferred to PendSV, which reads
+/// the pending flag via `take_pending_thread_switch()`.
+///
+/// Returns `true` if a thread switch was scheduled (the active thread changed),
 /// so the caller can trigger PendSV to perform the hardware context switch.
 ///
 /// Partitions with fewer than 2 runnable threads are skipped (zero overhead).
-///
-/// This must run after `advance_schedule_tick` so that `active_partition` reflects
-/// the partition that is about to execute, and before PendSV fires so that
-/// `partition_sp` contains the correct thread's SP for context restore.
 // TODO: If a partition switch just occurred in advance_schedule_tick, the newly
 // selected partition's partition_sp (its last saved state) is saved into the
 // outgoing thread's TCB and then the schedule advances, causing the partition to
@@ -252,6 +252,11 @@ where
         BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
     >,
 {
+    // Guard: if a thread switch is already pending, do not re-advance.
+    if is_thread_switch_pending() {
+        return false;
+    }
+
     let pid = match kernel.active_partition {
         Some(pid) => pid as usize,
         None => return false,
@@ -263,8 +268,9 @@ where
         None => return false,
     };
 
-    // Phase 1: access PCB, check runnable count, save outgoing SP, advance, read incoming SP.
-    let switch_sp = {
+    // Phase 1: access PCB, check runnable count, save outgoing SP, advance,
+    // determine whether a thread switch occurred.
+    let outgoing_tid = {
         let pcb = match kernel.pcb_mut(pid) {
             Some(pcb) => pcb,
             None => return false,
@@ -289,18 +295,16 @@ where
         // Advance the intra-partition schedule (round-robin or priority).
         let new_tid = pcb.thread_table_mut().advance_intra_schedule();
 
-        // Only produce a new SP if the thread actually changed.
+        // Only flag a switch if the thread actually changed.
         match (prev_tid, new_tid) {
-            (Some(prev), Some(next)) if prev != next => {
-                pcb.thread_table().get(next).map(|t| t.stack_pointer)
-            }
+            (Some(prev), Some(next)) if prev != next => Some(prev),
             _ => None,
         }
     }; // PCB borrow ends here.
 
-    // Phase 2: update partition_sp so PendSV restores the correct thread.
-    if let Some(sp) = switch_sp {
-        kernel.set_sp(pid, sp);
+    // Phase 2: set the pending flag so PendSV can perform the actual SP swap.
+    if let Some(tid) = outgoing_tid {
+        set_pending_thread_switch(tid.into());
         true
     } else {
         false

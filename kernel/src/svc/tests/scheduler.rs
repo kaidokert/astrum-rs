@@ -390,8 +390,10 @@ fn kernel_2p_multithread() -> (Kernel<'static, TestConfig>, u32, u32) {
 
 #[cfg(feature = "intra-threads")]
 #[test]
-fn intra_thread_schedule_updates_partition_sp() {
-    let (mut k, t0_sp, t1_sp) = kernel_2p_multithread();
+fn intra_thread_schedule_sets_pending_flag() {
+    let (mut k, t0_sp, _t1_sp) = kernel_2p_multithread();
+    // Clear any leftover pending state.
+    let _ = svc_sched::take_pending_thread_switch();
 
     // Before advance: partition_sp[0] == thread 0's SP.
     assert_eq!(k.get_sp(0), Some(t0_sp));
@@ -400,11 +402,20 @@ fn intra_thread_schedule_updates_partition_sp() {
     let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
     assert!(switched, "must return true when thread changes");
 
-    // After advance: partition_sp[0] should be thread 1's SP.
+    // partition_sp must NOT have changed (SP swap is deferred to PendSV).
     assert_eq!(
         k.get_sp(0),
-        Some(t1_sp),
-        "partition_sp must reflect incoming thread's SP"
+        Some(t0_sp),
+        "partition_sp must remain unchanged — SP swap is deferred"
+    );
+
+    // The pending thread-switch flag must be set with outgoing thread 0's ID.
+    assert!(svc_sched::is_thread_switch_pending());
+    let outgoing = svc_sched::take_pending_thread_switch();
+    assert_eq!(
+        outgoing,
+        Some(0),
+        "pending flag must hold outgoing thread ID 0"
     );
 
     // Outgoing thread 0's TCB.stack_pointer should have been saved.
@@ -442,21 +453,25 @@ fn intra_thread_schedule_single_thread_no_change() {
 #[cfg(feature = "intra-threads")]
 #[test]
 fn intra_thread_schedule_round_robin_cycle() {
-    let (mut k, t0_sp, t1_sp) = kernel_2p_multithread();
+    let (mut k, t0_sp, _t1_sp) = kernel_2p_multithread();
+    // Clear any leftover pending state.
+    let _ = svc_sched::take_pending_thread_switch();
 
     // Advance 1: thread 0 → thread 1
     let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
     assert!(switched, "first advance must switch threads");
-    assert_eq!(k.get_sp(0), Some(t1_sp));
+    // partition_sp must NOT change (deferred to PendSV).
+    assert_eq!(k.get_sp(0), Some(t0_sp));
+    // Pending flag set with outgoing thread 0.
+    assert_eq!(svc_sched::take_pending_thread_switch(), Some(0));
 
     // Advance 2: thread 1 → thread 0
     let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
     assert!(switched, "second advance must switch back");
-    assert_eq!(
-        k.get_sp(0),
-        Some(t0_sp),
-        "round-robin must cycle back to thread 0"
-    );
+    // partition_sp still unchanged.
+    assert_eq!(k.get_sp(0), Some(t0_sp));
+    // Pending flag set with outgoing thread 1.
+    assert_eq!(svc_sched::take_pending_thread_switch(), Some(1));
 }
 
 #[cfg(feature = "intra-threads")]
@@ -533,6 +548,7 @@ fn pending_thread_switch_is_pending_reflects_state() {
 #[test]
 fn intra_thread_schedule_saves_outgoing_sp_before_advance() {
     let (mut k, _t0_sp, _t1_sp) = kernel_2p_multithread();
+    let _ = svc_sched::take_pending_thread_switch();
 
     // Set partition_sp to a distinct value (simulating PSP drift during execution).
     let drifted_sp = 0x2000_0ABC;
@@ -540,6 +556,17 @@ fn intra_thread_schedule_saves_outgoing_sp_before_advance() {
 
     let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
     assert!(switched, "must switch when multiple runnable threads exist");
+
+    // partition_sp must NOT have changed (deferred to PendSV).
+    assert_eq!(
+        k.get_sp(0),
+        Some(drifted_sp),
+        "partition_sp must remain unchanged"
+    );
+
+    // Pending flag must be set.
+    assert!(svc_sched::is_thread_switch_pending());
+    let _ = svc_sched::take_pending_thread_switch();
 
     // Outgoing thread 0's TCB should have the drifted SP saved.
     let saved = k
@@ -554,4 +581,37 @@ fn intra_thread_schedule_saves_outgoing_sp_before_advance() {
         saved, drifted_sp,
         "outgoing thread must save the actual partition_sp value"
     );
+}
+
+#[cfg(feature = "intra-threads")]
+#[test]
+fn intra_thread_schedule_readvance_blocked_while_pending() {
+    let (mut k, t0_sp, _t1_sp) = kernel_2p_multithread();
+    let _ = svc_sched::take_pending_thread_switch();
+
+    // First advance: should succeed and set the pending flag.
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(switched, "first advance must succeed");
+    assert!(svc_sched::is_thread_switch_pending());
+
+    // Second advance while flag is still pending: must return false (re-advance guard).
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(
+        !switched,
+        "re-advance must be blocked while a switch is pending"
+    );
+
+    // partition_sp must remain unchanged throughout.
+    assert_eq!(k.get_sp(0), Some(t0_sp));
+
+    // Clear the pending flag — now advance should work again.
+    let outgoing = svc_sched::take_pending_thread_switch();
+    assert_eq!(outgoing, Some(0));
+
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(
+        switched,
+        "advance must succeed after pending flag is cleared"
+    );
+    let _ = svc_sched::take_pending_thread_switch(); // cleanup
 }
