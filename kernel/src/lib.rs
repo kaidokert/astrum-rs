@@ -93,6 +93,8 @@ pub mod syscall;
 pub mod systick;
 #[cfg(feature = "intra-threads")]
 pub mod thread;
+#[cfg(feature = "intra-threads")]
+pub use rtos_traits::ids::ThreadId;
 pub mod tick;
 pub mod tombstone;
 #[cfg(feature = "trace")]

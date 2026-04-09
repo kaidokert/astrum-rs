@@ -355,6 +355,16 @@ macro_rules! define_kernel {
                     $crate::mpu::write_cached_base_regions(&p.MPU, pcb);
                 }
 
+                // Apply any pending intra-partition thread switch.
+                // context_save has already written the live PSP into
+                // partition_sp, so apply_pending_thread_switch can save
+                // it to the outgoing thread's TCB and swap in the
+                // incoming thread's SP.
+                // TODO: reviewer false positive — svc (lib.rs) and scheduler (svc/mod.rs)
+                // are both `pub mod`, so $crate::svc::scheduler:: is accessible from BSPs.
+                #[cfg(feature = "intra-threads")]
+                $crate::svc::scheduler::apply_pending_thread_switch(k);
+
                 // Return pid for dynamic-mode peripheral cache lookup.
                 // In static mode this is unused.
                 pid

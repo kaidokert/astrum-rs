@@ -314,7 +314,6 @@ where
 }
 
 #[cfg(feature = "intra-threads")]
-#[allow(dead_code)] // will be called from PendSV handler in a follow-up
 /// Apply a pending intra-partition thread switch.
 ///
 /// If `take_pending_thread_switch()` yields an outgoing thread ID:
@@ -324,7 +323,7 @@ where
 /// 3. Writes that SP into `partition_sp[pid]` so PendSV restores it.
 ///
 /// This is a no-op when no switch is pending.
-pub(crate) fn apply_pending_thread_switch<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>)
+pub fn apply_pending_thread_switch<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>)
 where
     [(); C::N]:,
     [(); C::SCHED]:,
