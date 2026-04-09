@@ -157,6 +157,9 @@ pub enum IrqClearModel {
     PartitionAcks,
     /// The kernel clears the interrupt using the given strategy.
     KernelClears(ClearStrategy),
+    /// Neither mask nor clear — the source is edge-triggered or
+    /// self-clearing, so no kernel action is needed.
+    NeverMask,
 }
 
 /// Convert a raw IPSR register value to an external IRQ number.
@@ -471,6 +474,37 @@ mod tests {
         assert_eq!(b.partition_id, p(0));
         assert_eq!(b.event_bits, 0x01);
         assert_eq!(b.clear_model, IrqClearModel::KernelClears(strategy));
+    }
+
+    #[test]
+    fn with_clear_model_stores_never_mask() {
+        let b = IrqBinding::with_clear_model(11, p(1), 0x08, IrqClearModel::NeverMask);
+        assert_eq!(b.irq_num, 11);
+        assert_eq!(b.partition_id, p(1));
+        assert_eq!(b.event_bits, 0x08);
+        assert_eq!(b.clear_model, IrqClearModel::NeverMask);
+    }
+
+    #[test]
+    fn with_clear_model_never_mask_const_evaluation() {
+        const B: IrqBinding =
+            IrqBinding::with_clear_model(13, p(0), 0x10, IrqClearModel::NeverMask);
+        assert_eq!(B.irq_num, 13);
+        assert_eq!(B.partition_id, p(0));
+        assert_eq!(B.event_bits, 0x10);
+        assert_eq!(B.clear_model, IrqClearModel::NeverMask);
+    }
+
+    #[test]
+    fn never_mask_round_trips_through_lookup() {
+        const TABLE: [IrqBinding; 3] = [
+            IrqBinding::new(5, p(0), 0x01),
+            IrqBinding::with_clear_model(10, p(1), 0x02, IrqClearModel::NeverMask),
+            IrqBinding::new(15, p(2), 0x04),
+        ];
+        let idx = lookup_binding(&TABLE, 10).unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(TABLE[idx].clear_model, IrqClearModel::NeverMask);
     }
 
     #[test]
@@ -905,30 +939,46 @@ mod tests {
     fn irq_clear_model_construct_match_eq_copy_clone() {
         let pa = IrqClearModel::PartitionAcks;
         let kc = IrqClearModel::KernelClears(CB);
+        let nm = IrqClearModel::NeverMask;
         // Exhaustive match — PartitionAcks
         match pa {
             IrqClearModel::PartitionAcks => {}
-            IrqClearModel::KernelClears(_) => panic!("wrong variant"),
+            IrqClearModel::KernelClears(_) | IrqClearModel::NeverMask => panic!("wrong variant"),
         }
         // Exhaustive match — KernelClears
         match kc {
             IrqClearModel::KernelClears(s) => assert_eq!(s, CB),
-            IrqClearModel::PartitionAcks => panic!("wrong variant"),
+            IrqClearModel::PartitionAcks | IrqClearModel::NeverMask => panic!("wrong variant"),
+        }
+        // Exhaustive match — NeverMask
+        match nm {
+            IrqClearModel::NeverMask => {}
+            IrqClearModel::PartitionAcks | IrqClearModel::KernelClears(_) => {
+                panic!("wrong variant")
+            }
         }
         // Equality
         assert_eq!(pa, IrqClearModel::PartitionAcks);
         assert_eq!(kc, IrqClearModel::KernelClears(CB));
+        assert_eq!(nm, IrqClearModel::NeverMask);
         assert_ne!(pa, kc);
+        assert_ne!(pa, nm);
+        assert_ne!(kc, nm);
         // Copy
         let cp = kc;
         assert_eq!(kc, cp);
+        let cp_nm = nm;
+        assert_eq!(nm, cp_nm);
         // Clone
         assert_eq!(pa, Clone::clone(&pa));
+        assert_eq!(nm, Clone::clone(&nm));
         // Debug
         let d = format!("{pa:?}");
         assert!(d.contains("PartitionAcks"));
         let d2 = format!("{kc:?}");
         assert!(d2.contains("KernelClears") && d2.contains("ClearBit"));
+        let d3 = format!("{nm:?}");
+        assert!(d3.contains("NeverMask"));
     }
 
     // ---- dispatch data-path tests (mixed clear models) ----

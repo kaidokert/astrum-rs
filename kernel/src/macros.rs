@@ -504,6 +504,10 @@ macro_rules! bind_interrupts {
                             // hardware and this write has a single-word width.
                             unsafe { (addr as *mut u32).write_volatile(value) };
                         }
+                        $crate::irq_dispatch::IrqClearModel::NeverMask => {
+                            // Edge-triggered / self-clearing source:
+                            // no mask, no clear — fall through to signal.
+                        }
                     }
                     $crate::irq_dispatch::signal_partition_from_isr::<$Config>(
                         b.partition_id,
