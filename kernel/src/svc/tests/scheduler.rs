@@ -615,3 +615,84 @@ fn intra_thread_schedule_readvance_blocked_while_pending() {
     );
     let _ = svc_sched::take_pending_thread_switch(); // cleanup
 }
+
+#[cfg(feature = "intra-threads")]
+#[test]
+fn apply_pending_thread_switch_swaps_sp() {
+    let (mut k, t0_sp, t1_sp) = kernel_2p_multithread();
+    // Clear any leftover pending state.
+    let _ = svc_sched::take_pending_thread_switch();
+
+    // Advance: schedules switch from thread 0 → thread 1, sets pending flag.
+    let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
+    assert!(switched, "advance must trigger a thread switch");
+
+    // partition_sp[0] still holds thread 0's SP (deferred).
+    assert_eq!(k.get_sp(0), Some(t0_sp));
+
+    // Apply the pending switch.
+    crate::svc::scheduler::apply_pending_thread_switch(&mut k);
+
+    // partition_sp[0] must now hold the incoming thread 1's SP.
+    assert_eq!(
+        k.get_sp(0),
+        Some(t1_sp),
+        "partition_sp must reflect the incoming thread's SP after apply"
+    );
+
+    // Outgoing thread 0's TCB must have the saved partition_sp.
+    let saved = k
+        .partitions()
+        .get(0)
+        .unwrap()
+        .thread_table()
+        .get(ThreadId::new(0))
+        .unwrap()
+        .stack_pointer;
+    assert_eq!(
+        saved, t0_sp,
+        "outgoing thread's TCB.stack_pointer must hold the saved partition_sp"
+    );
+
+    // Pending flag must be consumed (cleared).
+    assert!(
+        !svc_sched::is_thread_switch_pending(),
+        "pending flag must be cleared after apply"
+    );
+}
+
+#[cfg(feature = "intra-threads")]
+#[test]
+fn apply_pending_thread_switch_noop_when_not_pending() {
+    let (mut k, t0_sp, _t1_sp) = kernel_2p_multithread();
+    // Ensure no pending switch.
+    let _ = svc_sched::take_pending_thread_switch();
+
+    // Record original state.
+    let sp_before = k.get_sp(0).unwrap();
+    assert_eq!(sp_before, t0_sp);
+
+    // Apply with no pending switch — must be a no-op.
+    crate::svc::scheduler::apply_pending_thread_switch(&mut k);
+
+    // partition_sp unchanged.
+    assert_eq!(
+        k.get_sp(0),
+        Some(t0_sp),
+        "partition_sp must not change when no switch is pending"
+    );
+
+    // Thread 0's TCB.stack_pointer unchanged.
+    let t0_saved = k
+        .partitions()
+        .get(0)
+        .unwrap()
+        .thread_table()
+        .get(ThreadId::new(0))
+        .unwrap()
+        .stack_pointer;
+    assert_eq!(
+        t0_saved, t0_sp,
+        "outgoing TCB must not be modified when no switch is pending"
+    );
+}

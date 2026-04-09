@@ -12,6 +12,8 @@ use crate::semaphore::SemaphorePool;
 use crate::svc::{try_transition, Kernel};
 use core::sync::atomic::{AtomicU8, Ordering};
 use rtos_traits::ids::PartitionId;
+#[cfg(feature = "intra-threads")]
+use rtos_traits::ids::ThreadId;
 
 // ---------------------------------------------------------------------------
 // Pending thread-switch flag
@@ -309,4 +311,79 @@ where
     } else {
         false
     }
+}
+
+#[cfg(feature = "intra-threads")]
+#[allow(dead_code)] // will be called from PendSV handler in a follow-up
+/// Apply a pending intra-partition thread switch.
+///
+/// If `take_pending_thread_switch()` yields an outgoing thread ID:
+/// 1. Saves the current `partition_sp[pid]` (which `context_save` just wrote)
+///    into the outgoing thread's `TCB.stack_pointer`.
+/// 2. Reads the incoming (current) thread's `TCB.stack_pointer`.
+/// 3. Writes that SP into `partition_sp[pid]` so PendSV restores it.
+///
+/// This is a no-op when no switch is pending.
+pub(crate) fn apply_pending_thread_switch<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>)
+where
+    [(); C::N]:,
+    [(); C::SCHED]:,
+    [(); C::BP]:,
+    [(); C::BZ]:,
+    [(); C::DR]:,
+    C::Core:
+        CoreOps<PartTable = PartitionTable<{ C::N }>, SchedTable = ScheduleTable<{ C::SCHED }>>,
+    C::Sync: SyncOps<
+        SemPool = SemaphorePool<{ C::S }, { C::SW }>,
+        MutPool = MutexPool<{ C::MS }, { C::MW }>,
+    >,
+    C::Msg: MsgOps<
+        MsgPool = MessagePool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+        QueuingPool = QueuingPortPool<{ C::QS }, { C::QD }, { C::QM }, { C::QW }>,
+    >,
+    C::Ports: PortsOps<
+        SamplingPool = SamplingPortPool<{ C::SP }, { C::SM }>,
+        BlackboardPool = BlackboardPool<{ C::BS }, { C::BM }, { C::BW }>,
+    >,
+{
+    let outgoing_tid = match take_pending_thread_switch() {
+        Some(tid) => tid,
+        None => return,
+    };
+
+    let pid = match kernel.active_partition {
+        Some(pid) => pid as usize,
+        None => return,
+    };
+
+    // Read partition_sp[pid] — the live PSP that context_save just wrote.
+    let saved_sp = match kernel.get_sp(pid) {
+        Some(sp) => sp,
+        None => return,
+    };
+
+    // Save partition_sp into the outgoing thread's TCB, then read incoming
+    // thread's SP and write it to partition_sp. Split into two phases to
+    // avoid overlapping borrows on the PCB.
+    let incoming_sp = {
+        let pcb = match kernel.pcb_mut(pid) {
+            Some(pcb) => pcb,
+            None => return,
+        };
+
+        // Save the live PSP into the outgoing thread's TCB.
+        if let Some(tcb) = pcb.thread_table_mut().get_mut(ThreadId::new(outgoing_tid)) {
+            tcb.stack_pointer = saved_sp;
+        }
+
+        // Read the incoming (now-current) thread's SP.
+        let current_tid = pcb.thread_table().current_thread_id();
+        match current_tid.and_then(|tid| pcb.thread_table().get(tid)) {
+            Some(tcb) => tcb.stack_pointer,
+            None => return,
+        }
+    };
+
+    // Write the incoming thread's SP to partition_sp so PendSV restores it.
+    kernel.set_sp(pid, incoming_sp);
 }
