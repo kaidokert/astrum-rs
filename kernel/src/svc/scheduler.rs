@@ -274,9 +274,6 @@ where
             None => return false,
         };
 
-        // TODO: runnable_count() performs a linear O(N) scan on every SysTick.
-        // A cached counter in ThreadTable would be more efficient for high-frequency
-        // interrupt context. Deferred: acceptable for current max_threads (≤4).
         if pcb.thread_table().runnable_count() <= 1 {
             return false; // Zero or one runnable thread: nothing to switch to.
         }

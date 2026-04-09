@@ -91,12 +91,12 @@ pub fn handle_thread_create<const N: usize>(
     }
 }
 
-/// Validate a raw u32 thread ID and look up the corresponding TCB mutably.
-fn get_tcb_mut<const N: usize>(
+/// Validate a raw thread ID and return the owning PCB.
+fn get_pcb_mut<const N: usize>(
     partitions: &mut PartitionTable<N>,
     caller: PartitionId,
     thread_id_raw: u32,
-) -> Result<&mut ThreadControlBlock, u32> {
+) -> Result<(&mut crate::partition::PartitionControlBlock, ThreadId), u32> {
     if thread_id_raw > u8::MAX as u32 {
         return Err(SvcError::InvalidResource.to_u32());
     }
@@ -104,9 +104,10 @@ fn get_tcb_mut<const N: usize>(
         .get_mut(caller.as_raw() as usize)
         .ok_or(SvcError::InvalidPartition.to_u32())?;
     let tid = ThreadId::new(thread_id_raw as u8);
-    pcb.thread_table_mut()
-        .get_mut(tid)
-        .ok_or(SvcError::InvalidResource.to_u32())
+    if pcb.thread_table().get(tid).is_none() {
+        return Err(SvcError::InvalidResource.to_u32());
+    }
+    Ok((pcb, tid))
 }
 
 /// Handle SYS_THREAD_SUSPEND: transitions Ready/Running -> Suspended.
@@ -115,16 +116,14 @@ pub fn handle_thread_suspend<const N: usize>(
     caller: PartitionId,
     thread_id_raw: u32,
 ) -> u32 {
-    let tcb = match get_tcb_mut(partitions, caller, thread_id_raw) {
-        Ok(tcb) => tcb,
+    let (pcb, tid) = match get_pcb_mut(partitions, caller, thread_id_raw) {
+        Ok(v) => v,
         Err(e) => return e,
     };
-    match tcb.state {
-        ThreadState::Ready | ThreadState::Running => {
-            tcb.state = ThreadState::Suspended;
-            0
-        }
-        _ => SvcError::InvalidParameter.to_u32(),
+    if pcb.thread_table_mut().suspend_thread(tid) {
+        0
+    } else {
+        SvcError::InvalidParameter.to_u32()
     }
 }
 
@@ -134,16 +133,14 @@ pub fn handle_thread_resume<const N: usize>(
     caller: PartitionId,
     thread_id_raw: u32,
 ) -> u32 {
-    let tcb = match get_tcb_mut(partitions, caller, thread_id_raw) {
-        Ok(tcb) => tcb,
+    let (pcb, tid) = match get_pcb_mut(partitions, caller, thread_id_raw) {
+        Ok(v) => v,
         Err(e) => return e,
     };
-    match tcb.state {
-        ThreadState::Suspended => {
-            tcb.state = ThreadState::Ready;
-            0
-        }
-        _ => SvcError::InvalidParameter.to_u32(),
+    if pcb.thread_table_mut().resume_thread(tid) {
+        0
+    } else {
+        SvcError::InvalidParameter.to_u32()
     }
 }
 
@@ -153,11 +150,11 @@ pub fn handle_thread_stop<const N: usize>(
     caller: PartitionId,
     thread_id_raw: u32,
 ) -> u32 {
-    let tcb = match get_tcb_mut(partitions, caller, thread_id_raw) {
-        Ok(tcb) => tcb,
+    let (pcb, tid) = match get_pcb_mut(partitions, caller, thread_id_raw) {
+        Ok(v) => v,
         Err(e) => return e,
     };
-    tcb.state = ThreadState::Stopped;
+    pcb.thread_table_mut().stop_thread(tid);
     0
 }
 

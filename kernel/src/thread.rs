@@ -81,6 +81,7 @@ pub struct ThreadTable<const MAX: usize> {
     threads: [Option<ThreadControlBlock>; MAX],
     current_thread: u8,
     scheduling_policy: SchedulingPolicy,
+    runnable_cached: u8,
 }
 
 impl<const MAX: usize> ThreadTable<MAX> {
@@ -95,6 +96,7 @@ impl<const MAX: usize> ThreadTable<MAX> {
             threads: [None; MAX],
             current_thread: 0,
             scheduling_policy: policy,
+            runnable_cached: 0,
         }
     }
 
@@ -106,8 +108,12 @@ impl<const MAX: usize> ThreadTable<MAX> {
         for (i, slot) in self.threads.iter_mut().enumerate() {
             if slot.is_none() {
                 let id = ThreadId::new(i as u8);
+                let is_runnable = matches!(tcb.state, ThreadState::Ready | ThreadState::Running);
                 tcb.id = id;
                 *slot = Some(tcb);
+                if is_runnable {
+                    self.runnable_cached += 1;
+                }
                 return Ok(id);
             }
         }
@@ -143,7 +149,14 @@ impl<const MAX: usize> ThreadTable<MAX> {
     }
 
     /// Number of threads in the `Ready` or `Running` state (schedulable).
+    /// Returns the cached counter in O(1); debug builds verify via full scan.
     pub fn runnable_count(&self) -> usize {
+        let cached = self.runnable_cached as usize;
+        debug_assert_eq!(cached, self.compute_runnable(), "runnable_cached diverged");
+        cached
+    }
+
+    fn compute_runnable(&self) -> usize {
         self.threads
             .iter()
             .flatten()
@@ -272,6 +285,46 @@ impl<const MAX: usize> ThreadTable<MAX> {
         }
     }
 
+    /// Stop a single thread by ID. Returns `true` if the slot existed.
+    pub fn stop_thread(&mut self, id: ThreadId) -> bool {
+        let idx = id.as_raw() as usize;
+        if let Some(tcb) = self.threads.get_mut(idx).and_then(|s| s.as_mut()) {
+            if matches!(tcb.state, ThreadState::Ready | ThreadState::Running) {
+                self.runnable_cached = self.runnable_cached.saturating_sub(1);
+            }
+            tcb.state = ThreadState::Stopped;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Suspend a thread (Ready/Running → Suspended). Returns `true` on success.
+    pub fn suspend_thread(&mut self, id: ThreadId) -> bool {
+        let idx = id.as_raw() as usize;
+        if let Some(tcb) = self.threads.get_mut(idx).and_then(|s| s.as_mut()) {
+            if matches!(tcb.state, ThreadState::Ready | ThreadState::Running) {
+                tcb.state = ThreadState::Suspended;
+                self.runnable_cached = self.runnable_cached.saturating_sub(1);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Resume a suspended thread (Suspended → Ready). Returns `true` on success.
+    pub fn resume_thread(&mut self, id: ThreadId) -> bool {
+        let idx = id.as_raw() as usize;
+        if let Some(tcb) = self.threads.get_mut(idx).and_then(|s| s.as_mut()) {
+            if tcb.state == ThreadState::Suspended {
+                tcb.state = ThreadState::Ready;
+                self.runnable_cached += 1;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Stop all threads in the table by setting their state to `Stopped`.
     ///
     /// This is used when a partition faults — all threads must be stopped
@@ -280,6 +333,7 @@ impl<const MAX: usize> ThreadTable<MAX> {
         for slot in self.threads.iter_mut().flatten() {
             slot.state = ThreadState::Stopped;
         }
+        self.runnable_cached = 0;
     }
 
     /// Reset the thread table for a partition restart.
@@ -298,8 +352,13 @@ impl<const MAX: usize> ThreadTable<MAX> {
         stack_size: u32,
         r0: u32,
     ) -> Result<(), ThreadError> {
-        // Clear all child thread slots (1..MAX).
+        // Clear child thread slots (1..MAX), decrementing for runnable ones.
         for slot in self.threads.iter_mut().skip(1) {
+            if let Some(ref t) = slot {
+                if matches!(t.state, ThreadState::Ready | ThreadState::Running) {
+                    self.runnable_cached = self.runnable_cached.saturating_sub(1);
+                }
+            }
             *slot = None;
         }
         // Re-initialize thread 0 (overwrites existing slot 0).
@@ -326,6 +385,11 @@ impl<const MAX: usize> ThreadTable<MAX> {
         r0: u32,
     ) -> Result<(), ThreadError> {
         let slot = self.threads.get_mut(0).ok_or(ThreadError::TableFull)?;
+        if let Some(ref old) = slot {
+            if matches!(old.state, ThreadState::Ready | ThreadState::Running) {
+                self.runnable_cached = self.runnable_cached.saturating_sub(1);
+            }
+        }
         let stack_pointer = stack_base
             .checked_add(stack_size)
             .ok_or(ThreadError::StackOverflow)?;
@@ -341,6 +405,7 @@ impl<const MAX: usize> ThreadTable<MAX> {
         };
         *slot = Some(tcb);
         self.current_thread = 0;
+        self.runnable_cached += 1;
         Ok(())
     }
 
@@ -1206,5 +1271,43 @@ mod tests {
         assert_eq!(stack[idx + SAVED_CONTEXT_WORDS + 6], entry);
         // xpsr has Thumb bit
         assert_eq!(stack[idx + SAVED_CONTEXT_WORDS + 7], XPSR_THUMB);
+    }
+
+    // ── runnable_cached counter tests ──────────────────────────────
+
+    #[test]
+    fn runnable_cached_through_full_lifecycle() {
+        let mut table = ThreadTable::<4>::new(SchedulingPolicy::RoundRobin);
+        assert_eq!(table.runnable_count(), 0);
+        // add_thread with Ready state increments.
+        table.add_thread(make_tcb(0, 1)).unwrap();
+        assert_eq!(table.runnable_count(), 1);
+        table.add_thread(make_tcb(1, 1)).unwrap();
+        table.add_thread(make_tcb(2, 1)).unwrap();
+        assert_eq!(table.runnable_count(), 3);
+        // stop_thread decrements; idempotent on already-stopped.
+        table.stop_thread(ThreadId::new(1));
+        assert_eq!(table.runnable_count(), 2);
+        table.stop_thread(ThreadId::new(1));
+        assert_eq!(table.runnable_count(), 2);
+        // suspend / resume round-trips.
+        table.suspend_thread(ThreadId::new(0));
+        assert_eq!(table.runnable_count(), 1);
+        table.resume_thread(ThreadId::new(0));
+        assert_eq!(table.runnable_count(), 2);
+        // stop_all resets to 0.
+        table.stop_all_threads();
+        assert_eq!(table.runnable_count(), 0);
+        // init_main_thread / reset_for_restart on a fresh table.
+        let mut t2 = ThreadTable::<4>::new(SchedulingPolicy::RoundRobin);
+        t2.init_main_thread(0x0800_0000, 0x2000_0000, 1024, 0)
+            .unwrap();
+        assert_eq!(t2.runnable_count(), 1);
+        t2.add_thread(make_tcb(1, 1)).unwrap();
+        t2.add_thread(make_tcb(2, 1)).unwrap();
+        assert_eq!(t2.runnable_count(), 3);
+        t2.reset_for_restart(0x0800_0000, 0x2000_0000, 1024, 0)
+            .unwrap();
+        assert_eq!(t2.runnable_count(), 1);
     }
 }
