@@ -13,6 +13,10 @@ use rtos_traits::syscall::SvcError;
 /// - No binding exists for `irq_num` → [`SvcError::InvalidResource`]
 /// - `caller` does not own the binding → [`SvcError::PermissionDenied`]
 /// - The binding uses [`IrqClearModel::KernelClears`] → [`SvcError::OperationFailed`]
+///
+/// For [`IrqClearModel::NeverMask`] bindings the IRQ is never masked, so
+/// there is nothing to unmask.  The call returns `0` (harmless no-op)
+/// after the ownership check passes.
 #[must_use = "error code must be forwarded to the caller"]
 pub fn irq_ack_inner(bindings: &[IrqBinding], caller: PartitionId, irq_num: u8) -> u32 {
     let idx = match lookup_binding(bindings, irq_num) {
@@ -30,6 +34,9 @@ pub fn irq_ack_inner(bindings: &[IrqBinding], caller: PartitionId, irq_num: u8) 
         crate::klog!("irq_ack: KernelClears irq={} caller={:?}", irq_num, caller);
         return SvcError::OperationFailed.to_u32();
     }
+    // NeverMask: IRQ is never masked, so ack is a harmless no-op.
+    // PartitionAcks: caller will unmask the NVIC line (handled by caller).
+    // Both return success.
     0
 }
 
@@ -43,7 +50,7 @@ mod tests {
         PartitionId::new(v)
     }
 
-    const BINDINGS: [IrqBinding; 3] = [
+    const BINDINGS: [IrqBinding; 4] = [
         IrqBinding::new(5, p(0), 0x01),  // IRQ 5 → partition 0, PartitionAcks
         IrqBinding::new(10, p(1), 0x02), // IRQ 10 → partition 1, PartitionAcks
         IrqBinding::with_clear_model(
@@ -55,6 +62,7 @@ mod tests {
                 bit: 3,
             }),
         ),
+        IrqBinding::with_clear_model(30, p(1), 0x08, IrqClearModel::NeverMask), // IRQ 30 → partition 1, NeverMask
     ];
 
     #[test]
@@ -175,5 +183,34 @@ mod tests {
             irq_ack_inner(&BINDINGS, p(0), 20),
             SvcError::PermissionDenied.to_u32(),
         );
+    }
+
+    // ---- NeverMask ack behaviour ----
+
+    #[test]
+    fn never_mask_ack_returns_zero() {
+        // NeverMask binding: ack is a no-op that succeeds.
+        assert_eq!(irq_ack_inner(&BINDINGS, p(1), 30), 0);
+    }
+
+    #[test]
+    fn never_mask_wrong_caller_returns_permission_denied() {
+        // Ownership check still applies before the no-op path.
+        assert_eq!(
+            irq_ack_inner(&BINDINGS, p(0), 30),
+            SvcError::PermissionDenied.to_u32(),
+        );
+    }
+
+    #[test]
+    fn never_mask_standalone_returns_zero() {
+        // Standalone NeverMask table — no interaction with other models.
+        let table = [IrqBinding::with_clear_model(
+            42,
+            p(3),
+            0x10,
+            IrqClearModel::NeverMask,
+        )];
+        assert_eq!(irq_ack_inner(&table, p(3), 42), 0);
     }
 }
