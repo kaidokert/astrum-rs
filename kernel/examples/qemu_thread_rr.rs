@@ -3,7 +3,8 @@
 //! One partition configured with `max_threads=2` and `RoundRobin` policy.
 //! The main thread creates a second thread via `SYS_THREAD_CREATE`. Both
 //! threads increment separate volatile counters. The SysTick hook checks
-//! both counters are nonzero, proving both threads executed.
+//! that both counters exceed a minimum threshold (sustained scheduling) and
+//! that neither thread starves the other (fairness ratio max/min <= 3).
 //!
 //! Run: cargo run --target thumbv7m-none-eabi --features qemu,log-semihosting --example qemu_thread_rr
 #![no_std]
@@ -34,6 +35,13 @@ kernel::kernel_config!(
 static T0_COUNTER: AtomicU32 = AtomicU32::new(0);
 static T1_COUNTER: AtomicU32 = AtomicU32::new(0);
 const TIMEOUT_TICK: u32 = 300;
+const MIN_COUNT: u32 = 5;
+const MAX_FAIRNESS_RATIO: u32 = 3;
+// Snapshot counters: captured when both threads are first detected running.
+// This eliminates head-start bias from thread 0 running before thread 1 is created.
+static SNAP_T0: AtomicU32 = AtomicU32::new(0);
+static SNAP_T1: AtomicU32 = AtomicU32::new(0);
+static SNAP_TAKEN: AtomicU32 = AtomicU32::new(0);
 
 extern "C" fn thread1_entry() -> ! {
     loop {
@@ -65,9 +73,37 @@ kernel::define_kernel!(TestConfig, |tick, _k| {
     let c0 = T0_COUNTER.load(Ordering::Relaxed);
     let c1 = T1_COUNTER.load(Ordering::Relaxed);
 
-    if c0 > 0 && c1 > 0 {
-        hprintln!("qemu_thread_rr: PASS (t0={}, t1={})", c0, c1);
-        kernel::kexit!(success);
+    if c0 > 0 && c1 > 0 && SNAP_TAKEN.load(Ordering::Relaxed) == 0 {
+        // Both threads are running — capture baseline to eliminate head-start bias.
+        SNAP_T0.store(c0, Ordering::Relaxed);
+        SNAP_T1.store(c1, Ordering::Relaxed);
+        SNAP_TAKEN.store(1, Ordering::Relaxed);
+    }
+
+    if SNAP_TAKEN.load(Ordering::Relaxed) != 0 {
+        let d0 = c0 - SNAP_T0.load(Ordering::Relaxed);
+        let d1 = c1 - SNAP_T1.load(Ordering::Relaxed);
+
+        if d0 > MIN_COUNT && d1 > MIN_COUNT {
+            let (max, min) = if d0 >= d1 { (d0, d1) } else { (d1, d0) };
+            if max > min * MAX_FAIRNESS_RATIO {
+                hprintln!(
+                    "qemu_thread_rr: FAIL unfair (d0={}, d1={}, ratio={})",
+                    d0,
+                    d1,
+                    max / min
+                );
+                kernel::kexit!(failure);
+            }
+            hprintln!(
+                "qemu_thread_rr: PASS (t0={}, t1={}, d0={}, d1={})",
+                c0,
+                c1,
+                d0,
+                d1
+            );
+            kernel::kexit!(success);
+        }
     }
 
     if tick >= TIMEOUT_TICK {
