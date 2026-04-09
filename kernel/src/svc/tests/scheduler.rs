@@ -546,13 +546,27 @@ fn pending_thread_switch_is_pending_reflects_state() {
 
 #[cfg(feature = "intra-threads")]
 #[test]
-fn intra_thread_schedule_saves_outgoing_sp_before_advance() {
-    let (mut k, _t0_sp, _t1_sp) = kernel_2p_multithread();
+fn intra_thread_advance_does_not_modify_tcb_sp() {
+    let (mut k, t0_sp, _t1_sp) = kernel_2p_multithread();
     let _ = svc_sched::take_pending_thread_switch();
 
     // Set partition_sp to a distinct value (simulating PSP drift during execution).
     let drifted_sp = 0x2000_0ABC;
     k.set_sp(0, drifted_sp);
+
+    // Record thread 0's TCB stack_pointer before advance.
+    let sp_before = k
+        .partitions()
+        .get(0)
+        .unwrap()
+        .thread_table()
+        .get(ThreadId::new(0))
+        .unwrap()
+        .stack_pointer;
+    assert_eq!(
+        sp_before, t0_sp,
+        "TCB SP must be the original value before advance"
+    );
 
     let switched = crate::svc::scheduler::advance_intra_thread_schedule(&mut k);
     assert!(switched, "must switch when multiple runnable threads exist");
@@ -568,8 +582,9 @@ fn intra_thread_schedule_saves_outgoing_sp_before_advance() {
     assert!(svc_sched::is_thread_switch_pending());
     let _ = svc_sched::take_pending_thread_switch();
 
-    // Outgoing thread 0's TCB should have the drifted SP saved.
-    let saved = k
+    // Outgoing thread 0's TCB must NOT have been modified by advance —
+    // SP save is deferred to apply_pending_thread_switch in PendSV.
+    let sp_after = k
         .partitions()
         .get(0)
         .unwrap()
@@ -578,8 +593,8 @@ fn intra_thread_schedule_saves_outgoing_sp_before_advance() {
         .unwrap()
         .stack_pointer;
     assert_eq!(
-        saved, drifted_sp,
-        "outgoing thread must save the actual partition_sp value"
+        sp_after, t0_sp,
+        "advance must not modify outgoing thread's TCB stack_pointer"
     );
 }
 

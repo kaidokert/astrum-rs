@@ -214,22 +214,17 @@ where
 ///
 /// If the active partition has more than one runnable thread, this function:
 /// 1. Returns false early if a thread switch is already pending (re-advance guard)
-/// 2. Saves `partition_sp[pid]` into the outgoing thread's `TCB.stack_pointer`
-/// 3. Calls `advance_intra_schedule()` on the partition's `ThreadTable`
-/// 4. Sets the pending thread-switch flag with the outgoing thread ID
+/// 2. Calls `advance_intra_schedule()` on the partition's `ThreadTable`
+/// 3. Sets the pending thread-switch flag with the outgoing thread ID
 ///
-/// The actual SP swap into `partition_sp` is deferred to PendSV, which reads
-/// the pending flag via `take_pending_thread_switch()`.
+/// The outgoing thread's SP save and the incoming thread's SP restore are both
+/// deferred to `apply_pending_thread_switch`, which runs in PendSV after
+/// `context_save` has written the live PSP to `partition_sp`.
 ///
 /// Returns `true` if a thread switch was scheduled (the active thread changed),
 /// so the caller can trigger PendSV to perform the hardware context switch.
 ///
 /// Partitions with fewer than 2 runnable threads are skipped (zero overhead).
-// TODO: If a partition switch just occurred in advance_schedule_tick, the newly
-// selected partition's partition_sp (its last saved state) is saved into the
-// outgoing thread's TCB and then the schedule advances, causing the partition to
-// skip a thread upon resumption. This is currently acceptable for fairness but
-// should be revisited as an explicit design choice.
 pub(crate) fn advance_intra_thread_schedule<'mem, C: KernelConfig>(
     kernel: &mut Kernel<'mem, C>,
 ) -> bool
@@ -264,14 +259,8 @@ where
         None => return false,
     };
 
-    // Read partition_sp before borrowing PCB (avoids overlapping borrows).
-    let current_sp = match kernel.get_sp(pid) {
-        Some(sp) => sp,
-        None => return false,
-    };
-
-    // Phase 1: access PCB, check runnable count, save outgoing SP, advance,
-    // determine whether a thread switch occurred.
+    // Access PCB, check runnable count, advance schedule, determine whether
+    // a thread switch occurred. SP save is deferred to apply_pending_thread_switch.
     let outgoing_tid = {
         let pcb = match kernel.pcb_mut(pid) {
             Some(pcb) => pcb,
@@ -286,13 +275,6 @@ where
         }
 
         let prev_tid = pcb.thread_table().current_thread_id();
-
-        // Save current partition_sp to the outgoing (currently running) thread's TCB.
-        if let Some(tid) = prev_tid {
-            if let Some(tcb) = pcb.thread_table_mut().get_mut(tid) {
-                tcb.stack_pointer = current_sp;
-            }
-        }
 
         // Advance the intra-partition schedule (round-robin or priority).
         let new_tid = pcb.thread_table_mut().advance_intra_schedule();
