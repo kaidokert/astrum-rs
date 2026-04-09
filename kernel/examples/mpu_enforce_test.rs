@@ -56,7 +56,7 @@ extern "C" fn p1_entry() -> ! {
     }
 }
 
-kernel::define_unified_harness!(no_boot, TestConfig, |tick, _k| {
+kernel::define_kernel!(no_boot, TestConfig, |tick, _k| {
     if tick >= 8 {
         hprintln!("mpu_enforce_test: PASS");
         debug::exit(debug::EXIT_SUCCESS);

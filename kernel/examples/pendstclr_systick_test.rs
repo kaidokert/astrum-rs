@@ -53,7 +53,7 @@ static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Toggles PENDSTSET on alternating ticks to stress the PENDSTCLR path.
 static REPEND_GUARD: AtomicBool = AtomicBool::new(false);
 
-kernel::define_harness!(Config, |_tick, _k| {
+kernel::define_kernel!(Config, |_tick, _k| {
     // Pend PendSV on every tick to force context-switch attempts.
     #[cfg(target_arch = "arm")]
     cortex_m::peripheral::SCB::set_pendsv();

@@ -38,7 +38,7 @@ static PID_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 /// Latest sys_get_time reading (0 until partition reads a non-zero tick).
 static TIME_VAL: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     if tick < 5 {
         return;
     }

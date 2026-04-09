@@ -34,7 +34,7 @@ const TIMEOUT: u32 = 20;
 /// sys_debug_print result: Ok(0)→0, Err→e.to_u32().
 static PRINT_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 
-kernel::define_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     if tick < 5 {
         return;
     }

@@ -33,7 +33,7 @@ static CLOSE_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static WRITE_DONE: AtomicU32 = AtomicU32::new(0);
 static RX_READY: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_harness!(TestConfig, |tick, k| {
+kernel::define_kernel!(TestConfig, |tick, k| {
     // Inject payload into UART-A RX once write is done.
     if WRITE_DONE.load(Ordering::Acquire) == 1 && RX_READY.load(Ordering::Relaxed) == 0 {
         k.uart_pair.a.push_rx(&PAYLOAD);

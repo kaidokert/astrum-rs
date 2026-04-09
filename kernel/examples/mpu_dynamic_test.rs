@@ -1,4 +1,4 @@
-// Not migrated to define_unified_harness! — this test requires reading MPU R4
+// Not migrated to define_kernel! — this test requires reading MPU R4
 // RBAR and RASR registers directly in SysTick to verify partition-specific
 // values were programmed by PendSV. It uses distinct data region sizes per
 // partition (4 KiB vs 8 KiB) to confirm correct RASR encoding. The standard

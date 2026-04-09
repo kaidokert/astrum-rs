@@ -35,7 +35,7 @@ const UARTFR_OFFSET: u32 = 0x18;
 /// UARTFR reset value on PL011 (TXFE | RXFE = bits 7 and 4).
 const UARTFR_RESET: u32 = 0x90;
 
-kernel::define_harness!(PassthroughConfig);
+kernel::define_kernel!(PassthroughConfig);
 
 /// Partition stores the UARTFR value here after a successful volatile read.
 static UARTFR_VALUE: AtomicU32 = AtomicU32::new(0);

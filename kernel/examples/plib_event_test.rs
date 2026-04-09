@@ -34,7 +34,7 @@ static WAIT_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static CLEAR_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 static REMAIN_RC: AtomicU32 = AtomicU32::new(NOT_YET);
 
-kernel::define_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let set = SET_RC.load(Ordering::Acquire);
     let wait = WAIT_RC.load(Ordering::Acquire);
     let clear = CLEAR_RC.load(Ordering::Acquire);

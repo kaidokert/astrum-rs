@@ -66,7 +66,7 @@ unsafe fn read_mpu_region(mpu: &cortex_m::peripheral::MPU, n: u32) -> (u32, u32)
     (mpu.rbar.read(), mpu.rasr.read())
 }
 
-kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
+kernel::define_kernel!(no_boot, TestConfig, |tick, k| {
     // After a few ticks, PendSV has run and programmed R0-R3.
     if tick > 2 {
         let pid = k.current_partition as usize;

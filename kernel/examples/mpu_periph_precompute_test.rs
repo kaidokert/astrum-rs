@@ -56,7 +56,7 @@ unsafe fn read_mpu_region(mpu: &cortex_m::peripheral::MPU, n: u32) -> (u32, u32)
     (mpu.rbar.read(), mpu.rasr.read())
 }
 
-kernel::define_unified_harness!(no_boot, TestConfig, |tick, k| {
+kernel::define_kernel!(no_boot, TestConfig, |tick, k| {
     static SEEN: [core::sync::atomic::AtomicBool; 2] = [
         core::sync::atomic::AtomicBool::new(false),
         core::sync::atomic::AtomicBool::new(false),
