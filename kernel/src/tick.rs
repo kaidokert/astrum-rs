@@ -76,6 +76,16 @@ pub(crate) fn determine_idle_action(all_faulted: bool, schedule_idle: bool) -> I
     }
 }
 
+/// Determine whether the intra-thread schedule should advance this tick.
+///
+/// Returns `false` when a partition switch just occurred — the newly-selected
+/// partition hasn't executed yet, so rotating its thread schedule would be
+/// premature (Risk 1 in design-pendsv-context-save-intra-thread-clobber.md).
+#[cfg(test)]
+pub(crate) fn should_advance_intra_thread(event: &crate::scheduler::ScheduleEvent) -> bool {
+    !matches!(event, crate::scheduler::ScheduleEvent::PartitionSwitch(_))
+}
+
 /// Check idle conditions and emit trace + enter safe idle as needed.
 ///
 /// Consolidates the idle-path logic shared by both `systick_handler` variants.
@@ -313,13 +323,14 @@ pub fn systick_handler<'mem, C: crate::config::KernelConfig>(
     // Advance intra-partition thread schedule for the active partition.
     // Must run after advance_schedule_tick (active_partition is up to date)
     // and before PendSV fires (partition_sp must reflect the active thread).
+    //
+    // Skip when a partition switch just occurred: the newly-selected partition
+    // hasn't executed yet, so rotating its thread schedule would be premature
+    // (Risk 1 in design-pendsv-context-save-intra-thread-clobber.md).
     #[cfg(feature = "intra-threads")]
-    {
+    if !matches!(event, ScheduleEvent::PartitionSwitch(_)) {
         let thread_switched = crate::svc::scheduler::advance_intra_thread_schedule(kernel);
         if thread_switched {
-            // TODO: reviewer false positive — SCB::set_pendsv() is a static method in cortex-m 0.7;
-            // it is safe (no `unsafe` block needed) and panic-free. See identical usage at line 288
-            // and throughout the codebase (harness.rs, boot.rs, irq_dispatch.rs, svc/mod.rs).
             #[cfg(not(test))]
             cortex_m::peripheral::SCB::set_pendsv();
         }
@@ -900,5 +911,48 @@ mod tests {
             // Flag should remain set (guard was never created)
             assert!(mock.in_bottom_half, "flag should remain set on nested call");
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Intra-thread advance guard tests
+    //
+    // Verify that advance_intra_thread_schedule is skipped when a partition
+    // switch occurred in the same tick (Risk 1 in design doc). The guard
+    // prevents the newly-selected partition's thread schedule from being
+    // prematurely rotated before it has executed.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn should_advance_intra_thread_false_on_partition_switch() {
+        use crate::scheduler::ScheduleEvent;
+        assert!(
+            !should_advance_intra_thread(&ScheduleEvent::PartitionSwitch(0)),
+            "must skip intra-thread advance when partition switch occurred"
+        );
+        assert!(
+            !should_advance_intra_thread(&ScheduleEvent::PartitionSwitch(3)),
+            "must skip for any partition ID"
+        );
+        assert!(
+            !should_advance_intra_thread(&ScheduleEvent::PartitionSwitch(255)),
+            "must skip for max partition ID"
+        );
+    }
+
+    #[test]
+    fn should_advance_intra_thread_true_on_non_switch_events() {
+        use crate::scheduler::ScheduleEvent;
+        assert!(
+            should_advance_intra_thread(&ScheduleEvent::None),
+            "must advance on None (tick within current slot)"
+        );
+        assert!(
+            should_advance_intra_thread(&ScheduleEvent::Idle),
+            "must advance on Idle"
+        );
+        assert!(
+            should_advance_intra_thread(&ScheduleEvent::SystemWindow),
+            "must advance on SystemWindow"
+        );
     }
 }
