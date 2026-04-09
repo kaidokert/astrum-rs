@@ -105,7 +105,7 @@ extern "C" fn p1_entry() -> ! {
     }
 }
 
-kernel::define_harness!(no_boot, TestConfig, |tick, _k| {
+kernel::define_kernel!(no_boot, TestConfig, |tick, _k| {
     if TIMER_STATE.load(Ordering::Acquire) == 1 {
         let ctl = TIMER_CTL.load(Ordering::Acquire);
         let cfg = TIMER_CFG.load(Ordering::Acquire);

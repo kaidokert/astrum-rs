@@ -61,7 +61,7 @@ extern "C" fn p0_entry() -> ! {
     }
 }
 
-kernel::define_harness!(TestConfig, |tick, _k| {
+kernel::define_kernel!(TestConfig, |tick, _k| {
     let c0 = T0_COUNTER.load(Ordering::Relaxed);
     let c1 = T1_COUNTER.load(Ordering::Relaxed);
 

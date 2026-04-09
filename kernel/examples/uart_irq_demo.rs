@@ -35,7 +35,7 @@ const UART0_ICR: u32 = UART0_BASE + 0x044; // Interrupt Clear Register
 const UART0_MIS: u32 = UART0_BASE + 0x040; // Masked Interrupt Status
 const UART0_IRQ: u8 = 5;
 
-kernel::compose_kernel_config!(
+kernel::kernel_config!(
     Cfg<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
@@ -74,7 +74,7 @@ kernel::bind_interrupts!(Cfg, 70,
     5 => (0, 0x01, handler: uart0_rx_isr),
 );
 
-kernel::define_unified_harness!(Cfg, |tick, _k| {
+kernel::define_kernel!(Cfg, |tick, _k| {
     // Simulate two UART RX events via NVIC::pend.
     if tick == 2 {
         #[cfg(target_arch = "arm")]

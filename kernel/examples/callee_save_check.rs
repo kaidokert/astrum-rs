@@ -17,7 +17,7 @@ use kernel::{
 kernel::kernel_config!(Cfg<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 static CHECKS: AtomicU32 = AtomicU32::new(0);
 static ERRORS: AtomicU32 = AtomicU32::new(0);
-kernel::define_unified_harness!(Cfg, |tick, _k| {
+kernel::define_kernel!(Cfg, |tick, _k| {
     let chk = CHECKS.load(Ordering::Acquire);
     let err = ERRORS.load(Ordering::Acquire);
     if err > 0 {

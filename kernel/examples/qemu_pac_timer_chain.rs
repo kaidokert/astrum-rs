@@ -135,7 +135,7 @@ macro_rules! check {
     };
 }
 
-kernel::define_harness!(no_boot, TestConfig, |tick, _k| {
+kernel::define_kernel!(no_boot, TestConfig, |tick, _k| {
     if DONE.load(Ordering::Acquire) == 1 {
         let r: [u32; 8] = core::array::from_fn(|i| REGS[i].load(Ordering::Acquire));
         let (t0_ctl, t0_cfg, t0_tamr, t0_imr) = (r[0], r[1], r[2], r[3]);

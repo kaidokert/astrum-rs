@@ -151,7 +151,7 @@ fn check_val(actual: u32, expected: u32, mask: u32, name: &str) -> bool {
     true
 }
 
-kernel::define_harness!(no_boot, TestConfig, |tick, _k| {
+kernel::define_kernel!(no_boot, TestConfig, |tick, _k| {
     if RB[9].load(Ordering::Acquire) == 1 {
         let rb: [u32; 9] = core::array::from_fn(|i| RB[i].load(Ordering::Acquire));
         hprintln!(

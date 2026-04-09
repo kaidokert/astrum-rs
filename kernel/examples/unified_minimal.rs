@@ -1,4 +1,4 @@
-//! Minimal test for define_unified_harness!
+//! Minimal test for define_kernel!
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
@@ -12,7 +12,7 @@ use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 
-kernel::compose_kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Atomic flag for partition to signal it ran (semihosting requires privileged mode)
 static PARTITION_RAN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -32,7 +32,7 @@ fn make_schedule() -> ScheduleTable<{ TestConfig::SCHED }> {
     sched
 }
 
-kernel::define_unified_harness!(
+kernel::define_kernel!(
     TestConfig,
     make_schedule(),
     &[PartitionSpec::new(partition_main as PartitionEntry, 0)]

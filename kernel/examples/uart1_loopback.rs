@@ -1,4 +1,4 @@
-// Not migrated to define_unified_harness! — this test requires direct access
+// Not migrated to define_kernel! — this test requires direct access
 // to HwUartBackend in SysTick for software loopback transfer() calls and
 // multi-message verification with custom message patterns. The test also
 // exercises TX-full and RX-empty edge cases that require coordinated timing
@@ -45,7 +45,7 @@ const MESSAGES: [&[u8]; NUM_MESSAGES] = [MSG_SHORT, MSG_MEDIUM, MSG_LONG];
 /// TX ring buffer capacity in HwUartBackend (must match hw_uart.rs CAPACITY).
 const TX_CAPACITY: usize = 64;
 
-kernel::compose_kernel_config!(DemoConfig<Partitions4, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(DemoConfig<Partitions4, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 #[repr(C, align(1024))]
 struct AlignedStack([u32; STACK_WORDS]);

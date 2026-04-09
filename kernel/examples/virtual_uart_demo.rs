@@ -44,10 +44,10 @@ const MSG_HELLO: &[u8] = b"Hi";
 /// Response P2 sends back via UART-B TX → UART-A RX.
 const MSG_REPLY: &[u8] = b"Ok";
 
-kernel::compose_kernel_config!(DemoConfig<Partitions4, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
+kernel::kernel_config!(DemoConfig<Partitions4, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
 // Use the unified harness: single KERNEL global, no separate KS/KERN.
-kernel::define_unified_harness!(DemoConfig);
+kernel::define_kernel!(DemoConfig);
 
 // ---------------------------------------------------------------------------
 // P1: opens UART-A, writes message, yields, later reads response
