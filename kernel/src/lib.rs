@@ -121,8 +121,24 @@ pub fn idle_instruction() {
 ///
 /// Logs the all-faulted condition via `klog!` and enters an infinite idle loop.
 /// This prevents undefined behavior when no partitions remain schedulable.
+///
+/// **Interrupt guarantee:** Before entering the WFI loop, this function
+/// explicitly clears PRIMASK (`cpsie i`) to ensure interrupts are enabled.
+/// This means SysTick, PendSV, and other ISRs can still fire for diagnostics
+/// even if `enter_safe_idle` is reached from a path where PRIMASK was raised
+/// (e.g., a critical section).
 pub fn enter_safe_idle() -> ! {
     klog!("KERNEL: all partitions faulted — entering safe idle");
+    // Ensure interrupts are unmasked so SysTick/diagnostics ISRs can fire.
+    // In test mode this is a no-op (no real PRIMASK register).
+    #[cfg(not(test))]
+    unsafe {
+        // SAFETY: We are about to enter an infinite idle loop with no
+        // schedulable partitions. Enabling interrupts is both safe and
+        // required — without it, WFI would sleep forever if PRIMASK
+        // was raised on entry.
+        cortex_m::interrupt::enable();
+    }
     loop {
         idle_instruction();
     }
@@ -390,5 +406,13 @@ mod idle_tests {
         for _ in 0..3 {
             idle_instruction();
         }
+    }
+
+    #[test]
+    fn enter_safe_idle_exists() {
+        // Verify that enter_safe_idle is a visible, callable symbol.
+        // We cannot call it directly (it diverges with `-> !`), but we
+        // can confirm its type matches the expected signature.
+        let _: fn() -> ! = enter_safe_idle;
     }
 }
