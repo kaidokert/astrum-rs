@@ -163,9 +163,10 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
             [CUSTOM_IVT_EXAMPLES]="qemu,log-semihosting,custom-ivt"
             [DYNAMIC_MPU_EXAMPLES]="qemu,log-semihosting"
             [QEMU_PERIPHERAL_EXAMPLES]="qemu,log-semihosting,qemu-peripherals"
+            [INTRA_THREAD_EXAMPLES]="qemu,log-semihosting,intra-threads"
         )
         found=0
-        for category in EXAMPLES CUSTOM_IVT_EXAMPLES DYNAMIC_MPU_EXAMPLES QEMU_PERIPHERAL_EXAMPLES; do
+        for category in EXAMPLES CUSTOM_IVT_EXAMPLES DYNAMIC_MPU_EXAMPLES QEMU_PERIPHERAL_EXAMPLES INTRA_THREAD_EXAMPLES; do
             declare -n list="$category"
             for ex in "${list[@]}"; do
                 if [[ "$ex" == "$ONLY" ]]; then
@@ -189,6 +190,10 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
         echo ""
         echo "=== Custom-IVT examples ==="
         $RUN_FN "qemu,log-semihosting,custom-ivt" "${CUSTOM_IVT_EXAMPLES[@]}"
+
+        echo ""
+        echo "=== Intra-thread examples ==="
+        $RUN_FN "qemu,log-semihosting,intra-threads" "${INTRA_THREAD_EXAMPLES[@]}"
 
         if [[ "$QEMU_PERIPHERALS" -eq 1 ]]; then
             echo ""

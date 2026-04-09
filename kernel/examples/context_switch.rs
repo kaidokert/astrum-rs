@@ -1,6 +1,6 @@
 //! QEMU integration example: two-partition context switch via PendSV.
 //!
-//! Sets up two partitions using `define_unified_harness!`. Each partition
+//! Sets up two partitions using `define_kernel!`. Each partition
 //! stores its ID to a shared atomic; the SysTick hook observes which
 //! partition ran and exits after enough interleaved switches.
 #![no_std]
@@ -25,7 +25,7 @@ const TARGET_SWITCHES: u32 = 6;
 static PARTITION_RUNNING: AtomicU32 = AtomicU32::new(u32::MAX);
 static SWITCH_COUNT: AtomicU32 = AtomicU32::new(0);
 
-kernel::define_unified_harness!(DemoConfig, |tick, _k| {
+kernel::define_kernel!(DemoConfig, |tick, _k| {
     let who = PARTITION_RUNNING.load(Ordering::Acquire);
     if who != u32::MAX {
         let count = SWITCH_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
@@ -72,6 +72,7 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ DemoConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched entry 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched entry 1");
+    sched.add_system_window(1).expect("sys window");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
         PartitionSpec::new(partition_0_entry as PartitionEntry, 0),

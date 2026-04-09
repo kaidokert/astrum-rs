@@ -44,6 +44,11 @@ EXAMPLES=(
     last_partition_faults_test
     restart_hook_test
     restart_hook_cold_test
+)
+
+# Intra-thread examples require the intra-threads feature for
+# multi-threaded partition support.
+INTRA_THREAD_EXAMPLES=(
     qemu_thread_rr
 )
 
