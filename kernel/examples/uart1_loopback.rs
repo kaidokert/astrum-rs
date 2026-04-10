@@ -29,7 +29,7 @@ use kernel::{
     svc::{Kernel, YieldResult},
     uart_hal::UartRegs,
     virtual_device::VirtualDevice,
-    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions4, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, Partitions4, PortsTiny, SyncMinimal,
 };
 
 const NUM_PARTITIONS: usize = 2;
@@ -54,13 +54,6 @@ static mut STACKS: [AlignedStack; NUM_PARTITIONS] = {
     const ZERO: AlignedStack = AlignedStack([0; STACK_WORDS]);
     [ZERO; NUM_PARTITIONS]
 };
-
-#[no_mangle]
-static mut PARTITION_SP: [u32; NUM_PARTITIONS] = [0; NUM_PARTITIONS];
-#[no_mangle]
-static mut CURRENT_PARTITION: u32 = u32::MAX;
-#[no_mangle]
-static mut NEXT_PARTITION: u32 = 0;
 
 struct TestCounters {
     pass: u32,
@@ -109,9 +102,7 @@ kernel::define_unified_kernel!(DemoConfig, |k| {
     loop {
         let result = k.yield_current_slot();
         if let Some(pid) = result.partition_id() {
-            // SAFETY: single-core Cortex-M — NEXT_PARTITION is only
-            // read by PendSV (lower priority), which cannot preempt.
-            unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
+            k.set_next_partition(pid);
             break;
         }
         // System window or None — run software loopback and advance.
@@ -133,9 +124,7 @@ fn SysTick() {
         let current_tick = k.tick().get();
         match event {
             ScheduleEvent::PartitionSwitch(pid) => {
-                // SAFETY: single-core Cortex-M — NEXT_PARTITION is only read
-                // by PendSV (lower priority), which cannot preempt SysTick.
-                unsafe { core::ptr::write_volatile(&raw mut NEXT_PARTITION, pid as u32) }
+                k.set_next_partition(pid);
                 cortex_m::peripheral::SCB::set_pendsv();
             }
             ScheduleEvent::SystemWindow => {
@@ -148,27 +137,40 @@ fn SysTick() {
 }
 
 fn boot(
-    partitions: &[PartitionSpec],
     mut peripherals: cortex_m::Peripherals,
 ) -> Result<kernel::harness::Never, kernel::harness::BootError> {
     use cortex_m::peripheral::scb::SystemHandler;
     use cortex_m::peripheral::syst::SystClkSource;
     use cortex_m::peripheral::SCB;
-    // SAFETY: called once from main before the scheduler starts (interrupts
-    // disabled). STACKS, PARTITION_SP are only written here and read later
-    // by PendSV; no concurrent access is possible at this point.
-    // Exception priorities are set via the valid SCB peripheral reference.
-    unsafe {
-        let ptr = &raw mut STACKS;
-        let stacks = &mut *ptr;
-        let ptr2 = &raw mut PARTITION_SP;
-        let partition_sp = &mut *ptr2;
-        for (i, spec) in partitions.iter().enumerate() {
-            let stk = &mut stacks[i].0;
-            let ix = kernel::context::init_stack_frame(stk, spec.entry_point(), Some(spec.r0()))
-                .ok_or(kernel::harness::BootError::StackInitFailed { partition_index: i })?;
-            partition_sp[i] = stk.as_ptr() as u32 + (ix as u32) * 4;
+
+    // Initialize stack frames and start the schedule.
+    with_kernel_mut(|k| {
+        let n = k.partitions().len();
+        for i in 0..n {
+            let pcb = k.partitions().get(i).expect("partition PCB");
+            let entry = pcb.entry_point();
+            let base = pcb.stack_base();
+            let size = pcb.stack_size();
+            let word_count = (size / 4) as usize;
+
+            // SAFETY: PCBs hold valid stack memory pointers set up from
+            // ExternalPartitionMemory; called once before scheduler starts.
+            let stack_slice =
+                unsafe { core::slice::from_raw_parts_mut(base as *mut u32, word_count) };
+            let ix = kernel::context::init_stack_frame(stack_slice, entry, Some(pcb.r0_hint()))
+                .expect("init_stack_frame");
+            let sp = base + (ix as u32) * 4;
+            k.set_sp(i, sp);
         }
+
+        // Start the schedule and select the first partition for PendSV.
+        if let Some(pid) = kernel::svc::scheduler::start_schedule(k) {
+            k.set_next_partition(pid);
+        }
+    });
+
+    // SAFETY: called once from main before the scheduler starts.
+    unsafe {
         const { kernel::config::assert_priority_order::<DemoConfig>() }
         peripherals
             .SCB
@@ -401,18 +403,17 @@ fn main() -> ! {
         let [ref mut s0, ref mut s1] = *stacks;
         let base0 = s0.0.as_ptr() as u32;
         let base1 = s1.0.as_ptr() as u32;
-        // TODO: pass PartitionEntry instead of raw 0 once partitions have real entry functions
         let memories = [
             ExternalPartitionMemory::new(
                 &mut s0.0,
-                0,
+                p1_main as PartitionEntry,
                 MpuRegion::new(base0, STACK_BYTES, 0),
                 kernel::PartitionId::new(0),
             )
             .expect("ext mem"),
             ExternalPartitionMemory::new(
                 &mut s1.0,
-                0,
+                p2_main as PartitionEntry,
                 MpuRegion::new(base1, STACK_BYTES, 0),
                 kernel::PartitionId::new(1),
             )
@@ -458,13 +459,9 @@ fn main() -> ! {
         }
     });
 
-    let parts: [PartitionSpec; NUM_PARTITIONS] = [
-        PartitionSpec::new(p1_main as PartitionEntry, 0),
-        PartitionSpec::new(p2_main as PartitionEntry, 0),
-    ];
     #[allow(clippy::diverging_sub_expression, unreachable_code)]
     {
-        let _result: Result<kernel::harness::Never, kernel::harness::BootError> = boot(&parts, p);
+        let _result: Result<kernel::harness::Never, kernel::harness::BootError> = boot(p);
         match _result {
             Ok(never) => match never {},
             Err(_e) => loop {
