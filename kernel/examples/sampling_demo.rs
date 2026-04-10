@@ -18,12 +18,9 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::{
-    boot,
-    partition::{ExternalPartitionMemory, MpuRegion},
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc::Kernel,
-    PartitionEntry,
+    PartitionEntry, PartitionSpec,
 };
 
 // Actual partition count (3) differs from DemoConfig::N (4, from Partitions4 capacity).
@@ -46,7 +43,7 @@ kernel::kernel_config!(DemoConfig<kernel::Partitions4, kernel::SyncStandard, ker
 // Use the unified harness macro (no_boot variant) with SysTick hook for progress verification.
 // The hook runs in privileged handler mode and can use semihosting.
 // We call kernel::boot directly instead of the macro-generated boot().
-kernel::define_kernel!(no_boot, DemoConfig, |tick, _k| {
+kernel::define_kernel!(DemoConfig, |tick, _k| {
     // Check progress every 10 ticks
     if tick.is_multiple_of(10) {
         let sensor = SENSOR_VALUE.load(Ordering::Acquire);
@@ -164,27 +161,16 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let entry_fns: [PartitionEntry; NUM_PARTITIONS] = [sensor_main, control_main, display_main];
-    let k = {
-        let stacks = kernel::partition_stacks!(DemoConfig, NUM_PARTITIONS);
-        let stacks_ptr = stacks.as_mut_ptr();
-        let memories: [_; NUM_PARTITIONS] = core::array::from_fn(|i| {
-            // SAFETY: i < NUM_PARTITIONS, stacks has NUM_PARTITIONS elements, each index visited once.
-            let stk = unsafe { &mut *stacks_ptr.add(i) };
-            ExternalPartitionMemory::from_aligned_stack(
-                stk,
-                entry_fns[i],
-                MpuRegion::new(0, 0, 0),
-                kernel::PartitionId::new(i as u32),
-            )
-            .expect("mem")
-        });
-        sched.add_system_window(1).expect("sys window");
-        Kernel::<DemoConfig>::new(sched, &memories).expect("kernel")
-    };
+    sched.add_system_window(1).expect("sys window");
+
+    let parts: [PartitionSpec; NUM_PARTITIONS] = [
+        PartitionSpec::entry(sensor_main),
+        PartitionSpec::entry(control_main),
+        PartitionSpec::entry(display_main),
+    ];
+    let mut k = init_kernel(sched, &parts).expect("sampling_demo: init_kernel");
 
     // Create and connect sampling ports.
-    let mut k = k;
     let s0 = k
         .sampling_mut()
         .create_port(PortDirection::Source, 10)
@@ -214,8 +200,6 @@ fn main() -> ! {
     CONTROL_DST.store(d0 as u32, Ordering::Release);
     DISPLAY_DST.store(d1 as u32, Ordering::Release);
 
-    // TODO: reviewer flagged as unrelated — required by store_kernel signature change in dff1322
     store_kernel(&mut k);
-    // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
-    match unsafe { boot::boot_preconfigured::<DemoConfig>(p) }.expect("boot") {}
+    match boot(p).expect("sampling_demo: boot") {}
 }

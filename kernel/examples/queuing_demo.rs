@@ -21,8 +21,7 @@ use kernel::kpanic as _;
 use kernel::{
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
-    svc::Kernel,
-    PartitionBody, PartitionEntry,
+    PartitionBody, PartitionSpec,
 };
 use plib::SvcError;
 
@@ -367,28 +366,13 @@ fn main() -> ! {
         sched.add(ScheduleEntry::new(i, 2)).expect("sched entry");
     }
 
-    let eps: [PartitionEntry; DemoConfig::N] = [commander_main, worker_main];
-    let mut k = {
-        use kernel::partition::{ExternalPartitionMemory, MpuRegion};
-        let stacks = kernel::partition_stacks!(DemoConfig, DemoConfig::N);
-        let sp = stacks.as_mut_ptr();
-        let mems: [_; DemoConfig::N] = core::array::from_fn(|i| {
-            // SAFETY: `sp` points to the first of `DemoConfig::N` contiguous
-            // `StackStorage` elements returned by `partition_stacks!`, and `i`
-            // is in 0..N, so `sp.add(i)` is in-bounds. Each index is visited
-            // exactly once by `from_fn`, so no aliasing occurs.
-            let s = unsafe { &mut *sp.add(i) };
-            ExternalPartitionMemory::from_aligned_stack(
-                s,
-                eps[i],
-                MpuRegion::new(0, 0, 0),
-                kernel::PartitionId::new(i as u32),
-            )
-            .expect("mem")
-        });
-        sched.add_system_window(1).expect("sys window");
-        Kernel::<DemoConfig>::new(sched, &mems).expect("kernel creation")
-    };
+    sched.add_system_window(1).expect("sys window");
+
+    let parts: [PartitionSpec; DemoConfig::N] = [
+        PartitionSpec::entry(commander_main),
+        PartitionSpec::entry(worker_main),
+    ];
+    let mut k = init_kernel(sched, &parts).expect("queuing_demo: init_kernel");
 
     // Command channel: commander (Source cs) -> worker (Destination cd)
     let cs = k
@@ -422,6 +406,5 @@ fn main() -> ! {
         k.partitions_mut().get_mut(i).expect("pcb").set_r0_hint(h);
     }
     store_kernel(&mut k);
-    // SAFETY: PCBs populated by Kernel::new() with valid stacks.
-    match unsafe { kernel::boot::boot_preconfigured::<DemoConfig>(p) }.expect("queuing_demo: boot") {}
+    match boot(p).expect("queuing_demo: boot") {}
 }

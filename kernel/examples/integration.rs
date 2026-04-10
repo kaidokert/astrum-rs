@@ -10,18 +10,14 @@ use cortex_m_semihosting::{debug, hprintln};
 #[allow(unused_imports)]
 use kernel::kpanic as _;
 use kernel::message::SendOutcome;
-use kernel::partition::{ExternalPartitionMemory, MpuRegion, PartitionState};
+use kernel::partition::PartitionState;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
-use kernel::svc::Kernel;
 use kernel::{
-    boot, events, AlignedStack1K, DebugEnabled, MsgStandard, PartitionEntry, PartitionId,
-    Partitions4, PortsTiny, StackStorage as _, SyncMinimal,
+    events, DebugEnabled, MsgStandard, PartitionEntry, PartitionId, PartitionSpec, Partitions4,
+    PortsTiny, SyncMinimal,
 };
 
 kernel::kernel_config!(IntegrationConfig<Partitions4, SyncMinimal, MsgStandard, PortsTiny, DebugEnabled>);
-
-static mut STACKS: [AlignedStack1K; IntegrationConfig::N] =
-    [AlignedStack1K::ZERO; IntegrationConfig::N];
 
 static P_RAN: AtomicU32 = AtomicU32::new(u32::MAX);
 static SW: AtomicU32 = AtomicU32::new(0);
@@ -40,7 +36,7 @@ extern "C" fn p1_main() -> ! {
     }
 }
 
-kernel::define_kernel!(no_boot, IntegrationConfig, |tick, k| {
+kernel::define_kernel!(IntegrationConfig, |tick, k| {
     // Count context switches via SysTick ticks (sentinel MPU regions in QEMU
     // have size=0, so validate_mpu_region always fails — count ticks instead).
     SW.store(tick, Ordering::Release);
@@ -88,30 +84,13 @@ fn main() -> ! {
     let mut s: ScheduleTable<8> = ScheduleTable::new();
     s.add(ScheduleEntry::new(0, 3)).unwrap();
     s.add(ScheduleEntry::new(1, 3)).unwrap();
-    const NUM_PARTS: usize = 2;
-    let entry_fns: [PartitionEntry; NUM_PARTS] = [p0_main, p1_main];
-    let mut k = {
-        // SAFETY: called once from main before any interrupt handler runs.
-        let ptr = &raw mut STACKS;
-        let stacks = unsafe { &mut *ptr };
-        let mut stk_iter = stacks.iter_mut();
-        // TODO: unwrap() calls are acceptable in example main() -> ! but could use expect() for clarity
-        let memories: [_; NUM_PARTS] = core::array::from_fn(|i| {
-            ExternalPartitionMemory::from_aligned_stack(
-                stk_iter.next().unwrap(),
-                entry_fns[i],
-                MpuRegion::new(0, 0, 0),
-                kernel::PartitionId::new(i as u32),
-            )
-            .unwrap()
-        });
-        s.add_system_window(1).expect("sys window");
-        Kernel::<IntegrationConfig>::new(s, &memories).unwrap()
-    };
+    s.add_system_window(1).expect("sys window");
+
+    let parts: [PartitionSpec; 2] = [PartitionSpec::entry(p0_main), PartitionSpec::entry(p1_main)];
+    let mut k = init_kernel(s, &parts).expect("integration: init_kernel");
     let _ = k
         .messages_mut()
         .add(kernel::message::MessageQueue::<4, 4, 4>::new());
     store_kernel(&mut k);
-    // SAFETY: boot_preconfigured reads stack info from PCBs populated by Kernel::new().
-    match unsafe { boot::boot_preconfigured::<IntegrationConfig>(p) }.unwrap() {}
+    match boot(p).expect("integration: boot") {}
 }
