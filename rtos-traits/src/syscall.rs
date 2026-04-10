@@ -20,6 +20,7 @@ pub const SYS_SAMPLING_WRITE: u32 = 12;
 pub const SYS_SAMPLING_READ: u32 = 13;
 pub const SYS_SAMPLING_STATUS: u32 = 49; // r1=port_id, r2=out_ptr
 pub const SYS_SEM_STATUS: u32 = 56; // r1=sem_id, r2=out_ptr
+pub const SYS_EVT_STATUS: u32 = 57; // r1=partition_id, r2=out_ptr
 pub const SYS_QUEUING_SEND: u32 = 14;
 pub const SYS_QUEUING_RECV: u32 = 15;
 pub const SYS_QUEUING_STATUS: u32 = 16;
@@ -131,6 +132,7 @@ mod tests {
         ("SYS_SAMPLING_READ", SYS_SAMPLING_READ, 13),
         ("SYS_SAMPLING_STATUS", SYS_SAMPLING_STATUS, 49),
         ("SYS_SEM_STATUS", SYS_SEM_STATUS, 56),
+        ("SYS_EVT_STATUS", SYS_EVT_STATUS, 57),
         ("SYS_QUEUING_SEND", SYS_QUEUING_SEND, 14),
         ("SYS_QUEUING_RECV", SYS_QUEUING_RECV, 15),
         ("SYS_QUEUING_STATUS", SYS_QUEUING_STATUS, 16),
@@ -182,7 +184,7 @@ mod tests {
 
     #[test]
     fn base_constant_count() {
-        assert_eq!(BASE_SYSCALLS.len(), 43);
+        assert_eq!(BASE_SYSCALLS.len(), 44);
     }
 
     /// Dynamic-MPU syscall constants: (name, actual, expected).

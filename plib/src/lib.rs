@@ -51,6 +51,13 @@ pub struct SamplingPortStatus {
     pub validity: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventStatus {
+    pub pending_flags: u32,
+    pub wait_mask: u32,
+}
+
 pub use rtos_traits::buf_syscall;
 
 // ── Re-exported syscall constants (from rtos-traits) ──────────────────
@@ -63,7 +70,7 @@ pub use rtos_traits::syscall::{
     SYS_REQUEST_RESTART, SYS_REQUEST_STOP, SYS_SLEEP_TICKS, SYS_YIELD,
 };
 // Events
-pub use rtos_traits::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT};
+pub use rtos_traits::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_STATUS, SYS_EVT_WAIT};
 // Sync
 pub use rtos_traits::syscall::{
     SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_STATUS, SYS_SEM_WAIT,
@@ -338,6 +345,18 @@ pub fn sys_event_set(target_partition: PartitionId, mask: EventMask) -> Result<u
 /// `Err(SvcError)` if the syscall failed.
 pub fn sys_event_clear(mask: EventMask) -> Result<EventMask, SvcError> {
     decode_rc(rtos_traits::svc!(SYS_EVT_CLEAR, 0u32, mask.as_raw(), 0u32)).map(EventMask::new)
+}
+
+pub fn sys_event_status(partition_id: PartitionId) -> Result<EventStatus, SvcError> {
+    let mut status = core::mem::MaybeUninit::<EventStatus>::zeroed();
+    let rc = rtos_traits::svc!(
+        SYS_EVT_STATUS,
+        partition_id.as_raw(),
+        status.as_mut_ptr() as u32,
+        0u32
+    );
+    decode_rc(rc)?;
+    Ok(unsafe { status.assume_init() }) // SAFETY: rc==0 ⇒ struct initialised
 }
 
 /// Acknowledge a hardware IRQ after the partition has handled it.
@@ -1256,6 +1275,13 @@ mod tests {
             sys_event_set(PartitionId::new(1), EventMask::new(0xFF)),
             Ok(0)
         );
+    }
+
+    #[test]
+    fn event_status_returns_ok_on_host() {
+        let st = sys_event_status(PartitionId::new(0)).unwrap();
+        assert_eq!(st.pending_flags, 0);
+        assert_eq!(st.wait_mask, 0);
     }
 
     #[test]

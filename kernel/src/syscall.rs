@@ -4,7 +4,7 @@
 pub use rtos_traits::syscall::SYS_GET_PARTITION_ID;
 pub use rtos_traits::syscall::{
     SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ, SYS_DEBUG_EXIT, SYS_DEBUG_PRINT, SYS_EVT_CLEAR,
-    SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_ERROR_STATUS, SYS_GET_MAJOR_FRAME_COUNT,
+    SYS_EVT_SET, SYS_EVT_STATUS, SYS_EVT_WAIT, SYS_GET_ERROR_STATUS, SYS_GET_MAJOR_FRAME_COUNT,
     SYS_GET_PARTITION_RUN_COUNT, SYS_GET_PARTITION_STATUS, SYS_GET_SCHEDULE_INFO,
     SYS_GET_START_CONDITION, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK,
     SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND,
@@ -38,6 +38,7 @@ pub enum SyscallId {
     EventWait,
     EventSet,
     EventClear,
+    EvtStatus,
     SemWait,
     SemSignal,
     SemStatus,
@@ -114,6 +115,7 @@ impl SyscallId {
             SYS_EVT_WAIT => Some(Self::EventWait),
             SYS_EVT_SET => Some(Self::EventSet),
             SYS_EVT_CLEAR => Some(Self::EventClear),
+            SYS_EVT_STATUS => Some(Self::EvtStatus),
             SYS_SEM_WAIT => Some(Self::SemWait),
             SYS_SEM_SIGNAL => Some(Self::SemSignal),
             SYS_SEM_STATUS => Some(Self::SemStatus),
@@ -188,6 +190,7 @@ impl SyscallId {
             Self::EventWait => "event_wait",
             Self::EventSet => "event_set",
             Self::EventClear => "event_clear",
+            Self::EvtStatus => "evt_status",
             Self::SemWait => "sem_wait",
             Self::SemSignal => "sem_signal",
             Self::SemStatus => "sem_status",
@@ -261,6 +264,7 @@ impl SyscallId {
             Self::EventWait => SYS_EVT_WAIT,
             Self::EventSet => SYS_EVT_SET,
             Self::EventClear => SYS_EVT_CLEAR,
+            Self::EvtStatus => SYS_EVT_STATUS,
             Self::SemWait => SYS_SEM_WAIT,
             Self::SemSignal => SYS_SEM_SIGNAL,
             Self::SemStatus => SYS_SEM_STATUS,
@@ -338,6 +342,7 @@ mod tests {
         (SYS_EVT_WAIT, SyscallId::EventWait),
         (SYS_EVT_SET, SyscallId::EventSet),
         (SYS_EVT_CLEAR, SyscallId::EventClear),
+        (SYS_EVT_STATUS, SyscallId::EvtStatus),
         (SYS_SEM_WAIT, SyscallId::SemWait),
         (SYS_SEM_SIGNAL, SyscallId::SemSignal),
         (SYS_SEM_STATUS, SyscallId::SemStatus),
@@ -461,7 +466,7 @@ mod tests {
         // distinct variant; here we just verify we have the expected count.
         // Base: 49, +6 for intra-threads, +1 for partition-debug
         let expected =
-            51 + if cfg!(feature = "intra-threads") {
+            52 + if cfg!(feature = "intra-threads") {
                 6
             } else {
                 0

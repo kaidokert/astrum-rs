@@ -1,6 +1,15 @@
 use crate::events;
 use crate::partition::PartitionTable;
+use crate::svc::SvcError;
 use rtos_traits::ids::PartitionId;
+
+/// Status of a partition's event flags, returned by `SYS_EVT_STATUS`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventStatus {
+    pub pending_flags: u32,
+    pub wait_mask: u32,
+}
 
 /// Handle `EventWait`. Returns `(return_value, should_block)`.
 ///
@@ -26,6 +35,29 @@ pub fn handle_event_set<const N: usize>(
     mask: u32,
 ) -> u32 {
     events::event_set(pt, target, mask)
+}
+
+/// Handle `EvtStatus`: read event state for the given partition.
+///
+/// # Safety
+/// `out` must be valid, aligned, and writable.
+pub unsafe fn handle_event_status<const N: usize>(
+    pt: &PartitionTable<N>,
+    pid: PartitionId,
+    out: *mut EventStatus,
+) -> u32 {
+    match pt.get(pid.as_raw() as usize) {
+        Some(pcb) => {
+            let status = EventStatus {
+                pending_flags: pcb.event_flags(),
+                wait_mask: pcb.event_wait_mask(),
+            };
+            // SAFETY: caller guarantees `out` is valid, aligned, and writable.
+            unsafe { core::ptr::write(out, status) };
+            0
+        }
+        None => SvcError::InvalidPartition.to_u32(),
+    }
 }
 
 /// Handle `EventClear`: atomically clear the specified event bits for the
@@ -101,5 +133,41 @@ mod tests {
         assert!(!block, "must not block on invalid partition");
         assert_eq!(handle_event_set(&mut t, 99u32.into(), 0b1), inv);
         assert_eq!(handle_event_clear(&mut t, 99u32.into(), 0b1), inv);
+    }
+
+    #[test]
+    #[rustfmt::skip] #[allow(clippy::undocumented_unsafe_blocks)]
+    fn status_with_pending_events() {
+        let mut t = pt();
+        handle_event_set(&mut t, 0u32.into(), 0b1010);
+        let mut out = core::mem::MaybeUninit::<EventStatus>::uninit();
+        let rc = unsafe { handle_event_status(&t, 0u32.into(), out.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        let st = unsafe { out.assume_init() };
+        assert_eq!(st.pending_flags, 0b1010);
+        assert_eq!(st.wait_mask, 0);
+    }
+
+    #[test]
+    #[rustfmt::skip] #[allow(clippy::undocumented_unsafe_blocks)]
+    fn status_during_active_wait() {
+        let mut t = pt();
+        let (_, block) = handle_event_wait(&mut t, 0u32.into(), 0b0011);
+        assert!(block);
+        let mut out = core::mem::MaybeUninit::<EventStatus>::uninit();
+        let rc = unsafe { handle_event_status(&t, 0u32.into(), out.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        let st = unsafe { out.assume_init() };
+        assert_eq!(st.pending_flags, 0);
+        assert_eq!(st.wait_mask, 0b0011);
+    }
+
+    #[test]
+    #[rustfmt::skip] #[allow(clippy::undocumented_unsafe_blocks)]
+    fn status_invalid_partition() {
+        let t = pt();
+        let mut out = core::mem::MaybeUninit::<EventStatus>::uninit();
+        let rc = unsafe { handle_event_status(&t, 99u32.into(), out.as_mut_ptr()) };
+        assert_eq!(rc, SvcError::InvalidPartition.to_u32());
     }
 }

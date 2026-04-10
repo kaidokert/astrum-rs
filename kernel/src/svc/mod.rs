@@ -1787,6 +1787,28 @@ where
             Some(SyscallId::EventClear) => {
                 ev::handle_event_clear(self.partitions_mut(), PartitionId::new(caller as u32), arg2)
             }
+            Some(SyscallId::EvtStatus) => {
+                match self.check_user_ptr(frame.r2, core::mem::size_of::<ev::EventStatus>()) {
+                    Err(e) => e,
+                    Ok(())
+                        if !(frame.r2 as usize)
+                            .is_multiple_of(core::mem::align_of::<ev::EventStatus>()) =>
+                    {
+                        SvcError::InvalidPointer.to_u32()
+                    }
+                    Ok(()) => {
+                        let pid = PartitionId::new(frame.r1);
+                        // SAFETY: pointer validated above.
+                        unsafe {
+                            ev::handle_event_status(
+                                self.partitions(),
+                                pid,
+                                frame.r2 as *mut ev::EventStatus,
+                            )
+                        }
+                    }
+                }
+            }
             Some(SyscallId::SemWait) => {
                 let pt = self.core.partitions_mut();
                 let sem_id = SemaphoreId::new(arg1);
