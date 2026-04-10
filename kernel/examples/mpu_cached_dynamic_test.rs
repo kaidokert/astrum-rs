@@ -18,8 +18,8 @@ use kernel::{
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, StackStorage as _,
-    SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny,
+    StackStorage as _, SyncMinimal,
 };
 
 const NP: usize = 2;
@@ -142,13 +142,10 @@ fn main() -> ! {
             // SAFETY: i < NP, stacks has NP elements, each index visited once.
             let stk = unsafe { &mut *stacks_ptr.add(i) };
             let base = stk.as_u32_slice().as_ptr() as u32;
-            ExternalPartitionMemory::from_aligned_stack(
-                stk,
-                entry_fns[i],
-                MpuRegion::new(base, REGION_SZ, 0),
-                kernel::PartitionId::new(i as u32),
-            )
-            .expect("mem")
+            let spec = PartitionSpec::entry(entry_fns[i])
+                .with_data_mpu(MpuRegion::new(base, REGION_SZ, 0));
+            ExternalPartitionMemory::from_spec(stk, &spec, kernel::PartitionId::new(i as u32))
+                .expect("mem")
         });
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };

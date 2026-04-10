@@ -35,7 +35,7 @@ use kernel::{
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
 use porting_guide::klog;
 
@@ -185,13 +185,13 @@ fn main() -> ! {
         let memories: [_; NP] = core::array::from_fn(|i| {
             // SAFETY: i < NP, stacks has NP elements, each index visited once.
             let stk = unsafe { &mut *stacks_ptr.add(i) };
-            ExternalPartitionMemory::from_aligned_stack(
-                stk,
-                entry_fns[i],
-                MpuRegion::new(DATA_BASES[i], DATA_SZ, 0),
-                kernel::PartitionId::new(i as u32),
-            )
-            .expect("mem")
+            let spec = PartitionSpec::entry(entry_fns[i]).with_data_mpu(MpuRegion::new(
+                DATA_BASES[i],
+                DATA_SZ,
+                0,
+            ));
+            ExternalPartitionMemory::from_spec(stk, &spec, kernel::PartitionId::new(i as u32))
+                .expect("mem")
         });
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };

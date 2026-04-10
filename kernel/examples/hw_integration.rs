@@ -17,8 +17,8 @@ use kernel::{
     sampling::PortDirection,
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    AlignedStack1K, DebugEnabled, MsgSmall, PartitionEntry, Partitions2, PortsTiny,
-    StackStorage as _, SyncMinimal,
+    AlignedStack1K, DebugEnabled, MsgSmall, PartitionEntry, PartitionSpec, Partitions2,
+    PortsTiny, StackStorage as _, SyncMinimal,
 };
 #[allow(unused_imports)]
 use kernel::kpanic as _;
@@ -29,6 +29,8 @@ static P1_RECV_OK: AtomicU32 = AtomicU32::new(0);
 static PARTS_RAN: AtomicU32 = AtomicU32::new(0);
 static SRC_PORT: AtomicU32 = AtomicU32::new(0);
 static DST_PORT: AtomicU32 = AtomicU32::new(0);
+/// Peripheral MPU regions for each partition (placeholder – no device access needed).
+static PERIPH_REGIONS: [[MpuRegion; 0]; Cfg::N] = [[], []];
 kernel::define_kernel!(no_boot, Cfg, |tick, k| {
     let addr = k as *const _ as usize;
     // TODO: align_of_val is a tautology (references are always naturally aligned).
@@ -80,15 +82,18 @@ fn main() -> ! {
     if sched.add_system_window(1).is_err() { loop { kexit!(failure); } }
     let entry_fns: [PartitionEntry; Cfg::N] = [p0_main, p1_main];
     let mut k = {
-        // SAFETY: called once from main before any interrupt handler runs.
         let ptr = &raw mut STACKS;
+        // SAFETY: called once from main before any interrupt handler runs;
+        // no other code accesses STACKS, so the mutable reference is unique.
         let stacks = unsafe { &mut *ptr };
         let mut stk_iter = stacks.iter_mut();
         let memories: [_; Cfg::N] = core::array::from_fn(|i| {
-            match ExternalPartitionMemory::from_aligned_stack(
+            let spec = PartitionSpec::entry(entry_fns[i])
+                .with_peripherals(&PERIPH_REGIONS[i]);
+            match ExternalPartitionMemory::from_spec(
+                // TODO(panic-free): convert to Result
                 stk_iter.next().expect("stack"),
-                entry_fns[i],
-                MpuRegion::new(0, 0, 0),
+                &spec,
                 kernel::PartitionId::new(i as u32),
             ) {
                 Ok(m) => m, Err(_) => loop { kexit!(failure); },
