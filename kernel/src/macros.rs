@@ -295,6 +295,22 @@ macro_rules! __make_irq_binding {
     ($irq:expr, ($pid:expr, $evt:expr, handler: $handler:path)) => {
         $crate::irq_dispatch::IrqBinding::new($irq, $crate::PartitionId::new($pid as u32), $evt)
     };
+    ($irq:expr, ($pid:expr, $evt:expr, never_mask)) => {
+        $crate::irq_dispatch::IrqBinding::with_clear_model(
+            $irq,
+            $crate::PartitionId::new($pid as u32),
+            $evt,
+            $crate::irq_dispatch::IrqClearModel::NeverMask,
+        )
+    };
+    ($irq:expr, ($pid:expr, $evt:expr, never_mask, handler: $handler:path)) => {
+        $crate::irq_dispatch::IrqBinding::with_clear_model(
+            $irq,
+            $crate::PartitionId::new($pid as u32),
+            $evt,
+            $crate::irq_dispatch::IrqClearModel::NeverMask,
+        )
+    };
     ($irq:expr, ($pid:expr, $evt:expr, $clear:expr)) => {
         $crate::irq_dispatch::IrqBinding::with_clear_model(
             $irq,
@@ -345,6 +361,12 @@ macro_rules! __ref_handler_if_custom {
     };
     // 2-tuple: no custom handler.
     (($pid:expr, $evt:expr)) => {};
+    // never_mask keyword form: no custom handler.
+    (($pid:expr, $evt:expr, never_mask)) => {};
+    // never_mask with handler: form – emit a const reference.
+    (($pid:expr, $evt:expr, never_mask, handler: $handler:path)) => {
+        const _: $crate::IsrHandler = $handler;
+    };
     // 3-tuple with explicit clear model: no custom handler.
     (($pid:expr, $evt:expr, $clear:expr)) => {};
     // clear: WriteRegister keyword form: no custom handler.
@@ -367,6 +389,14 @@ macro_rules! __make_irq_handler {
     };
     // handler: form – custom ISR
     (($pid:expr, $evt:expr, handler: $handler:path), $default:path) => {
+        $handler as $crate::IsrHandler
+    };
+    // never_mask keyword form: standard dispatch
+    (($pid:expr, $evt:expr, never_mask), $default:path) => {
+        $default as $crate::IsrHandler
+    };
+    // never_mask with handler: form – custom ISR
+    (($pid:expr, $evt:expr, never_mask, handler: $handler:path), $default:path) => {
         $handler as $crate::IsrHandler
     };
     // 3-tuple with explicit clear model: standard dispatch
@@ -396,6 +426,8 @@ macro_rules! __make_irq_handler {
 ///     23 => (1, 0x04, IrqClearModel::KernelClears(
 ///         ClearStrategy::WriteRegister { addr: 0x100, value: 1 },
 ///     )),                                  // 3-tuple: explicit clear model
+///     30 => (0, 0x02, never_mask),         // edge-triggered: no mask/clear
+///     31 => (0, 0x04, never_mask, handler: my_custom_isr),  // never_mask + custom ISR
 /// );
 /// ```
 ///
@@ -983,6 +1015,84 @@ mod tests {
     #[test]
     fn bind_interrupts_clear_keyword_and_mixed_accepted() {
         // 2-tuple, clear: keyword, and legacy 3-tuple forms compile together.
+    }
+
+    // ---- never_mask keyword form tests ----
+
+    #[test]
+    fn make_irq_binding_never_mask_keyword() {
+        let b = __make_irq_binding!(15, (0, 0x04, never_mask));
+        assert_eq!(b.irq_num, 15);
+        assert_eq!(b.partition_id, crate::PartitionId::new(0));
+        assert_eq!(b.event_bits, 0x04);
+        assert_eq!(b.clear_model, crate::irq_dispatch::IrqClearModel::NeverMask);
+    }
+
+    #[test]
+    fn make_irq_binding_never_mask_handler_keyword() {
+        let b = __make_irq_binding!(16, (1, 0x08, never_mask, handler: test_custom_isr));
+        assert_eq!(b.irq_num, 16);
+        assert_eq!(b.partition_id, crate::PartitionId::new(1));
+        assert_eq!(b.event_bits, 0x08);
+        assert_eq!(b.clear_model, crate::irq_dispatch::IrqClearModel::NeverMask);
+    }
+
+    #[test]
+    fn make_irq_handler_never_mask_returns_default() {
+        let h = __make_irq_handler!((0, 0x01, never_mask), test_default_dispatch);
+        assert_eq!(
+            h as *const () as usize,
+            test_default_dispatch as *const () as usize
+        );
+    }
+
+    #[test]
+    fn make_irq_handler_never_mask_handler_returns_custom() {
+        let h = __make_irq_handler!(
+            (0, 0x01, never_mask, handler: test_custom_isr),
+            test_default_dispatch
+        );
+        assert_eq!(
+            h as *const () as usize,
+            test_custom_isr as *const () as usize
+        );
+    }
+
+    // Verify never_mask compiles in bind_interrupts! (standalone and mixed).
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 80,
+            42 => (0, 0x01, never_mask),
+        );
+    };
+
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 80,
+            43 => (0, 0x01, never_mask, handler: test_custom_isr),
+        );
+    };
+
+    const _: () = {
+        bind_interrupts!(DefaultConfig, 90,
+            44 => (0, 0x01),
+            45 => (1, 0x02, never_mask),
+            46 => (0, 0x04, never_mask, handler: test_custom_isr),
+            47 => (1, 0x08, clear: WriteRegister(0x100, 1)),
+        );
+    };
+
+    #[test]
+    fn bind_interrupts_never_mask_accepted() {
+        // never_mask keyword accepted by const validation.
+    }
+
+    #[test]
+    fn bind_interrupts_never_mask_handler_accepted() {
+        // never_mask + handler: form accepted by const validation.
+    }
+
+    #[test]
+    fn bind_interrupts_never_mask_mixed_accepted() {
+        // never_mask mixed with other forms in a single invocation compiles.
     }
 
     // ---- const_assert! tests ----
