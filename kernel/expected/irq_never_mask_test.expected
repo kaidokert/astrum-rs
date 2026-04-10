@@ -1,0 +1,5 @@
+# mode: contains
+irq_never_mask_test: start
+irq_never_mask_test: pended IRQ 0 at tick 2
+irq_never_mask_test: pended IRQ 0 at tick 4
+irq_never_mask_test: PASS

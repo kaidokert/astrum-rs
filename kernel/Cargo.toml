@@ -151,6 +151,10 @@ name = "irq_kernel_clears_test"
 required-features = ["qemu", "log-semihosting", "custom-ivt"]
 
 [[example]]
+name = "irq_never_mask_test"
+required-features = ["qemu", "log-semihosting", "custom-ivt"]
+
+[[example]]
 name = "irq_simultaneous_test"
 required-features = ["qemu", "log-semihosting", "custom-ivt"]
 
