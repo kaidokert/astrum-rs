@@ -1,0 +1,5 @@
+# mode: contains
+never_mask_handler: start
+never_mask_handler: pended IRQ 60 at tick 2
+never_mask_handler: pended IRQ 60 at tick 4
+never_mask_handler: PASS
