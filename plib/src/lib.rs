@@ -18,6 +18,7 @@ pub use rtos_traits::api::SvcError;
 pub use rtos_traits::check_entry_sig;
 pub use rtos_traits::partition::{
     EntryAddr, EntryPointFn, IsrHandler, PartitionBody, PartitionEntry, PartitionSpec,
+    PartitionStatus,
 };
 
 /// Status information for a queuing port, returned by [`sys_queuing_status`].
@@ -40,9 +41,9 @@ pub use rtos_traits::buf_syscall;
 // Control
 pub use rtos_traits::syscall::{
     SYS_GET_ERROR_STATUS, SYS_GET_MAJOR_FRAME_COUNT, SYS_GET_PARTITION_ID,
-    SYS_GET_PARTITION_RUN_COUNT, SYS_GET_SCHEDULE_INFO, SYS_GET_START_CONDITION, SYS_GET_TIME,
-    SYS_IRQ_ACK, SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART, SYS_REQUEST_STOP,
-    SYS_SLEEP_TICKS, SYS_YIELD,
+    SYS_GET_PARTITION_RUN_COUNT, SYS_GET_PARTITION_STATUS, SYS_GET_SCHEDULE_INFO,
+    SYS_GET_START_CONDITION, SYS_GET_TIME, SYS_IRQ_ACK, SYS_REGISTER_ERROR_HANDLER,
+    SYS_REQUEST_RESTART, SYS_REQUEST_STOP, SYS_SLEEP_TICKS, SYS_YIELD,
 };
 // Events
 pub use rtos_traits::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT};
@@ -522,6 +523,31 @@ pub fn sys_get_schedule_info() -> Result<ScheduleInfo, SvcError> {
         major_frame_ticks,
         num_partitions: r1,
     })
+}
+
+/// Query the calling partition's runtime status.
+///
+/// The kernel writes the full [`PartitionStatus`] struct to a caller-provided
+/// buffer via the `r1` pointer register.
+///
+/// # Returns
+///
+/// `Ok(status)` with the partition status, or `Err(SvcError)` if the
+/// syscall failed.
+pub fn sys_get_partition_status() -> Result<PartitionStatus, SvcError> {
+    let mut status = core::mem::MaybeUninit::<PartitionStatus>::zeroed();
+    // SAFETY: svc! triggers a supervisor call whose handler validates all
+    // arguments.  The pointer is valid for writes of size_of::<PartitionStatus>()
+    // and the kernel writes the full struct before returning 0.
+    let rc = rtos_traits::svc!(
+        SYS_GET_PARTITION_STATUS,
+        status.as_mut_ptr() as u32,
+        0u32,
+        0u32
+    );
+    decode_rc(rc)?;
+    // SAFETY: On success (rc == 0) the kernel has fully initialised the struct.
+    Ok(unsafe { status.assume_init() })
 }
 
 /// Get the current kernel tick count.
@@ -1327,6 +1353,18 @@ mod tests {
             direction: 0,
         };
         assert_eq!(sys_queuing_status(QueuingPortId::new(0)), Ok(expected));
+    }
+
+    #[test]
+    fn partition_status_returns_ok_zeroed_on_host() {
+        let expected = PartitionStatus {
+            partition_id: 0,
+            period_ticks: 0,
+            duration_ticks: 0,
+            operating_mode: 0,
+            start_condition: 0,
+        };
+        assert_eq!(sys_get_partition_status(), Ok(expected));
     }
 
     #[test]
