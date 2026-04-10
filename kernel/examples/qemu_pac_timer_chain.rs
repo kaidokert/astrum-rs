@@ -16,8 +16,8 @@ use kernel::{
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, StackStorage as _,
-    SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny,
+    StackStorage as _, SyncMinimal,
 };
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -239,7 +239,7 @@ fn main() -> ! {
     {
         fatal_halt();
     }
-    let timer_regions = [
+    static TIMER_REGIONS: [MpuRegion; 2] = [
         MpuRegion::new(TIMER0_BASE, TIMER_SIZE, 0),
         MpuRegion::new(TIMER1_BASE, TIMER_SIZE, 0),
     ];
@@ -250,22 +250,13 @@ fn main() -> ! {
             // SAFETY: i < NP, stacks has NP elements, each index visited once.
             let stk = unsafe { &mut *stacks_ptr.add(i) };
             let base = stk.as_u32_slice().as_ptr() as u32;
-            let mem = match ExternalPartitionMemory::from_aligned_stack(
-                stk,
-                entry_fns[i],
-                MpuRegion::new(base, REGION_SZ, 0),
-                kernel::PartitionId::new(i as u32),
-            ) {
+            let spec = PartitionSpec::entry(entry_fns[i])
+                .with_data_mpu(MpuRegion::new(base, REGION_SZ, 0))
+                .with_peripherals(if i == 0 { &TIMER_REGIONS } else { &[] });
+            match ExternalPartitionMemory::from_spec(stk, &spec, kernel::PartitionId::new(i as u32))
+            {
                 Ok(m) => m,
                 Err(_) => fatal_halt(),
-            };
-            if i == 0 {
-                match mem.with_peripheral_regions(&timer_regions) {
-                    Ok(m) => m,
-                    Err(_) => fatal_halt(),
-                }
-            } else {
-                mem
             }
         });
         match Kernel::<TestConfig>::new(sched, &memories) {
