@@ -1422,6 +1422,80 @@ where
     }
 
     // -------------------------------------------------------------------------
+    // GetPartitionStatus handler
+    // -------------------------------------------------------------------------
+
+    /// Populate a `PartitionStatus` struct in user memory from the calling
+    /// partition's PCB and the schedule table.
+    ///
+    /// `ptr` is the user-supplied destination address (from r1). The function
+    /// validates alignment and accessibility before writing.
+    fn handle_get_partition_status(&self, caller_pid: PartitionId, ptr: u32) -> u32 {
+        use rtos_traits::partition::PartitionStatus;
+
+        let len = core::mem::size_of::<PartitionStatus>();
+
+        // Alignment check: PartitionStatus is #[repr(C)] with u32 fields.
+        if !ptr.is_multiple_of(core::mem::align_of::<PartitionStatus>() as u32) {
+            return SvcError::InvalidPointer.to_u32();
+        }
+
+        if let Err(e) = self.check_user_ptr(ptr, len) {
+            return e;
+        }
+
+        let pid_idx = caller_pid.as_raw() as usize;
+        let pcb = match self.partitions().get(pid_idx) {
+            Some(p) => p,
+            None => return SvcError::InvalidPartition.to_u32(),
+        };
+
+        use rtos_traits::partition::{
+            OPERATING_MODE_FAULTED, OPERATING_MODE_READY, OPERATING_MODE_RUNNING,
+            OPERATING_MODE_WAITING, START_CONDITION_COLD_RESTART, START_CONDITION_NORMAL_BOOT,
+            START_CONDITION_WARM_RESTART,
+        };
+
+        let operating_mode = match pcb.state() {
+            crate::partition::PartitionState::Ready => OPERATING_MODE_READY,
+            crate::partition::PartitionState::Running => OPERATING_MODE_RUNNING,
+            crate::partition::PartitionState::Waiting => OPERATING_MODE_WAITING,
+            crate::partition::PartitionState::Faulted => OPERATING_MODE_FAULTED,
+        };
+
+        let start_condition = match pcb.start_condition() {
+            crate::partition::StartCondition::NormalBoot => START_CONDITION_NORMAL_BOOT,
+            crate::partition::StartCondition::WarmRestart => START_CONDITION_WARM_RESTART,
+            crate::partition::StartCondition::ColdRestart => START_CONDITION_COLD_RESTART,
+        };
+
+        // TODO: O(N) schedule scan on every call; consider pre-computing per-partition
+        // duration or adding a lookup API to the schedule table for hot-path efficiency.
+        // Sum durations of all schedule entries assigned to this partition.
+        let mut duration_ticks = 0u32;
+        for entry in self.schedule().entries() {
+            if !entry.is_system_window && entry.partition_index as usize == pid_idx {
+                duration_ticks = duration_ticks.saturating_add(entry.duration_ticks);
+            }
+        }
+
+        let status = PartitionStatus {
+            partition_id: pid_idx as u32,
+            period_ticks: self.schedule().major_frame_ticks,
+            duration_ticks,
+            operating_mode,
+            start_condition,
+        };
+
+        let dst = ptr as *mut PartitionStatus;
+        // SAFETY: `dst` has been validated for alignment (4-byte) and lies
+        // within the calling partition's accessible MPU region with sufficient
+        // size (20 bytes) by the checks above.
+        unsafe { core::ptr::write(dst, status) };
+        0
+    }
+
+    // -------------------------------------------------------------------------
     // Facade methods delegating to self.sync (SyncPools)
     // -------------------------------------------------------------------------
 
@@ -2512,6 +2586,9 @@ where
                 frame.r1 = self.partition_count() as u32;
                 self.schedule().major_frame_ticks
             }
+            Some(SyscallId::GetPartitionStatus) => {
+                self.handle_get_partition_status(caller_pid, arg1)
+            }
             Some(SyscallId::IrqAck) => {
                 let irq_num = arg1 as u8;
                 let caller_id = caller_pid;
@@ -3331,6 +3408,7 @@ mod tests {
     mod events;
     mod last_error;
     mod message;
+    mod partition_status;
     mod pcb_roundtrip;
     mod restart;
     mod scheduler;

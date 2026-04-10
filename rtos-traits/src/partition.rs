@@ -3,6 +3,17 @@
 #[cfg(feature = "intra-threads")]
 use crate::thread::SchedulingPolicy;
 
+// -- ABI constants for PartitionStatus.operating_mode --
+pub const OPERATING_MODE_READY: u32 = 0;
+pub const OPERATING_MODE_RUNNING: u32 = 1;
+pub const OPERATING_MODE_WAITING: u32 = 2;
+pub const OPERATING_MODE_FAULTED: u32 = 3;
+
+// -- ABI constants for PartitionStatus.start_condition --
+pub const START_CONDITION_NORMAL_BOOT: u32 = 0;
+pub const START_CONDITION_WARM_RESTART: u32 = 1;
+pub const START_CONDITION_COLD_RESTART: u32 = 2;
+
 /// Runtime status of a partition, returned by `SYS_GET_PARTITION_STATUS`.
 ///
 /// Layout is `#[repr(C)]` so the kernel can write it directly into a
