@@ -1015,9 +1015,6 @@ where
     pub uart_pair: crate::virtual_uart::VirtualUartPair,
     /// ISR top-half to bottom-half ring buffer (8 records, 16-byte payload).
     pub isr_ring: crate::split_isr::IsrRingBuffer<8, 16>,
-    /// Optional hardware UART backend, checked after `uart_pair` in
-    /// `dev_dispatch`. Set via [`set_hw_uart`](Self::set_hw_uart).
-    pub hw_uart: Option<crate::hw_uart::HwUartBackend>,
     /// Device registry for dynamic device dispatch.
     pub registry: crate::virtual_device::DeviceRegistry<'static, { C::DR }>,
     /// Wait queue for partitions blocked on device reads.
@@ -1306,7 +1303,6 @@ where
             buffers: crate::buffer_pool::BufferPool::new(),
             uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
-            hw_uart: None,
             registry,
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
@@ -1349,7 +1345,6 @@ where
             buffers: crate::buffer_pool::BufferPool::new(),
             uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
-            hw_uart: None,
             registry,
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
@@ -1574,19 +1569,6 @@ where
     #[inline(always)]
     pub fn blackboards_mut(&mut self) -> &mut <C::Ports as PortsOps>::BlackboardPool {
         self.ports.blackboards_mut()
-    }
-
-    /// Install an optional hardware UART backend.
-    ///
-    /// Stores the backend in the `hw_uart` field for direct access (e.g.
-    /// ISR bottom-half draining).  `dev_dispatch` no longer falls back to
-    /// this field — callers must register the backend in the
-    /// [`DeviceRegistry`](crate::virtual_device::DeviceRegistry) to make
-    /// it reachable via syscall dispatch.
-    // TODO: migrate remaining callers to register hw_uart in the registry
-    // at init time, then remove this method (backlog item 195).
-    pub fn set_hw_uart(&mut self, backend: crate::hw_uart::HwUartBackend) {
-        self.hw_uart = Some(backend);
     }
 
     /// Store a per-kernel IRQ binding table for `IrqAck` dispatch.
@@ -3186,12 +3168,6 @@ where
         &mut self.dev_wait_queue
     }
 
-    /// Returns an immutable reference to the hardware UART backend.
-    #[inline(always)]
-    pub fn hw_uart(&self) -> &Option<crate::hw_uart::HwUartBackend> {
-        &self.hw_uart
-    }
-
     /// Drains debug output from all partitions with pending debug data.
     ///
     /// Iterates through all partitions, and for each with `debug_pending=true`,
@@ -3343,7 +3319,7 @@ fn handle_yield() -> u32 {
 #[allow(clippy::undocumented_unsafe_blocks, deprecated)]
 mod tests {
     // Facade methods for `active_partition`, `current_partition`, `yield_requested`,
-    // `buffers`, `dev_wait_queue`, and `hw_uart` are now available on Kernel.
+    // `buffers`, and `dev_wait_queue` are now available on Kernel.
     // Tests should use these accessor methods instead of direct field access.
 
     //! # SAFETY — Test Dispatch Justification
@@ -3566,7 +3542,6 @@ mod tests {
             buffers: crate::buffer_pool::BufferPool::new(),
             uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
             isr_ring: crate::split_isr::IsrRingBuffer::new(),
-            hw_uart: None,
             registry,
             dev_wait_queue: crate::waitqueue::DeviceWaitQueue::new(),
             dynamic_strategy: crate::mpu_strategy::DynamicStrategy::new(),
@@ -7092,12 +7067,11 @@ mod tests {
 
     // ---- hw_uart integration tests ----
 
-    /// hw_uart starts as None; virtual UARTs still work.
+    /// Virtual UARTs dispatch correctly without any hw_uart in the registry.
     #[test]
-    fn hw_uart_none_virtual_uarts_still_dispatch() {
+    fn virtual_uarts_still_dispatch() {
         use crate::syscall::SYS_DEV_OPEN;
         let mut k = kernel(0, 0, 0);
-        assert!(k.hw_uart().is_none());
         // Virtual UART-A (device 0) opens successfully.
         let mut ef = frame(SYS_DEV_OPEN, 0, 0);
         unsafe { k.dispatch(&mut ef) };
@@ -7108,9 +7082,9 @@ mod tests {
         assert_eq!(ef.r0, 0);
     }
 
-    /// Unknown device ID returns InvalidResource when hw_uart is None.
+    /// Unknown device ID returns InvalidResource when no hw_uart is registered.
     #[test]
-    fn hw_uart_none_unknown_id_returns_invalid_resource() {
+    fn unknown_id_returns_invalid_resource() {
         use crate::syscall::SYS_DEV_OPEN;
         let mut k = kernel(0, 0, 0);
         let mut ef = frame(SYS_DEV_OPEN, 5, 0);

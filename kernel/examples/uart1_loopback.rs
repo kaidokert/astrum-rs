@@ -421,15 +421,23 @@ fn main() -> ! {
         Kernel::<DemoConfig>::new(sched, &memories).expect("kernel creation")
     };
 
-    // Set up HW UART backend with software loopback
+    // Set up HW UART backend with software loopback.
     // SAFETY: 0x4000_D000 is the UART1 base address on LM3S6965; the
     // peripheral region is mapped and we have exclusive access before
     // interrupts are enabled.
     let regs = unsafe { UartRegs::from_base(0x4000_D000) };
     regs.init(115_200, 12_000_000);
-    let mut hw_backend = HwUartBackend::new(HW_UART_DEV as u8, regs);
-    hw_backend.set_loopback(true);
-    kern.set_hw_uart(hw_backend);
+    // SAFETY: HW_UART_BACKEND is written once here before interrupts are
+    // enabled and the scheduler starts. All subsequent accesses go through
+    // the device registry which borrows it as &'static mut.
+    static mut HW_UART_BACKEND: Option<HwUartBackend> = None;
+    let hw_ref: &'static mut HwUartBackend = unsafe {
+        let ptr = &raw mut HW_UART_BACKEND;
+        let mut backend = HwUartBackend::new(HW_UART_DEV as u8, regs);
+        backend.set_loopback(true);
+        (*ptr) = Some(backend);
+        (*ptr).as_mut().unwrap()
+    };
 
     // Store kernel and register device backends
     store_kernel(&mut kern);
@@ -437,18 +445,16 @@ fn main() -> ! {
     with_kernel_mut(|k| {
         // SAFETY: Kernel state lives on the caller's stack in a -> !
         // function, so it is effectively 'static. The backends live inside
-        // the kernel (uart_pair and hw_uart fields). with_kernel_mut runs
-        // inside interrupt::free, guaranteeing exclusive access on
-        // single-core Cortex-M.
+        // the kernel (uart_pair) or a static (HW_UART_BACKEND).
+        // with_kernel_mut runs inside interrupt::free, guaranteeing
+        // exclusive access on single-core Cortex-M.
         unsafe {
             let a: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.a as *mut _);
             let b: &'static mut dyn VirtualDevice = &mut *(&mut k.uart_pair.b as *mut _);
             k.registry.add(a).expect("register UART-A");
             k.registry.add(b).expect("register UART-B");
-            if let Some(hw) = k.hw_uart.as_mut() {
-                let hw: &'static mut dyn VirtualDevice = &mut *(hw as *mut HwUartBackend as *mut _);
-                k.registry.add(hw).expect("register HW UART");
-            }
+            let hw: &'static mut dyn VirtualDevice = &mut *(hw_ref as *mut HwUartBackend as *mut _);
+            k.registry.add(hw).expect("register HW UART");
         }
     });
 
