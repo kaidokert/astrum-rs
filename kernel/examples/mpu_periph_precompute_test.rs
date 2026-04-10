@@ -14,8 +14,8 @@ use kernel::{
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, StackStorage as _,
-    SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny,
+    StackStorage as _, SyncMinimal,
 };
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -110,7 +110,7 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(0, 2)).expect("sched 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched 1");
     // P0 → GPIOA (0x4000_4000), P1 → GPIOB (0x4000_5000) on LM3S6965.
-    let periph_regions: [[MpuRegion; 1]; NP] = [
+    static PERIPH_REGIONS: [[MpuRegion; 1]; NP] = [
         [MpuRegion::new(0x4000_4000, 4096, 0)],
         [MpuRegion::new(0x4000_5000, 4096, 0)],
     ];
@@ -121,15 +121,11 @@ fn main() -> ! {
             // SAFETY: i < NP, stacks has NP elements, each index visited once.
             let stk = unsafe { &mut *stacks_ptr.add(i) };
             let base = stk.as_u32_slice().as_ptr() as u32;
-            ExternalPartitionMemory::from_aligned_stack(
-                stk,
-                entry_fns[i],
-                MpuRegion::new(base, REGION_SZ, 0),
-                kernel::PartitionId::new(i as u32),
-            )
-            .expect("mem")
-            .with_peripheral_regions(&periph_regions[i])
-            .expect("periph")
+            let spec = PartitionSpec::entry(entry_fns[i])
+                .with_data_mpu(MpuRegion::new(base, REGION_SZ, 0))
+                .with_peripherals(&PERIPH_REGIONS[i]);
+            ExternalPartitionMemory::from_spec(stk, &spec, kernel::PartitionId::new(i as u32))
+                .expect("mem")
         });
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };

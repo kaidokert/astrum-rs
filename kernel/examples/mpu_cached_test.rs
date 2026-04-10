@@ -15,8 +15,8 @@ use kernel::{
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, StackStorage as _,
-    SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny,
+    StackStorage as _, SyncMinimal,
 };
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -119,25 +119,20 @@ fn main() -> ! {
             {
                 // UART0 peripheral region for p0: exercises the non-trivial peripheral cache path.
                 let base = s0.as_u32_slice().as_ptr() as u32;
-                ExternalPartitionMemory::from_aligned_stack(
-                    s0,
-                    entry_fns[0],
-                    MpuRegion::new(base, REGION_SZ, 0),
-                    kernel::PartitionId::new(0),
-                )
-                .expect("mem 0")
-                .with_peripheral_regions(&[MpuRegion::new(0x4000_C000, 4096, AP_FULL_ACCESS)])
-                .expect("periph 0")
+                static P0_PERIPH: [MpuRegion; 1] =
+                    [MpuRegion::new(0x4000_C000, 4096, AP_FULL_ACCESS)];
+                let spec = PartitionSpec::entry(entry_fns[0])
+                    .with_data_mpu(MpuRegion::new(base, REGION_SZ, 0))
+                    .with_peripherals(&P0_PERIPH);
+                ExternalPartitionMemory::from_spec(s0, &spec, kernel::PartitionId::new(0))
+                    .expect("mem 0")
             },
             {
                 let base = s1.as_u32_slice().as_ptr() as u32;
-                ExternalPartitionMemory::from_aligned_stack(
-                    s1,
-                    entry_fns[1],
-                    MpuRegion::new(base, REGION_SZ, 0),
-                    kernel::PartitionId::new(1),
-                )
-                .expect("mem 1")
+                let spec = PartitionSpec::entry(entry_fns[1])
+                    .with_data_mpu(MpuRegion::new(base, REGION_SZ, 0));
+                ExternalPartitionMemory::from_spec(s1, &spec, kernel::PartitionId::new(1))
+                    .expect("mem 1")
             },
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
