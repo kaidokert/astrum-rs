@@ -366,6 +366,10 @@ impl<const N: usize> VirtualDevice for HwUartBackend<N> {
     fn tick_drain(&mut self) {
         self.drain_tx_to_hw();
     }
+
+    fn push_isr_rx(&mut self, data: &[u8]) -> usize {
+        self.push_rx_from_isr(data)
+    }
 }
 
 #[cfg(test)]

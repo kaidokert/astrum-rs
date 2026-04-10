@@ -197,6 +197,10 @@ impl VirtualDevice for VirtualUartBackend {
             _ => Err(DeviceError::NotFound),
         }
     }
+
+    fn push_isr_rx(&mut self, data: &[u8]) -> usize {
+        self.push_rx(data)
+    }
 }
 
 /// A pair of virtual UARTs wired for loopback: UART-A TX routes to

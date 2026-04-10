@@ -45,6 +45,13 @@ pub trait VirtualDevice: Send {
     /// Called from kernel tick to drain pending ISR-side state.
     /// Default impl is a no-op for devices that don't need bottom halves.
     fn tick_drain(&mut self) {}
+
+    /// Inject ISR-sourced data into the device's RX path.
+    /// Returns the number of bytes actually enqueued.
+    /// Default impl is a no-op returning 0.
+    fn push_isr_rx(&mut self, _data: &[u8]) -> usize {
+        0
+    }
 }
 
 /// Fixed-capacity registry of virtual devices looked up by device ID.
@@ -98,6 +105,25 @@ impl<'a, const N: usize> DeviceRegistry<'a, N> {
     }
     pub fn is_empty(&self) -> bool {
         self.count == 0
+    }
+
+    /// Call `tick_drain()` on every registered device.
+    pub fn drain_all(&mut self) {
+        for dev in self.devices.iter_mut().take(self.count).flatten() {
+            dev.tick_drain();
+        }
+    }
+
+    /// Find device by ID and call `push_isr_rx(data)` on it.
+    /// Returns `true` if the device was found, `false` otherwise.
+    pub fn push_to_device(&mut self, device_id: u8, data: &[u8]) -> bool {
+        for dev in self.devices.iter_mut().take(self.count).flatten() {
+            if dev.device_id() == device_id {
+                dev.push_isr_rx(data);
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -250,5 +276,131 @@ mod tests {
         assert_eq!(d.ioctl(pid(1), 0, 0).unwrap(), 0);
         d.close(pid(1)).unwrap();
         assert_eq!(d.close(pid(1)), Err(DeviceError::NotOpen));
+    }
+
+    #[test]
+    fn push_isr_rx_default_returns_zero() {
+        let mut dev = MockDev::new(1);
+        assert_eq!(dev.push_isr_rx(&[0xAA, 0xBB]), 0);
+    }
+
+    /// Mock that tracks tick_drain and push_isr_rx calls.
+    struct TrackingDev {
+        id: u8,
+        drain_count: u32,
+        rx_bytes: [u8; 16],
+        rx_len: usize,
+    }
+
+    impl TrackingDev {
+        fn new(id: u8) -> Self {
+            Self {
+                id,
+                drain_count: 0,
+                rx_bytes: [0; 16],
+                rx_len: 0,
+            }
+        }
+    }
+
+    impl VirtualDevice for TrackingDev {
+        fn device_id(&self) -> u8 {
+            self.id
+        }
+        fn open(&mut self, _: PartitionId) -> Result<(), DeviceError> {
+            Ok(())
+        }
+        fn close(&mut self, _: PartitionId) -> Result<(), DeviceError> {
+            Ok(())
+        }
+        fn read(&mut self, _: PartitionId, _: &mut [u8]) -> Result<usize, DeviceError> {
+            Ok(0)
+        }
+        fn write(&mut self, _: PartitionId, _: &[u8]) -> Result<usize, DeviceError> {
+            Ok(0)
+        }
+        fn ioctl(&mut self, _: PartitionId, _: u32, _: u32) -> Result<u32, DeviceError> {
+            Ok(0)
+        }
+        fn tick_drain(&mut self) {
+            self.drain_count += 1;
+        }
+        fn push_isr_rx(&mut self, data: &[u8]) -> usize {
+            let mut count = 0;
+            for &b in data {
+                if self.rx_len >= self.rx_bytes.len() {
+                    break;
+                }
+                self.rx_bytes[self.rx_len] = b;
+                self.rx_len += 1;
+                count += 1;
+            }
+            count
+        }
+    }
+
+    #[test]
+    fn drain_all_calls_tick_drain_on_every_device() {
+        let mut d1 = TrackingDev::new(1);
+        let mut d2 = TrackingDev::new(2);
+        let mut d3 = TrackingDev::new(3);
+        {
+            let mut reg = DeviceRegistry::<4>::new();
+            reg.add(&mut d1).unwrap();
+            reg.add(&mut d2).unwrap();
+            reg.add(&mut d3).unwrap();
+
+            reg.drain_all();
+            reg.drain_all();
+
+            assert_eq!(reg.len(), 3);
+        }
+        // Registry dropped — verify drain_count on originals.
+        assert_eq!(d1.drain_count, 2);
+        assert_eq!(d2.drain_count, 2);
+        assert_eq!(d3.drain_count, 2);
+    }
+
+    #[test]
+    fn drain_all_on_empty_registry() {
+        let mut reg = DeviceRegistry::<4>::new();
+        reg.drain_all(); // should not panic
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn push_to_device_routes_data_correctly() {
+        let mut d1 = TrackingDev::new(10);
+        let mut d2 = TrackingDev::new(20);
+        {
+            let mut reg = DeviceRegistry::<4>::new();
+            reg.add(&mut d1).unwrap();
+            reg.add(&mut d2).unwrap();
+
+            assert!(reg.push_to_device(10, &[0xAA, 0xBB, 0xCC]));
+            assert!(reg.push_to_device(20, &[0xDD]));
+            assert!(!reg.push_to_device(99, &[0xFF])); // not found
+        }
+        assert_eq!(d1.rx_len, 3);
+        assert_eq!(&d1.rx_bytes[..3], &[0xAA, 0xBB, 0xCC]);
+        assert_eq!(d2.rx_len, 1);
+        assert_eq!(d2.rx_bytes[0], 0xDD);
+    }
+
+    #[test]
+    fn push_to_device_empty_data() {
+        let mut d1 = TrackingDev::new(1);
+        {
+            let mut reg = DeviceRegistry::<4>::new();
+            reg.add(&mut d1).unwrap();
+            assert!(reg.push_to_device(1, &[]));
+        }
+        assert_eq!(d1.rx_len, 0);
+    }
+
+    #[test]
+    fn push_to_device_not_found_returns_false() {
+        let mut reg = DeviceRegistry::<4>::new();
+        assert!(!reg.push_to_device(1, &[0x01]));
     }
 }
