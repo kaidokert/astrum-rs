@@ -1,6 +1,24 @@
-use crate::sampling::{SamplingError, SamplingPortPool, Validity};
+use crate::sampling::{SamplingError, SamplingPortPool, SamplingPortStatus, Validity};
 use crate::svc::SvcError;
 use rtos_traits::ids::SamplingPortId;
+
+/// # Safety
+/// Caller must ensure `out` is valid, aligned, and writable.
+pub unsafe fn handle_sampling_status<const S: usize, const M: usize>(
+    pool: &SamplingPortPool<S, M>,
+    port_id: SamplingPortId,
+    out: *mut SamplingPortStatus,
+    current_time: u64,
+) -> u32 {
+    match pool.get_sampling_port_status(port_id.as_raw() as usize, current_time) {
+        Ok(status) => {
+            // SAFETY: caller guarantees `out` is valid, aligned, and writable.
+            unsafe { core::ptr::write(out, status) };
+            0
+        }
+        Err(_) => SvcError::InvalidResource.to_u32(),
+    }
+}
 
 /// Handle `SamplingWrite`.
 ///
@@ -81,6 +99,7 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip] #[allow(clippy::undocumented_unsafe_blocks)]
     fn roundtrip_validity_and_errors() {
         let mut p = pool();
         let inv = SvcError::InvalidResource.to_u32();
@@ -103,5 +122,14 @@ mod tests {
         assert_eq!(sampling_error_to_svc(SamplingError::DirectionViolation), op);
         assert_eq!(sampling_error_to_svc(SamplingError::MessageTooLarge), op);
         assert_eq!(sampling_error_to_svc(SamplingError::PoolFull), op);
+        // SAFETY: all MaybeUninit pointers below are stack-local and valid.
+        let mut s = core::mem::MaybeUninit::<SamplingPortStatus>::uninit();
+        assert_eq!(unsafe { handle_sampling_status(&p, SamplingPortId::new(1), s.as_mut_ptr(), 500) }, 0);
+        let s = unsafe { s.assume_init() };
+        assert_eq!((s.max_message_size, s.direction, s.refresh_period, s.validity), (16, 1, 1000, 0));
+        let mut s2 = core::mem::MaybeUninit::<SamplingPortStatus>::uninit();
+        assert_eq!(unsafe { handle_sampling_status(&p, SamplingPortId::new(99), s2.as_mut_ptr(), 0) }, inv);
+        assert_eq!(unsafe { handle_sampling_status(&p, SamplingPortId::new(1), s2.as_mut_ptr(), 2000) }, 0);
+        assert_eq!(unsafe { s2.assume_init() }.validity, 1);
     }
 }

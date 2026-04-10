@@ -9,8 +9,8 @@ pub use rtos_traits::syscall::{
     SYS_GET_START_CONDITION, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK,
     SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND,
     SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS, SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART,
-    SYS_REQUEST_STOP, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
-    SYS_SLEEP_TICKS, SYS_YIELD,
+    SYS_REQUEST_STOP, SYS_SAMPLING_READ, SYS_SAMPLING_STATUS, SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL,
+    SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_YIELD,
 };
 
 #[cfg(feature = "intra-threads")]
@@ -47,6 +47,7 @@ pub enum SyscallId {
     GetTime,
     SamplingWrite,
     SamplingRead,
+    SamplingStatus,
     QueuingSend,
     QueuingRecv,
     QueuingStatus,
@@ -121,6 +122,7 @@ impl SyscallId {
             SYS_GET_TIME => Some(Self::GetTime),
             SYS_SAMPLING_WRITE => Some(Self::SamplingWrite),
             SYS_SAMPLING_READ => Some(Self::SamplingRead),
+            SYS_SAMPLING_STATUS => Some(Self::SamplingStatus),
             SYS_QUEUING_SEND => Some(Self::QueuingSend),
             SYS_QUEUING_RECV => Some(Self::QueuingRecv),
             SYS_QUEUING_STATUS => Some(Self::QueuingStatus),
@@ -193,6 +195,7 @@ impl SyscallId {
             Self::GetTime => "get_time",
             Self::SamplingWrite => "sampling_write",
             Self::SamplingRead => "sampling_read",
+            Self::SamplingStatus => "sampling_status",
             Self::QueuingSend => "queuing_send",
             Self::QueuingRecv => "queuing_recv",
             Self::QueuingStatus => "queuing_status",
@@ -264,6 +267,7 @@ impl SyscallId {
             Self::GetTime => SYS_GET_TIME,
             Self::SamplingWrite => SYS_SAMPLING_WRITE,
             Self::SamplingRead => SYS_SAMPLING_READ,
+            Self::SamplingStatus => SYS_SAMPLING_STATUS,
             Self::QueuingSend => SYS_QUEUING_SEND,
             Self::QueuingRecv => SYS_QUEUING_RECV,
             Self::QueuingStatus => SYS_QUEUING_STATUS,
@@ -339,6 +343,7 @@ mod tests {
         (SYS_GET_TIME, SyscallId::GetTime),
         (SYS_SAMPLING_WRITE, SyscallId::SamplingWrite),
         (SYS_SAMPLING_READ, SyscallId::SamplingRead),
+        (SYS_SAMPLING_STATUS, SyscallId::SamplingStatus),
         (SYS_QUEUING_SEND, SyscallId::QueuingSend),
         (SYS_QUEUING_RECV, SyscallId::QueuingRecv),
         (SYS_QUEUING_STATUS, SyscallId::QueuingStatus),
@@ -424,7 +429,6 @@ mod tests {
         assert_eq!(SyscallId::from_u32(46), Some(SyscallId::GetMajorFrameCount));
         assert_eq!(SyscallId::from_u32(47), Some(SyscallId::GetScheduleInfo));
         assert_eq!(SyscallId::from_u32(48), Some(SyscallId::GetPartitionStatus));
-        assert_eq!(SyscallId::from_u32(49), None);
         #[cfg(feature = "intra-threads")]
         {
             assert_eq!(
@@ -453,7 +457,7 @@ mod tests {
         // distinct variant; here we just verify we have the expected count.
         // Base: 49, +6 for intra-threads, +1 for partition-debug
         let expected =
-            49 + if cfg!(feature = "intra-threads") {
+            50 + if cfg!(feature = "intra-threads") {
                 6
             } else {
                 0

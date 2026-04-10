@@ -10,6 +10,15 @@ pub enum Validity {
     Invalid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct SamplingPortStatus {
+    pub max_message_size: u32,
+    pub direction: u32,
+    pub refresh_period: u32,
+    pub validity: u32,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum SamplingError {
     PoolFull,
@@ -96,6 +105,13 @@ impl<const M: usize> SamplingPort<M> {
         Ok((&self.data[..self.current_size], self.timestamp))
     }
 
+    #[rustfmt::skip]
+    pub fn status(&self, current_time: u64) -> SamplingPortStatus {
+        let dir = if self.direction == PortDirection::Source { 0 } else { 1 };
+        let val = if self.validity(current_time) == Validity::Valid { 0 } else { 1 };
+        SamplingPortStatus { max_message_size: self.max_size as u32, direction: dir, refresh_period: self.refresh_period, validity: val }
+    }
+
     pub fn validity(&self, current_time: u64) -> Validity {
         if self.current_size == 0 {
             return Validity::Invalid;
@@ -155,6 +171,17 @@ impl<const S: usize, const M: usize> SamplingPortPool<S, M> {
 
     pub fn is_empty(&self) -> bool {
         self.ports.is_empty()
+    }
+
+    pub fn get_sampling_port_status(
+        &self,
+        port_id: usize,
+        current_time: u64,
+    ) -> Result<SamplingPortStatus, SamplingError> {
+        self.ports
+            .get(port_id)
+            .ok_or(SamplingError::InvalidPort)
+            .map(|p| p.status(current_time))
     }
 
     fn write_port_buffer(&mut self, id: usize, data: &[u8], ts: u64) -> Result<(), SamplingError> {

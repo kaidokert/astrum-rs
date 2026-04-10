@@ -330,7 +330,7 @@ use crate::partition::{
     ConfigError, PartitionConfig, PartitionControlBlock, PartitionState, PartitionTable,
 };
 use crate::queuing::{QueuingPortPool, QueuingPortStatus, RecvQueuingOutcome, SendQueuingOutcome};
-use crate::sampling::SamplingPortPool;
+use crate::sampling::{SamplingPortPool, SamplingPortStatus};
 use crate::scheduler::ScheduleTable;
 use crate::semaphore::SemaphorePool;
 use crate::syscall::SyscallId;
@@ -1912,6 +1912,31 @@ where
                     }
                 }
             },
+            #[cfg(feature = "ipc-sampling")]
+            Some(SyscallId::SamplingStatus) => {
+                match self.check_user_ptr(frame.r2, core::mem::size_of::<SamplingPortStatus>()) {
+                    Err(e) => e,
+                    Ok(())
+                        if !(frame.r2 as usize)
+                            .is_multiple_of(core::mem::align_of::<SamplingPortStatus>()) =>
+                    {
+                        SvcError::InvalidPointer.to_u32()
+                    }
+                    Ok(()) => {
+                        let port_id = SamplingPortId::new(frame.r1);
+                        let tick = self.tick.get();
+                        // SAFETY: check_user_ptr + alignment guard validated the pointer.
+                        unsafe {
+                            sampling::handle_sampling_status(
+                                self.ports.sampling(),
+                                port_id,
+                                frame.r2 as *mut SamplingPortStatus,
+                                tick,
+                            )
+                        }
+                    }
+                }
+            }
             #[cfg(feature = "ipc-queuing")]
             Some(SyscallId::QueuingSend) => {
                 match self.check_user_ptr(frame.r3, frame.r2 as usize) {

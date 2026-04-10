@@ -34,6 +34,15 @@ pub struct QueuingPortStatus {
     pub direction: u32,
 }
 
+#[repr(C)] // Direction: 0=Source, 1=Dest. Validity: 0=Valid, 1=Invalid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SamplingPortStatus {
+    pub max_message_size: u32,
+    pub direction: u32,
+    pub refresh_period: u32,
+    pub validity: u32,
+}
+
 pub use rtos_traits::buf_syscall;
 
 // ── Re-exported syscall constants (from rtos-traits) ──────────────────
@@ -54,7 +63,7 @@ pub use rtos_traits::syscall::{SYS_MSG_RECV, SYS_MSG_SEND};
 // Ports
 pub use rtos_traits::syscall::{
     SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED,
-    SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE,
+    SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_STATUS, SYS_SAMPLING_WRITE,
 };
 // Device driver & query (dynamic-mpu only, defined in rtos-traits)
 pub use rtos_traits::syscall::{
@@ -650,6 +659,18 @@ pub fn sys_sampling_read(port_id: SamplingPortId, buf: &mut [u8]) -> Result<u32,
         buf.len() as u32,
         buf.as_mut_ptr() as u32
     ))
+}
+
+pub fn sys_sampling_status(port_id: SamplingPortId) -> Result<SamplingPortStatus, SvcError> {
+    let mut status = core::mem::MaybeUninit::<SamplingPortStatus>::zeroed();
+    let rc = rtos_traits::svc!(
+        SYS_SAMPLING_STATUS,
+        port_id.as_raw(),
+        status.as_mut_ptr() as u32,
+        0u32
+    );
+    decode_rc(rc)?;
+    Ok(unsafe { status.assume_init() }) // SAFETY: rc==0 ⇒ struct initialised
 }
 
 /// Send a message to another partition.
