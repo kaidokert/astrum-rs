@@ -52,6 +52,9 @@ pub const SYS_GET_PARTITION_RUN_COUNT: u32 = 45;
 pub const SYS_GET_MAJOR_FRAME_COUNT: u32 = 46;
 /// Get schedule info: returns (major_frame_ticks in r0, num_partitions in r1).
 pub const SYS_GET_SCHEDULE_INFO: u32 = 47;
+/// Get partition status: r1=buf_ptr (must point to a `PartitionStatus`-sized region).
+/// Writes the calling partition's status into the buffer; returns 0 on success.
+pub const SYS_GET_PARTITION_STATUS: u32 = 48;
 /// Thread create: r1=entry_point, r2=stack_ptr, r3=priority. Returns thread_id in r0.
 pub const SYS_THREAD_CREATE: u32 = 50;
 /// Thread start: r1=thread_id. Returns 0 on success.
@@ -148,6 +151,7 @@ mod tests {
         ),
         ("SYS_GET_MAJOR_FRAME_COUNT", SYS_GET_MAJOR_FRAME_COUNT, 46),
         ("SYS_GET_SCHEDULE_INFO", SYS_GET_SCHEDULE_INFO, 47),
+        ("SYS_GET_PARTITION_STATUS", SYS_GET_PARTITION_STATUS, 48),
         ("SYS_THREAD_CREATE", SYS_THREAD_CREATE, 50),
         ("SYS_THREAD_START", SYS_THREAD_START, 51),
         ("SYS_THREAD_STOP", SYS_THREAD_STOP, 52),
@@ -174,7 +178,7 @@ mod tests {
 
     #[test]
     fn base_constant_count() {
-        assert_eq!(BASE_SYSCALLS.len(), 40);
+        assert_eq!(BASE_SYSCALLS.len(), 41);
     }
 
     /// Dynamic-MPU syscall constants: (name, actual, expected).

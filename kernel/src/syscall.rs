@@ -5,11 +5,12 @@ pub use rtos_traits::syscall::SYS_GET_PARTITION_ID;
 pub use rtos_traits::syscall::{
     SYS_BB_CLEAR, SYS_BB_DISPLAY, SYS_BB_READ, SYS_DEBUG_EXIT, SYS_DEBUG_PRINT, SYS_EVT_CLEAR,
     SYS_EVT_SET, SYS_EVT_WAIT, SYS_GET_ERROR_STATUS, SYS_GET_MAJOR_FRAME_COUNT,
-    SYS_GET_PARTITION_RUN_COUNT, SYS_GET_SCHEDULE_INFO, SYS_GET_START_CONDITION, SYS_GET_TIME,
-    SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_QUEUING_RECV,
-    SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS,
-    SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART, SYS_REQUEST_STOP, SYS_SAMPLING_READ,
-    SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_YIELD,
+    SYS_GET_PARTITION_RUN_COUNT, SYS_GET_PARTITION_STATUS, SYS_GET_SCHEDULE_INFO,
+    SYS_GET_START_CONDITION, SYS_GET_TIME, SYS_IRQ_ACK, SYS_MSG_RECV, SYS_MSG_SEND, SYS_MTX_LOCK,
+    SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND,
+    SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS, SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART,
+    SYS_REQUEST_STOP, SYS_SAMPLING_READ, SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL, SYS_SEM_WAIT,
+    SYS_SLEEP_TICKS, SYS_YIELD,
 };
 
 #[cfg(feature = "intra-threads")]
@@ -80,6 +81,7 @@ pub enum SyscallId {
     GetPartitionRunCount,
     GetMajorFrameCount,
     GetScheduleInfo,
+    GetPartitionStatus,
     #[cfg(feature = "intra-threads")]
     ThreadCreate,
     #[cfg(feature = "intra-threads")]
@@ -153,6 +155,7 @@ impl SyscallId {
             SYS_GET_PARTITION_RUN_COUNT => Some(Self::GetPartitionRunCount),
             SYS_GET_MAJOR_FRAME_COUNT => Some(Self::GetMajorFrameCount),
             SYS_GET_SCHEDULE_INFO => Some(Self::GetScheduleInfo),
+            SYS_GET_PARTITION_STATUS => Some(Self::GetPartitionStatus),
             #[cfg(feature = "intra-threads")]
             SYS_THREAD_CREATE => Some(Self::ThreadCreate),
             #[cfg(feature = "intra-threads")]
@@ -224,6 +227,7 @@ impl SyscallId {
             Self::GetPartitionRunCount => "get_partition_run_count",
             Self::GetMajorFrameCount => "get_major_frame_count",
             Self::GetScheduleInfo => "get_schedule_info",
+            Self::GetPartitionStatus => "get_partition_status",
             #[cfg(feature = "intra-threads")]
             Self::ThreadCreate => "thread_create",
             #[cfg(feature = "intra-threads")]
@@ -294,6 +298,7 @@ impl SyscallId {
             Self::GetPartitionRunCount => SYS_GET_PARTITION_RUN_COUNT,
             Self::GetMajorFrameCount => SYS_GET_MAJOR_FRAME_COUNT,
             Self::GetScheduleInfo => SYS_GET_SCHEDULE_INFO,
+            Self::GetPartitionStatus => SYS_GET_PARTITION_STATUS,
             #[cfg(feature = "intra-threads")]
             Self::ThreadCreate => SYS_THREAD_CREATE,
             #[cfg(feature = "intra-threads")]
@@ -368,6 +373,7 @@ mod tests {
         (SYS_GET_PARTITION_RUN_COUNT, SyscallId::GetPartitionRunCount),
         (SYS_GET_MAJOR_FRAME_COUNT, SyscallId::GetMajorFrameCount),
         (SYS_GET_SCHEDULE_INFO, SyscallId::GetScheduleInfo),
+        (SYS_GET_PARTITION_STATUS, SyscallId::GetPartitionStatus),
         #[cfg(feature = "intra-threads")]
         (SYS_THREAD_CREATE, SyscallId::ThreadCreate),
         #[cfg(feature = "intra-threads")]
@@ -417,7 +423,7 @@ mod tests {
         );
         assert_eq!(SyscallId::from_u32(46), Some(SyscallId::GetMajorFrameCount));
         assert_eq!(SyscallId::from_u32(47), Some(SyscallId::GetScheduleInfo));
-        assert_eq!(SyscallId::from_u32(48), None);
+        assert_eq!(SyscallId::from_u32(48), Some(SyscallId::GetPartitionStatus));
         assert_eq!(SyscallId::from_u32(49), None);
         #[cfg(feature = "intra-threads")]
         {
@@ -445,9 +451,9 @@ mod tests {
     fn constants_are_unique() {
         // round_trip_all_variants already proves each constant maps to a
         // distinct variant; here we just verify we have the expected count.
-        // Base: 48, +6 for intra-threads, +1 for partition-debug
+        // Base: 49, +6 for intra-threads, +1 for partition-debug
         let expected =
-            48 + if cfg!(feature = "intra-threads") {
+            49 + if cfg!(feature = "intra-threads") {
                 6
             } else {
                 0

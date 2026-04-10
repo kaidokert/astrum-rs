@@ -3,6 +3,30 @@
 #[cfg(feature = "intra-threads")]
 use crate::thread::SchedulingPolicy;
 
+/// Runtime status of a partition, returned by `SYS_GET_PARTITION_STATUS`.
+///
+/// Layout is `#[repr(C)]` so the kernel can write it directly into a
+/// user-provided buffer and plib can read it back without serialisation.
+///
+/// # Fields
+///
+/// * `partition_id` — zero-based index of the partition.
+/// * `period_ticks` — scheduled period (major-frame window) in ticks.
+/// * `duration_ticks` — scheduled duration (time-slice) in ticks.
+/// * `operating_mode` — current state encoded as a `u32`:
+///   0 = Ready, 1 = Running, 2 = Waiting, 3 = Faulted.
+/// * `start_condition` — how the partition was last (re)started:
+///   0 = NormalBoot, 1 = WarmRestart, 2 = ColdRestart.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartitionStatus {
+    pub partition_id: u32,
+    pub period_ticks: u32,
+    pub duration_ticks: u32,
+    pub operating_mode: u32,
+    pub start_condition: u32,
+}
+
 /// Signature for a partition body function that receives an argument in `r0`.
 pub type PartitionBody = extern "C" fn(u32) -> !;
 /// Signature for a partition entry point (no arguments, diverging).
@@ -543,6 +567,76 @@ mod tests {
     fn from_entry_body_catches_truncation_on_64bit() {
         let body: PartitionBody = _dummy_body;
         let _ = EntryAddr::from_entry(body);
+    }
+
+    // --- PartitionStatus tests ---
+
+    #[test]
+    fn partition_status_repr_c_size() {
+        // 5 × u32 = 20 bytes, no padding expected with #[repr(C)]
+        assert_eq!(core::mem::size_of::<PartitionStatus>(), 20);
+        assert_eq!(core::mem::align_of::<PartitionStatus>(), 4);
+    }
+
+    #[test]
+    fn partition_status_field_round_trip() {
+        let status = PartitionStatus {
+            partition_id: 2,
+            period_ticks: 1000,
+            duration_ticks: 250,
+            operating_mode: 1,  // Running
+            start_condition: 0, // NormalBoot
+        };
+        assert_eq!(status.partition_id, 2);
+        assert_eq!(status.period_ticks, 1000);
+        assert_eq!(status.duration_ticks, 250);
+        assert_eq!(status.operating_mode, 1);
+        assert_eq!(status.start_condition, 0);
+    }
+
+    #[test]
+    fn partition_status_copy_clone_eq() {
+        let a = PartitionStatus {
+            partition_id: 0,
+            period_ticks: 500,
+            duration_ticks: 100,
+            operating_mode: 3,  // Faulted
+            start_condition: 2, // ColdRestart
+        };
+        let b = a; // Copy
+        assert_eq!(a, b);
+        #[allow(clippy::clone_on_copy)]
+        let c = a.clone(); // explicitly test Clone impl
+        assert_eq!(a, c);
+    }
+
+    #[test]
+    fn partition_status_ne() {
+        let a = PartitionStatus {
+            partition_id: 0,
+            period_ticks: 500,
+            duration_ticks: 100,
+            operating_mode: 0,
+            start_condition: 0,
+        };
+        let b = PartitionStatus {
+            partition_id: 1,
+            ..a
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn partition_status_debug_not_empty() {
+        let s = PartitionStatus {
+            partition_id: 0,
+            period_ticks: 0,
+            duration_ticks: 0,
+            operating_mode: 0,
+            start_condition: 0,
+        };
+        let dbg = format!("{:?}", s);
+        assert!(dbg.contains("PartitionStatus"));
     }
 
     /// On 64-bit hosts, `PartitionSpec::new()` must trigger the truncation
