@@ -17,8 +17,8 @@ use kernel::{
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     svc::Kernel,
-    DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, StackStorage as _,
-    SyncMinimal,
+    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny,
+    StackStorage as _, SyncMinimal,
 };
 #[allow(clippy::single_component_path_imports)]
 use plib;
@@ -163,7 +163,11 @@ kernel::define_kernel!(no_boot, TestConfig, |tick, _k| {
         );
         hprintln!(
             "qemu_pac_pwm0_deadband: GENB={:#06x} EN={:#06x} DBCTL={:#06x} DBRISE={:#06x} DBFALL={:#06x}",
-            rb[4], rb[5], rb[6], rb[7], rb[8]
+            rb[4],
+            rb[5],
+            rb[6],
+            rb[7],
+            rb[8]
         );
 
         let mut zero_count = 0u32;
@@ -292,7 +296,7 @@ fn main() -> ! {
         fatal_halt();
     }
 
-    let pwm0_region = [MpuRegion::new(PWM0_BASE, PWM0_SIZE, 0)];
+    static PWM0_REGION: [MpuRegion; 1] = [MpuRegion::new(PWM0_BASE, PWM0_SIZE, 0)];
     let mut k = {
         let stacks = kernel::partition_stacks!(TestConfig, NP);
         let stacks_ptr = stacks.as_mut_ptr();
@@ -300,22 +304,13 @@ fn main() -> ! {
             // SAFETY: i < NP, stacks has NP elements, each index visited once.
             let stk = unsafe { &mut *stacks_ptr.add(i) };
             let base = stk.as_u32_slice().as_ptr() as u32;
-            let mem = match ExternalPartitionMemory::from_aligned_stack(
-                stk,
-                entry_fns[i],
-                MpuRegion::new(base, REGION_SZ, 0),
-                kernel::PartitionId::new(i as u32),
-            ) {
+            let spec = PartitionSpec::entry(entry_fns[i])
+                .with_data_mpu(MpuRegion::new(base, REGION_SZ, 0))
+                .with_peripherals(if i == 0 { &PWM0_REGION } else { &[] });
+            match ExternalPartitionMemory::from_spec(stk, &spec, kernel::PartitionId::new(i as u32))
+            {
                 Ok(m) => m,
                 Err(_) => fatal_halt(),
-            };
-            if i == 0 {
-                match mem.with_peripheral_regions(&pwm0_region) {
-                    Ok(m) => m,
-                    Err(_) => fatal_halt(),
-                }
-            } else {
-                mem
             }
         });
         match Kernel::<TestConfig>::new(sched, &memories) {
