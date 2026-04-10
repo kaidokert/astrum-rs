@@ -141,11 +141,9 @@ impl HwPwm0Channel {
     /// # Safety
     /// Same as [`Pwm0Channel::with_backend`], plus `base_addr` must be valid MMIO.
     pub unsafe fn new(base_addr: usize, channel: u8) -> Result<Self, Pwm0Error> {
-        Self::with_backend(
-            base_addr,
-            MmioRegisterBank::new(base_addr as *mut u32),
-            channel,
-        )
+        // SAFETY: Caller of `new` guarantees `base_addr` is a valid MMIO address.
+        let bank = unsafe { MmioRegisterBank::new(base_addr as *mut u32) };
+        Self::with_backend(base_addr, bank, channel)
     }
 }
 

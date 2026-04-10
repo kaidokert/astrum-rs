@@ -6,7 +6,6 @@ description = "Partition library: user-space helpers for partitions"
 
 [dependencies]
 rtos-traits = { path = "../rtos-traits" }
-embedded-hal = { version = "0.2", optional = true }
 
 [features]
 default = []
@@ -14,9 +13,6 @@ partition-debug = ["rtos-traits/partition-debug"]
 # Gates blackboard wrapper functions in plib; raw constants in rtos-traits are
 # intentionally unconditional (harmless without the wrapper API).
 ipc-blackboard = []
-qemu-peripherals = ["dep:embedded-hal"]
-mock-hal = ["rtos-traits/mock-hal", "dep:embedded-hal"]
 
 [dev-dependencies]
 rtos-traits = { path = "../rtos-traits", features = ["mock-hal"] }
-embedded-hal = { version = "0.2" }

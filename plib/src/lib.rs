@@ -10,9 +10,6 @@
 
 #![no_std]
 
-#[cfg(any(feature = "qemu-peripherals", feature = "mock-hal"))]
-pub mod pwm;
-
 pub use rtos_traits::api::decode_rc;
 pub use rtos_traits::api::decode_rc_r01_detail;
 pub use rtos_traits::api::SvcError;
