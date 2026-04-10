@@ -13,6 +13,7 @@ heapless = "0.8"
 panic-halt = { version = "1.0", optional = true }
 panic-rtt-target = { version = "0.2", optional = true }
 panic-semihosting = { version = "0.6", features = ["exit"], optional = true }
+lm3s = { path = "../boards/lm3s" }
 rtos-traits = { path = "../rtos-traits" }
 rtos-trace = { version = "0.2", default-features = false, optional = true }
 rtt-target = { version = "0.6", optional = true }
@@ -664,6 +665,7 @@ systemview-target = { version = "0.3", default-features = false, features = ["co
 plib = { path = "../plib" }
 
 [target.'cfg(not(target_arch = "arm"))'.dev-dependencies]
+lm3s = { path = "../boards/lm3s", features = ["mock-hal"] }
 rtos-traits = { path = "../rtos-traits", features = ["mock-hal"] }
 trybuild = "1"
 

@@ -96,14 +96,15 @@ impl HwUartRegs {
     /// # Safety
     /// `base` must point to a valid, mapped UART peripheral region.
     pub unsafe fn from_base(base: u32) -> Self {
-        Self::with_backend(base, MmioRegisterBank::new(base as *mut u32))
+        // SAFETY: Caller guarantees `base` is a valid UART peripheral address.
+        Self::with_backend(base, unsafe { MmioRegisterBank::new(base as *mut u32) })
     }
 }
 
-#[cfg(test)]
-impl UartRegs<crate::test_register::ArrayRegisterBank> {
+#[cfg(any(test, feature = "mock-hal"))]
+impl UartRegs<rtos_traits::test_register::ArrayRegisterBank> {
     pub fn new(base: u32) -> Self {
-        Self::with_backend(base, crate::test_register::ArrayRegisterBank::new())
+        Self::with_backend(base, rtos_traits::test_register::ArrayRegisterBank::new())
     }
 }
 
@@ -316,7 +317,7 @@ pub fn compute_baud_divisors(clock_hz: u32, baud: u32) -> (u16, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    type T = UartRegs<crate::test_register::ArrayRegisterBank>;
+    type T = UartRegs<rtos_traits::test_register::ArrayRegisterBank>;
 
     // -- Register offset constants ------------------------------------------
 

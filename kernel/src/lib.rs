@@ -148,11 +148,11 @@ pub fn enter_safe_idle() -> ! {
 pub use rtos_traits::check_entry_sig;
 
 // Re-export handle_systick at crate root for convenience
+pub use lm3s::uart_hal;
 pub use svc::SvcDispatchFn;
 #[cfg(not(test))]
 pub use systick::handle_systick;
 pub use systick::TickHandlerFn;
-pub mod uart_hal;
 pub mod virtual_device;
 pub mod virtual_uart;
 pub mod waitqueue;
