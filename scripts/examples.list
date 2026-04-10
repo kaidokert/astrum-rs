@@ -83,7 +83,8 @@ DYNAMIC_MPU_EXAMPLES=(
     single_periph_boot_test
     asymmetric_periph_test
     # Disabled pending MPU config fixes:
-    # mpu_dynamic_test buffer_pool_test virtual_uart_demo uart1_loopback
+    # mpu_dynamic_test buffer_pool_test virtual_uart_demo
+    uart1_loopback
 )
 
 # QEMU peripheral examples require the tudelft-lm3s6965-pac PAC crate

@@ -1,0 +1,7 @@
+   Compiling kernel v0.1.0 (/home/vagrant/cortex-m-rtos/kernel)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.48s
+     Running `qemu-system-arm -cpu cortex-m3 -machine lm3s6965evb -nographic -semihosting-config enable=on,target=native -kernel target/thumbv7m-none-eabi/debug/examples/uart1_loopback`
+Timer with period zero, disabling
+=== kernel v0.1.0 ===
+uart1_loopback: start
+qemu-system-arm: terminating on signal 15 from pid 3163082 (timeout)

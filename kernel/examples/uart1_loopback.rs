@@ -23,7 +23,7 @@ use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
     hw_uart::HwUartBackend,
-    mpu_strategy::DynamicStrategy,
+    mpu_strategy::{DynamicStrategy, MpuStrategy},
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::{Kernel, YieldResult},
@@ -113,7 +113,7 @@ kernel::define_unified_kernel!(DemoConfig, |k| {
 #[used]
 static _SVC: kernel::SvcDispatchFn = kernel::svc::SVC_HANDLER;
 
-kernel::define_pendsv!();
+kernel::define_pendsv!(dynamic: STRATEGY, DemoConfig);
 
 #[exception]
 fn SysTick() {
@@ -124,6 +124,12 @@ fn SysTick() {
         let current_tick = k.tick().get();
         match event {
             ScheduleEvent::PartitionSwitch(pid) => {
+                if let Some(pcb) = k.partitions().get(pid as usize) {
+                    let dyn_region = pcb.cached_dynamic_region();
+                    STRATEGY
+                        .configure_partition(kernel::PartitionId::new(pid as u32), &[dyn_region], 0)
+                        .expect("configure_partition");
+                }
                 k.set_next_partition(pid);
                 cortex_m::peripheral::SCB::set_pendsv();
             }
@@ -143,11 +149,13 @@ fn boot(
     use cortex_m::peripheral::syst::SystClkSource;
     use cortex_m::peripheral::SCB;
 
-    // Initialize stack frames and start the schedule.
+    // Initialize stack frames, seal MPU caches, and start the schedule.
     with_kernel_mut(|k| {
         let n = k.partitions().len();
         for i in 0..n {
-            let pcb = k.partitions().get(i).expect("partition PCB");
+            let pcb = k.partitions_mut().get_mut(i).expect("partition PCB");
+            kernel::mpu::precompute_mpu_cache(pcb).expect("precompute_mpu_cache");
+
             let entry = pcb.entry_point();
             let base = pcb.stack_base();
             let size = pcb.stack_size();
@@ -165,6 +173,14 @@ fn boot(
 
         // Start the schedule and select the first partition for PendSV.
         if let Some(pid) = kernel::svc::scheduler::start_schedule(k) {
+            // Configure the dynamic MPU strategy for the first partition
+            // before the initial PendSV fires.
+            if let Some(pcb) = k.partitions().get(pid as usize) {
+                let dyn_region = pcb.cached_dynamic_region();
+                STRATEGY
+                    .configure_partition(kernel::PartitionId::new(pid as u32), &[dyn_region], 0)
+                    .expect("configure_partition");
+            }
             k.set_next_partition(pid);
         }
     });
@@ -182,6 +198,17 @@ fn boot(
             .SCB
             .set_priority(SystemHandler::SysTick, DemoConfig::SYSTICK_PRIORITY);
     }
+    // SAFETY: Interrupts not yet enabled. PRIVDEFENA ensures privileged
+    // code retains a default memory map.
+    unsafe {
+        peripherals
+            .MPU
+            .ctrl
+            .write(kernel::mpu::MPU_CTRL_ENABLE_PRIVDEFENA)
+    };
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+
     peripherals.SYST.set_clock_source(SystClkSource::Core);
     peripherals
         .SYST
@@ -189,6 +216,7 @@ fn boot(
     peripherals.SYST.clear_current();
     peripherals.SYST.enable_counter();
     peripherals.SYST.enable_interrupt();
+
     SCB::set_pendsv();
     loop {
         cortex_m::asm::wfi();
@@ -403,6 +431,8 @@ fn main() -> ! {
         let [ref mut s0, ref mut s1] = *stacks;
         let base0 = s0.0.as_ptr() as u32;
         let base1 = s1.0.as_ptr() as u32;
+        // Code region: LM3S6965 flash starts at 0x0000_0000, 256 KiB.
+        let code_region = MpuRegion::new(0x0000_0000, 256 * 1024, 0);
         let memories = [
             ExternalPartitionMemory::new(
                 &mut s0.0,
@@ -410,14 +440,18 @@ fn main() -> ! {
                 MpuRegion::new(base0, STACK_BYTES, 0),
                 kernel::PartitionId::new(0),
             )
-            .expect("ext mem"),
+            .expect("ext mem")
+            .with_code_mpu_region(code_region)
+            .expect("code region"),
             ExternalPartitionMemory::new(
                 &mut s1.0,
                 p2_main as PartitionEntry,
                 MpuRegion::new(base1, STACK_BYTES, 0),
                 kernel::PartitionId::new(1),
             )
-            .expect("ext mem"),
+            .expect("ext mem")
+            .with_code_mpu_region(code_region)
+            .expect("code region"),
         ];
         Kernel::<DemoConfig>::new(sched, &memories).expect("kernel creation")
     };
