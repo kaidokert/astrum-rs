@@ -362,6 +362,10 @@ impl<const N: usize> VirtualDevice for HwUartBackend<N> {
             _ => Err(DeviceError::NotFound),
         }
     }
+
+    fn tick_drain(&mut self) {
+        self.drain_tx_to_hw();
+    }
 }
 
 #[cfg(test)]
@@ -1033,6 +1037,39 @@ mod tests {
         // Refill should work.
         let n = VirtualDevice::write(&mut hw, pid(0), &[0xCD; 10]).unwrap();
         assert_eq!(n, 10);
+    }
+
+    // ---- tick_drain tests ----
+
+    #[test]
+    fn tick_drain_calls_drain_tx_to_hw() {
+        let mut hw = make_backend(1);
+        hw.set_loopback(true);
+        VirtualDevice::open(&mut hw, pid(0)).unwrap();
+        VirtualDevice::write(&mut hw, pid(0), &[0xDE, 0xAD, 0xBE]).unwrap();
+        assert_eq!(hw.tx_len(), 3);
+        assert_eq!(hw.rx_len(), 0);
+
+        // tick_drain should drain TX to RX via loopback.
+        VirtualDevice::tick_drain(&mut hw);
+
+        assert_eq!(hw.tx_len(), 0);
+        assert_eq!(hw.rx_len(), 3);
+        // Verify data integrity.
+        let mut buf = [0u8; 3];
+        let n = VirtualDevice::read(&mut hw, pid(0), &mut buf).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(buf, [0xDE, 0xAD, 0xBE]);
+    }
+
+    #[test]
+    fn tick_drain_noop_when_tx_empty() {
+        let mut hw = make_backend(1);
+        hw.set_loopback(true);
+        // TX is empty — tick_drain should do nothing.
+        VirtualDevice::tick_drain(&mut hw);
+        assert_eq!(hw.tx_len(), 0);
+        assert_eq!(hw.rx_len(), 0);
     }
 
     #[test]

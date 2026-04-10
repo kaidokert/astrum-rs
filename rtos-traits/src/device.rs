@@ -41,6 +41,10 @@ pub trait VirtualDevice: Send {
         cmd: u32,
         arg: u32,
     ) -> Result<u32, DeviceError>;
+
+    /// Called from kernel tick to drain pending ISR-side state.
+    /// Default impl is a no-op for devices that don't need bottom halves.
+    fn tick_drain(&mut self) {}
 }
 
 /// Fixed-capacity registry of virtual devices looked up by device ID.
@@ -189,6 +193,16 @@ mod tests {
             self.require_open(p)?;
             Ok(0)
         }
+    }
+
+    #[test]
+    fn tick_drain_default_is_noop() {
+        let mut dev = MockDev::new(42);
+        // MockDev does not override tick_drain, so it gets the default no-op.
+        dev.tick_drain();
+        // Verify state is unchanged — device_id still correct, no partition opened.
+        assert_eq!(dev.device_id(), 42);
+        assert_eq!(dev.1, None);
     }
 
     #[test]
