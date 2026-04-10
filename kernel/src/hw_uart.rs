@@ -370,6 +370,10 @@ impl<const N: usize> VirtualDevice for HwUartBackend<N> {
     fn push_isr_rx(&mut self, data: &[u8]) -> usize {
         self.push_rx_from_isr(data)
     }
+
+    fn has_rx_data(&self) -> bool {
+        self.rx_len() > 0
+    }
 }
 
 #[cfg(test)]

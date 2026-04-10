@@ -89,14 +89,14 @@ fn record(pass: bool, name: &str) {
 static STRATEGY: DynamicStrategy = DynamicStrategy::new();
 
 /// Run the bottom-half processing for virtual-UART, ISR-ring, and
-/// HwUartBackend.  Software loopback is handled internally by
+/// device registry.  Software loopback is handled internally by
 /// `HwUartBackend::drain_tx_to_hw` when loopback mode is enabled.
 fn do_bottom_half(k: &mut Kernel<'_, DemoConfig>, current_tick: u64) {
     kernel::tick::run_bottom_half(
         &mut k.uart_pair,
         &mut k.isr_ring,
         &mut k.buffers,
-        &mut k.hw_uart,
+        &mut k.registry,
         current_tick,
         &STRATEGY,
     );

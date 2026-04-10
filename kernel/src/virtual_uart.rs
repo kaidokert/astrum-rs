@@ -201,6 +201,10 @@ impl VirtualDevice for VirtualUartBackend {
     fn push_isr_rx(&mut self, data: &[u8]) -> usize {
         self.push_rx(data)
     }
+
+    fn has_rx_data(&self) -> bool {
+        self.rx_len() > 0
+    }
 }
 
 /// A pair of virtual UARTs wired for loopback: UART-A TX routes to

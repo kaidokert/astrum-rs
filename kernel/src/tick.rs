@@ -379,7 +379,7 @@ macro_rules! run_bottom_half {
                 &mut $kernel.uart_pair,
                 &mut $kernel.isr_ring,
                 &mut $kernel.buffers,
-                &mut $kernel.hw_uart,
+                &mut $kernel.registry,
                 $current_tick,
                 $strategy,
             ))
@@ -444,37 +444,29 @@ pub struct BottomHalfResult {
 /// Note: Partition waking (`Waiting` → `Ready`) is performed by the caller
 /// (`systick_handler`) based on the returned `BottomHalfResult`, not by this
 /// function.
-pub fn run_bottom_half<const D: usize, const M: usize, const BP: usize, const BZ: usize>(
+pub fn run_bottom_half<
+    const D: usize,
+    const M: usize,
+    const BP: usize,
+    const BZ: usize,
+    const DR: usize,
+>(
     uart_pair: &mut crate::virtual_uart::VirtualUartPair,
     isr_ring: &mut crate::split_isr::IsrRingBuffer<D, M>,
     buffers: &mut crate::buffer_pool::BufferPool<BP, BZ>,
-    hw_uart: &mut Option<crate::hw_uart::HwUartBackend>,
+    registry: &mut crate::virtual_device::DeviceRegistry<'_, DR>,
     current_tick: u64,
     strategy: &dyn crate::mpu_strategy::MpuStrategy,
 ) -> BottomHalfResult {
-    use crate::virtual_device::VirtualDevice;
     let (a_to_b, b_to_a) = uart_pair.transfer();
-    let a_id = uart_pair.a.device_id();
-    let b_id = uart_pair.b.device_id();
     while isr_ring.pop_with(|tag, data| {
-        if tag == a_id {
-            uart_pair.a.push_rx(data);
-        } else if tag == b_id {
-            uart_pair.b.push_rx(data);
-        } else if let Some(hw) = hw_uart.as_mut() {
-            if hw.device_id() == tag {
-                hw.push_rx_from_isr(data);
-            }
-        }
+        registry.push_to_device(tag, data);
     }) {}
-    if let Some(hw) = hw_uart.as_mut() {
-        hw.drain_tx_to_hw();
-    }
+    registry.drain_all();
     buffers.revoke_expired(current_tick, strategy);
 
-    let has_rx_data = uart_pair.a.rx_len() > 0
-        || uart_pair.b.rx_len() > 0
-        || hw_uart.as_ref().is_some_and(|hw| hw.rx_len() > 0);
+    let has_rx_data =
+        uart_pair.a.rx_len() > 0 || uart_pair.b.rx_len() > 0 || registry.any_has_rx_data();
 
     BottomHalfResult {
         a_to_b,
@@ -710,6 +702,7 @@ mod tests {
         use crate::buffer_pool::BufferPool;
         use crate::mpu_strategy::DynamicStrategy;
         use crate::split_isr::IsrRingBuffer;
+        use crate::virtual_device::DeviceRegistry;
         use crate::virtual_uart::VirtualUartPair;
 
         #[test]
@@ -717,7 +710,7 @@ mod tests {
             let mut pair = VirtualUartPair::new(0, 1);
             let mut ring = IsrRingBuffer::<4, 8>::new();
             let mut buffers = BufferPool::<4, 32>::new();
-            let mut hw_uart = None;
+            let mut registry = DeviceRegistry::<4>::new();
             let ds = DynamicStrategy::new();
 
             pair.a.push_tx(&[0xAA, 0xBB]);
@@ -725,7 +718,7 @@ mod tests {
                 &mut pair,
                 &mut ring,
                 &mut buffers,
-                &mut hw_uart,
+                &mut registry,
                 0,
                 &ds,
             );
@@ -742,13 +735,13 @@ mod tests {
             let mut pair = VirtualUartPair::new(0, 1);
             let mut ring = IsrRingBuffer::<4, 8>::new();
             let mut buffers = BufferPool::<4, 32>::new();
-            let mut hw_uart = None;
+            let mut registry = DeviceRegistry::<4>::new();
             let ds = DynamicStrategy::new();
             let bh = crate::tick::run_bottom_half(
                 &mut pair,
                 &mut ring,
                 &mut buffers,
-                &mut hw_uart,
+                &mut registry,
                 0,
                 &ds,
             );
@@ -761,7 +754,7 @@ mod tests {
             let mut pair = VirtualUartPair::new(0, 1);
             let mut ring = IsrRingBuffer::<4, 8>::new();
             let mut buffers = BufferPool::<4, 32>::new();
-            let mut hw_uart = None;
+            let mut registry = DeviceRegistry::<4>::new();
             let ds = DynamicStrategy::new();
 
             pair.a.push_tx(&[0x42]);
@@ -769,7 +762,7 @@ mod tests {
                 &mut pair,
                 &mut ring,
                 &mut buffers,
-                &mut hw_uart,
+                &mut registry,
                 10,
                 &ds,
             );
@@ -781,7 +774,7 @@ mod tests {
             let mut pair = VirtualUartPair::new(0, 1);
             let mut ring = IsrRingBuffer::<4, 8>::new();
             let mut buffers = BufferPool::<4, 32>::new();
-            let mut hw_uart = None;
+            let mut registry = DeviceRegistry::<4>::new();
             let ds = DynamicStrategy::new();
 
             buffers
@@ -797,7 +790,7 @@ mod tests {
                 &mut pair,
                 &mut ring,
                 &mut buffers,
-                &mut hw_uart,
+                &mut registry,
                 100,
                 &ds,
             );
@@ -815,6 +808,50 @@ mod tests {
                 },
             );
             assert_eq!(buffers.deadline(1), Some(200));
+        }
+
+        fn make_hw_uart(id: u8) -> crate::hw_uart::HwUartBackend {
+            let mut hw =
+                crate::hw_uart::HwUartBackend::new(id, crate::uart_hal::UartRegs::new(0x4000_C000));
+            hw.set_loopback(true);
+            hw
+        }
+
+        /// Verifies ISR ring routing via registry (push_to_device) and
+        /// that drain_all is called (tick_drain moves TX→RX in loopback).
+        #[test]
+        fn run_bottom_half_registry_isr_routing_and_drain() {
+            use crate::virtual_device::VirtualDevice;
+            let mut pair = VirtualUartPair::new(0, 1);
+            let mut ring = IsrRingBuffer::<4, 8>::new();
+            let mut buffers = BufferPool::<4, 32>::new();
+            let ds = DynamicStrategy::new();
+
+            let hw: &'static mut crate::hw_uart::HwUartBackend =
+                Box::leak(Box::new(make_hw_uart(5)));
+            hw.open(crate::PartitionId::new(0)).unwrap();
+            // TX data for drain_all to move via loopback
+            hw.write(crate::PartitionId::new(0), &[0xBE, 0xEF]).unwrap();
+            let mut registry = DeviceRegistry::<4>::new();
+            registry.add(hw).unwrap();
+            // ISR data tagged for device 5 — routed via registry
+            ring.push_from_isr(5, &[0xDE]).unwrap();
+
+            let bh = crate::tick::run_bottom_half(
+                &mut pair,
+                &mut ring,
+                &mut buffers,
+                &mut registry,
+                0,
+                &ds,
+            );
+            assert!(bh.has_rx_data);
+            // Verify drain_all ran: loopback moved TX→RX (2 bytes) + ISR pushed 1 byte
+            let dev = registry.get_mut(5).unwrap();
+            let mut buf = [0u8; 4];
+            let n = dev.read(crate::PartitionId::new(0), &mut buf).unwrap();
+            assert_eq!(n, 3);
+            assert_eq!(&buf[..3], &[0xDE, 0xBE, 0xEF]);
         }
 
         // -------------------------------------------------------------------------
@@ -860,7 +897,7 @@ mod tests {
             uart_pair: crate::virtual_uart::VirtualUartPair,
             isr_ring: crate::split_isr::IsrRingBuffer<4, 8>,
             buffers: crate::buffer_pool::BufferPool<4, 32>,
-            hw_uart: Option<crate::hw_uart::HwUartBackend>,
+            registry: DeviceRegistry<'static, 4>,
             dynamic_strategy: DynamicStrategy,
         }
 
@@ -871,7 +908,7 @@ mod tests {
                     uart_pair: crate::virtual_uart::VirtualUartPair::new(0, 1),
                     isr_ring: crate::split_isr::IsrRingBuffer::new(),
                     buffers: crate::buffer_pool::BufferPool::new(),
-                    hw_uart: None,
+                    registry: DeviceRegistry::new(),
                     dynamic_strategy: DynamicStrategy::new(),
                 }
             }

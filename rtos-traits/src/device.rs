@@ -52,6 +52,13 @@ pub trait VirtualDevice: Send {
     fn push_isr_rx(&mut self, _data: &[u8]) -> usize {
         0
     }
+
+    /// Returns `true` when the device has pending RX data for a reader.
+    /// Used by the bottom-half to decide whether to wake waiting partitions.
+    /// Default impl returns `false` for devices that don't buffer RX data.
+    fn has_rx_data(&self) -> bool {
+        false
+    }
 }
 
 /// Fixed-capacity registry of virtual devices looked up by device ID.
@@ -124,6 +131,15 @@ impl<'a, const N: usize> DeviceRegistry<'a, N> {
             }
         }
         false
+    }
+
+    /// Returns `true` if any registered device has pending RX data.
+    pub fn any_has_rx_data(&self) -> bool {
+        self.devices
+            .iter()
+            .take(self.count)
+            .flatten()
+            .any(|dev| dev.has_rx_data())
     }
 }
 
