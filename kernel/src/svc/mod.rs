@@ -332,7 +332,7 @@ use crate::partition::{
 use crate::queuing::{QueuingPortPool, QueuingPortStatus, RecvQueuingOutcome, SendQueuingOutcome};
 use crate::sampling::{SamplingPortPool, SamplingPortStatus};
 use crate::scheduler::ScheduleTable;
-use crate::semaphore::SemaphorePool;
+use crate::semaphore::{SemaphorePool, SemaphoreStatus};
 use crate::syscall::SyscallId;
 use crate::tick::TickCounter;
 // Re-export for callers who need to call methods on TickCounter from facade methods
@@ -1801,6 +1801,28 @@ where
                 let pt = self.core.partitions_mut();
                 let sem_id = SemaphoreId::new(arg1);
                 sync::handle_sem_signal(self.sync.semaphores_mut(), pt, sem_id)
+            }
+            Some(SyscallId::SemStatus) => {
+                match self.check_user_ptr(frame.r2, core::mem::size_of::<SemaphoreStatus>()) {
+                    Err(e) => e,
+                    Ok(())
+                        if !(frame.r2 as usize)
+                            .is_multiple_of(core::mem::align_of::<SemaphoreStatus>()) =>
+                    {
+                        SvcError::InvalidPointer.to_u32()
+                    }
+                    Ok(()) => {
+                        let sem_id = SemaphoreId::new(frame.r1);
+                        // SAFETY: pointer validated above.
+                        unsafe {
+                            sync::handle_sem_status(
+                                self.sync.semaphores(),
+                                sem_id,
+                                frame.r2 as *mut SemaphoreStatus,
+                            )
+                        }
+                    }
+                }
             }
             Some(SyscallId::MutexLock) => {
                 let pt = self.core.partitions_mut();

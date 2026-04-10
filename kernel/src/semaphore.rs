@@ -35,6 +35,14 @@ impl<const W: usize> Semaphore<W> {
         self.max_count
     }
 }
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SemaphoreStatus {
+    pub current_count: u32,
+    pub max_count: u32,
+    pub waiting_count: u32,
+}
+
 pub struct SemaphorePool<const S: usize, const W: usize> {
     slots: heapless::Vec<Semaphore<W>, S>,
 }
@@ -50,6 +58,14 @@ impl<const S: usize, const W: usize> SemaphorePool<S, W> {
     }
     pub fn get(&self, id: usize) -> Option<&Semaphore<W>> {
         self.slots.get(id)
+    }
+    pub fn get_semaphore_status(&self, id: usize) -> Result<SemaphoreStatus, SemaphoreError> {
+        let sem = self.slots.get(id).ok_or(SemaphoreError::InvalidSemaphore)?;
+        Ok(SemaphoreStatus {
+            current_count: sem.count,
+            max_count: sem.max_count,
+            waiting_count: sem.wait_queue.len() as u32,
+        })
     }
     pub fn wait<const N: usize>(
         &mut self,
@@ -220,5 +236,20 @@ mod tests {
         let result = p.wait(&mut t, 0, 0);
         assert_eq!(result, Ok(false), "wait() on zero-count semaphore must return Ok(false)");
         assert_eq!(t.get(0).unwrap().state(), Waiting, "blocked partition must be in Waiting state");
+    }
+    #[test] fn get_semaphore_status_valid_and_invalid() {
+        let (mut t, mut p) = (tbl::<4>(3), SemaphorePool::<4, 4>::new());
+        p.add(Semaphore::new(2, 5)).unwrap();
+        let s = p.get_semaphore_status(0).unwrap();
+        assert_eq!((s.current_count, s.max_count, s.waiting_count), (2, 5, 0));
+        assert_eq!(p.wait(&mut t, 0, 0), Ok(true));
+        assert_eq!(p.get_semaphore_status(0).unwrap().current_count, 1);
+        assert_eq!(p.wait(&mut t, 0, 0), Ok(true));
+        assert_eq!(p.wait(&mut t, 0, 1), Ok(false));
+        let s = p.get_semaphore_status(0).unwrap();
+        assert_eq!((s.current_count, s.waiting_count), (0, 1));
+        p.signal(&mut t, 0).unwrap();
+        assert_eq!(p.get_semaphore_status(0).unwrap().waiting_count, 0);
+        assert_eq!(p.get_semaphore_status(99), Err(SemaphoreError::InvalidSemaphore));
     }
 }

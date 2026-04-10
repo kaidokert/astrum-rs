@@ -1,6 +1,6 @@
 use crate::mutex::{MutexError, MutexPool};
 use crate::partition::PartitionTable;
-use crate::semaphore::{SemaphoreError, SemaphorePool};
+use crate::semaphore::{SemaphoreError, SemaphorePool, SemaphoreStatus};
 use crate::svc::SvcError;
 use rtos_traits::ids::{MutexId, SemaphoreId};
 
@@ -24,6 +24,23 @@ pub fn handle_sem_signal<const N: usize, const S: usize, const W: usize>(
 ) -> u32 {
     sem.signal(pt, id.as_raw() as usize)
         .map_or_else(sem_error_to_svc, |()| 0)
+}
+
+/// # Safety
+/// `out` must be valid, aligned, and writable.
+pub unsafe fn handle_sem_status<const S: usize, const W: usize>(
+    sem: &SemaphorePool<S, W>,
+    id: SemaphoreId,
+    out: *mut SemaphoreStatus,
+) -> u32 {
+    match sem.get_semaphore_status(id.as_raw() as usize) {
+        Ok(status) => {
+            // SAFETY: see doc on this function.
+            unsafe { core::ptr::write(out, status) };
+            0
+        }
+        Err(_) => SvcError::InvalidResource.to_u32(),
+    }
 }
 
 pub fn handle_mtx_lock<const N: usize, const S: usize, const W: usize>(
@@ -181,5 +198,19 @@ mod tests {
             mtx_error_to_svc(MutexError::Transition(crate::partition::TransitionError)),
             SvcError::TransitionFailed.to_u32()
         );
+    }
+    #[test]
+    #[rustfmt::skip] #[allow(clippy::undocumented_unsafe_blocks)]
+    fn sem_status() {
+        let (mut p, mut s) = (pt(), SemaphorePool::<4, 4>::new());
+        s.add(Semaphore::new(2, 5)).unwrap();
+        let mut out = core::mem::MaybeUninit::<SemaphoreStatus>::uninit();
+        assert_eq!(unsafe { handle_sem_status(&s, SemaphoreId::new(0), out.as_mut_ptr()) }, 0);
+        let st = unsafe { out.assume_init() };
+        assert_eq!((st.current_count, st.max_count, st.waiting_count), (2, 5, 0));
+        assert_eq!(handle_sem_wait(&mut s, &mut p, SemaphoreId::new(0), 0), (1, false));
+        assert_eq!(unsafe { handle_sem_status(&s, SemaphoreId::new(0), out.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { out.assume_init() }.current_count, 1);
+        assert_eq!(unsafe { handle_sem_status(&s, SemaphoreId::new(99), out.as_mut_ptr()) }, SvcError::InvalidResource.to_u32());
     }
 }

@@ -34,6 +34,14 @@ pub struct QueuingPortStatus {
     pub direction: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SemaphoreStatus {
+    pub current_count: u32,
+    pub max_count: u32,
+    pub waiting_count: u32,
+}
+
 #[repr(C)] // Direction: 0=Source, 1=Dest. Validity: 0=Valid, 1=Invalid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SamplingPortStatus {
@@ -57,7 +65,9 @@ pub use rtos_traits::syscall::{
 // Events
 pub use rtos_traits::syscall::{SYS_EVT_CLEAR, SYS_EVT_SET, SYS_EVT_WAIT};
 // Sync
-pub use rtos_traits::syscall::{SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_WAIT};
+pub use rtos_traits::syscall::{
+    SYS_MTX_LOCK, SYS_MTX_UNLOCK, SYS_SEM_SIGNAL, SYS_SEM_STATUS, SYS_SEM_WAIT,
+};
 // Messaging
 pub use rtos_traits::syscall::{SYS_MSG_RECV, SYS_MSG_SEND};
 // Ports
@@ -596,6 +606,18 @@ pub fn sys_sem_signal(sem_id: SemaphoreId) -> Result<u32, SvcError> {
         0u32,
         0u32
     ))
+}
+
+pub fn sys_sem_status(sem_id: SemaphoreId) -> Result<SemaphoreStatus, SvcError> {
+    let mut status = core::mem::MaybeUninit::<SemaphoreStatus>::zeroed();
+    let rc = rtos_traits::svc!(
+        SYS_SEM_STATUS,
+        sem_id.as_raw(),
+        status.as_mut_ptr() as u32,
+        0u32
+    );
+    decode_rc(rc)?;
+    Ok(unsafe { status.assume_init() }) // SAFETY: rc==0 ⇒ struct initialised
 }
 
 /// Lock a mutex.

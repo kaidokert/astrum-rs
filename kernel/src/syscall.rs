@@ -10,7 +10,7 @@ pub use rtos_traits::syscall::{
     SYS_MTX_UNLOCK, SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND,
     SYS_QUEUING_SEND_TIMED, SYS_QUEUING_STATUS, SYS_REGISTER_ERROR_HANDLER, SYS_REQUEST_RESTART,
     SYS_REQUEST_STOP, SYS_SAMPLING_READ, SYS_SAMPLING_STATUS, SYS_SAMPLING_WRITE, SYS_SEM_SIGNAL,
-    SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_YIELD,
+    SYS_SEM_STATUS, SYS_SEM_WAIT, SYS_SLEEP_TICKS, SYS_YIELD,
 };
 
 #[cfg(feature = "intra-threads")]
@@ -40,6 +40,7 @@ pub enum SyscallId {
     EventClear,
     SemWait,
     SemSignal,
+    SemStatus,
     MutexLock,
     MutexUnlock,
     MsgSend,
@@ -115,6 +116,7 @@ impl SyscallId {
             SYS_EVT_CLEAR => Some(Self::EventClear),
             SYS_SEM_WAIT => Some(Self::SemWait),
             SYS_SEM_SIGNAL => Some(Self::SemSignal),
+            SYS_SEM_STATUS => Some(Self::SemStatus),
             SYS_MTX_LOCK => Some(Self::MutexLock),
             SYS_MTX_UNLOCK => Some(Self::MutexUnlock),
             SYS_MSG_SEND => Some(Self::MsgSend),
@@ -188,6 +190,7 @@ impl SyscallId {
             Self::EventClear => "event_clear",
             Self::SemWait => "sem_wait",
             Self::SemSignal => "sem_signal",
+            Self::SemStatus => "sem_status",
             Self::MutexLock => "mutex_lock",
             Self::MutexUnlock => "mutex_unlock",
             Self::MsgSend => "msg_send",
@@ -260,6 +263,7 @@ impl SyscallId {
             Self::EventClear => SYS_EVT_CLEAR,
             Self::SemWait => SYS_SEM_WAIT,
             Self::SemSignal => SYS_SEM_SIGNAL,
+            Self::SemStatus => SYS_SEM_STATUS,
             Self::MutexLock => SYS_MTX_LOCK,
             Self::MutexUnlock => SYS_MTX_UNLOCK,
             Self::MsgSend => SYS_MSG_SEND,
@@ -336,6 +340,7 @@ mod tests {
         (SYS_EVT_CLEAR, SyscallId::EventClear),
         (SYS_SEM_WAIT, SyscallId::SemWait),
         (SYS_SEM_SIGNAL, SyscallId::SemSignal),
+        (SYS_SEM_STATUS, SyscallId::SemStatus),
         (SYS_MTX_LOCK, SyscallId::MutexLock),
         (SYS_MTX_UNLOCK, SyscallId::MutexUnlock),
         (SYS_MSG_SEND, SyscallId::MsgSend),
@@ -446,7 +451,6 @@ mod tests {
             assert_eq!(SyscallId::from_u32(SYS_THREAD_CREATE), None);
             assert_eq!(SyscallId::from_u32(SYS_THREAD_GET_ID), None);
         }
-        assert_eq!(SyscallId::from_u32(56), None);
         assert_eq!(SyscallId::from_u32(100), None);
         assert_eq!(SyscallId::from_u32(u32::MAX), None);
     }
@@ -457,7 +461,7 @@ mod tests {
         // distinct variant; here we just verify we have the expected count.
         // Base: 49, +6 for intra-threads, +1 for partition-debug
         let expected =
-            50 + if cfg!(feature = "intra-threads") {
+            51 + if cfg!(feature = "intra-threads") {
                 6
             } else {
                 0
