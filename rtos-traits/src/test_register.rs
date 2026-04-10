@@ -1,4 +1,4 @@
-use rtos_traits::register::RegisterBank;
+use crate::register::RegisterBank;
 
 const REG_SLOTS: usize = 18;
 

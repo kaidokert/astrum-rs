@@ -68,7 +68,7 @@
 //! mask the IRQ explicitly — the entire window between `event_wait`
 //! returning and `sys_irq_ack` completing is implicitly protected.
 //!
-//! [`PartitionAcks`]: crate::irq_dispatch::IrqClearModel::PartitionAcks
+//! `PartitionAcks` is defined in the `kernel` crate's `irq_dispatch` module.
 
 /// Error returned when the ring buffer is full.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

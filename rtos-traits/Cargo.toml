@@ -13,3 +13,6 @@ partition-debug = []
 mock-hal = []
 std = []
 intra-threads = []
+# StaticIsrRing single-core/multi-core gating (matches kernel features).
+multi-core = []
+single-core = []

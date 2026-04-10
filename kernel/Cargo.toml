@@ -623,8 +623,8 @@ log-defmt = ["dep:defmt"]
 
 # Multi-core: removes StaticIsrRing Sync impl (IRQ-masking insufficient on SMP).
 # Use `single-core` as an explicit override when both are enabled (--all-features).
-multi-core = []
-single-core = []
+multi-core = ["rtos-traits/multi-core"]
+single-core = ["rtos-traits/single-core"]
 
 # FPU context: save/restore FPU registers on context switch (Cortex-M4F+).
 fpu-context = []

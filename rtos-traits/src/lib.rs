@@ -10,9 +10,12 @@ pub mod fmt;
 pub mod hal;
 pub mod i2c;
 pub mod ids;
+pub mod isr_ring;
 pub mod partition;
 pub mod register;
 pub mod spi;
+#[cfg(any(test, feature = "mock-hal"))]
+pub mod test_register;
 pub mod syscall;
 pub mod thread;
 pub mod uart;

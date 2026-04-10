@@ -85,7 +85,7 @@ pub mod queuing;
 pub mod sampling;
 pub mod scheduler;
 pub mod semaphore;
-pub mod split_isr;
+pub use rtos_traits::isr_ring as split_isr;
 pub mod state;
 pub mod svc;
 pub mod sync_pools;
@@ -166,7 +166,7 @@ pub mod test_harness;
 #[cfg(test)]
 pub mod test_mmap;
 #[cfg(test)]
-pub mod test_register;
+pub use rtos_traits::test_register;
 
 #[cfg(test)]
 #[allow(deprecated)]
