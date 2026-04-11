@@ -13,6 +13,8 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
+// NOTE: Raw svc!() used intentionally to test kernel validation of malformed arguments.
+
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
