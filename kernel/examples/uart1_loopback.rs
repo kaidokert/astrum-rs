@@ -22,15 +22,14 @@ use cortex_m::interrupt::Mutex;
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    hw_uart::HwUartBackend,
     mpu_strategy::{DynamicStrategy, MpuStrategy},
     partition::{ExternalPartitionMemory, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleEvent, ScheduleTable},
     svc::{Kernel, YieldResult},
-    uart_hal::UartRegs,
     virtual_device::VirtualDevice,
     DebugEnabled, MsgMinimal, PartitionEntry, Partitions4, PortsTiny, SyncMinimal,
 };
+use lm3s::{hw_uart::HwUartBackend, uart_hal::UartRegs};
 
 const NUM_PARTITIONS: usize = 2;
 const STACK_WORDS: usize = 256;
