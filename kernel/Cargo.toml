@@ -667,6 +667,7 @@ plib = { path = "../plib" }
 [target.'cfg(not(target_arch = "arm"))'.dev-dependencies]
 lm3s = { path = "../boards/lm3s", features = ["mock-hal"] }
 rtos-traits = { path = "../rtos-traits", features = ["mock-hal"] }
+lm3s = { path = "../boards/lm3s", features = ["mock-hal"] }
 trybuild = "1"
 
 [target.'cfg(not(target_arch = "arm"))'.dev-dependencies.loom]
