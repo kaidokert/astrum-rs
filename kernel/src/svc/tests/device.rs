@@ -127,12 +127,12 @@ pub(super) fn low32_buf(page: usize) -> *mut u8 {
 
 #[test]
 fn dev_close_after_open_returns_success() {
-    use crate::hw_uart::HwUartBackend;
     use crate::syscall::{SYS_DEV_CLOSE, SYS_DEV_OPEN};
-    use crate::uart_hal::UartRegs;
+    use lm3s::hw_uart::HwUartBackend;
+    use lm3s::uart_hal::UartRegs;
     let (mut registry, _, _) = default_registry();
     // Type annotation needed: const generic N cannot be inferred through dyn VirtualDevice.
-    let hw: &mut HwUartBackend<8> =
+    let hw: &mut HwUartBackend<_, 8> =
         Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
     registry.add(hw).unwrap();
     let mut k = kernel_with_registry(0, 0, 0, registry);
@@ -150,12 +150,12 @@ fn dev_close_after_open_returns_success() {
 
 #[test]
 fn dev_close_without_open_returns_error() {
-    use crate::hw_uart::HwUartBackend;
     use crate::syscall::SYS_DEV_CLOSE;
-    use crate::uart_hal::UartRegs;
+    use lm3s::hw_uart::HwUartBackend;
+    use lm3s::uart_hal::UartRegs;
     let (mut registry, _, _) = default_registry();
     // Type annotation needed: const generic N cannot be inferred through dyn VirtualDevice.
-    let hw: &mut HwUartBackend<8> =
+    let hw: &mut HwUartBackend<_, 8> =
         Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
     registry.add(hw).unwrap();
     let mut k = kernel_with_registry(0, 0, 0, registry);
