@@ -22,6 +22,7 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions1, PortsTiny, SyncMinimal,
 };
+use plib::sys_thread_create;
 use rtos_traits::thread::SchedulingPolicy;
 
 kernel::kernel_config!(
@@ -52,16 +53,13 @@ extern "C" fn thread1_entry() -> ! {
 
 const _: PartitionEntry = p0_entry;
 extern "C" fn p0_entry() -> ! {
-    // Create a second thread via SYS_THREAD_CREATE syscall.
-    let ret = rtos_traits::svc!(
-        rtos_traits::syscall::SYS_THREAD_CREATE,
-        thread1_entry as *const () as u32,
-        1u32,
-        0u32
-    );
-    if ret >= 0x8000_0000 {
-        hprintln!("qemu_thread_rr: FAIL SYS_THREAD_CREATE returned {:#x}", ret);
-        kernel::kexit!(failure);
+    // Create a second thread via plib wrapper.
+    match sys_thread_create(thread1_entry as *const (), 1) {
+        Ok(_tid) => {}
+        Err(e) => {
+            hprintln!("qemu_thread_rr: FAIL SYS_THREAD_CREATE error {:?}", e);
+            kernel::kexit!(failure);
+        }
     }
     loop {
         T0_COUNTER.fetch_add(1, Ordering::Relaxed);
