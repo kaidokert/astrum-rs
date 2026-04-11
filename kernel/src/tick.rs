@@ -810,9 +810,11 @@ mod tests {
             assert_eq!(buffers.deadline(1), Some(200));
         }
 
-        fn make_hw_uart(id: u8) -> crate::hw_uart::HwUartBackend {
-            let mut hw =
-                crate::hw_uart::HwUartBackend::new(id, crate::uart_hal::UartRegs::new(0x4000_C000));
+        fn make_hw_uart(id: u8) -> lm3s::hw_uart::MockHwUartBackend {
+            let mut hw = lm3s::hw_uart::MockHwUartBackend::new(
+                id,
+                lm3s::uart_hal::UartRegs::new(0x4000_C000),
+            );
             hw.set_loopback(true);
             hw
         }
@@ -827,7 +829,7 @@ mod tests {
             let mut buffers = BufferPool::<4, 32>::new();
             let ds = DynamicStrategy::new();
 
-            let hw: &'static mut crate::hw_uart::HwUartBackend =
+            let hw: &'static mut lm3s::hw_uart::MockHwUartBackend =
                 Box::leak(Box::new(make_hw_uart(5)));
             hw.open(crate::PartitionId::new(0)).unwrap();
             // TX data for drain_all to move via loopback

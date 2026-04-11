@@ -659,6 +659,7 @@ proptest = []
 loom = { version = "0.7", optional = true }
 
 [target.'cfg(target_arch = "arm")'.dependencies]
+lm3s = { path = "../boards/lm3s" }
 systemview-target = { version = "0.3", default-features = false, features = ["cortex-m", "callbacks-os", "ext-rtt-channels-2"], optional = true } # TODO: reviewer false positive – v0.3.0 only provides ext-rtt-channels-2, not ext-rtt-channels-1
 
 [dev-dependencies]
@@ -667,7 +668,6 @@ plib = { path = "../plib" }
 [target.'cfg(not(target_arch = "arm"))'.dev-dependencies]
 lm3s = { path = "../boards/lm3s", features = ["mock-hal"] }
 rtos-traits = { path = "../rtos-traits", features = ["mock-hal"] }
-lm3s = { path = "../boards/lm3s", features = ["mock-hal"] }
 trybuild = "1"
 
 [target.'cfg(not(target_arch = "arm"))'.dev-dependencies.loom]

@@ -6,15 +6,11 @@
 
 use heapless::Deque;
 
-use crate::split_isr::IsrRingBuffer;
 use crate::uart_hal::UartRegs;
-use crate::virtual_device::{DeviceError, VirtualDevice};
-use crate::PartitionId;
-
-#[cfg(test)]
-use crate::test_register::ArrayRegisterBank as RegBank;
-#[cfg(not(test))]
-use rtos_traits::register::MmioRegisterBank as RegBank;
+use rtos_traits::device::{DeviceError, VirtualDevice};
+use rtos_traits::ids::PartitionId;
+use rtos_traits::isr_ring::IsrRingBuffer;
+use rtos_traits::register::RegisterBank;
 
 /// UART1 interrupt number on the LM3S6965 (NVIC IRQ 6).
 pub const UART1_IRQ: u8 = 6;
@@ -38,14 +34,22 @@ pub const IOCTL_AVAILABLE: u32 = 0x02;
 /// Ring buffer capacity for both TX and RX channels.
 const CAPACITY: usize = 64;
 
+/// Type alias for test/mock backends using `ArrayRegisterBank`.
+#[cfg(any(test, feature = "mock-hal"))]
+pub type MockHwUartBackend<const N: usize = 8> =
+    HwUartBackend<rtos_traits::test_register::ArrayRegisterBank, N>;
+
 /// Hardware UART backend with kernel-side TX/RX ring buffers.
 ///
 /// `write()` pushes into TX; an ISR/bottom-half drains TX to hardware.
 /// An ISR top-half calls `push_rx()` from hardware; `read()` pops RX.
-/// Generic `N` specifies the max partitions (use `KernelConfig::N`).
-pub struct HwUartBackend<const N: usize = 8> {
+/// Generic `R` is the register bank type, `N` the max partitions.
+pub struct HwUartBackend<
+    R: RegisterBank = rtos_traits::register::MmioRegisterBank,
+    const N: usize = 8,
+> {
     device_id: u8,
-    regs: UartRegs<RegBank>,
+    regs: UartRegs<R>,
     tx: Deque<u8, CAPACITY>,
     rx: Deque<u8, CAPACITY>,
     /// Tracks which partitions have opened this device; `open_partitions[i]`
@@ -56,9 +60,9 @@ pub struct HwUartBackend<const N: usize = 8> {
     loopback: bool,
 }
 
-impl<const N: usize> HwUartBackend<N> {
+impl<R: RegisterBank, const N: usize> HwUartBackend<R, N> {
     /// Create a new hardware UART backend.
-    pub fn new(device_id: u8, regs: UartRegs<RegBank>) -> Self {
+    pub fn new(device_id: u8, regs: UartRegs<R>) -> Self {
         Self {
             device_id,
             regs,
@@ -70,7 +74,7 @@ impl<const N: usize> HwUartBackend<N> {
     }
 
     /// Return a reference to the underlying UART registers.
-    pub fn regs(&self) -> &UartRegs<RegBank> {
+    pub fn regs(&self) -> &UartRegs<R> {
         &self.regs
     }
 
@@ -228,8 +232,8 @@ impl<const N: usize> HwUartBackend<N> {
 ///
 /// This is a free function so examples can call it directly from their
 /// interrupt vector table entry.
-pub fn uart1_isr_top_half<const N: usize, const D: usize, const M: usize>(
-    backend: &mut HwUartBackend<N>,
+pub fn uart1_isr_top_half<R: RegisterBank, const N: usize, const D: usize, const M: usize>(
+    backend: &mut HwUartBackend<R, N>,
     isr_ring: &mut IsrRingBuffer<D, M>,
 ) -> bool {
     let ris = backend.regs.read_ris();
@@ -280,9 +284,11 @@ unsafe impl cortex_m::interrupt::InterruptNumber for Uart1Irq {
 /// configured and the NVIC peripheral is valid.
 #[cfg(not(test))]
 pub fn enable_uart1_irq(nvic: &mut cortex_m::peripheral::NVIC) {
+    /// Minimum application IRQ priority for the LM3S6965 three-tier model.
+    const MIN_APP_IRQ_PRIORITY: u8 = 0x20;
     const {
         assert!(
-            UART1_IRQ_PRIORITY >= crate::DefaultConfig::MIN_APP_IRQ_PRIORITY,
+            UART1_IRQ_PRIORITY >= MIN_APP_IRQ_PRIORITY,
             "UART1_IRQ_PRIORITY must be >= MIN_APP_IRQ_PRIORITY",
         );
     }
@@ -300,7 +306,7 @@ pub fn disable_uart1_irq() {
     cortex_m::peripheral::NVIC::mask(Uart1Irq);
 }
 
-impl<const N: usize> VirtualDevice for HwUartBackend<N> {
+impl<R: RegisterBank + Send, const N: usize> VirtualDevice for HwUartBackend<R, N> {
     fn device_id(&self) -> u8 {
         self.device_id
     }
@@ -383,7 +389,7 @@ mod tests {
     fn pid(v: u8) -> PartitionId {
         PartitionId::new(v as u32)
     }
-    fn make_backend(id: u8) -> HwUartBackend {
+    fn make_backend(id: u8) -> HwUartBackend<rtos_traits::test_register::ArrayRegisterBank> {
         HwUartBackend::new(id, UartRegs::new(0x4000_C000))
     }
 
@@ -738,26 +744,19 @@ mod tests {
         assert_eq!(UART1_IRQ_PRIORITY, 0x40);
     }
 
+    /// Minimum application IRQ priority for the LM3S6965 three-tier model.
+    const MIN_APP_IRQ_PRIORITY: u8 = 0x20;
+    /// PendSV priority (lowest priority, used for context switching).
+    const PENDSV_PRIORITY: u8 = 0xFF;
+
     #[test]
     fn uart1_irq_priority_above_min_app_floor() {
-        let floor = crate::DefaultConfig::MIN_APP_IRQ_PRIORITY;
-        assert!(
-            UART1_IRQ_PRIORITY >= floor,
-            "UART1_IRQ_PRIORITY ({:#04X}) must be >= MIN_APP_IRQ_PRIORITY ({:#04X})",
-            UART1_IRQ_PRIORITY,
-            floor,
-        );
+        const { assert!(UART1_IRQ_PRIORITY >= MIN_APP_IRQ_PRIORITY) };
     }
 
     #[test]
     fn uart1_irq_priority_below_pendsv() {
-        let pendsv = crate::DefaultConfig::PENDSV_PRIORITY;
-        assert!(
-            UART1_IRQ_PRIORITY < pendsv,
-            "UART1_IRQ_PRIORITY ({:#04X}) must be < PENDSV_PRIORITY ({:#04X})",
-            UART1_IRQ_PRIORITY,
-            pendsv,
-        );
+        const { assert!(UART1_IRQ_PRIORITY < PENDSV_PRIORITY) };
     }
 
     // ---- uart1_isr_top_half tests ----
@@ -817,7 +816,7 @@ mod tests {
         assert_eq!(ring.len(), 1);
         ring.pop_with(|tag, payload| {
             assert_eq!(tag, 3); // device_id = 3
-                                // Payload should reflect RTRIS, not the hardcoded RXRIS.
+            // Payload should reflect RTRIS, not the hardcoded RXRIS.
             assert_eq!(payload, &[crate::uart_hal::RIS_RTRIS as u8]);
         });
     }

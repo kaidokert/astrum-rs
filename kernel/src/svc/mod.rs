@@ -7164,13 +7164,13 @@ mod tests {
     /// After registering hw_uart in the registry, dev_dispatch routes to it.
     #[test]
     fn hw_uart_registered_and_dispatch_open_write_read() {
-        use crate::hw_uart::HwUartBackend;
         use crate::syscall::{SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_WRITE};
-        use crate::uart_hal::UartRegs;
+        use lm3s::hw_uart::HwUartBackend;
+        use lm3s::uart_hal::UartRegs;
         let (mut registry, _, _) = default_registry();
-        let hw: &'static mut HwUartBackend =
+        let hw: &'static mut HwUartBackend<_, 8> =
             Box::leak(Box::new(HwUartBackend::new(5, UartRegs::new(0x4000_C000))));
-        let hw_ptr: *mut HwUartBackend = hw as *mut _;
+        let hw_ptr: *mut HwUartBackend<_, 8> = hw as *mut _;
         registry.add(hw).unwrap();
         let mut k = kernel_with_registry(0, 0, 0, registry);
         // Open hw_uart device 5 (now in the registry).
@@ -7199,12 +7199,12 @@ mod tests {
     /// Registry rejects duplicate device IDs, preventing shadowing.
     #[test]
     fn registry_rejects_duplicate_device_id() {
-        use crate::hw_uart::HwUartBackend;
-        use crate::uart_hal::UartRegs;
+        use lm3s::hw_uart::HwUartBackend;
+        use lm3s::uart_hal::UartRegs;
         let (mut registry, _, _) = default_registry();
         // Attempt to register hw_uart with device_id = 0 (same as UART-A).
         // Type annotation needed: const generic N cannot be inferred through dyn VirtualDevice.
-        let hw: &mut HwUartBackend<8> =
+        let hw: &mut HwUartBackend<_, 8> =
             Box::leak(Box::new(HwUartBackend::new(0, UartRegs::new(0x4000_C000))));
         assert_eq!(
             registry.add(hw),

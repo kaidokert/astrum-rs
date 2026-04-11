@@ -6,5 +6,6 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod hw_uart;
 pub mod pwm;
 pub mod uart_hal;

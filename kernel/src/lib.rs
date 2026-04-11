@@ -50,7 +50,6 @@ pub mod events;
 pub mod fault;
 #[cfg(feature = "health-partition")]
 pub mod health;
-pub mod hw_uart;
 pub mod invariants;
 pub mod irq_ack;
 pub mod irq_dispatch;
@@ -148,7 +147,6 @@ pub fn enter_safe_idle() -> ! {
 pub use rtos_traits::check_entry_sig;
 
 // Re-export handle_systick at crate root for convenience
-pub use lm3s::uart_hal;
 pub use svc::SvcDispatchFn;
 #[cfg(not(test))]
 pub use systick::handle_systick;

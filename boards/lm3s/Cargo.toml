@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 rtos-traits = { path = "../../rtos-traits" }
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 embedded-hal = { version = "0.2" }
 heapless = "0.8"
 
