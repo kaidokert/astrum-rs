@@ -82,6 +82,8 @@ pub use rtos_traits::syscall::{
     SYS_QUEUING_RECV, SYS_QUEUING_RECV_TIMED, SYS_QUEUING_SEND, SYS_QUEUING_SEND_TIMED,
     SYS_QUEUING_STATUS, SYS_SAMPLING_READ, SYS_SAMPLING_STATUS, SYS_SAMPLING_WRITE,
 };
+// Thread management
+pub use rtos_traits::syscall::SYS_THREAD_CREATE;
 // Device driver & query (dynamic-mpu only, defined in rtos-traits)
 pub use rtos_traits::syscall::{
     SYS_DEV_CLOSE, SYS_DEV_IOCTL, SYS_DEV_OPEN, SYS_DEV_READ, SYS_DEV_READ_TIMED, SYS_DEV_WRITE,
@@ -1217,6 +1219,24 @@ pub fn sys_debug_exit(code: u32) -> Result<u32, SvcError> {
     decode_rc(rtos_traits::svc!(SYS_DEBUG_EXIT, code, 0u32, 0u32))
 }
 
+// ── Thread management ──────────────────────────────────────────────────
+
+/// Create a new thread in the calling partition.
+///
+/// ABI: r1 = entry (function pointer), r2 = priority, r3 = 0 (reserved).
+///
+/// # Returns
+///
+/// `Ok(thread_id)` on success, or `Err(SvcError)` if thread creation failed.
+pub fn sys_thread_create(entry: *const (), priority: u32) -> Result<u32, SvcError> {
+    decode_rc(rtos_traits::svc!(
+        SYS_THREAD_CREATE,
+        entry as u32,
+        priority,
+        0u32
+    ))
+}
+
 // ── Buffer error discriminant decoder ──────────────────────────────────
 
 /// Map a buffer-error discriminant (from r1 detail) to a human-readable name.
@@ -1658,6 +1678,8 @@ mod tests {
         assert_eq!(crate::SYS_QUEUING_STATUS, src::SYS_QUEUING_STATUS);
         assert_eq!(crate::SYS_QUEUING_SEND_TIMED, src::SYS_QUEUING_SEND_TIMED);
         assert_eq!(crate::SYS_QUEUING_RECV_TIMED, src::SYS_QUEUING_RECV_TIMED);
+        // Thread management
+        assert_eq!(crate::SYS_THREAD_CREATE, src::SYS_THREAD_CREATE);
         // Debug (unconditional)
         assert_eq!(crate::SYS_DEBUG_PRINT, src::SYS_DEBUG_PRINT);
         assert_eq!(crate::SYS_DEBUG_EXIT, src::SYS_DEBUG_EXIT);
@@ -2027,6 +2049,35 @@ mod tests {
             assert_eq!(crate::PartitionSpec::from((pe, 7)).r0(), 7);
         }
         assert_eq!(u32::from(crate::EntryAddr::from(0x1000u32)), 0x1000);
+    }
+
+    // ── sys_thread_create tests ────────────────────────────────────────
+
+    #[test]
+    fn thread_create_returns_ok_zero_on_host() {
+        // On host the svc! stub returns 0; decode_rc(0) = Ok(0).
+        let result = sys_thread_create(0x0800_1000 as *const (), 1);
+        assert_eq!(result, Ok(0));
+    }
+
+    #[test]
+    fn thread_create_null_entry_returns_ok_zero_on_host() {
+        let result = sys_thread_create(core::ptr::null(), 0);
+        assert_eq!(result, Ok(0));
+    }
+
+    #[test]
+    fn thread_create_high_priority_returns_ok_zero_on_host() {
+        let result = sys_thread_create(0x0800_2000 as *const (), u32::MAX);
+        assert_eq!(result, Ok(0));
+    }
+
+    #[test]
+    fn thread_create_decode_rc_error_path() {
+        // Verify decode_rc correctly maps error codes (this exercises the
+        // error return path that the host stub cannot trigger).
+        let err_code = SvcError::InvalidResource.to_u32();
+        assert_eq!(decode_rc(err_code), Err(SvcError::InvalidResource));
     }
 
     // ── describe_buf_error tests ───────────────────────────────────────
