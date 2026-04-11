@@ -211,7 +211,7 @@ defmt-rtt = "1.0"
 embedded-hal-02 = { package = "embedded-hal", version = "0.2", features = ["unproven"] }
 panic-probe = { version = "1.0", features = ["print-defmt"] }
 semihosting = "0.1.20"
-atsamd-hal = { path = "../ref/atsamd/hal", features = ["same51j", "usb", "dma"] }
+atsamd-hal = { version = "0.23.3", features = ["same51j", "usb", "dma"] }
 usb-device = "0.3"
 usbd-serial = "0.2"
 rtt-target = "0.6"
