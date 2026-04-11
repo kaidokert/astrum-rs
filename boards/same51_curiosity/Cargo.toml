@@ -1,0 +1,235 @@
+[package]
+authors = ["Kaido Kert <kaidokert@gmail.com>"]
+name = "same51_curiosity"
+edition = "2024"
+version = "0.1.0"
+license = "Apache-2.0"
+
+[features]
+default = []
+pac-rt = ["atsamd-hal/same51j-rt"]
+uses-kernel = ["dep:kernel", "kernel/log-rtt", "kernel/custom-ivt"]
+kernel-example = ["uses-kernel", "custom-ivt", "dep:plib", "kernel/ipc-blackboard", "plib/ipc-blackboard"]
+kernel-fpu = ["kernel-mpu", "kernel/fpu-context"]
+kernel-mpu = ["kernel-example", "custom-ivt", "dep:plib"]
+qemu = []
+partition-debug = ["kernel-example", "custom-ivt", "dep:plib", "plib/partition-debug", "kernel/partition-debug"]
+custom-ivt = []
+embedded-graphics-demo = ["dep:embedded-graphics"]
+
+[[example]]
+name = "blinky"
+path = "examples/blinky.rs"
+test = false
+
+[[example]]
+name = "dmac_mem2mem"
+path = "examples/dmac_mem2mem.rs"
+test = false
+
+[[example]]
+name = "dmac_uart"
+path = "examples/dmac_uart.rs"
+test = false
+
+[[example]]
+name = "lcd_red"
+path = "examples/lcd_red.rs"
+test = false
+
+[[example]]
+name = "lcd_red_raw"
+path = "examples/lcd_red_raw.rs"
+test = false
+
+[[example]]
+name = "lcd_manual"
+path = "examples/lcd_manual.rs"
+test = false
+
+[[example]]
+name = "lcd_embedded_graphics"
+path = "examples/lcd_embedded_graphics.rs"
+test = false
+required-features = ["embedded-graphics-demo"]
+
+[[example]]
+name = "mpu_info"
+path = "examples/mpu_info.rs"
+test = false
+
+[[example]]
+name = "vcom_uart"
+path = "examples/vcom_uart.rs"
+test = false
+
+[[example]]
+name = "usb_cdc_irq"
+path = "examples/usb_cdc_irq.rs"
+test = false
+required-features = ["pac-rt"]
+
+[[example]]
+name = "vcom"
+path = "examples/vcom.rs"
+test = false
+required-features = ["partition-debug"]
+
+[[example]]
+name = "astrum_blinky"
+path = "examples/astrum_blinky.rs"
+test = false
+required-features = ["partition-debug"]
+
+[[example]]
+name = "mpu_kernel_demo"
+path = "examples/mpu_kernel_demo.rs"
+test = false
+required-features = ["kernel-mpu"]
+
+[[example]]
+name = "buf_dma_demo"
+path = "examples/buf_dma_demo.rs"
+test = false
+required-features = ["kernel-mpu"]
+
+[[example]]
+name = "uart_dma_demo"
+path = "examples/uart_dma_demo.rs"
+test = false
+required-features = ["kernel-mpu"]
+
+[[example]]
+name = "uart_dma_transfer_demo"
+path = "examples/uart_dma_transfer_demo.rs"
+test = false
+required-features = ["kernel-mpu"]
+
+[[example]]
+name = "uart_dma_echo"
+path = "examples/uart_dma_echo.rs"
+test = false
+required-features = ["kernel-mpu"]
+
+[[example]]
+name = "usb_cdc_partition_d"
+path = "examples/usb_cdc_partition_d.rs"
+test = false
+required-features = ["kernel-mpu"]
+
+[[example]]
+name = "usb_cdc_vdev"
+path = "examples/usb_cdc_vdev.rs"
+test = false
+required-features = ["kernel-mpu"]
+
+[[example]]
+name = "usb_cdc_partition_ack"
+path = "examples/usb_cdc_partition_ack.rs"
+test = false
+required-features = ["kernel-mpu"]
+
+[[example]]
+name = "fpu_context_test"
+path = "examples/fpu_context_test.rs"
+test = false
+required-features = ["kernel-fpu"]
+
+[[example]]
+name = "semaphore_demo"
+path = "examples/semaphore_demo.rs"
+test = false
+required-features = ["kernel-example"]
+
+[[example]]
+name = "mutex_demo"
+path = "examples/mutex_demo.rs"
+test = false
+required-features = ["kernel-example"]
+
+[[example]]
+name = "events_demo"
+path = "examples/events_demo.rs"
+test = false
+required-features = ["kernel-example"]
+
+[[example]]
+name = "msg_demo"
+path = "examples/msg_demo.rs"
+test = false
+required-features = ["kernel-example"]
+
+[[example]]
+name = "queuing_demo"
+path = "examples/queuing_demo.rs"
+test = false
+required-features = ["kernel-example"]
+
+[[example]]
+name = "blackboard_demo"
+path = "examples/blackboard_demo.rs"
+test = false
+required-features = ["kernel-example"]
+
+[[example]]
+name = "sampling_demo"
+path = "examples/sampling_demo.rs"
+test = false
+required-features = ["kernel-example"]
+
+[[example]]
+name = "adversarial_test"
+path = "examples/adversarial_test.rs"
+test = false
+required-features = ["kernel-example"]
+
+[[example]]
+name = "wdt_bare"
+path = "examples/wdt_bare.rs"
+test = false
+
+[[example]]
+name = "wdt_partition"
+path = "examples/wdt_partition.rs"
+test = false
+required-features = ["kernel-mpu"]
+
+[lib]
+harness = false
+
+# needed for each integration test
+[[test]]
+name = "integration"
+harness = false
+
+[dependencies]
+critical-section = "1.2.0"
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+defmt = "1.0"
+defmt-rtt = "1.0"
+embedded-hal-02 = { package = "embedded-hal", version = "0.2", features = ["unproven"] }
+panic-probe = { version = "1.0", features = ["print-defmt"] }
+semihosting = "0.1.20"
+atsamd-hal = { path = "../ref/atsamd/hal", features = ["same51j", "usb", "dma"] }
+usb-device = "0.3"
+usbd-serial = "0.2"
+rtt-target = "0.6"
+panic-halt = "1.0"
+kernel = { path = "../../kernel/kernel", optional = true }
+plib = { path = "../../kernel/plib", optional = true }
+heapless = "0.8"
+# mipidsi = { path = "../ref/mipidsi", default-features = false }
+mipidsi = "0.10.0"
+embedded-graphics-core = "0.4.1"
+embedded-graphics = { version = "0.8.1", optional = true }
+nb = "1.1.0"
+
+[profile.release]
+debug = 2
+
+[profile.dev]
+opt-level = 1
+
+[dev-dependencies]
+defmt-test = "0.3"

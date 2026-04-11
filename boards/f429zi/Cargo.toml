@@ -1,0 +1,277 @@
+[package]
+name = "f429zi"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = { version = "0.7.5", default-features = false }
+cortex-m-semihosting = "0.5"
+panic-halt = { version = "1.0.0", optional = true }
+stm32f4xx-hal = { path = "../ref/stm32f4xx-hal", features = ["stm32f429", "usb_fs", "otg-fs", "usart3"], optional = true }
+usb-device = { version = "0.3", optional = true, features = ["control-buffer-256"] }
+usbd-serial = { version = "0.2", optional = true }
+usbd-audio = { version = "0.3", git = "https://github.com/kaidokert/usbd-audio", rev = "v0.3.0-channel-patch", optional = true }
+rtt-target = "0.6"
+panic-rtt-target = "0.2"
+kernel = { path = "../../kernel/kernel", optional = true }
+heapless = { version = "0.8", optional = true }
+stm32f4 = { version = "0.15.1", features = ["stm32f429", "rt"], optional = true }
+plib = { path = "../../kernel/plib", optional = true }
+rtos-traits = { path = "../../kernel/rtos-traits", optional = true }
+bme280 = { version = "0.5.1", optional = true }
+
+[features]
+default = ["hal"]
+# HAL-based examples (USB, blinky, etc.)
+hal = ["dep:panic-halt", "dep:stm32f4xx-hal", "dep:usb-device", "dep:usbd-serial"]
+# Activates kernel dep + RTT panic backend so kernel::kpanic registers the handler.
+# Avoids duplicate #[panic_handler] between lib.rs (panic_rtt_target) and kpanic's fallback.
+uses-kernel = ["dep:kernel", "kernel/log-rtt", "kernel/panic-tombstone", "kernel/debug-no-wfi"]
+# Kernel examples - device.x provides interrupt vectors, HAL not needed
+kernel-example = ["uses-kernel", "dep:heapless", "dep:plib", "kernel/ipc-blackboard", "plib/ipc-blackboard"]
+# Partition debug logging (plib/dprint!) — adds plib dep and enables kernel partition-debug syscalls
+partition-debug = ["kernel-example", "dep:plib", "plib/partition-debug", "kernel/partition-debug"]
+# Kernel dynamic-MPU enforcement — wires __boot_mpu_init + per-switch region reprogramming.
+# MPU must also be declared as a local feature so that cfg!(feature = "MPU")
+# evaluates correctly inside define_kernel! (macro cfgs use the calling crate's features).
+# TODO: stub features to silence "unexpected cfg" warnings caused by kernel macro cfg leakage.
+# define_kernel! and kernel_config! test cfg(feature = "qemu") / "partition-debug"
+# in the calling crate's namespace. Upstream should fix the macro hygiene; for now we declare them.
+qemu = []
+# Stub: bind_interrupts! checks cfg(feature = "custom-ivt") in the calling crate's
+# namespace (macro hygiene leak). Declare it here so the check passes for f429zi examples.
+custom-ivt = []
+# Kernel + device IRQ vectors.
+# stm32f4 PAC "rt" provides a full 91-entry __INTERRUPTS array + device.x PROVIDE directives.
+# kernel/custom-ivt suppresses the kernel's 1-entry __INTERRUPTS fallback so the PAC's
+# 91-entry version wins and external IRQ slots (TIM6_DAC=54, EXTI, etc.) are available.
+# Required for examples that register #[no_mangle] IRQ handlers (TIM, EXTI, etc.).
+kernel-irq = ["kernel-example", "dep:stm32f4", "kernel/custom-ivt", "custom-ivt"]
+# Kernel + device IRQ vectors + dynamic-MPU enforcement: for examples that
+# need both the full vector table (external IRQs) and MPU isolation.
+kernel-irq-mpu = ["kernel-irq", "dep:plib"]
+kernel-fpu = ["kernel-example", "kernel/fpu-context"]
+kernel-threads = ["kernel-mpu", "kernel/intra-threads"]
+kernel-mpu = ["kernel-example", "dep:plib", "dep:rtos-traits"]
+# Kernel + HAL: kernel partition that drives hardware via stm32f4xx-hal (Approach D)
+# Uses local HAL clone so we can patch without waiting on upstream.
+kernel-hal = ["kernel-example", "dep:stm32f4xx-hal"]
+# Kernel + HAL + MPU enforcement: Approach D with real isolation.
+# Partition gets only its declared peripheral_regions; MPU blocks all other MMIO.
+kernel-mpu-hal = ["kernel-mpu", "dep:stm32f4xx-hal"]
+# Kernel + USB CDC: kernel partition that manages USB echo via RTOS events.
+# USB ISR owns the USB stack; partition drives echo logic via ring buffers + events.
+kernel-usb = ["kernel-example", "dep:stm32f4xx-hal", "dep:usb-device", "dep:usbd-serial"]
+# Kernel + USB CDC + MPU enforcement: Option D — partition IS the USB driver.
+# No ISR. Partition polls USB directly in thread mode under real MPU isolation.
+# OTG_FS (0x5000_0000/256KB) is the only peripheral_region granted.
+kernel-usb-mpu = ["kernel-mpu", "dep:stm32f4xx-hal", "dep:usb-device", "dep:usbd-serial"]
+# Kernel + custom IVT (bind_interrupts!) + HAL + MPU enforcement.
+# Does NOT include dep:stm32f4 (which would conflict with bind_interrupts!'s __INTERRUPTS).
+# f429zi's own device.x (from build.rs) provides the full 91-IRQ PROVIDE table.
+# Use for examples that combine bind_interrupts!, peripheral_regions, and SYS_IRQ_ACK.
+kernel-irq-mpu-hal = ["kernel-mpu", "kernel/custom-ivt", "custom-ivt", "dep:stm32f4xx-hal", "dep:plib"]
+# Kernel + bind_interrupts! + MPU + HAL + partition debug logging (plib/dprint!).
+# Use for examples that need reliable partition-side logging via the kernel drain path.
+kernel-irq-mpu-hal-debug = ["kernel-irq-mpu-hal", "dep:plib", "plib/partition-debug", "kernel/partition-debug"]
+usb-audio = ["hal", "dep:usbd-audio"]
+kernel-usb-audio = ["kernel-irq-mpu-hal", "dep:usb-device", "dep:usbd-audio"]
+# Audio bandwidth tiers (combine with kernel-usb-audio). Default: 2ch/S16LE/48kHz = 192 B/frame
+audio-24bit = []    # S24LE: 2ch = 288 B/frame
+audio-4ch = []      # 4ch S16LE = 384 B/frame
+audio-4ch-24 = []   # 4ch S24LE = 576 B/frame
+audio-8ch-24 = []   # 8ch S24LE @ 44.1kHz = 1058 B/frame (F412 production max)
+# Half-duplex: input-only or output-only (frees FIFO for higher bandwidth)
+audio-input-only = []   # microphone only, no speaker endpoint
+audio-output-only = []  # speaker only, no microphone endpoint
+kernel-mpu-hal-fpu = ["kernel-mpu-hal", "kernel/fpu-context"]
+kernel-health = ["kernel-example", "kernel/health-partition"]
+bme280 = ["dep:bme280", "kernel/fpu-context"]
+
+[[example]]
+name = "stochastic_fault"
+required-features = ["kernel-mpu-hal-fpu"]
+[[example]]
+name = "wdt_recovery"
+required-features = ["kernel-mpu"]
+[[example]]
+name = "ipc_stress"
+required-features = ["kernel-example"]
+[[example]]
+name = "start_condition_test"
+required-features = ["kernel-mpu"]
+[[example]]
+name = "privilege_escalation_test"
+required-features = ["kernel-mpu"]
+[[example]]
+name = "timed_ipc_test"
+required-features = ["kernel-example"]
+[[example]]
+name = "thread_demo"
+required-features = ["kernel-threads"]
+[[example]]
+name = "health_partition_hw"
+required-features = ["kernel-health"]
+
+# --- usb-audio: bare-metal USB Audio Class ---
+[[example]]
+name = "usb_audio"
+required-features = ["usb-audio"]
+
+[[example]]
+name = "usb_audio_partition"
+required-features = ["kernel-usb-audio"]
+
+[[example]]
+name = "dual_temp_2part"
+required-features = ["kernel-mpu-hal", "bme280"]
+[[example]]
+name = "dual_temp_3part"
+required-features = ["kernel-mpu-hal", "bme280"]
+
+# --- kernel-fpu: kernel + FPU context save/restore ---
+[[example]]
+name = "fpu_context_test"
+required-features = ["kernel-fpu"]
+
+# --- kernel-example: fault survival + adversarial (static MPU, no MPU) ---
+[[example]]
+name = "fault_survive_test"
+required-features = ["kernel-example"]
+[[example]]
+name = "adversarial_test"
+required-features = ["kernel-example"]
+
+# --- kernel-example: harness init_kernel, no HAL, no MPU ---
+[[example]]
+name = "blackboard_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "events_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "events_dprint_demo"
+required-features = ["partition-debug"]
+[[example]]
+name = "four_part_test"
+required-features = ["kernel-example"]
+[[example]]
+name = "msg_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "mutex_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "plib_demo"
+required-features = ["partition-debug"]
+[[example]]
+name = "queuing_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "sampling_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "semaphore_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "stack_overflow_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "starvation_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "sys_sleep_ticks_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "timed_ipc_demo"
+required-features = ["kernel-example"]
+[[example]]
+name = "vdev_uart"
+required-features = ["kernel-irq-mpu-hal"]
+[[example]]
+name = "vdev_uart_ioctl"
+required-features = ["kernel-irq-mpu-hal"]
+
+# --- kernel-irq: kernel + hardware IRQ (stm32f4 PAC with "rt") ---
+[[example]]
+name = "gpio_blinky"
+required-features = ["kernel-irq"]
+[[example]]
+name = "timer_irq_demo"
+required-features = ["kernel-irq"]
+
+# --- kernel-mpu: kernel + MPU, no HAL ---
+[[example]]
+name = "buf_lend_demo"
+required-features = ["kernel-mpu"]
+[[example]]
+name = "mpu_kernel_demo"
+required-features = ["kernel-mpu"]
+
+# --- kernel-mpu-hal: kernel + MPU + stm32f4xx-hal ---
+[[example]]
+name = "buf_dma_demo"
+required-features = ["kernel-mpu-hal"]
+[[example]]
+name = "hal_gpio_blink"
+required-features = ["kernel-mpu-hal"]
+[[example]]
+name = "hal_gpio_blink_mpu"
+required-features = ["kernel-mpu-hal"]
+[[example]]
+name = "uart_dma_demo"
+required-features = ["kernel-mpu-hal"]
+[[example]]
+name = "uart_dma_echo"
+required-features = ["kernel-mpu-hal"]
+
+# --- kernel-irq-mpu: kernel + MPU + hardware IRQ ---
+[[example]]
+name = "button_isr_demo"
+required-features = ["kernel-irq-mpu"]
+
+# --- kernel-irq-mpu-hal: kernel + MPU + HAL + bind_interrupts! ---
+[[example]]
+name = "split_isr_uart"
+required-features = ["kernel-irq-mpu-hal"]
+[[example]]
+name = "uart_partition"
+required-features = ["kernel-irq-mpu-hal"]
+[[example]]
+name = "uart_sweep"
+required-features = ["kernel-irq-mpu-hal-debug"]
+
+# --- kernel-usb: kernel + USB stack ---
+[[example]]
+name = "usb_driver"
+required-features = ["kernel-usb"]
+
+# --- kernel-usb-mpu: kernel + USB + MPU ---
+[[example]]
+name = "usb_partition"
+required-features = ["kernel-usb-mpu"]
+[[example]]
+name = "uart_usb_pipeline"
+required-features = ["kernel-usb-mpu"]
+[[example]]
+name = "buf_transfer_usb"
+required-features = ["kernel-usb-mpu"]
+
+# --- kernel-mpu-hal + bme280 ---
+[[example]]
+name = "bme280_partition"
+required-features = ["kernel-mpu-hal", "bme280"]
+
+[profile.release]
+debug = 2  # Enable debug info for RTT/defmt
+
+# Enable NRVO in debug builds so that large Kernel<C> structs (32KB+) are not
+# double-copied onto the MSP stack during construction. Generic functions like
+# Kernel::with_config are monomorphized in the calling crate (f429zi), not the
+# kernel crate, so this override must be on the f429zi package itself.
+# Without this, with_config() allocates a ~77KB frame and overflows SRAM
+# when using AlignedStack4K (2 × 4KB partition stacks → 32KB+ Kernel<C>).
+# opt-level=1 enables NRVO + basic inlining while keeping debug symbols.
+[profile.dev]
+opt-level = 1

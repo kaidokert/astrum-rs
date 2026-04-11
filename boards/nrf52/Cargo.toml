@@ -1,0 +1,109 @@
+[package]
+name = "nrf52"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+rtt-target = "0.6"
+# "1.0" matches the kernel crate's panic-halt dep — cargo deduplicates them
+panic-halt = "1.0"
+kernel = { path = "../../kernel/kernel", optional = true }
+plib = { path = "../../kernel/plib", optional = true }
+heapless = { version = "0.8", optional = true }
+# Without "rt": no __INTERRUPTS — kernel builds use the kernel's own __INTERRUPTS symbol.
+# "bare" feature adds "rt" for standalone examples (PAC then provides __INTERRUPTS).
+nrf52833-pac = "0.12.2"
+nrf52833-hal = { version = "0.19.0", optional = true, default-features = false }
+embedded-hal = { version = "1.0.0", optional = true }
+
+[features]
+# Activates kernel dep so kernel::kpanic registers the panic handler (inline halt fallback).
+# Avoids duplicate #[panic_handler] between lib.rs (panic_halt) and kpanic's inline fallback.
+uses-kernel = ["dep:kernel", "kernel/log-rtt"]
+kernel-example = ["uses-kernel", "dep:heapless", "dep:plib", "kernel/ipc-blackboard", "plib/ipc-blackboard"]
+# Kernel dynamic-MPU enforcement — same pattern as f429zi kernel-mpu feature.
+# TODO: stub features to silence "unexpected cfg" warnings caused by kernel macro cfg leakage.
+# define_kernel! tests cfg(feature = "qemu"); kernel_config! tests
+# cfg(feature = "partition-debug"). Neither feature exists in nRF52 but the macros expand
+# in the calling crate's namespace. Upstream should fix macro hygiene; stubs work for now.
+qemu = []
+partition-debug = []
+# Standalone (no kernel) examples: PAC rt feature provides __INTERRUPTS.
+# Not compatible with kernel builds (kernel already provides __INTERRUPTS).
+bare = ["nrf52833-pac/rt"]
+kernel-fpu = ["kernel-example", "kernel/fpu-context"]
+custom-ivt = []
+kernel-irq = ["kernel-mpu", "kernel/custom-ivt", "custom-ivt"]
+kernel-mpu = ["kernel-example", "dep:plib"]
+# Kernel + HAL + MPU enforcement: Approach D with real isolation on nRF52833.
+# Partition gets only its declared peripheral_regions (P0 GPIO); MPU blocks all else.
+kernel-mpu-hal = ["kernel-mpu", "dep:nrf52833-hal", "dep:embedded-hal"]
+
+[profile.dev]
+opt-level = 1
+
+[[example]]
+name = "uarte_bare_tx"
+required-features = ["bare"]
+
+[[example]]
+name = "rtt_hello"
+required-features = ["bare"]
+
+[[example]]
+name = "blinky"
+required-features = ["bare"]
+
+[[example]]
+name = "systick"
+required-features = ["bare"]
+
+[[example]]
+name = "mpu_info"
+required-features = ["bare"]
+
+[[example]]
+name = "semaphore_demo"
+required-features = ["kernel-example"]
+
+[[example]]
+name = "mutex_demo"
+required-features = ["kernel-example"]
+
+[[example]]
+name = "events_demo"
+required-features = ["kernel-example"]
+
+[[example]]
+name = "msg_demo"
+required-features = ["kernel-example"]
+
+[[example]]
+name = "queuing_demo"
+required-features = ["kernel-example"]
+
+[[example]]
+name = "blackboard_demo"
+required-features = ["kernel-example"]
+
+[[example]]
+name = "sampling_demo"
+required-features = ["kernel-example"]
+
+[[example]]
+name = "fpu_context_test"
+required-features = ["kernel-fpu"]
+
+[[example]]
+name = "adversarial_test"
+required-features = ["kernel-example"]
+
+[[example]]
+name = "uarte_irq_partition"
+required-features = ["kernel-irq"]
+
+[[example]]
+name = "hal_gpio_blink_mpu"
+required-features = ["kernel-mpu-hal"]

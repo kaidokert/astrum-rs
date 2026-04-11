@@ -1,0 +1,7 @@
+/* STM32F207ZG memory layout — NUCLEO-F207ZG */
+MEMORY
+{
+  /* STM32F207ZG: 1MB Flash, 128KB SRAM (contiguous, no CCM) */
+  FLASH : ORIGIN = 0x08000000, LENGTH = 1M
+  RAM : ORIGIN = 0x20000000, LENGTH = 128K
+}

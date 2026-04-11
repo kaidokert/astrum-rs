@@ -1,0 +1,11 @@
+[build]
+target = "thumbv7em-none-eabihf"
+
+[target.thumbv7em-none-eabihf]
+# probe-rs pinned to the PCA10100 J-Link OB (SN 000685893034)
+# Power cycle board: uhubctl -l 1-2 -p 1 -a cycle
+runner = "probe-rs run --probe 1366:1025:000685893034 --chip nRF52833_xxAA"
+
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+]

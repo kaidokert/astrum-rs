@@ -1,0 +1,26 @@
+[workspace]
+members = ["astrum_gecko", "efm32-hal", "olimex_103stk", "thunderboard"]
+# f429zi and nrf52 have their own [profile] settings (opt-level=1 for NRVO, etc.)
+# that are ignored when they're workspace members. They also use path deps resolved
+# relative to their own Cargo.toml. Exclude them so they act as standalone workspaces.
+# Build them standalone: cd f429zi && cargo build ...
+# microchip and same51_curiosity require ../ref/atsamd/hal which is only available
+# in the jlink checkout (/home/kaido/code/jlink/ref/vendored/atsamd-hal).
+# Build them standalone: cd microchip && cargo build ...
+exclude = ["microchip", "ref/mipidsi", "same51_curiosity", "f429zi", "nrf52", "f407", "f207"]
+resolver = "3"
+
+[profile.dev]
+opt-level = "s"
+codegen-units = 1
+panic = "abort"
+
+[profile.release]
+opt-level = "s"
+codegen-units = 1
+lto = "fat"
+debug = 2
+panic = "abort"
+
+[patch.crates-io]
+ra4m1-pac = { git = "https://github.com/kaidokert/ra-pac.git", tag = "irqcr-patch-1" }

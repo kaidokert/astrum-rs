@@ -1,0 +1,14 @@
+[target.thumbv7em-none-eabihf]
+runner = "probe-rs run --probe 0483:374b:0672FF494849887767184220 --chip STM32F429ZITx"
+
+[build]
+target = "thumbv7em-none-eabihf"
+
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+rustflags = [
+  "-C", "link-arg=-Tlink.x",
+  # stm32f4xx-hal pulls stm32f4/rt (for pac::interrupt enum) which also defines
+  # __INTERRUPTS; kernel provides its own. LLD silently picks first in debug;
+  # release needs explicit permission. Both tables are identical (all DefaultHandler).
+  "-C", "link-arg=--allow-multiple-definition",
+]
