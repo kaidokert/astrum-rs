@@ -9,8 +9,8 @@ cortex-m-rt = "0.7"
 rtt-target = "0.6"
 # "1.0" matches the kernel crate's panic-halt dep — cargo deduplicates them
 panic-halt = "1.0"
-kernel = { path = "../../kernel/kernel", optional = true }
-plib = { path = "../../kernel/plib", optional = true }
+kernel = { path = "../../kernel", optional = true }
+plib = { path = "../../plib", optional = true }
 heapless = { version = "0.8", optional = true }
 # Without "rt": no __INTERRUPTS — kernel builds use the kernel's own __INTERRUPTS symbol.
 # "bare" feature adds "rt" for standalone examples (PAC then provides __INTERRUPTS).

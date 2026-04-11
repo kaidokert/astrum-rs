@@ -216,8 +216,8 @@ usb-device = "0.3"
 usbd-serial = "0.2"
 rtt-target = "0.6"
 panic-halt = "1.0"
-kernel = { path = "../../kernel/kernel", optional = true }
-plib = { path = "../../kernel/plib", optional = true }
+kernel = { path = "../../kernel", optional = true }
+plib = { path = "../../plib", optional = true }
 heapless = "0.8"
 # mipidsi = { path = "../ref/mipidsi", default-features = false }
 mipidsi = "0.10.0"

@@ -7,7 +7,7 @@ members = ["astrum_gecko", "efm32-hal", "olimex_103stk", "thunderboard"]
 # microchip and same51_curiosity require ../ref/atsamd/hal which is only available
 # in the jlink checkout (/home/kaido/code/jlink/ref/vendored/atsamd-hal).
 # Build them standalone: cd microchip && cargo build ...
-exclude = ["microchip", "ref/mipidsi", "same51_curiosity", "f429zi", "nrf52", "f407", "f207"]
+exclude = ["microchip", "ref/mipidsi", "same51_curiosity", "f429zi", "nrf52", "f407", "f207", "lm3s"]
 resolver = "3"
 
 [profile.dev]

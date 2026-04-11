@@ -14,11 +14,11 @@ usbd-serial = { version = "0.2", optional = true }
 usbd-audio = { version = "0.3", git = "https://github.com/kaidokert/usbd-audio", rev = "v0.3.0-channel-patch", optional = true }
 rtt-target = "0.6"
 panic-rtt-target = "0.2"
-kernel = { path = "../../kernel/kernel", optional = true }
+kernel = { path = "../../kernel", optional = true }
 heapless = { version = "0.8", optional = true }
 stm32f4 = { version = "0.15.1", features = ["stm32f429", "rt"], optional = true }
-plib = { path = "../../kernel/plib", optional = true }
-rtos-traits = { path = "../../kernel/rtos-traits", optional = true }
+plib = { path = "../../plib", optional = true }
+rtos-traits = { path = "../../rtos-traits", optional = true }
 bme280 = { version = "0.5.1", optional = true }
 
 [features]

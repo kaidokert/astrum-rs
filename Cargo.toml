@@ -1,5 +1,6 @@
 [workspace]
-members = ["kernel", "plib", "rtos-traits", "bsp-nrf52840", "bsp-stm32f4", "bsp-atsamd51", "porting_guide", "boards/lm3s"]
+members = ["kernel", "plib", "rtos-traits", "porting_guide", "boards/lm3s"]
+exclude = ["boards/f429zi", "boards/nrf52", "boards/f207", "boards/f407", "boards/same51_curiosity"]
 resolver = "2"
 
 # Dev profile: debug symbols with basic optimisation (opt-level = 1).
