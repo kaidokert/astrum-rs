@@ -1,0 +1,45 @@
+name: Boards
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build:
+    name: ${{ matrix.board }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: f207
+            target: thumbv7m-none-eabi
+            features: kernel-mpu
+          - board: f429zi
+            target: thumbv7em-none-eabihf
+            features: kernel-mpu
+          - board: nrf52
+            target: thumbv7em-none-eabihf
+            features: kernel-mpu
+          - board: same51_curiosity
+            target: thumbv7em-none-eabihf
+            features: kernel-mpu
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7m-none-eabi, thumbv7em-none-eabihf
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: boards/${{ matrix.board }}
+          key: ${{ matrix.board }}
+
+      - name: Build examples
+        working-directory: boards/${{ matrix.board }}
+        run: cargo build --examples --features ${{ matrix.features }} --target ${{ matrix.target }}

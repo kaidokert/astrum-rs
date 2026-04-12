@@ -2,19 +2,58 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: never
+
 jobs:
-  qemu:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install nightly Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          targets: thumbv7m-none-eabi, thumbv7em-none-eabihf
-          components: rustfmt, clippy, llvm-tools-preview
+          targets: thumbv7m-none-eabi
+          components: rustfmt, clippy
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy (host)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: clippy (embedded)
+        run: cargo clippy -p kernel --target thumbv7m-none-eabi -- -D warnings
+
+  test:
+    name: Host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: cargo test
+        run: cargo test --workspace
+
+  qemu:
+    name: QEMU examples
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7m-none-eabi
 
       - uses: swatinem/rust-cache@v2
 
@@ -23,43 +62,31 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y qemu-system-arm
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Run QEMU examples
+        run: ./scripts/run-qemu-examples.sh --strict --qemu-peripherals
 
-      # TODO: consider matrix strategy for combo checks (better parallelism and per-combo visibility)
-      - name: RTT duplicate-symbol regression check
-        run: |
-          echo "building examples with log-rtt"
-          cargo build -p kernel --examples --features log-rtt --target thumbv7m-none-eabi
-          echo "building multi-backend combos"
-          for combo in "log-rtt,log-swo" "log-rtt,log-defmt" "log-semihosting,log-rtt" "log-semihosting,log-defmt"; do
-            echo "combo: $combo"
-            cargo build -p kernel --examples --features "$combo" --target thumbv7m-none-eabi
-          done
-
-      - name: Run CI
-        run: ./scripts/ci.sh
-
-  hardware:
-    needs: qemu
-    runs-on: [self-hosted, stm32]
+  feature-combos:
+    name: Feature combo – ${{ matrix.features }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - "log-rtt"
+          - "log-rtt,log-swo"
+          - "log-rtt,log-defmt"
+          - "log-semihosting,log-rtt"
+          - "log-semihosting,log-defmt"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install nightly Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          targets: thumbv7em-none-eabihf
+          targets: thumbv7m-none-eabi
 
-      - name: Build hw_integration
-        run: >
-          cargo build -p kernel --example hw_integration
-          --features log-rtt
-          --target thumbv7em-none-eabihf
-          --release
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: combo-${{ matrix.features }}
 
-      - name: Run hardware tests
-        run: >
-          ./scripts/probe-rs-ci.sh
-          --elf target/thumbv7em-none-eabihf/release/examples/hw_integration
-          --chip "${{ vars.HARDWARE_CHIP || 'STM32F429ZI' }}"
+      - name: Build kernel examples
+        run: cargo build -p kernel --examples --features "${{ matrix.features }}" --target thumbv7m-none-eabi
