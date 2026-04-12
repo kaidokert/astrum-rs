@@ -442,7 +442,9 @@ const TESTS: &[TestCase] = &[
         name: "fault_restart_demo",
         features: "kernel-mpu",
         success_pattern: "SUCCESS: fault restart demo working",
-        timeout_secs: 15,
+        // Post-fault tick rate is sensitive to code alignment (67-117 Hz
+        // depending on layout). 30s accommodates the worst case.
+        timeout_secs: 30,
         release: true,
         host: HostKind::None,
     },
