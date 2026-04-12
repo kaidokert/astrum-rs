@@ -217,6 +217,8 @@ pub enum BootError {
     TooManyPartitions { given: usize, max: usize },
     /// Kernel initialization failed due to a configuration error.
     KernelInit(ConfigError),
+    /// First partition could not transition Ready→Running at schedule start.
+    ScheduleTransitionFailed,
     /// FPU lazy stacking (LSPEN | ASPEN) not active after enabling FPU.
     FpuLazyStackingNotActive,
     /// Buffer pool slot misaligned (MPU requires data aligned to buffer size).
@@ -263,8 +265,9 @@ impl BootError {
             Self::KernelNotInitialized => 12,
             Self::TooManyPartitions { .. } => 13,
             Self::KernelInit(inner) => 0x200 + inner.discriminant(),
-            Self::FpuLazyStackingNotActive => 14,
-            Self::BufferPoolMisaligned { .. } => 15,
+            Self::ScheduleTransitionFailed => 14,
+            Self::FpuLazyStackingNotActive => 15,
+            Self::BufferPoolMisaligned { .. } => 16,
         }
     }
 }
@@ -346,6 +349,9 @@ impl core::fmt::Display for BootError {
             }
             Self::KernelInit(e) => {
                 write!(f, "kernel init failed: {e}")
+            }
+            Self::ScheduleTransitionFailed => {
+                write!(f, "first partition Ready→Running transition failed")
             }
             Self::FpuLazyStackingNotActive => {
                 write!(
@@ -640,17 +646,22 @@ where
 
     // Step 5: Start the schedule and select the first partition.
     crate::state::with_kernel_mut::<C, _, _>(|k| {
-        crate::svc::scheduler::start_schedule(k).inspect(|&pid| k.set_next_partition(pid))
+        crate::svc::scheduler::start_schedule(k)
+            .map_err(|_| BootError::ScheduleTransitionFailed)
+            .and_then(|opt| {
+                if let Some(pid) = opt {
+                    k.set_next_partition(pid);
+                }
+                opt.ok_or(BootError::NoReadyPartition)
+            })
     })
     .map_err(|_| {
         let e = BootError::KernelNotInitialized;
         crate::klog!("boot: {}", e);
         e
     })?
-    .ok_or_else(|| {
-        let e = BootError::NoReadyPartition;
-        crate::klog!("boot: {}", e);
-        e
+    .inspect_err(|_e| {
+        crate::klog!("boot: {}", _e);
     })?;
 
     // Step 6: Initialize MPU hardware.
@@ -1700,7 +1711,8 @@ mod tests {
             BootError::TooManyPartitions { given: 0, max: 0 }.discriminant(),
             13
         );
-        assert_eq!(BootError::FpuLazyStackingNotActive.discriminant(), 14);
+        assert_eq!(BootError::ScheduleTransitionFailed.discriminant(), 14);
+        assert_eq!(BootError::FpuLazyStackingNotActive.discriminant(), 15);
         assert_eq!(
             BootError::BufferPoolMisaligned {
                 slot: 0,
@@ -1708,7 +1720,7 @@ mod tests {
                 required: 0
             }
             .discriminant(),
-            15
+            16
         );
 
         // Wrapped MpuError variants use 0x100 + inner discriminant.
@@ -1900,6 +1912,7 @@ mod tests {
             | BootError::KernelNotInitialized
             | BootError::TooManyPartitions { .. }
             | BootError::KernelInit(_)
+            | BootError::ScheduleTransitionFailed
             | BootError::FpuLazyStackingNotActive
             | BootError::BufferPoolMisaligned { .. } => {}
         }

@@ -3,7 +3,7 @@ use crate::config::{CoreOps, KernelConfig, MsgOps, PortsOps, SyncOps};
 use crate::invariants::assert_partition_state_consistency;
 use crate::message::MessagePool;
 use crate::mutex::MutexPool;
-use crate::partition::{PartitionState, PartitionTable};
+use crate::partition::{PartitionState, PartitionTable, TransitionError};
 use crate::queuing::QueuingPortPool;
 use crate::sampling::SamplingPortPool;
 use crate::scheduler::ScheduleEvent;
@@ -117,7 +117,9 @@ where
 /// `sys_get_partition_run_count` returns ≥ 1 during the partition's
 /// very first execution window — matching the invariant that every
 /// scheduled execution is counted (see `advance_schedule_tick`).
-pub fn start_schedule<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>) -> Option<u8>
+pub fn start_schedule<'mem, C: KernelConfig>(
+    kernel: &mut Kernel<'mem, C>,
+) -> Result<Option<u8>, TransitionError>
 where
     [(); C::N]:,
     [(); C::SCHED]:,
@@ -144,16 +146,20 @@ where
     if let Some(pid) = first_pid {
         kernel.active_partition = Some(pid);
         if let Some(pcb) = kernel.pcb_mut(pid as usize) {
-            if pcb.transition(PartitionState::Running).is_err() {
-                crate::klog!(
-                    "[sched] start_schedule: Ready→Running failed for pid {}",
-                    pid
-                );
+            if pcb.state() == PartitionState::Ready {
+                if let Err(e) = pcb.transition(PartitionState::Running) {
+                    crate::klog!(
+                        "[sched] start_schedule: Ready→Running failed for pid {}",
+                        pid
+                    );
+                    kernel.active_partition = None;
+                    return Err(e);
+                }
             }
             pcb.increment_run_count();
         }
     }
-    first_pid
+    Ok(first_pid)
 }
 
 pub fn advance_schedule_tick<'mem, C: KernelConfig>(kernel: &mut Kernel<'mem, C>) -> ScheduleEvent
@@ -200,6 +206,13 @@ where
                             PartitionState::Ready,
                         )
                     {
+                        // Waiting→Ready succeeded; complete to Running since
+                        // this partition remains active.
+                        try_transition(
+                            kernel.partitions_mut(),
+                            PartitionId::new(ap as u32),
+                            PartitionState::Running,
+                        );
                         kernel.set_next_partition(ap);
                     }
                 }
@@ -209,6 +222,7 @@ where
             if let Some(pcb) = kernel.pcb_mut(pid as usize) {
                 if pcb.transition(PartitionState::Running).is_err() {
                     crate::klog!("[sched] advance_tick: Ready→Running failed for pid {}", pid);
+                    return ScheduleEvent::None;
                 }
                 pcb.reset_starvation();
                 pcb.increment_run_count();

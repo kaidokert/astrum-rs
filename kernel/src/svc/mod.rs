@@ -10800,7 +10800,7 @@ mod tests {
 
         let mut h = KernelTestHarness::with_partitions(3).expect("harness setup");
         let k = h.kernel_mut();
-        svc_scheduler::start_schedule(k);
+        svc_scheduler::start_schedule(k).expect("start_schedule");
         k.set_next_partition(0);
 
         // P0: Running → Waiting.
@@ -10856,7 +10856,7 @@ mod tests {
 
         let mut h = KernelTestHarness::with_partitions(3).expect("harness setup");
         let k = h.kernel_mut();
-        svc_scheduler::start_schedule(k);
+        svc_scheduler::start_schedule(k).expect("start_schedule");
         k.set_next_partition(0);
 
         // P0: Running → Waiting.
@@ -10931,7 +10931,7 @@ mod tests {
 
         // Start the schedule
         let initial = svc_scheduler::start_schedule(&mut k);
-        assert_eq!(initial, Some(0)); // First entry is partition 0
+        assert_eq!(initial, Ok(Some(0))); // First entry is partition 0
         assert_eq!(k.active_partition, Some(0));
         assert_eq!(k.schedule().current_partition(), Some(0));
     }
@@ -10944,7 +10944,7 @@ mod tests {
 
         // Start empty schedule returns None
         let initial = svc_scheduler::start_schedule(&mut k);
-        assert_eq!(initial, None);
+        assert_eq!(initial, Ok(None));
         assert_eq!(k.active_partition, None);
     }
 
