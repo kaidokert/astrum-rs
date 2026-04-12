@@ -9,7 +9,7 @@ looking up the target partition in a static binding table. The kernel
 top-half runs in Handler mode (privileged); the partition bottom-half
 runs in its next Thread-mode time slot.
 
-See also: `notes/driver-architecture.md` §2 for the broader driver model.
+See also: [`../docs/driver-architecture.md`](../docs/driver-architecture.md) §2 for the broader driver model.
 
 ## 2. Four-Step IRQ Flow
 

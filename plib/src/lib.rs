@@ -1242,7 +1242,7 @@ pub fn sys_thread_create(entry: *const (), priority: u32) -> Result<u32, SvcErro
 /// Map a buffer-error discriminant (from r1 detail) to a human-readable name.
 ///
 /// The discriminant values match those returned by `BufferError::discriminant()`
-/// and `MpuError::discriminant()` in the kernel (see architecture.md §14).
+/// and `MpuError::discriminant()` in the kernel.
 ///
 /// - `1..=8`       — direct `BufferError` variants
 /// - `0x101..=0x110` — `BufferError::Mpu(inner)` sub-errors

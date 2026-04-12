@@ -4,7 +4,7 @@ Consolidated reference for all IPC primitives: event flags, semaphores,
 mutexes, message queues, sampling ports, queuing ports, and blackboards.
 For context on the SVC dispatch mechanism, PendSV context switching, and
 the static scheduler that drives partition execution, see
-[architecture.md](architecture.md).
+[`../architecture.md`](../architecture.md).
 
 ## Table of Contents
 
@@ -128,7 +128,7 @@ values.
 | `WaitQueueFull`    | `0xFFFF_FFFD`  | Wait queue at capacity, cannot block       |
 | `TransitionFailed` | `0xFFFF_FFFC`  | Partition state transition not permitted   |
 | `InvalidPartition` | `0xFFFF_FFFB`  | Partition index out of range               |
-| `OperationFailed`  | `0xFFFF_FFFA`  | Direction violation, message too large, etc. For buffer syscalls, `r1` contains a sub-error detail discriminant — see [architecture.md §14](architecture.md#14-svc-error-return-abi--r1-detail-convention) |
+| `OperationFailed`  | `0xFFFF_FFFA`  | Direction violation, message too large, etc. For buffer syscalls, `r1` carries a sub-error detail discriminant; see `plib::describe_buf_error` for the decoder. |
 | `InvalidPointer`   | `0xFFFF_FFF9`  | User pointer outside caller's MPU region   |
 
 Module-level error enums (`SamplingError`, `QueuingError`,
@@ -428,7 +428,7 @@ Two wait queue types in `kernel/src/waitqueue.rs`:
 4. Partition state becomes `Waiting`.
 
 In the ARINC 653-style static scheduler (see
-[architecture.md](architecture.md#4-static-schedule-table-format)),
+[`../architecture.md`](../architecture.md#schedule-table)),
 blocking does NOT skip the partition's time slot. The partition still
 receives its window but cannot do useful work.
 
@@ -455,8 +455,8 @@ synchronization primitives are needed.
 ### Mechanism
 
 On each SysTick interrupt (see
-[architecture.md](architecture.md#4-static-schedule-table-format) for
-the SysTick handler), after advancing the schedule table, the kernel
+[`../architecture.md`](../architecture.md#systick--pendsv-coordination)
+for the SysTick handler), after advancing the schedule table, the kernel
 sweeps all timed wait queues for expired entries.
 
 Both `QueuingPortPool` and `BlackboardPool` provide a `tick_timeouts`
@@ -494,10 +494,9 @@ in their next time slot.
 ## 10. Buffer Pool
 
 Source: `kernel/src/buffer_pool.rs`.
-For the MPU region strategy (DynamicStrategy, R4-R7 slot tracking) and
-context-switch integration, see
-[architecture.md §11.1](architecture.md#111-mpustrategy-trait-and-dynamicstrategy)
-and [§11.2](architecture.md#112-buffer-pool-memory-model).
+For the MPU region strategy (DynamicStrategy, R4-R7 slot tracking),
+the buffer pool memory model, and context-switch integration, see
+[`../architecture.md`](../architecture.md#dynamic-mpu-and-virtual-devices).
 
 ### Data structures
 
@@ -601,16 +600,14 @@ all slots and automatically revokes any whose deadline has passed —
 removing the MPU window and returning the slot to `Free`. This is
 called from `run_bottom_half()` during every system window. For the
 full timed revocation design and bottom-half integration, see
-[architecture.md §11.2](architecture.md#112-buffer-pool-memory-model)
-and [§11.3](architecture.md#113-system-window-schedule-entries-and-bottom-half-processing).
+[`../architecture.md`](../architecture.md#dynamic-mpu-and-virtual-devices).
 
 ## 11. Virtual Devices
 
 Source: `kernel/src/virtual_device.rs` and `kernel/src/virtual_uart.rs`.
-For the system-window schedule entries
-that drive bottom-half processing (UART transfer, ISR drain), see
-[architecture.md §11.3](architecture.md#113-system-window-schedule-entries-and-bottom-half-processing)
-and [§11.5](architecture.md#115-virtual-device-abstraction-layer).
+For the system-window schedule entries that drive bottom-half processing
+(UART transfer, ISR drain) and the virtual device abstraction layer, see
+[`../architecture.md`](../architecture.md#dynamic-mpu-and-virtual-devices).
 
 ### VirtualDevice trait
 

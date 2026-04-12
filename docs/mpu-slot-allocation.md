@@ -223,7 +223,5 @@ only 8 bytes (one `(u32, u32)` pair).
 
 - [MPU Bundling Design](../mpu-bundling-design.md) — combining adjacent
   peripherals into single MPU regions to recover dynamic slots.
-- [Precompute MPU Registers](../precompute-mpu-registers.md) — boot-time
-  precomputation of RBAR/RASR pairs into `cached_base_regions`.
-- [Architecture Overview](../architecture.md) — system-level architecture
+- [Architecture Overview](../../docs/architecture.md) — system-level architecture
   including memory ownership model and partition lifecycle.

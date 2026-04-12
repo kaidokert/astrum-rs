@@ -1,11 +1,10 @@
 # Driver Architecture
 
-The core architectural insight: **the kernel is a resource mediator, not
-a transaction mediator.** It provides resources — MPU regions, interrupt
-routing, IPC channels — rather than intermediating every hardware
-transaction on behalf of partitions. The kernel never touches a UART
-data register or clocks an SPI byte. It grants access and gets out of
-the way.
+The kernel is **a resource mediator, not a transaction mediator.** It
+provides resources — MPU regions, interrupt routing, IPC channels —
+rather than intermediating every hardware transaction on behalf of
+partitions. The kernel never touches a UART data register or clocks an
+SPI byte. It grants access and gets out of the way.
 
 Traditional RTOS driver models place peripheral drivers inside the
 kernel, making every `spi.write(&buf)` a syscall. This adds per-operation
@@ -21,8 +20,6 @@ partition runs standard PAC/HAL crate code directly.
 
 1. [User-Space Drivers for Dedicated Peripherals](#1-user-space-drivers-for-dedicated-peripherals)
 2. [Interrupt Routing Model](#2-interrupt-routing-model)
-3. Shared Bus Arbitration (planned)
-4. Kernel-Mediated Fallback (planned)
 
 ---
 

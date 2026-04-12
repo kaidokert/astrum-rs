@@ -439,10 +439,10 @@ These examples exercise the dynamic MPU subsystem: runtime MPU region
 allocation (R4-R7), buffer pool zero-copy lending, and the virtual
 device abstraction layer.
 For the architecture behind these subsystems, see
-[architecture.md §12](architecture.md#12-dynamic-mpu-and-virtual-devices).
+[`../docs/architecture.md`](../docs/architecture.md#dynamic-mpu-and-virtual-devices).
 For syscall details, see
-[ipc-reference.md §10 (Buffer Pool)](ipc-reference.md#10-buffer-pool) and
-[§11 (Virtual Devices)](ipc-reference.md#11-virtual-devices).
+[`../docs/reference/ipc-reference.md` §10 (Buffer Pool)](../docs/reference/ipc-reference.md#10-buffer-pool) and
+[§11 (Virtual Devices)](../docs/reference/ipc-reference.md#11-virtual-devices).
 
 All dynamic MPU examples run with:
 
@@ -719,10 +719,10 @@ next system window.
 
 This demo uses `SYS_DEV_READ_TIMED` (blocking device read with
 timeout) instead of yield-poll loops. See
-[ipc-reference.md §11](ipc-reference.md#11-virtual-devices) for the
-`SYS_DEV_READ_TIMED` syscall semantics and
-[architecture.md §11.5](architecture.md#115-virtual-device-abstraction-layer)
-for the blocking-read wakeup protocol.
+[`../docs/reference/ipc-reference.md` §11](../docs/reference/ipc-reference.md#11-virtual-devices)
+for the `SYS_DEV_READ_TIMED` syscall semantics and the
+[`Dynamic MPU and virtual devices`](../docs/architecture.md#dynamic-mpu-and-virtual-devices)
+section of the architecture overview for the blocking-read wakeup protocol.
 
 ---
 
@@ -745,9 +745,10 @@ for the blocking-read wakeup protocol.
 
 For the device syscall semantics (`SYS_DEV_OPEN`, `SYS_DEV_READ`,
 `SYS_DEV_WRITE`), see
-[ipc-reference.md §11](ipc-reference.md#11-virtual-devices). For the
-`DeviceRegistry` and `DeviceError` types, see
-[architecture.md §11.5](architecture.md#115-virtual-device-abstraction-layer).
+[`../docs/reference/ipc-reference.md` §11](../docs/reference/ipc-reference.md#11-virtual-devices).
+For the `DeviceRegistry` and `DeviceError` types, see the
+[`Dynamic MPU and virtual devices`](../docs/architecture.md#dynamic-mpu-and-virtual-devices)
+section of the architecture overview.
 
 #### Architecture
 

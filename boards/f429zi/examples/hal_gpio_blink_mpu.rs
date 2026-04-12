@@ -5,7 +5,7 @@
 //! peripheral_regions (GPIOB only) and its SRAM data window.  Access to any
 //! other peripheral or kernel memory causes a MemManage fault.
 //!
-//! This is the completion of "Approach D" from notes/driver-architecture.md:
+//! This is the completion of "Approach D" from docs/driver-architecture.md:
 //! - Kernel maps GPIOB into the partition's MPU window at boot.
 //! - Partition calls `Peripherals::steal()`, `GPIOB.split_unchecked()`, `toggle()` —
 //!   standard stm32f4xx-hal, zero kernel syscalls for I/O.
@@ -43,7 +43,7 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
-use kernel::{PartitionSpec, 
+use kernel::{PartitionSpec,
     partition_core::AlignedStack2K,
     scheduler::{ScheduleEntry, ScheduleTable},
     {Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled},
