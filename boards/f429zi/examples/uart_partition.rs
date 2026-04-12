@@ -1,6 +1,6 @@
 //! UART IRQ Partition Demo (HAL variant) — STM32F429ZI
 //!
-//! Same architecture as uart_irq_partition.rs (Approach D + Model B IRQ),
+//! Same architecture as uart_irq_partition.rs (MPU pass-through + Model B IRQ),
 //! but hardware initialisation uses stm32f4xx-hal APIs instead of raw PAC
 //! register accesses.  Only one PAC call remains: CR3.HDSEL.
 //!
@@ -127,7 +127,7 @@ kernel::define_kernel!(UartHalCfg, |tick, _k| {
 });
 
 // ---------------------------------------------------------------------------
-// Partition P0: UART driver (Approach D + IRQ Model B).
+// Partition P0: UART driver (MPU pass-through + IRQ Model B).
 //
 // Runs under MPU enforcement — only USART3 MMIO (0x4000_4800/1KB) is in
 // peripheral_regions.  The NVIC (PPB 0xE000_E000) is NOT grantable, so
@@ -184,7 +184,7 @@ kernel::partition_trampoline!(uart_driver => uart_driver_body);
 // ---------------------------------------------------------------------------
 #[entry]
 fn main() -> ! {
-    rprintln!("\n=== UART IRQ Partition Demo (HAL variant) — Approach D + Model B IRQ ===");
+    rprintln!("\n=== UART IRQ Partition Demo (HAL variant) — MPU pass-through + Model B IRQ ===");
     rprintln!("USART3 half-duplex loopback: TX byte → internal RX → RXNE → IRQ 39");
     rprintln!("IrqClearModel::PartitionAcks (mask on dispatch) + plib::sys_irq_ack (unmask)");
 

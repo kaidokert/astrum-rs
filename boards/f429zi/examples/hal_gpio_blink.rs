@@ -1,11 +1,11 @@
-//! HAL GPIO Blink — stm32f4xx-hal from a Kernel Partition (Approach D)
+//! HAL GPIO Blink — stm32f4xx-hal from a Kernel Partition (MPU pass-through)
 //!
 //! Validates that stm32f4xx-hal's GPIO API runs correctly from inside a kernel
 //! partition using Peripherals::steal().  The partition calls steal() once at
 //! init, splits GPIOB using the HAL, then toggles LEDs in response to a
 //! SysTick-driven event — zero syscalls for the GPIO I/O path.
 //!
-//! This is the minimal proof-of-concept for Approach D (MPU peripheral
+//! This is the minimal proof-of-concept for MPU pass-through (MPU peripheral
 //! pass-through): the kernel maps nothing here (MPU_ENFORCE = false), but the
 //! ownership model is correct — one partition owns one peripheral bank.
 //!
@@ -27,7 +27,7 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
-use kernel::{PartitionSpec, 
+use kernel::{PartitionSpec,
     scheduler::{ScheduleEntry, ScheduleTable},
     {Partitions4, SyncMinimal, MsgSmall, PortsTiny, DebugEnabled},
 };

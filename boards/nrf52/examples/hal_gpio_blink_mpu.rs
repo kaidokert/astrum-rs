@@ -1,4 +1,4 @@
-//! HAL GPIO Blink under MPU Enforcement — Approach D nRF52833
+//! HAL GPIO Blink under MPU Enforcement — MPU pass-through nRF52833
 //!
 //! Proves that nrf52833-hal GPIO code can run from a kernel partition under
 //! real MPU enforcement: the partition only has MPU access to its declared
@@ -7,7 +7,7 @@
 //!
 //! This is the nRF52833 equivalent of the f429zi `hal_gpio_blink_mpu` example.
 //!
-//! Key difference from STM32 Approach D:
+//! Key difference from STM32 MPU pass-through:
 //!   - nRF52 GPIO is always-on — no clock gating, no RCC equivalent.
 //!   - No bit-band alias region — nrf52833-hal uses no bit-band tricks.
 //!   - p0::Parts::new(dp.P0) is zero-register-access (just wraps PhantomData).
@@ -40,7 +40,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use embedded_hal::digital::OutputPin;
-use kernel::{PartitionSpec, 
+use kernel::{PartitionSpec,
     partition_core::AlignedStack2K,
     scheduler::{ScheduleEntry, ScheduleTable},
     {Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled},
@@ -112,7 +112,7 @@ kernel::define_kernel!(HalMpuConfig, |tick, k| {
 ///   - P0 GPIO (0x5000_0000 + 4 KB): LED control
 /// Any access outside these ranges → MemManage fault.
 ///
-/// Unlike STM32 Approach D, no split_unchecked() is needed here because:
+/// Unlike STM32 MPU pass-through, no split_unchecked() is needed here because:
 ///   - p0::Parts::new(dp.P0) writes no registers (pure PhantomData wrapper)
 ///   - nRF52 has no clock gating and no bit-band alias
 extern "C" fn blinker_main_body(_r0: u32) -> ! {
@@ -167,7 +167,7 @@ kernel::partition_trampoline!(blinker_main => blinker_main_body);
 
 #[entry]
 fn main() -> ! {
-    rprintln!("\n=== HAL GPIO Blink — MPU Enforcement (Approach D nRF52833) ===");
+    rprintln!("\n=== HAL GPIO Blink — MPU Enforcement (MPU pass-through nRF52833) ===");
     rprintln!("nRF52833 — nrf52833-hal GPIO from kernel partition under MPU isolation");
     rprintln!("No clock enable needed: nRF52 GPIO is always-on (no RCC equivalent)");
     // GPIO P0: 0x5000_0000, 4 KB (highest reg PIN_CNF[31] at +0x77C, fits in 4 KB ✓)

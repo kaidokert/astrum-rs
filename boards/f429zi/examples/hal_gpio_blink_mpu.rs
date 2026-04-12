@@ -1,11 +1,11 @@
-//! HAL GPIO Blink under MPU Enforcement — Approach D Full Demo
+//! HAL GPIO Blink under MPU Enforcement — MPU pass-through Full Demo
 //!
 //! Proves that stm32f4xx-hal GPIO code can run from a kernel partition under
 //! real MPU enforcement: the partition only has MPU access to its declared
 //! peripheral_regions (GPIOB only) and its SRAM data window.  Access to any
 //! other peripheral or kernel memory causes a MemManage fault.
 //!
-//! This is the completion of "Approach D" from docs/driver-architecture.md:
+//! This is the completion of "MPU pass-through" from docs/driver-architecture.md:
 //! - Kernel maps GPIOB into the partition's MPU window at boot.
 //! - Partition calls `Peripherals::steal()`, `GPIOB.split_unchecked()`, `toggle()` —
 //!   standard stm32f4xx-hal, zero kernel syscalls for I/O.
@@ -152,7 +152,7 @@ kernel::partition_trampoline!(blinker_main => blinker_main_body);
 
 #[entry]
 fn main() -> ! {
-    rprintln!("\n=== HAL GPIO Blink — MPU Enforcement (Approach D Full Demo) ===");
+    rprintln!("\n=== HAL GPIO Blink — MPU Enforcement (MPU pass-through Full Demo) ===");
     rprintln!("STM32F429ZI — stm32f4xx-hal from kernel partition under MPU isolation");
     // GPIOB register block: 0x4002_0400, 1 KB (1KB-aligned ✓)
     // Covers MODER, OTYPER, OSPEEDR, PUPDR, IDR, ODR, BSRR, LCKR, AFR.

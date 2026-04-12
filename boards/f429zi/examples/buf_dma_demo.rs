@@ -24,7 +24,7 @@
 //!     - `StreamsTuple::new(dp.DMA1, &mut rcc)` → enables DMA1 AHB1 clock and
 //!       returns typed stream handles (`.1` = `Stream1<DMA1>`).
 //!
-//!   producer_body() (Approach D partition), via `Stream`+`StreamISR` traits on
+//!   producer_body() (MPU pass-through partition), via `Stream`+`StreamISR` traits on
 //!   the stored `Stream1<pac::DMA1>`:
 //!     - `stream.set_peripheral_address(USART3_DR_ADDR)` — PAR
 //!     - `stream.set_memory_address(buf_ptr as u32)` — M0AR, **runtime address**

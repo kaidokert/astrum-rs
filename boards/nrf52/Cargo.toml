@@ -37,7 +37,7 @@ kernel-fpu = ["kernel-example", "kernel/fpu-context"]
 custom-ivt = []
 kernel-irq = ["kernel-mpu", "kernel/custom-ivt", "custom-ivt"]
 kernel-mpu = ["kernel-example", "dep:plib"]
-# Kernel + HAL + MPU enforcement: Approach D with real isolation on nRF52833.
+# Kernel + HAL + MPU enforcement: MPU pass-through with real isolation on nRF52833.
 # Partition gets only its declared peripheral_regions (P0 GPIO); MPU blocks all else.
 kernel-mpu-hal = ["kernel-mpu", "dep:nrf52833-hal", "dep:embedded-hal"]
 

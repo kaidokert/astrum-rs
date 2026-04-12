@@ -25,7 +25,7 @@ partition runs standard PAC/HAL crate code directly.
 
 ## 1. User-Space Drivers for Dedicated Peripherals
 
-### 1.1 Mechanism: MPU Peripheral Pass-Through (Approach D)
+### 1.1 Mechanism: MPU Peripheral Pass-Through
 
 When a peripheral is owned exclusively by one partition, the kernel
 grants that partition direct hardware access through the MPU:
@@ -142,7 +142,7 @@ re-scanning the PCB list.
 
 ### 1.4 Decision Rationale
 
-The choice of Approach D over kernel-mediated alternatives rests on a
+The choice of MPU pass-through over kernel-mediated alternatives rests on a
 single observation: **interfaces are expensive, implementation is cheap.**
 
 Every kernel-mediated peripheral class requires an operation enum
@@ -151,13 +151,13 @@ path in the SVC handler, an error translation layer, and documentation
 and versioning for all of the above. This is ABI surface the RTOS team
 must own indefinitely.
 
-Under Approach D the hardware register map *is* the interface, and the
+Under MPU pass-through the hardware register map *is* the interface, and the
 community-maintained `embedded-hal` trait impls running in partition
 space *are* the driver. The kernel introduces **zero new ABI** for
 peripheral access — only MPU region configuration and interrupt routing,
 mechanisms that already exist for memory isolation.
 
-The trade-off: Approach D requires dedicated peripheral ownership (one
+The trade-off: MPU pass-through requires dedicated peripheral ownership (one
 partition per peripheral). For shared buses, a server partition pattern
 using existing IPC primitives handles arbitration without new kernel ABI.
 

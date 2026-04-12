@@ -1,6 +1,6 @@
 //! USB Audio Partition — Full-Duplex Isochronous under RTOS (STM32F429ZI)
 //!
-//! Kernel partition running the full USB Audio stack (Approach D + Model B IRQ).
+//! Kernel partition running the full USB Audio stack (MPU pass-through + Model B IRQ).
 //! Isochronous transfers require sub-millisecond scheduling to avoid frame drops.
 //!
 //! Architecture:
@@ -188,7 +188,7 @@ static SINE_TABLE: [i16; SINE_PERIOD] = [
 ];
 
 // ---------------------------------------------------------------------------
-// USB Audio partition body (Approach D + IRQ Model B)
+// USB Audio partition body (MPU pass-through + IRQ Model B)
 //
 // Runs under MPU enforcement — only OTG_FS (0x5000_0000/256KB) is granted.
 // OTG_FS ISR is masked by kernel dispatch; partition ACKs to unmask.
@@ -277,7 +277,7 @@ fn main() -> ! {
     static mut EP_MEMORY: [u32; 2048] = [0; 2048];
     static mut USB_BUS: Option<usb_device::bus::UsbBusAllocator<UsbBus<USB>>> = None;
 
-    rprintln!("\n=== USB Audio Partition — Approach D + Model B IRQ ===");
+    rprintln!("\n=== USB Audio Partition — MPU pass-through + Model B IRQ ===");
     rprintln!("{}, 500us tick, MPU, OTG_FS IRQ", LABEL);
 
     let dp = pac::Peripherals::take().unwrap();

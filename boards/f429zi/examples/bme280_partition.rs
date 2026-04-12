@@ -1,6 +1,6 @@
 //! BME280 Sensor Partition — STM32F429ZI NUCLEO-144
 //!
-//! Approach D: partition directly drives a BME280 sensor over I2C under
+//! MPU pass-through: partition directly drives a BME280 sensor over I2C under
 //! real MPU enforcement. Proves the embedded-hal ecosystem works inside
 //! an isolated RTOS partition.
 //!

@@ -1,6 +1,6 @@
-//! UARTE IRQ Partition Demo — nRF52833 (Approach D + Model B IRQ)
+//! UARTE IRQ Partition Demo — nRF52833 (MPU pass-through + Model B IRQ)
 //!
-//! Proves Approach D (partition owns peripheral under MPU) works on Nordic
+//! Proves MPU pass-through (partition owns peripheral under MPU) works on Nordic
 //! silicon with EasyDMA.  Full-duplex TX+RX verified via J-Link VCOM echo.
 //!
 //! Architecture:
@@ -115,7 +115,7 @@ kernel::define_kernel!(UarteCfg, |tick, _k| {
 });
 
 // ---------------------------------------------------------------------------
-// Partition P0: UARTE driver (Approach D + IRQ Model B).
+// Partition P0: UARTE driver (MPU pass-through + IRQ Model B).
 //
 // Runs under MPU enforcement — only UARTE0 (0x4000_2000/4KB) is in
 // peripheral_regions.  NVIC is NOT grantable (PPB), so IRQ unmask
@@ -191,7 +191,7 @@ kernel::partition_trampoline!(uarte_driver => uarte_driver_body);
 
 #[entry]
 fn main() -> ! {
-    rprintln!("\n=== UARTE IRQ Partition Demo — nRF52833 (Approach D + Model B IRQ) ===");
+    rprintln!("\n=== UARTE IRQ Partition Demo — nRF52833 (MPU pass-through + Model B IRQ) ===");
     rprintln!("UARTE0 EasyDMA TX+RX on P0.06/P0.08, ENDTX+ENDRX IRQ, host echo verify");
 
     let dp = pac::Peripherals::take().unwrap();

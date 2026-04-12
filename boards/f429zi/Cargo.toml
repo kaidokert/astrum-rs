@@ -54,10 +54,10 @@ kernel-irq-mpu = ["kernel-irq", "dep:plib"]
 kernel-fpu = ["kernel-example", "kernel/fpu-context"]
 kernel-threads = ["kernel-mpu", "kernel/intra-threads"]
 kernel-mpu = ["kernel-example", "dep:plib", "dep:rtos-traits"]
-# Kernel + HAL: kernel partition that drives hardware via stm32f4xx-hal (Approach D)
+# Kernel + HAL: kernel partition that drives hardware via stm32f4xx-hal (MPU pass-through)
 # Uses local HAL clone so we can patch without waiting on upstream.
 kernel-hal = ["kernel-example", "dep:stm32f4xx-hal"]
-# Kernel + HAL + MPU enforcement: Approach D with real isolation.
+# Kernel + HAL + MPU enforcement: MPU pass-through with real isolation.
 # Partition gets only its declared peripheral_regions; MPU blocks all other MMIO.
 kernel-mpu-hal = ["kernel-mpu", "dep:stm32f4xx-hal"]
 # Kernel + USB CDC: kernel partition that manages USB echo via RTOS events.
