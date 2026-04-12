@@ -144,7 +144,12 @@ where
     if let Some(pid) = first_pid {
         kernel.active_partition = Some(pid);
         if let Some(pcb) = kernel.pcb_mut(pid as usize) {
-            let _ = pcb.transition(PartitionState::Running);
+            if pcb.transition(PartitionState::Running).is_err() {
+                crate::klog!(
+                    "[sched] start_schedule: Ready→Running failed for pid {}",
+                    pid
+                );
+            }
             pcb.increment_run_count();
         }
     }
@@ -202,7 +207,9 @@ where
             }
             transition_outgoing_ready(kernel);
             if let Some(pcb) = kernel.pcb_mut(pid as usize) {
-                let _ = pcb.transition(PartitionState::Running);
+                if pcb.transition(PartitionState::Running).is_err() {
+                    crate::klog!("[sched] advance_tick: Ready→Running failed for pid {}", pid);
+                }
                 pcb.reset_starvation();
                 pcb.increment_run_count();
             }

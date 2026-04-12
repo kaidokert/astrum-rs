@@ -48,21 +48,22 @@ macro_rules! define_memmanage_handler {
                         // handler was activated (in_error_handler), return the
                         // fresh SP so we can update PSP accordingly.
                         let pid = d.partition_id.as_raw() as usize;
-                        let is_restarted_or_error = k.pcb(pid).map_or(false, |pcb|
-                            pcb.state() == $crate::partition::PartitionState::Ready
-                            || pcb.in_error_handler());
-                        if is_restarted_or_error {
-                            // Transition restarted partition Ready→Running so the
-                            // dispatch invariant (active ⟹ Running) holds when
-                            // the partition makes its first post-restart SVC.
-                            if let Some(pcb) = k.pcb_mut(pid) {
-                                if pcb.state() == $crate::partition::PartitionState::Ready {
-                                    let _ = pcb.transition(
-                                        $crate::partition::PartitionState::Running,
-                                    );
+                        if let Some(pcb) = k.pcb_mut(pid) {
+                            let ready = pcb.state() == $crate::partition::PartitionState::Ready;
+                            let in_eh = pcb.in_error_handler();
+                            if ready || in_eh {
+                                // Transition restarted partition Ready→Running
+                                // so the dispatch invariant (active ⟹ Running)
+                                // holds when it makes its first post-restart SVC.
+                                if ready {
+                                    if pcb.transition($crate::partition::PartitionState::Running).is_err() {
+                                        $crate::klog!("[MemManage] Ready→Running transition failed for pid {}", pid);
+                                    }
                                 }
+                                k.partition_sp().get(pid).copied()
+                            } else {
+                                None
                             }
-                            k.partition_sp().get(pid).copied()
                         } else {
                             None
                         }
