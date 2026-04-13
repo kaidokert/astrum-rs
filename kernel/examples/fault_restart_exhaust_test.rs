@@ -28,7 +28,7 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::{
     mpu,
-    partition::{FaultPolicy, PartitionState},
+    partition::{FaultPolicy, MpuRegion, PartitionState},
     scheduler::ScheduleTable,
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
@@ -233,11 +233,14 @@ fn main() -> ! {
     // Set up static MPU: flash RX, RAM RW, kernel guard no-access.
     configure_static_mpu(&p.MPU);
 
-    let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 2).expect("round_robin");
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 2).expect("round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; TestConfig::N] = [
-        PartitionSpec::new(p0_entry as PartitionEntry, 0),
-        PartitionSpec::new(p1_entry as PartitionEntry, 0),
+        PartitionSpec::new(p0_entry as PartitionEntry, 0)
+            .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0)),
+        PartitionSpec::new(p1_entry as PartitionEntry, 0)
+            .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0)),
     ];
     let mut k = init_kernel(sched, &parts).expect("init_kernel");
 

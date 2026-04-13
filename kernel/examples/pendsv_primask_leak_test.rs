@@ -134,8 +134,9 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("primask_leak: Peripherals::take");
     hprintln!("pendsv_primask_leak_test: start");
 
-    let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
+    let mut sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("primask_leak: sched");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),

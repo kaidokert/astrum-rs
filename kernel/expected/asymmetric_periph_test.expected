@@ -1,6 +1,6 @@
 # mode: contains
 asymmetric_periph_test: start
-asymmetric_periph_test: P0 2-periph access OK
-asymmetric_periph_test: P1 3-periph access OK
-asymmetric_periph_test: R6 disabled for P0 (isolation OK)
+asymmetric_periph_test: P0 0-periph OK
+asymmetric_periph_test: P1 2-periph access OK
+asymmetric_periph_test: R4 disabled for P0 (isolation OK)
 asymmetric_periph_test: PASS

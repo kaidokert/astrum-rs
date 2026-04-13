@@ -109,7 +109,8 @@ fn main() -> ! {
     // round_robin(2,1) schedules P0 and P1 only. P2 stays Ready but never
     // runs, so increment_starvation_for_ready_partitions() (which iterates
     // ALL partitions regardless of schedule membership) will count P2.
-    let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(2, 1).expect("round_robin");
+    let mut sched = ScheduleTable::<{ Config::SCHED }>::round_robin(2, 1).expect("round_robin");
+    sched.add_system_window(1).expect("system window");
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),

@@ -122,8 +122,9 @@ fn main() -> ! {
     hprintln!("pendsv_primask_test: start");
 
     // 2 partitions, 1 tick per slot → major frame = 2 ticks (~1992 cycles).
-    let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
+    let mut sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("round-robin schedule for 2 partitions must fit");
+    sched.add_system_window(1).expect("system window");
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),

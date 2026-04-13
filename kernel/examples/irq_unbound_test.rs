@@ -19,7 +19,7 @@ kernel::kernel_config!(
     UnboundConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
-// IRQ 5 → partition 0, event 0x01.  IRQ 10 intentionally unbound.
+// IRQ 5 -> partition 0, event 0x01.  IRQ 10 intentionally unbound.
 kernel::bind_interrupts!(UnboundConfig, 70,
     5 => (0, 0x01),
 );
@@ -30,13 +30,13 @@ static WAIT_COUNT: AtomicU32 = AtomicU32::new(0);
 
 kernel::define_kernel!(UnboundConfig, |tick, _k| {
     if tick == 2 {
-        // Software-pend unbound IRQ 10 — must be a safe no-op.
+        // Software-pend unbound IRQ 10 -- must be a safe no-op.
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(10));
         hprintln!("irq_unbound_test: pended unbound IRQ 10 at tick {}", tick);
     }
     if tick == 3 {
-        // Software-pend bound IRQ 5 — delivers event 0x01 to partition 0.
+        // Software-pend bound IRQ 5 -- delivers event 0x01 to partition 0.
         #[cfg(target_arch = "arm")]
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(5));
         hprintln!("irq_unbound_test: pended bound IRQ 5 at tick {}", tick);
@@ -86,16 +86,18 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("irq_unbound_test: Peripherals::take");
     hprintln!("irq_unbound_test: start");
 
-    let sched = ScheduleTable::<{ UnboundConfig::SCHED }>::round_robin(1, 3)
+    let mut sched = ScheduleTable::<{ UnboundConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_unbound_test: round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
-    init_kernel(sched, &parts).expect("irq_unbound_test: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("irq_unbound_test: init_kernel");
+    store_kernel(&mut k);
 
     // Unmask bound IRQs (IRQ 5).
     enable_bound_irqs(&mut p.NVIC, UnboundConfig::IRQ_DEFAULT_PRIORITY).unwrap();
 
-    // Unmask unbound IRQ 10 so its IVT handler fires (lookup_binding → None).
+    // Unmask unbound IRQ 10 so its IVT handler fires (lookup_binding -> None).
     #[cfg(target_arch = "arm")]
     // SAFETY: IRQ 10 is a valid external interrupt on LM3S6965 (the QEMU
     // target has 70 external IRQs, 0..69).  Priority is set at boot time

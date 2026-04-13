@@ -134,6 +134,8 @@ fn main() -> ! {
                 kernel::PartitionId::new(0),
             )
             .expect("mem 0")
+            .with_code_mpu_region(MpuRegion::new(0, 0x4_0000, 0))
+            .expect("code mpu 0")
             .with_peripheral_regions(&[MpuRegion::new(UART0_BASE, UART0_SIZE, 0)])
             .expect("periph 0"),
             ExternalPartitionMemory::new(
@@ -142,7 +144,9 @@ fn main() -> ! {
                 MpuRegion::new(0, 0, 0),
                 kernel::PartitionId::new(1),
             )
-            .expect("mem 1"),
+            .expect("mem 1")
+            .with_code_mpu_region(MpuRegion::new(0, 0x4_0000, 0))
+            .expect("code mpu 1"),
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };

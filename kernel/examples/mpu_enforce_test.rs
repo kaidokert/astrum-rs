@@ -78,6 +78,7 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched entry 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched entry 1");
+    sched.add_system_window(1).expect("system window");
 
     let mut k = {
         // SAFETY: called once from main before any interrupt handler runs.

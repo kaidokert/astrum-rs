@@ -56,11 +56,13 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("qemu_custom_ivt: Peripherals::take");
     hprintln!("qemu_custom_ivt: start");
 
-    let sched = ScheduleTable::<{ IvtConfig::SCHED }>::round_robin(1, 3)
+    let mut sched = ScheduleTable::<{ IvtConfig::SCHED }>::round_robin(1, 3)
         .expect("qemu_custom_ivt: round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; IvtConfig::N] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
-    init_kernel(sched, &parts).expect("qemu_custom_ivt: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("qemu_custom_ivt: init_kernel");
+    store_kernel(&mut k);
 
     // Enable all IRQs bound by bind_interrupts! at the configured default priority.
     enable_bound_irqs(&mut p.NVIC, IvtConfig::IRQ_DEFAULT_PRIORITY).unwrap();

@@ -1,13 +1,13 @@
-//! QEMU test: asymmetric peripheral region counts (2 vs 3).
+//! QEMU test: asymmetric peripheral region counts (0 vs 2).
 //!
 //! Boots two partitions with different peripheral region counts:
-//! - P0: 2 peripheral regions (UART0 + TIMER0)
-//! - P1: 3 peripheral regions (UART0 + TIMER0 + I2C0)
+//! - P0: 0 peripheral regions
+//! - P1: 2 peripheral regions (I2C0 + GPIOA)
 //!
-//! Each partition performs volatile write+read to its granted peripherals.
-//! The tick handler verifies that after context-switching to P0, the third
-//! peripheral MPU slot (R6) is disabled — proving P1's extra peripheral
-//! (I2C0) is not leaked to P0.
+//! P1 performs volatile write+read to its granted peripherals.
+//! The tick handler verifies that after context-switching to P0, the first
+//! peripheral MPU slot (R4) is disabled — proving P1's peripherals
+//! are not leaked to P0.
 //!
 //! Run:
 //!   cargo run --example asymmetric_periph_test --features qemu,log-semihosting \
@@ -35,9 +35,8 @@ const NP: usize = 2;
 const STACK_WORDS: usize = 256;
 
 // Peripheral base addresses on LM3S6965.
-const UART0_BASE: u32 = 0x4000_C000;
-const TIMER0_BASE: u32 = 0x4003_0000;
 const I2C0_BASE: u32 = 0x4002_0000;
+const GPIOA_BASE: u32 = 0x4000_4000;
 const PERIPH_SIZE: u32 = 4096;
 
 kernel::kernel_config!(
@@ -66,32 +65,27 @@ kernel::define_kernel!(TestConfig, |tick, k| {
     let p1_ok = P1_RESULT.load(Ordering::Acquire) == 1;
 
     // Once both partitions have confirmed peripheral access, verify
-    // MPU isolation: when P0 is the current partition, the third
-    // peripheral slot (R6) must be disabled.
+    // MPU isolation: when P0 is the current partition, the first
+    // peripheral slot (R4) must be disabled — P0 has no peripherals.
     if p0_ok && p1_ok && tick >= 8 {
         let pid = k.current_partition;
         if pid == 0 {
             // SAFETY: SysTick preempts PendSV → exclusive MPU access.
             let p = unsafe { cortex_m::Peripherals::steal() };
-            // TODO: R6 == MPU region 6 assumes peripheral slots start at 4.
-            // The kernel should expose a FIRST_PERIPHERAL_SLOT constant so tests
-            // can compute the correct slot instead of hard-coding magic numbers.
-            // R6 is MPU region 6, the third peripheral-reserved slot.
-            // For P0 (which has only 2 peripherals), R6 must be disabled.
-            // SAFETY: SysTick preempts PendSV, so we have exclusive MPU access.
-            // `read_mpu_rasr` only reads RNR/RASR which is safe under that guarantee.
-            let rasr6 = unsafe { read_mpu_rasr(&p.MPU, 6) };
-            let enabled = rasr6 & 1;
+            // R4 is the first dynamic peripheral slot.
+            // For P0 (which has 0 peripherals), R4 must be disabled.
+            let rasr4 = unsafe { read_mpu_rasr(&p.MPU, 4) };
+            let enabled = rasr4 & 1;
             if enabled != 0 {
                 hprintln!(
-                    "asymmetric_periph_test: FAIL R6 not disabled for P0 (RASR={:#010x})",
-                    rasr6
+                    "asymmetric_periph_test: FAIL R4 not disabled for P0 (RASR={:#010x})",
+                    rasr4
                 );
                 kernel::kexit!(failure);
             }
-            hprintln!("asymmetric_periph_test: P0 2-periph access OK");
-            hprintln!("asymmetric_periph_test: P1 3-periph access OK");
-            hprintln!("asymmetric_periph_test: R6 disabled for P0 (isolation OK)");
+            hprintln!("asymmetric_periph_test: P0 0-periph OK");
+            hprintln!("asymmetric_periph_test: P1 2-periph access OK");
+            hprintln!("asymmetric_periph_test: R4 disabled for P0 (isolation OK)");
             hprintln!("asymmetric_periph_test: PASS");
             kernel::kexit!(success);
         }
@@ -107,22 +101,9 @@ kernel::define_kernel!(TestConfig, |tick, k| {
     }
 });
 
-/// P0: access UART0 + TIMER0 (2 peripherals).
+/// P0: no peripherals.
 const _: PartitionEntry = p0_entry;
 extern "C" fn p0_entry() -> ! {
-    let uart0_dr = UART0_BASE as *mut u32;
-    let timer0_cfg = TIMER0_BASE as *mut u32;
-
-    // SAFETY: UART0 DR and TIMER0 CFG are valid MMIO registers on lm3s6965evb.
-    // We have MPU-granted access to both regions.
-    unsafe {
-        core::ptr::write_volatile(uart0_dr, 0x41);
-        let _u = core::ptr::read_volatile(uart0_dr);
-
-        core::ptr::write_volatile(timer0_cfg, 0x0);
-        let _t = core::ptr::read_volatile(timer0_cfg);
-    }
-
     P0_RESULT.store(1, Ordering::Release);
 
     loop {
@@ -130,24 +111,19 @@ extern "C" fn p0_entry() -> ! {
     }
 }
 
-/// P1: access UART0 + TIMER0 + I2C0 (3 peripherals).
+/// P1: access I2C0 + GPIOA (2 peripherals).
 const _: PartitionEntry = p1_entry;
 extern "C" fn p1_entry() -> ! {
-    let uart0_dr = UART0_BASE as *mut u32;
-    let timer0_cfg = TIMER0_BASE as *mut u32;
     let i2c0_msa = I2C0_BASE as *mut u32;
+    let gpioa = GPIOA_BASE as *mut u32;
 
-    // SAFETY: UART0 DR, TIMER0 CFG, and I2C0 MSA are valid MMIO registers
-    // on lm3s6965evb.  We have MPU-granted access to all three regions.
+    // SAFETY: I2C0 MSA and GPIOA are valid MMIO registers on lm3s6965evb.
     unsafe {
-        core::ptr::write_volatile(uart0_dr, 0x42);
-        let _u = core::ptr::read_volatile(uart0_dr);
-
-        core::ptr::write_volatile(timer0_cfg, 0x0);
-        let _t = core::ptr::read_volatile(timer0_cfg);
-
         core::ptr::write_volatile(i2c0_msa, 0x0);
         let _i = core::ptr::read_volatile(i2c0_msa);
+
+        core::ptr::write_volatile(gpioa, 0x0);
+        let _a = core::ptr::read_volatile(gpioa);
     }
 
     P1_RESULT.store(1, Ordering::Release);
@@ -173,14 +149,9 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 3)).expect("sched P1");
     sched.add_system_window(1).expect("sys1");
 
-    let p0_periphs = [
-        MpuRegion::new(UART0_BASE, PERIPH_SIZE, 0),
-        MpuRegion::new(TIMER0_BASE, PERIPH_SIZE, 0),
-    ];
     let p1_periphs = [
-        MpuRegion::new(UART0_BASE, PERIPH_SIZE, 0),
-        MpuRegion::new(TIMER0_BASE, PERIPH_SIZE, 0),
         MpuRegion::new(I2C0_BASE, PERIPH_SIZE, 0),
+        MpuRegion::new(GPIOA_BASE, PERIPH_SIZE, 0),
     ];
 
     // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by
@@ -201,8 +172,8 @@ fn main() -> ! {
                 kernel::PartitionId::new(0),
             )
             .expect("mem 0")
-            .with_peripheral_regions(&p0_periphs)
-            .expect("periph 0"),
+            .with_code_mpu_region(MpuRegion::new(0, 0x4_0000, 0))
+            .expect("code mpu 0"),
             ExternalPartitionMemory::new(
                 s1,
                 EntryAddr::from_entry(p1_entry as PartitionEntry),
@@ -210,6 +181,8 @@ fn main() -> ! {
                 kernel::PartitionId::new(1),
             )
             .expect("mem 1")
+            .with_code_mpu_region(MpuRegion::new(0, 0x4_0000, 0))
+            .expect("code mpu 1")
             .with_peripheral_regions(&p1_periphs)
             .expect("periph 1"),
         ];

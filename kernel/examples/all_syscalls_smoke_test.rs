@@ -107,7 +107,8 @@ extern "C" fn partition_main() -> ! {
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("Peripherals::take");
     hprintln!("all_syscalls_smoke_test: start");
-    let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("round_robin");
+    let mut sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(1, 3).expect("round_robin");
+    sched.add_system_window(1).expect("system window");
     let parts: [PartitionSpec; Cfg::N] = [PartitionSpec::new(partition_main as PartitionEntry, 0)];
     let mut k = init_kernel(sched, &parts).expect("Kernel::create");
     store_kernel(&mut k);

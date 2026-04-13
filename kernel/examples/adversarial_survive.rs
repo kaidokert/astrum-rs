@@ -203,7 +203,8 @@ fn main() -> ! {
     // Set up static MPU: flash RX, RAM RW, kernel guard no-access.
     configure_static_mpu(&p.MPU);
 
-    let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 2).expect("round_robin");
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(2, 2).expect("round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; TestConfig::N] = [
         PartitionSpec::new(p0_entry as PartitionEntry, 0),

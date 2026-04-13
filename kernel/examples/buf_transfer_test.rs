@@ -127,14 +127,18 @@ fn main() -> ! {
                 MpuRegion::new(0, 0, 0),
                 kernel::PartitionId::new(0),
             )
-            .expect("mem 0"),
+            .expect("mem 0")
+            .with_code_mpu_region(MpuRegion::new(0, 0x4_0000, 0))
+            .expect("code mpu 0"),
             ExternalPartitionMemory::new(
                 s1,
                 EntryAddr::from_entry(p1_main as PartitionEntry),
                 MpuRegion::new(0, 0, 0),
                 kernel::PartitionId::new(1),
             )
-            .expect("mem 1"),
+            .expect("mem 1")
+            .with_code_mpu_region(MpuRegion::new(0, 0x4_0000, 0))
+            .expect("code mpu 1"),
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };

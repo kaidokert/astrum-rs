@@ -1,7 +1,7 @@
 //! QEMU integration test: SysTick cannot be preempted by app IRQ.
 //!
 //! At tick 2, the SysTick hook pends IRQ 0 (at MIN_APP_IRQ_PRIORITY 0x20)
-//! and checks `NVIC::is_pending` — since SYSTICK_PRIORITY (0x10) is higher,
+//! and checks `NVIC::is_pending` -- since SYSTICK_PRIORITY (0x10) is higher,
 //! the IRQ must remain pending.  After SysTick returns, the IRQ fires and
 //! dispatches event 0x01 to partition 0, confirming eventual delivery.
 //!
@@ -21,7 +21,7 @@ use kernel::{
 
 kernel::kernel_config!(Config<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-// Bind IRQ 0 → partition 0, event bit 0x01.
+// Bind IRQ 0 -> partition 0, event bit 0x01.
 kernel::bind_interrupts!(Config, 70,
     0 => (0, 0x01),
 );
@@ -43,7 +43,7 @@ kernel::define_kernel!(Config, |tick, _k| {
 
             // IRQ 0 is at MIN_APP_IRQ_PRIORITY (0x20), SysTick is at 0x10.
             // Lower numeric value = higher urgency.  Since 0x10 < 0x20,
-            // SysTick cannot be preempted — the IRQ must still be pending.
+            // SysTick cannot be preempted -- the IRQ must still be pending.
             if cortex_m::peripheral::NVIC::is_pending(kernel::irq_dispatch::IrqNr(0)) {
                 hprintln!("systick_preempt_test: IRQ still pending inside SysTick");
                 PEND_VERIFIED.store(1, Ordering::Release);
@@ -96,12 +96,14 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("Peripherals::take");
     hprintln!("systick_preempt_test: start");
 
-    let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(1, 3).expect("round_robin");
+    let mut sched = ScheduleTable::<{ Config::SCHED }>::round_robin(1, 3).expect("round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; Config::N] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
-    init_kernel(sched, &parts).expect("systick_preempt_test: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("systick_preempt_test: init_kernel");
+    store_kernel(&mut k);
 
-    // Enable IRQ 0 at MIN_APP_IRQ_PRIORITY — the tightest allowed app
+    // Enable IRQ 0 at MIN_APP_IRQ_PRIORITY -- the tightest allowed app
     // priority, numerically just above SYSTICK_PRIORITY.
     enable_bound_irqs(&mut p.NVIC, Config::MIN_APP_IRQ_PRIORITY).unwrap();
 

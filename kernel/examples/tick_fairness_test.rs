@@ -109,8 +109,9 @@ fn main() -> ! {
     hprintln!("tick_fairness_test: start");
 
     // 2 partitions, 1 tick per slot → major frame = 2 ticks.
-    let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
+    let mut sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1)
         .expect("tick_fairness: sched");
+    sched.add_system_window(1).expect("system window");
 
     // SAFETY: called once from main before any interrupt handler runs.
     // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by

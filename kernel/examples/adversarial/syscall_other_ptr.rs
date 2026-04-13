@@ -120,6 +120,7 @@ fn main() -> ! {
     sched
         .add(ScheduleEntry::new(0, 2))
         .expect("schedule entry must fit");
+    sched.add_system_window(1).expect("system window");
 
     let mut stack0 = AlignedStack1K::ZERO;
     let mut stack1 = AlignedStack1K::ZERO;

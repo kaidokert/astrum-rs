@@ -17,7 +17,7 @@ use cortex_m_semihosting::hprintln;
 use kernel::kpanic as _;
 use kernel::{
     mpu,
-    partition::FaultPolicy,
+    partition::{FaultPolicy, MpuRegion},
     scheduler::{ScheduleEntry, ScheduleTable},
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
@@ -186,8 +186,10 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 2)).expect("add P1");
     sched.add_system_window(1).expect("sys1");
     let parts: [PartitionSpec; TestConfig::N] = [
-        PartitionSpec::new(p0_entry as PartitionEntry, 0),
-        PartitionSpec::new(p1_entry as PartitionEntry, 0),
+        PartitionSpec::new(p0_entry as PartitionEntry, 0)
+            .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0)),
+        PartitionSpec::new(p1_entry as PartitionEntry, 0)
+            .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0)),
     ];
     let mut k = init_kernel(sched, &parts).expect("init_kernel");
     k.pcb_mut(0)

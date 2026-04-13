@@ -135,8 +135,9 @@ fn main() -> ! {
     hprintln!("pendstclr_systick_test: start");
 
     // 2 ticks per slot absorbs the forced PENDSTSET re-entry tick.
-    let sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 2)
+    let mut sched = ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 2)
         .expect("pendstclr_systick: sched");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),

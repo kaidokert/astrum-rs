@@ -24,6 +24,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+use kernel::partition::MpuRegion;
 use kernel::scheduler::{ScheduleEntry, ScheduleTable};
 use kernel::{
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
@@ -105,10 +106,12 @@ fn main() -> ! {
     sched.add_system_window(1).expect("syswin 1");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
-        PartitionSpec::new(p0_main as PartitionEntry, 0),
-        PartitionSpec::new(p1_main as PartitionEntry, 0),
+        PartitionSpec::new(p0_main as PartitionEntry, 0)
+            .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0)),
+        PartitionSpec::new(p1_main as PartitionEntry, 0)
+            .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0)),
     ];
-    init_kernel(sched, &parts).expect("pendsv_primask_dynamic_test: Kernel::create");
-
+    let mut k = init_kernel(sched, &parts).expect("pendsv_primask_dynamic_test: Kernel::create");
+    store_kernel(&mut k);
     match boot(p).expect("pendsv_primask_dynamic_test: boot") {}
 }

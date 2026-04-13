@@ -112,6 +112,7 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched 1");
+    sched.add_system_window(1).expect("system window");
     let mut k = {
         let stacks = kernel::partition_stacks!(TestConfig, TestConfig::N);
         let [ref mut s0, ref mut s1] = *stacks;

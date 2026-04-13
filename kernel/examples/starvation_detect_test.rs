@@ -117,8 +117,9 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("Peripherals::take");
     hprintln!("starvation_detect_test: start");
 
-    let sched =
+    let mut sched =
         ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1).expect("round_robin");
+    sched.add_system_window(1).expect("system window");
 
     // SAFETY: called once from main before any interrupt handler runs.
     // TODO: reviewer false positive — `__PARTITION_STACKS` is defined by
@@ -140,14 +141,18 @@ fn main() -> ! {
             mpu,
             kernel::PartitionId::new(0),
         )
-        .expect("mem 0"),
+        .expect("mem 0")
+        .with_code_mpu_region(MpuRegion::new(0, 0x4_0000, 0))
+        .expect("code mpu 0"),
         ExternalPartitionMemory::new(
             s1,
             e(p1_main as PartitionEntry),
             mpu,
             kernel::PartitionId::new(1),
         )
-        .expect("mem 1"),
+        .expect("mem 1")
+        .with_code_mpu_region(MpuRegion::new(0, 0x4_0000, 0))
+        .expect("code mpu 1"),
     ];
     let mut k = Kernel::<Config>::new(sched, &memories).expect("Kernel::create");
 

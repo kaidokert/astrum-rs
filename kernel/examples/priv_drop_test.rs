@@ -83,6 +83,7 @@ fn main() -> ! {
     sched
         .add(ScheduleEntry::new(0, 2))
         .expect("static schedule entry must fit");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; TestConfig::N] =
         [PartitionSpec::new(partition_main as PartitionEntry, 0)];
