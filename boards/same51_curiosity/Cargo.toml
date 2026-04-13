@@ -7,6 +7,7 @@ license = "Apache-2.0"
 
 [features]
 default = []
+bare = []
 pac-rt = ["atsamd-hal/same51j-rt"]
 uses-kernel = ["dep:kernel", "kernel/log-rtt", "kernel/custom-ivt"]
 kernel-example = ["uses-kernel", "custom-ivt", "dep:plib", "kernel/ipc-blackboard", "plib/ipc-blackboard"]
@@ -21,31 +22,41 @@ embedded-graphics-demo = ["dep:embedded-graphics"]
 name = "blinky"
 path = "examples/blinky.rs"
 test = false
+required-features = ["bare"]
+
+[[example]]
+name = "rtt_hello"
+required-features = ["bare"]
 
 [[example]]
 name = "dmac_mem2mem"
 path = "examples/dmac_mem2mem.rs"
 test = false
+required-features = ["bare"]
 
 [[example]]
 name = "dmac_uart"
 path = "examples/dmac_uart.rs"
 test = false
+required-features = ["bare"]
 
 [[example]]
 name = "lcd_red"
 path = "examples/lcd_red.rs"
 test = false
+required-features = ["bare"]
 
 [[example]]
 name = "lcd_red_raw"
 path = "examples/lcd_red_raw.rs"
 test = false
+required-features = ["bare"]
 
 [[example]]
 name = "lcd_manual"
 path = "examples/lcd_manual.rs"
 test = false
+required-features = ["bare"]
 
 [[example]]
 name = "lcd_embedded_graphics"
@@ -57,11 +68,13 @@ required-features = ["embedded-graphics-demo"]
 name = "mpu_info"
 path = "examples/mpu_info.rs"
 test = false
+required-features = ["bare"]
 
 [[example]]
 name = "vcom_uart"
 path = "examples/vcom_uart.rs"
 test = false
+required-features = ["bare"]
 
 [[example]]
 name = "usb_cdc_irq"
@@ -187,6 +200,7 @@ required-features = ["kernel-example"]
 name = "wdt_bare"
 path = "examples/wdt_bare.rs"
 test = false
+required-features = ["bare"]
 
 [[example]]
 name = "wdt_partition"

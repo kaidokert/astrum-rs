@@ -260,7 +260,7 @@ fn main() -> ! {
             .expect("code1"),
     ];
 
-    let k = kernel::svc::Kernel::<BufConfig>::new(sched, &mems).expect("kernel");
+    let mut k = kernel::svc::Kernel::<BufConfig>::new(sched, &mems).expect("kernel");
     store_kernel(&mut k);
     rprintln!("[INIT] Kernel created. Buffer pool: 1 slot × 32 bytes.");
     rprintln!("[INIT] Pattern=0x{:02X}  Slot={}  P0↔P1 events: READY=0x{:x} DONE=0x{:x}",

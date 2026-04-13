@@ -14,6 +14,7 @@ heapless = { version = "0.8", optional = true }
 
 [features]
 default = []
+bare = []
 uses-kernel = ["dep:kernel", "kernel/log-rtt", "kernel/panic-tombstone", "kernel/debug-no-wfi"]
 kernel-example = ["uses-kernel", "dep:plib", "dep:heapless"]
 kernel-mpu = ["kernel-example", "dep:plib"]
@@ -30,7 +31,7 @@ panic = "abort"
 
 [[example]]
 name = "rtt_hello"
-required-features = []
+required-features = ["bare"]
 
 [[example]]
 name = "mpu_kernel_demo"
