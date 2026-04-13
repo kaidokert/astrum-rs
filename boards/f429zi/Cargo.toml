@@ -137,6 +137,8 @@ required-features = ["hal", "bme280"]
 [[example]]
 name = "sensor_to_fram"
 required-features = ["kernel-mpu-hal", "bme280"]
+
+# --- bare: standalone tutorials (no kernel, manual context switching) ---
 [[example]]
 name = "blinky"
 required-features = ["bare"]

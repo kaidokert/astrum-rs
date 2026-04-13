@@ -42,7 +42,7 @@ jobs:
 
       - name: Install flip-link
         if: matrix.board == 'same51_curiosity'
-        run: cargo install flip-link
+        run: cargo install flip-link --version 0.1.12 --locked
 
       - name: Build examples
         working-directory: boards/${{ matrix.board }}
