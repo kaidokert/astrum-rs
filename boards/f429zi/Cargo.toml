@@ -23,6 +23,8 @@ bme280 = { version = "0.5.1", optional = true }
 
 [features]
 default = ["hal"]
+# Bare-metal step-by-step tutorials (no kernel, manual context switching)
+bare = []
 # HAL-based examples (USB, blinky, etc.)
 hal = ["dep:panic-halt", "dep:stm32f4xx-hal", "dep:usb-device", "dep:usbd-serial"]
 # Activates kernel dep + RTT panic backend so kernel::kpanic registers the handler.
@@ -129,6 +131,33 @@ required-features = ["kernel-mpu-hal", "bme280"]
 [[example]]
 name = "dual_temp_3part"
 required-features = ["kernel-mpu-hal", "bme280"]
+[[example]]
+name = "i2c_scan"
+required-features = ["hal", "bme280"]
+[[example]]
+name = "sensor_to_fram"
+required-features = ["kernel-mpu-hal", "bme280"]
+[[example]]
+name = "blinky"
+required-features = ["bare"]
+[[example]]
+name = "context_switch"
+required-features = ["bare"]
+[[example]]
+name = "context_switch_ipc"
+required-features = ["bare"]
+[[example]]
+name = "context_switch_mpu"
+required-features = ["bare"]
+[[example]]
+name = "context_switch_mpu_dynamic"
+required-features = ["bare"]
+[[example]]
+name = "context_switch_svc"
+required-features = ["bare"]
+[[example]]
+name = "context_switch_schedule"
+required-features = ["bare"]
 
 # --- kernel-fpu: kernel + FPU context save/restore ---
 [[example]]
