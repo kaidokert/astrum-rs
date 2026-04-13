@@ -10,6 +10,9 @@ TARGET="thumbv7m-none-eabi"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
+# Prefer python3, fall back to python (Windows).
+PYTHON="${PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)}"
+
 # Run a single example, capturing full semihosting stdout to a file.
 # Usage: capture_example_output <features> <example>
 # Writes output to $OUTDIR/<example>.out and returns the cargo exit status.
@@ -18,7 +21,7 @@ capture_example_output() {
     local ex="$2"
     local outfile="$OUTDIR/${ex}.out"
     timeout 30 cargo run -p kernel --target "$TARGET" --features "$features" --example "$ex" \
-        > "$outfile" 2>&1
+        > "$outfile" 2>"$OUTDIR/${ex}.stderr"
 }
 
 # Check a single example's output against its expected file or last-line grep.
@@ -31,7 +34,7 @@ check_example() {
 
     if [[ -f "$expected_file" ]]; then
         local report
-        if report=$(python3 "$SCRIPT_DIR/compare-output.py" "$expected_file" "$outfile" 2>&1); then
+        if report=$("$PYTHON" "$SCRIPT_DIR/compare-output.py" "$expected_file" "$outfile" 2>&1); then
             return 0
         fi
         if [[ -n "$report" ]]; then
