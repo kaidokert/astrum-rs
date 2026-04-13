@@ -13,14 +13,14 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::{
     buf_syscall,
     partition::MpuRegion,
     scheduler::{ScheduleEntry, ScheduleTable},
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
-#[allow(unused_imports)]
-use kernel::kpanic as _;
 
 kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>

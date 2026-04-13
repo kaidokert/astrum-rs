@@ -5,8 +5,8 @@
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    partition::MpuRegion,
-    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+    partition::MpuRegion, DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2,
+    PortsTiny, SyncMinimal,
 };
 kernel::kernel_config!(Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 kernel::define_kernel!(Config, |tick, k| {

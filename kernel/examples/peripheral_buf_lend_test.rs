@@ -12,6 +12,8 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::{
     buf_syscall,
     mpu_strategy::MpuStrategy,
@@ -20,8 +22,6 @@ use kernel::{
     svc::Kernel,
     DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal,
 };
-#[allow(unused_imports)]
-use kernel::kpanic as _;
 
 const NP: usize = 2;
 const P1: u8 = 1;
