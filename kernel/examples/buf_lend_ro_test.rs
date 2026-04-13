@@ -20,6 +20,8 @@ use kernel::{
     svc::Kernel,
     DebugEnabled, MsgMinimal, PartitionEntry, Partitions2, PortsTiny, SyncMinimal,
 };
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 
 const NP: usize = 2;
 const P1: u8 = 1;

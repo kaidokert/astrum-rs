@@ -19,6 +19,8 @@ use kernel::{
     scheduler::{ScheduleEntry, ScheduleTable},
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 
 kernel::kernel_config!(
     TestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
