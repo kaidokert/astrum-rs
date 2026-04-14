@@ -28,11 +28,16 @@ use std::path::PathBuf;
 ///
 /// The `{output_region}` placeholder is replaced at emit time (same
 /// logic as `kernel_state.x`).
-/// Linker fragment for .kernel_state section.
+/// Linker fragment for .kernel_state section and PendSV ABI symbols.
 ///
 /// Provides `__kernel_state_start` and `__kernel_state_end` symbols used by
 /// the SVC guard to detect kernel-memory pointers.  Board-specific memory.x
 /// files already define this; the kernel build emits it for QEMU targets.
+///
+/// Also provides fallback definitions (via PROVIDE) for the PendSV assembly
+/// ABI offset symbols. `define_kernel!` emits the real values; standalone
+/// examples that don't use the macro get zero-value fallbacks so the linker
+/// doesn't error on the references from PendSV assembly.
 const KERNEL_STATE_X_TEMPLATE: &str = "\
 /* .kernel_state section — kernel data boundary symbols for SVC guard. */
 SECTIONS
@@ -45,6 +50,14 @@ SECTIONS
     __kernel_state_end = .;
   }{output_region}
 } INSERT AFTER .bss;
+
+/* Fallback PendSV ABI offset symbols — overridden by define_kernel! macro. */
+PROVIDE(KERNEL_CORE_OFFSET = 0);
+PROVIDE(KERNEL_CURRENT_PARTITION_OFFSET = 0);
+PROVIDE(KERNEL_TICKS_DROPPED_OFFSET = 0);
+PROVIDE(CORE_NEXT_PARTITION_OFFSET = 0);
+PROVIDE(CORE_PARTITION_SP_OFFSET = 0);
+PROVIDE(CORE_PARTITION_STACK_LIMIT_OFFSET = 0);
 ";
 
 const TOMBSTONE_X_TEMPLATE: &str = "\
