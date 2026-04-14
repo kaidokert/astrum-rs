@@ -265,9 +265,9 @@ impl BootError {
             Self::KernelNotInitialized => 12,
             Self::TooManyPartitions { .. } => 13,
             Self::KernelInit(inner) => 0x200 + inner.discriminant(),
-            Self::ScheduleTransitionFailed => 14,
-            Self::FpuLazyStackingNotActive => 15,
-            Self::BufferPoolMisaligned { .. } => 16,
+            Self::FpuLazyStackingNotActive => 14,
+            Self::BufferPoolMisaligned { .. } => 15,
+            Self::ScheduleTransitionFailed => 16,
         }
     }
 }
@@ -1711,8 +1711,7 @@ mod tests {
             BootError::TooManyPartitions { given: 0, max: 0 }.discriminant(),
             13
         );
-        assert_eq!(BootError::ScheduleTransitionFailed.discriminant(), 14);
-        assert_eq!(BootError::FpuLazyStackingNotActive.discriminant(), 15);
+        assert_eq!(BootError::FpuLazyStackingNotActive.discriminant(), 14);
         assert_eq!(
             BootError::BufferPoolMisaligned {
                 slot: 0,
@@ -1720,8 +1719,9 @@ mod tests {
                 required: 0
             }
             .discriminant(),
-            16
+            15
         );
+        assert_eq!(BootError::ScheduleTransitionFailed.discriminant(), 16);
 
         // Wrapped MpuError variants use 0x100 + inner discriminant.
         assert_eq!(

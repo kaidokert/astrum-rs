@@ -146,14 +146,28 @@ where
     if let Some(pid) = first_pid {
         kernel.active_partition = Some(pid);
         if let Some(pcb) = kernel.pcb_mut(pid as usize) {
-            if pcb.state() == PartitionState::Ready {
-                if let Err(e) = pcb.transition(PartitionState::Running) {
+            match pcb.state() {
+                PartitionState::Ready => {
+                    if let Err(e) = pcb.transition(PartitionState::Running) {
+                        crate::klog!(
+                            "[sched] start_schedule: Ready→Running failed for pid {}",
+                            pid
+                        );
+                        kernel.active_partition = None;
+                        return Err(e);
+                    }
+                }
+                PartitionState::Running => {
+                    // Already Running (e.g. test harness pre-transitions) — no-op.
+                }
+                _ => {
                     crate::klog!(
-                        "[sched] start_schedule: Ready→Running failed for pid {}",
-                        pid
+                        "[sched] start_schedule: pid {} in unexpected state {:?}",
+                        pid,
+                        pcb.state()
                     );
                     kernel.active_partition = None;
-                    return Err(e);
+                    return Err(TransitionError);
                 }
             }
             pcb.increment_run_count();
@@ -222,6 +236,7 @@ where
             if let Some(pcb) = kernel.pcb_mut(pid as usize) {
                 if pcb.transition(PartitionState::Running).is_err() {
                     crate::klog!("[sched] advance_tick: Ready→Running failed for pid {}", pid);
+                    kernel.active_partition = None;
                     return ScheduleEvent::None;
                 }
                 pcb.reset_starvation();
