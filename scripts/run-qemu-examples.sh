@@ -72,7 +72,15 @@ run_examples() {
                 PASS=$((PASS + 1))
                 continue
             fi
-            echo "FAIL (build/runtime error)"
+            echo "FAIL (build/runtime error, rc=$rc)"
+            if [[ -s "$OUTDIR/${ex}.out" ]]; then
+                echo "  stdout: $(head -3 "$OUTDIR/${ex}.out")" >&2
+            else
+                echo "  stdout: (empty)" >&2
+            fi
+            if [[ -s "$OUTDIR/${ex}.stderr" ]]; then
+                echo "  stderr: $(tail -5 "$OUTDIR/${ex}.stderr")" >&2
+            fi
             FAIL=$((FAIL + 1))
             FAILED="$FAILED $ex"
             continue
@@ -81,7 +89,10 @@ run_examples() {
             echo "PASS"
             PASS=$((PASS + 1))
         else
-            echo "FAIL"
+            echo "FAIL (output mismatch)"
+            if [[ -s "$OUTDIR/${ex}.out" ]]; then
+                echo "  stdout: $(head -3 "$OUTDIR/${ex}.out")" >&2
+            fi
             FAIL=$((FAIL + 1))
             FAILED="$FAILED $ex"
         fi
@@ -129,6 +140,9 @@ run_examples_record() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    echo "QEMU version: $(qemu-system-arm --version | head -1)"
+    echo "Rust version: $(rustc --version)"
+    echo ""
     PASS=0
     FAIL=0
     FAILED=""
