@@ -171,7 +171,7 @@ fn boot(
         }
 
         // Start the schedule and select the first partition for PendSV.
-        if let Some(pid) = kernel::svc::scheduler::start_schedule(k) {
+        if let Ok(Some(pid)) = kernel::svc::scheduler::start_schedule(k) {
             // Configure the dynamic MPU strategy for the first partition
             // before the initial PendSV fires.
             if let Some(pcb) = k.partitions().get(pid as usize) {
