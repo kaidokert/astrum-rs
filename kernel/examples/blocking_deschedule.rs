@@ -191,7 +191,9 @@ fn main() -> ! {
     );
 
     // Start schedule and set next partition before storing kernel
-    let first_pid = kernel::svc::scheduler::start_schedule(&mut k).expect("schedule start failed");
+    let first_pid = kernel::svc::scheduler::start_schedule(&mut k)
+        .expect("start_schedule transition")
+        .expect("no ready partition");
     k.set_next_partition(first_pid);
     hprintln!("blocking_deschedule: first_pid={}", first_pid);
 

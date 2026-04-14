@@ -164,7 +164,8 @@ fn main() -> ! {
 
     // Start schedule and get first partition (BEFORE storing kernel)
     hprintln!("debug_boot: starting schedule");
-    let first_pid = kernel::svc::scheduler::start_schedule(&mut k);
+    let first_pid =
+        kernel::svc::scheduler::start_schedule(&mut k).expect("start_schedule transition");
     hprintln!("debug_boot: first_pid = {:?}", first_pid);
 
     // Set next_partition before storing kernel

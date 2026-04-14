@@ -247,7 +247,9 @@ fn main() -> ! {
 
     // Step 5: Start schedule and select first partition.
     with_kernel_mut(|k| {
-        let pid = kernel::svc::scheduler::start_schedule(k).expect("start_schedule");
+        let pid = kernel::svc::scheduler::start_schedule(k)
+            .expect("start_schedule transition")
+            .expect("no ready partition");
         k.set_next_partition(pid);
     });
 

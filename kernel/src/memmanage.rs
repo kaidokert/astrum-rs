@@ -48,13 +48,27 @@ macro_rules! define_memmanage_handler {
                         // handler was activated (in_error_handler), return the
                         // fresh SP so we can update PSP accordingly.
                         let pid = d.partition_id.as_raw() as usize;
-                        // TODO: reviewer false positive — map_or(false, ...) closure syntax is correct;
-                        // reviewer confused diff indentation with a missing brace in is_some_and
-                        if k.pcb(pid).map_or(false, |pcb|
-                            pcb.state() == $crate::partition::PartitionState::Ready
-                            || pcb.in_error_handler())
-                        {
-                            k.partition_sp().get(pid).copied()
+                        if let Some(pcb) = k.pcb_mut(pid) {
+                            let ready = pcb.state() == $crate::partition::PartitionState::Ready;
+                            let in_eh = pcb.in_error_handler();
+                            if ready || in_eh {
+                                // Transition restarted partition Ready→Running
+                                // so the dispatch invariant (active ⟹ Running)
+                                // holds when it makes its first post-restart SVC.
+                                if ready {
+                                    if pcb.transition($crate::partition::PartitionState::Running).is_err() {
+                                        $crate::klog!("[MemManage] Ready→Running transition failed for pid {}", pid);
+                                        k.active_partition = None;
+                                        None
+                                    } else {
+                                        k.partition_sp().get(pid).copied()
+                                    }
+                                } else {
+                                    k.partition_sp().get(pid).copied()
+                                }
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
@@ -188,10 +202,9 @@ where
             if count < max {
                 match kernel.restart_partition(pid as usize, warm) {
                     Ok(()) => {
-                        // Clear active_partition: the partition is now Ready,
-                        // not Running, so the invariant checker must not see
-                        // it as the active Running partition.
-                        kernel.set_core_active_partition(None);
+                        // active_partition stays Some(pid) — the partition
+                        // will resume immediately. The macro transitions
+                        // Ready→Running after extracting restart_sp.
                         crate::klog!(
                             "[MemManage] pid={} {} restart ({}/{})",
                             pid,
