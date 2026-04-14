@@ -223,7 +223,9 @@ fn main() -> ! {
 
     let entry_fns: [PartitionEntry; NP] = [p0_entry, p1_entry];
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
-    if sched.add(ScheduleEntry::new(0, 4)).is_err() || sched.add(ScheduleEntry::new(1, 2)).is_err()
+    if sched.add(ScheduleEntry::new(0, 4)).is_err()
+        || sched.add(ScheduleEntry::new(1, 2)).is_err()
+        || sched.add_system_window(1).is_err()
     {
         fatal_halt();
     }
@@ -237,6 +239,7 @@ fn main() -> ! {
             let stk = unsafe { &mut *stacks_ptr.add(i) };
             let base = stk.as_u32_slice().as_ptr() as u32;
             let spec = PartitionSpec::entry(entry_fns[i])
+                .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0))
                 .with_data_mpu(MpuRegion::new(base, REGION_SZ, 0))
                 .with_peripherals(if i == 0 { &TIMER0_REGION } else { &[] });
             match ExternalPartitionMemory::from_spec(stk, &spec, kernel::PartitionId::new(i as u32))

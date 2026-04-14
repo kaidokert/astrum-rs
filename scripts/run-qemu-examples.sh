@@ -10,15 +10,19 @@ TARGET="thumbv7m-none-eabi"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
+# Prefer python3, fall back to python (Windows).
+PYTHON="${PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)}"
+
 # Run a single example, capturing full semihosting stdout to a file.
-# Usage: capture_example_output <features> <example>
+# Usage: capture_example_output <features> <example> [extra_cargo_flags...]
 # Writes output to $OUTDIR/<example>.out and returns the cargo exit status.
 capture_example_output() {
     local features="$1"
     local ex="$2"
     local outfile="$OUTDIR/${ex}.out"
-    timeout 30 cargo run -p kernel --target "$TARGET" --features "$features" --example "$ex" \
-        > "$outfile" 2>&1
+    # shellcheck disable=SC2086
+    timeout 30 cargo run -p kernel --target "$TARGET" --features "$features" --example "$ex" $CARGO_EXTRA_ARGS \
+        > "$outfile" 2>"$OUTDIR/${ex}.stderr"
 }
 
 # Check a single example's output against its expected file or last-line grep.
@@ -31,7 +35,7 @@ check_example() {
 
     if [[ -f "$expected_file" ]]; then
         local report
-        if report=$(python3 "$SCRIPT_DIR/compare-output.py" "$expected_file" "$outfile" 2>&1); then
+        if report=$("$PYTHON" "$SCRIPT_DIR/compare-output.py" "$expected_file" "$outfile" 2>&1); then
             return 0
         fi
         if [[ -n "$report" ]]; then
@@ -68,7 +72,16 @@ run_examples() {
                 PASS=$((PASS + 1))
                 continue
             fi
-            echo "FAIL (build/runtime error)"
+            echo "FAIL (build/runtime error, rc=$rc)"
+            if [[ -s "$OUTDIR/${ex}.out" ]]; then
+                echo "  stdout: $(head -3 "$OUTDIR/${ex}.out")" >&2
+            else
+                echo "  stdout: (empty)" >&2
+            fi
+            if [[ -s "$OUTDIR/${ex}.stderr" ]]; then
+                echo "  stderr (last 20 lines):" >&2
+                tail -20 "$OUTDIR/${ex}.stderr" >&2
+            fi
             FAIL=$((FAIL + 1))
             FAILED="$FAILED $ex"
             continue
@@ -77,7 +90,10 @@ run_examples() {
             echo "PASS"
             PASS=$((PASS + 1))
         else
-            echo "FAIL"
+            echo "FAIL (output mismatch)"
+            if [[ -s "$OUTDIR/${ex}.out" ]]; then
+                echo "  stdout: $(head -3 "$OUTDIR/${ex}.out")" >&2
+            fi
             FAIL=$((FAIL + 1))
             FAILED="$FAILED $ex"
         fi
@@ -125,6 +141,9 @@ run_examples_record() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    echo "QEMU version: $(qemu-system-arm --version | head -1)"
+    echo "Rust version: $(rustc --version)"
+    echo ""
     PASS=0
     FAIL=0
     FAILED=""
@@ -133,6 +152,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     ONLY=""
     OUTDIR="${TMPDIR:-/tmp}/rtos-examples-$$"
     mkdir -p "$OUTDIR"
+    CARGO_EXTRA_ARGS=""
 
     source "$SCRIPT_DIR/examples.list"
 
@@ -160,17 +180,23 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
         # Map each category to its feature flags and example list.
         declare -A CATEGORY_FEATURES=(
             [EXAMPLES]="qemu,log-semihosting,ipc-blackboard"
+            [RELEASE_EXAMPLES]="qemu,log-semihosting,ipc-blackboard"
             [CUSTOM_IVT_EXAMPLES]="qemu,log-semihosting,custom-ivt"
             [DYNAMIC_MPU_EXAMPLES]="qemu,log-semihosting"
             [QEMU_PERIPHERAL_EXAMPLES]="qemu,log-semihosting,qemu-peripherals"
             [INTRA_THREAD_EXAMPLES]="qemu,log-semihosting,intra-threads"
         )
+        declare -A CATEGORY_EXTRA_ARGS=(
+            [RELEASE_EXAMPLES]="--release"
+        )
         found=0
-        for category in EXAMPLES CUSTOM_IVT_EXAMPLES DYNAMIC_MPU_EXAMPLES QEMU_PERIPHERAL_EXAMPLES INTRA_THREAD_EXAMPLES; do
+        for category in EXAMPLES RELEASE_EXAMPLES CUSTOM_IVT_EXAMPLES DYNAMIC_MPU_EXAMPLES QEMU_PERIPHERAL_EXAMPLES INTRA_THREAD_EXAMPLES; do
             declare -n list="$category"
             for ex in "${list[@]}"; do
                 if [[ "$ex" == "$ONLY" ]]; then
+                    CARGO_EXTRA_ARGS="${CATEGORY_EXTRA_ARGS[$category]:-}"
                     $RUN_FN "${CATEGORY_FEATURES[$category]}" "$ONLY"
+                    CARGO_EXTRA_ARGS=""
                     found=1; break 2
                 fi
             done
@@ -182,6 +208,14 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     else
         echo "=== Static-mode examples ==="
         $RUN_FN "qemu,log-semihosting,ipc-blackboard" "${EXAMPLES[@]}"
+
+        if [[ ${#RELEASE_EXAMPLES[@]} -gt 0 ]]; then
+            echo ""
+            echo "=== Release-only examples (--release) ==="
+            CARGO_EXTRA_ARGS="--release"
+            $RUN_FN "qemu,log-semihosting,ipc-blackboard" "${RELEASE_EXAMPLES[@]}"
+            CARGO_EXTRA_ARGS=""
+        fi
 
         echo ""
         echo "=== Dynamic-MPU examples ==="

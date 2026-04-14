@@ -1,6 +1,6 @@
 //! QEMU test: two-partition independent IRQ ack cycles (PartitionAcks).
-//! IRQ 0 → P0, IRQ 1 → P1. Each loops: event_wait → SYS_IRQ_ACK → count.
-//! Pends at ticks 2, 3, 6; by tick 12 both counters must be ≥ 2.
+//! IRQ 0 -> P0, IRQ 1 -> P1. Each loops: event_wait -> SYS_IRQ_ACK -> count.
+//! Pends at ticks 2, 3, 6; by tick 12 both counters must be >= 2.
 #![no_std]
 #![no_main]
 #![allow(incomplete_features)]
@@ -97,13 +97,15 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("irq_ack_multi_test: Peripherals::take");
     hprintln!("irq_ack_multi_test: start");
 
-    let sched = ScheduleTable::<{ AckMultiConfig::SCHED }>::round_robin(2, 3)
+    let mut sched = ScheduleTable::<{ AckMultiConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_ack_multi_test: round_robin");
+    sched.add_system_window(1).expect("system window");
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
-    init_kernel(sched, &parts).expect("irq_ack_multi_test: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("irq_ack_multi_test: init_kernel");
+    store_kernel(&mut k);
     enable_bound_irqs(&mut p.NVIC, AckMultiConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     match boot(p).expect("irq_ack_multi_test: boot") {}
 }

@@ -2,8 +2,8 @@
 //!
 //! Validates that IRQ dispatch delivers events to the correct partition:
 //!
-//! 1. `bind_interrupts!` maps IRQ 0 → partition 0 (event 0x01) and
-//!    IRQ 1 → partition 1 (event 0x02).
+//! 1. `bind_interrupts!` maps IRQ 0 -> partition 0 (event 0x01) and
+//!    IRQ 1 -> partition 1 (event 0x02).
 //! 2. Each partition loops on `event_wait` for its respective event bit
 //!    and increments a separate AtomicU32 counter on wake.
 //! 3. SysTick software-triggers IRQ 0 at tick 2 and IRQ 1 at tick 3,
@@ -26,7 +26,7 @@ use plib::EventMask;
 
 kernel::kernel_config!(MultiIrqConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-// Bind IRQ 0 → partition 0, event 0x01; IRQ 1 → partition 1, event 0x02.
+// Bind IRQ 0 -> partition 0, event 0x01; IRQ 1 -> partition 1, event 0x02.
 kernel::bind_interrupts!(MultiIrqConfig, 70,
     0 => (0, 0x01),
     1 => (1, 0x02),
@@ -100,14 +100,16 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("irq_multi_test: Peripherals::take");
     hprintln!("irq_multi_test: start");
 
-    let sched = ScheduleTable::<{ MultiIrqConfig::SCHED }>::round_robin(2, 3)
+    let mut sched = ScheduleTable::<{ MultiIrqConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_multi_test: round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
-    init_kernel(sched, &parts).expect("irq_multi_test: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("irq_multi_test: init_kernel");
+    store_kernel(&mut k);
 
     // Unmask bound IRQs so software-triggered pends fire.
     enable_bound_irqs(&mut p.NVIC, MultiIrqConfig::IRQ_DEFAULT_PRIORITY).unwrap();

@@ -5,7 +5,8 @@
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
 use kernel::{
-    DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
+    partition::MpuRegion, DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2,
+    PortsTiny, SyncMinimal,
 };
 kernel::kernel_config!(Config<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 kernel::define_kernel!(Config, |tick, k| {
@@ -35,12 +36,16 @@ extern "C" fn p1_healthy() -> ! {
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("peripherals");
     hprintln!("pendsv_stack_overflow_test: start");
-    let sched =
+    let mut sched =
         kernel::scheduler::ScheduleTable::<{ Config::SCHED }>::round_robin(2, 1).expect("sched");
+    sched.add_system_window(1).expect("system window");
     let parts: [PartitionSpec; 2] = [
-        PartitionSpec::new(p0_overflow as PartitionEntry, 0),
-        PartitionSpec::new(p1_healthy as PartitionEntry, 0),
+        PartitionSpec::new(p0_overflow as PartitionEntry, 0)
+            .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0)),
+        PartitionSpec::new(p1_healthy as PartitionEntry, 0)
+            .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0)),
     ];
-    init_kernel(sched, &parts).expect("kernel");
+    let mut k = init_kernel(sched, &parts).expect("kernel");
+    store_kernel(&mut k);
     match boot(p).expect("boot") {}
 }

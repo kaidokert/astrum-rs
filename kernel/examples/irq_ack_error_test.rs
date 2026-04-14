@@ -1,9 +1,9 @@
 //! QEMU integration test: SYS_IRQ_ACK error-path validation.
 //!
-//! Binds IRQ 0 → partition 0 and IRQ 1 → partition 1 (both PartitionAcks).
+//! Binds IRQ 0 -> partition 0 and IRQ 1 -> partition 1 (both PartitionAcks).
 //! Only partition 0 runs test logic; it exercises two error paths:
-//!   1. Ack unbound IRQ 99 → InvalidResource
-//!   2. Ack IRQ 1 owned by partition 1 → PermissionDenied
+//!   1. Ack unbound IRQ 99 -> InvalidResource
+//!   2. Ack IRQ 1 owned by partition 1 -> PermissionDenied
 //!
 //! After verifying both error codes the partition enters its event_wait loop.
 //!
@@ -24,7 +24,7 @@ use plib::SvcError;
 
 kernel::kernel_config!(ErrTestConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-// IRQ 0 → P0, IRQ 1 → P1 (both PartitionAcks).
+// IRQ 0 -> P0, IRQ 1 -> P1 (both PartitionAcks).
 kernel::bind_interrupts!(ErrTestConfig, 70,
     0 => (0, 0x01),
     1 => (1, 0x02),
@@ -59,7 +59,7 @@ const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     // Error-path tests: run once before entering normal event loop.
     //
-    // Test 1: ack unbound IRQ 99 → InvalidResource.
+    // Test 1: ack unbound IRQ 99 -> InvalidResource.
     match plib::sys_irq_ack(99) {
         Err(SvcError::InvalidResource) => {
             CHECKS_PASSED.fetch_add(1, Ordering::Release);
@@ -70,7 +70,7 @@ extern "C" fn p0_main() -> ! {
         }
     }
 
-    // Test 2: ack IRQ 1 owned by partition 1 → PermissionDenied.
+    // Test 2: ack IRQ 1 owned by partition 1 -> PermissionDenied.
     match plib::sys_irq_ack(1) {
         Err(SvcError::PermissionDenied) => {
             CHECKS_PASSED.fetch_add(1, Ordering::Release);
@@ -104,13 +104,15 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("irq_ack_error_test: Peripherals::take");
     hprintln!("irq_ack_error_test: start");
 
-    let sched = ScheduleTable::<{ ErrTestConfig::SCHED }>::round_robin(2, 3)
+    let mut sched = ScheduleTable::<{ ErrTestConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_ack_error_test: round_robin");
+    sched.add_system_window(1).expect("system window");
     let parts: [PartitionSpec; ErrTestConfig::N] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
-    init_kernel(sched, &parts).expect("irq_ack_error_test: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("irq_ack_error_test: init_kernel");
+    store_kernel(&mut k);
     enable_bound_irqs(&mut p.NVIC, ErrTestConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     match boot(p).expect("irq_ack_error_test: boot") {}
 }

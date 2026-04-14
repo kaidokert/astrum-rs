@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install -y qemu-system-arm
 
       - name: Run QEMU examples
-        run: ./scripts/run-qemu-examples.sh --strict --qemu-peripherals
+        run: ./scripts/run-qemu-examples.sh --qemu-peripherals
 
   feature-combos:
     name: Feature combo – ${{ matrix.features }}

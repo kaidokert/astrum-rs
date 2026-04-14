@@ -12,6 +12,8 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::{debug, hprintln};
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::{
     buf_syscall,
     mpu_strategy::MpuStrategy,
@@ -133,14 +135,18 @@ fn main() -> ! {
                 mpu,
                 kernel::PartitionId::new(0),
             )
-            .expect("mem 0"),
+            .expect("mem 0")
+            .with_code_mpu_region(MpuRegion::new(0, 0x4_0000, 0))
+            .expect("code mpu 0"),
             ExternalPartitionMemory::new(
                 s1,
                 EntryAddr::from_entry(p1_main as PartitionEntry),
                 mpu,
                 kernel::PartitionId::new(1),
             )
-            .expect("mem 1"),
+            .expect("mem 1")
+            .with_code_mpu_region(MpuRegion::new(0, 0x4_0000, 0))
+            .expect("code mpu 1"),
         ];
         Kernel::<TestConfig>::new(sched, &memories).expect("kernel")
     };

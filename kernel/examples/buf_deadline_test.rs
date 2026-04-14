@@ -13,8 +13,11 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{entry, exception};
 use cortex_m_semihosting::hprintln;
+#[allow(unused_imports)]
+use kernel::kpanic as _;
 use kernel::{
     buf_syscall,
+    partition::MpuRegion,
     scheduler::{ScheduleEntry, ScheduleTable},
     DebugEnabled, MsgMinimal, PartitionEntry, PartitionSpec, Partitions2, PortsTiny, SyncMinimal,
 };
@@ -106,9 +109,12 @@ fn main() -> ! {
     sched.add(ScheduleEntry::new(1, 3)).ok();
     sched.add_system_window(1).ok();
     let parts: [PartitionSpec; 2] = [
-        PartitionSpec::new(p0_main as PartitionEntry, 0),
-        PartitionSpec::new(p1_main as PartitionEntry, 0),
+        PartitionSpec::new(p0_main as PartitionEntry, 0)
+            .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0)),
+        PartitionSpec::new(p1_main as PartitionEntry, 0)
+            .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0)),
     ];
-    init_kernel(sched, &parts).expect("kernel");
+    let mut k = init_kernel(sched, &parts).expect("kernel");
+    store_kernel(&mut k);
     match boot(p).expect("boot") {}
 }

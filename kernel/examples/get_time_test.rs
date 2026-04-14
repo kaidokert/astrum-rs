@@ -84,6 +84,7 @@ fn main() -> ! {
     // Build schedule: single partition runs for 2 ticks per slot.
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched entry");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; TestConfig::N] =
         [PartitionSpec::new(partition_main as PartitionEntry, 0)];

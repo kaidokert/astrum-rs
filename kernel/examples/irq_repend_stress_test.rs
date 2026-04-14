@@ -2,9 +2,9 @@
 //!
 //! Validates the PartitionAcks lifecycle under continuous interrupt pressure:
 //!
-//! 1. `bind_interrupts!` maps IRQ 0 → partition 0, event bit 0x01.
+//! 1. `bind_interrupts!` maps IRQ 0 -> partition 0, event bit 0x01.
 //! 2. SysTick hook pends IRQ 0 on **every** tick >= 2 (sustained pressure).
-//! 3. Partition loops: `event_wait(0x01)` → `SYS_IRQ_ACK` → increment counter.
+//! 3. Partition loops: `event_wait(0x01)` -> `SYS_IRQ_ACK` -> increment counter.
 //! 4. Test passes when counter >= 5 (proving 5 consecutive mask/ack/unmask/re-pend
 //!    cycles), or fails at tick 30 if the counter hasn't reached the threshold.
 //!
@@ -28,7 +28,7 @@ use kernel::{
 
 kernel::kernel_config!(StressConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-// Bind IRQ 0 → partition 0, event bit 0x01 (PartitionAcks default).
+// Bind IRQ 0 -> partition 0, event bit 0x01 (PartitionAcks default).
 kernel::bind_interrupts!(StressConfig, 70,
     0 => (0, 0x01),
 );
@@ -47,7 +47,7 @@ kernel::define_kernel!(StressConfig, |tick, _k| {
         cortex_m::peripheral::NVIC::pend(kernel::irq_dispatch::IrqNr(0));
     }
     // Check for pass: counter reached threshold.
-    // Pends start at tick 2; 5 ack cycles need at least 5 ticks → earliest at tick 7.
+    // Pends start at tick 2; 5 ack cycles need at least 5 ticks -> earliest at tick 7.
     if tick >= 7 {
         let count = ACK_COUNT.load(Ordering::Acquire);
         if count >= PASS_THRESHOLD {
@@ -98,11 +98,13 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("irq_repend_stress: Peripherals::take");
     hprintln!("irq_repend_stress: start");
 
-    let sched = ScheduleTable::<{ StressConfig::SCHED }>::round_robin(1, 3)
+    let mut sched = ScheduleTable::<{ StressConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_repend_stress: round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
-    init_kernel(sched, &parts).expect("irq_repend_stress_test: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("irq_repend_stress_test: init_kernel");
+    store_kernel(&mut k);
 
     // Unmask IRQ 0 so the software-triggered pend fires.
     enable_bound_irqs(&mut p.NVIC, StressConfig::IRQ_DEFAULT_PRIORITY).unwrap();

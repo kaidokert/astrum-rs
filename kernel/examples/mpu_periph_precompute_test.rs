@@ -109,6 +109,7 @@ fn main() -> ! {
     let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::new();
     sched.add(ScheduleEntry::new(0, 2)).expect("sched 0");
     sched.add(ScheduleEntry::new(1, 2)).expect("sched 1");
+    sched.add_system_window(1).expect("system window");
     // P0 → GPIOA (0x4000_4000), P1 → GPIOB (0x4000_5000) on LM3S6965.
     static PERIPH_REGIONS: [[MpuRegion; 1]; NP] = [
         [MpuRegion::new(0x4000_4000, 4096, 0)],
@@ -123,6 +124,7 @@ fn main() -> ! {
             let base = stk.as_u32_slice().as_ptr() as u32;
             let spec = PartitionSpec::entry(entry_fns[i])
                 .with_data_mpu(MpuRegion::new(base, REGION_SZ, 0))
+                .with_code_mpu(MpuRegion::new(0, 0x4_0000, 0))
                 .with_peripherals(&PERIPH_REGIONS[i]);
             ExternalPartitionMemory::from_spec(stk, &spec, kernel::PartitionId::new(i as u32))
                 .expect("mem")

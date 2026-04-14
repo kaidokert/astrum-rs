@@ -143,8 +143,9 @@ extern "C" fn p1_main() -> ! {
 fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("basepri: peripherals");
     hprintln!("svcall_basepri_clear_test: start");
-    let sched =
+    let mut sched =
         ScheduleTable::<{ Config::SCHED }>::round_robin(NUM_PARTITIONS, 1).expect("basepri: sched");
+    sched.add_system_window(1).expect("system window");
     let mut stk0 = AlignedStack1K::ZERO;
     let mut stk1 = AlignedStack1K::ZERO;
     let sentinel_mpu = MpuRegion::new(0, 0, 0);

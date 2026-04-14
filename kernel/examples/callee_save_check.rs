@@ -114,7 +114,8 @@ fn main() -> ! {
     // main's return type is changed to Result in the future.
     let p = cortex_m::Peripherals::take().unwrap();
     hprintln!("callee_save_check: start");
-    let sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(2, 2).expect("sched");
+    let mut sched = ScheduleTable::<{ Cfg::SCHED }>::round_robin(2, 2).expect("sched");
+    sched.add_system_window(1).expect("system window");
     let parts: [PartitionSpec; Cfg::N] = [
         PartitionSpec::new(partition_0_entry as PartitionEntry, 0),
         PartitionSpec::new(partition_1_entry as PartitionEntry, 0),

@@ -2,7 +2,7 @@
 //!
 //! Validates the full ISR dispatch chain end-to-end:
 //!
-//! 1. `bind_interrupts!` maps IRQ 0 → partition 0 with event bit 0x01.
+//! 1. `bind_interrupts!` maps IRQ 0 -> partition 0 with event bit 0x01.
 //! 2. Partition 0 calls `event_wait(0x01)` via SVC in a loop.
 //! 3. At tick 2, SysTick software-triggers IRQ 0 via `NVIC::pend`.
 //! 4. The dispatch handler calls `signal_partition_from_isr`, setting
@@ -29,7 +29,7 @@ use plib;
 
 kernel::kernel_config!(IrqTestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-// Bind IRQ 0 → partition 0, event bit 0x01.
+// Bind IRQ 0 -> partition 0, event bit 0x01.
 // NOTE: the second argument (70) is the IRQ *count* (vector table size for
 // the LM3S6965), NOT a priority.  The NVIC priority is set separately via
 // `enable_bound_irqs`.
@@ -91,11 +91,13 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("irq_dispatch_test: Peripherals::take");
     hprintln!("irq_dispatch_test: start");
 
-    let sched = ScheduleTable::<{ IrqTestConfig::SCHED }>::round_robin(1, 3)
+    let mut sched = ScheduleTable::<{ IrqTestConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_dispatch_test: round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
-    init_kernel(sched, &parts).expect("irq_dispatch_test: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("irq_dispatch_test: init_kernel");
+    store_kernel(&mut k);
 
     // Unmask IRQ 0 so the software-triggered pend fires.
     enable_bound_irqs(&mut p.NVIC, IrqTestConfig::IRQ_DEFAULT_PRIORITY).unwrap();

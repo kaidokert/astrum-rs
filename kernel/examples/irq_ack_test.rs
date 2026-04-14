@@ -2,9 +2,9 @@
 //!
 //! Validates the complete PartitionAcks cycle end-to-end:
 //!
-//! 1. `bind_interrupts!` maps IRQ 0 → partition 0 with event bit 0x01
+//! 1. `bind_interrupts!` maps IRQ 0 -> partition 0 with event bit 0x01
 //!    using the default 2-tuple form (`PartitionAcks` clear model).
-//! 2. Partition 0 loops: `event_wait(0x01)` → `SYS_IRQ_ACK` → increment
+//! 2. Partition 0 loops: `event_wait(0x01)` -> `SYS_IRQ_ACK` -> increment
 //!    counter.  The ack syscall unmasks the IRQ so it can fire again.
 //! 3. The SysTick harness pends IRQ 0 at tick 2 and again at tick 6
 //!    (after the first ack re-enables it).
@@ -28,7 +28,7 @@ use kernel::{
 
 kernel::kernel_config!(AckTestConfig<Partitions1, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-// Bind IRQ 0 → partition 0, event bit 0x01 (PartitionAcks default).
+// Bind IRQ 0 -> partition 0, event bit 0x01 (PartitionAcks default).
 kernel::bind_interrupts!(AckTestConfig, 70,
     0 => (0, 0x01),
 );
@@ -90,11 +90,13 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("irq_ack_test: Peripherals::take");
     hprintln!("irq_ack_test: start");
 
-    let sched = ScheduleTable::<{ AckTestConfig::SCHED }>::round_robin(1, 3)
+    let mut sched = ScheduleTable::<{ AckTestConfig::SCHED }>::round_robin(1, 3)
         .expect("irq_ack_test: round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [PartitionSpec::new(p0_main as PartitionEntry, 0)];
-    init_kernel(sched, &parts).expect("irq_ack_test: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("irq_ack_test: init_kernel");
+    store_kernel(&mut k);
 
     // Unmask IRQ 0 so the software-triggered pend fires.
     enable_bound_irqs(&mut p.NVIC, AckTestConfig::IRQ_DEFAULT_PRIORITY).unwrap();

@@ -56,8 +56,9 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("boot_banner_test: Peripherals::take");
     hprintln!("boot_banner_test: start");
 
-    let sched = kernel::scheduler::ScheduleTable::<{ BannerConfig::SCHED }>::round_robin(1, 3)
+    let mut sched = kernel::scheduler::ScheduleTable::<{ BannerConfig::SCHED }>::round_robin(1, 3)
         .expect("boot_banner_test: round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; BannerConfig::N] =
         [PartitionSpec::new(partition_main as PartitionEntry, 0)];

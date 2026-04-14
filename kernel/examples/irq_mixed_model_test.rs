@@ -1,5 +1,5 @@
 //! QEMU test: mixed PartitionAcks + KernelClears in one binding table.
-//! IRQ 5 → P0 (PartitionAcks, 0x01), IRQ 6 → P1 (KernelClears(WriteRegister), 0x02).
+//! IRQ 5 -> P0 (PartitionAcks, 0x01), IRQ 6 -> P1 (KernelClears(WriteRegister), 0x02).
 //! P0 loops event_wait + SYS_IRQ_ACK. P1 loops event_wait only.
 //! Pends at ticks 2-3; by tick 8 both counters must be nonzero.
 #![no_std]
@@ -22,8 +22,8 @@ kernel::kernel_config!(
     MixedConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>
 );
 
-// IRQ 5 → P0, PartitionAcks (2-tuple default); IRQ 6 → P1, KernelClears(WriteRegister).
-// UART0 ICR at 0x4000_C044 on lm3s6965evb — safe MMIO target for the write.
+// IRQ 5 -> P0, PartitionAcks (2-tuple default); IRQ 6 -> P1, KernelClears(WriteRegister).
+// UART0 ICR at 0x4000_C044 on lm3s6965evb -- safe MMIO target for the write.
 kernel::bind_interrupts!(MixedConfig, 70,
     5 => (0, 0x01),
     6 => (1, 0x02, IrqClearModel::KernelClears(
@@ -66,7 +66,7 @@ kernel::define_kernel!(MixedConfig, |tick, _k| {
     }
 });
 
-/// Partition 0: PartitionAcks — event_wait + SYS_IRQ_ACK loop.
+/// Partition 0: PartitionAcks -- event_wait + SYS_IRQ_ACK loop.
 const _: PartitionEntry = p0_main;
 extern "C" fn p0_main() -> ! {
     loop {
@@ -82,7 +82,7 @@ extern "C" fn p0_main() -> ! {
     }
 }
 
-/// Partition 1: KernelClears — event_wait only, no ack needed.
+/// Partition 1: KernelClears -- event_wait only, no ack needed.
 const _: PartitionEntry = p1_main;
 extern "C" fn p1_main() -> ! {
     loop {
@@ -99,13 +99,15 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("irq_mixed_model_test: Peripherals::take");
     hprintln!("irq_mixed_model_test: start");
 
-    let sched = ScheduleTable::<{ MixedConfig::SCHED }>::round_robin(2, 3)
+    let mut sched = ScheduleTable::<{ MixedConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_mixed_model_test: round_robin");
+    sched.add_system_window(1).expect("system window");
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
-    init_kernel(sched, &parts).expect("irq_mixed_model_test: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("irq_mixed_model_test: init_kernel");
+    store_kernel(&mut k);
     enable_bound_irqs(&mut p.NVIC, MixedConfig::IRQ_DEFAULT_PRIORITY).unwrap();
     match boot(p).expect("irq_mixed_model_test: boot") {}
 }

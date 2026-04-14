@@ -79,8 +79,9 @@ fn main() -> ! {
     let p = cortex_m::Peripherals::take().expect("dropped_tick_test: Peripherals::take");
     hprintln!("dropped_tick_test: start");
 
-    let sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3)
+    let mut sched = ScheduleTable::<{ TestConfig::SCHED }>::round_robin(1, 3)
         .expect("dropped_tick_test: round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; TestConfig::N] =
         [PartitionSpec::new(partition_main as PartitionEntry, 0)];

@@ -16,7 +16,7 @@ use plib::EventMask;
 
 kernel::kernel_config!(SimulIrqConfig<Partitions2, SyncMinimal, MsgMinimal, PortsTiny, DebugEnabled>);
 
-// Bind IRQ 0 → partition 0, event 0x01; IRQ 1 → partition 1, event 0x02.
+// Bind IRQ 0 -> partition 0, event 0x01; IRQ 1 -> partition 1, event 0x02.
 kernel::bind_interrupts!(SimulIrqConfig, 70,
     0 => (0, 0x01),
     1 => (1, 0x02),
@@ -106,14 +106,16 @@ fn main() -> ! {
     let mut p = cortex_m::Peripherals::take().expect("irq_simultaneous_test: Peripherals::take");
     hprintln!("irq_simultaneous_test: start");
 
-    let sched = ScheduleTable::<{ SimulIrqConfig::SCHED }>::round_robin(2, 3)
+    let mut sched = ScheduleTable::<{ SimulIrqConfig::SCHED }>::round_robin(2, 3)
         .expect("irq_simultaneous_test: round_robin");
+    sched.add_system_window(1).expect("system window");
 
     let parts: [PartitionSpec; NUM_PARTITIONS] = [
         PartitionSpec::new(p0_main as PartitionEntry, 0),
         PartitionSpec::new(p1_main as PartitionEntry, 0),
     ];
-    init_kernel(sched, &parts).expect("irq_simultaneous_test: init_kernel");
+    let mut k = init_kernel(sched, &parts).expect("irq_simultaneous_test: init_kernel");
+    store_kernel(&mut k);
 
     // Unmask bound IRQs so software-triggered pends fire.
     enable_bound_irqs(&mut p.NVIC, SimulIrqConfig::IRQ_DEFAULT_PRIORITY).unwrap();
