@@ -28,6 +28,25 @@ use std::path::PathBuf;
 ///
 /// The `{output_region}` placeholder is replaced at emit time (same
 /// logic as `kernel_state.x`).
+/// Linker fragment for .kernel_state section.
+///
+/// Provides `__kernel_state_start` and `__kernel_state_end` symbols used by
+/// the SVC guard to detect kernel-memory pointers.  Board-specific memory.x
+/// files already define this; the kernel build emits it for QEMU targets.
+const KERNEL_STATE_X_TEMPLATE: &str = "\
+/* .kernel_state section — kernel data boundary symbols for SVC guard. */
+SECTIONS
+{
+  .kernel_state (NOLOAD) : ALIGN(8)
+  {
+    __kernel_state_start = .;
+    KEEP(*(.kernel_state .kernel_state.*))
+    . = ALIGN(8);
+    __kernel_state_end = .;
+  }{output_region}
+} INSERT AFTER .bss;
+";
+
 const TOMBSTONE_X_TEMPLATE: &str = "\
 /* .noinit section — survives soft reset for post-mortem diagnostics. */
 SECTIONS
@@ -122,6 +141,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // INSERT AFTER .bss, avoiding a hard dependency on a region named "RAM".
     let output_region = if is_qemu { " > RAM" } else { "" };
 
+    // Emit kernel_state.x for the .kernel_state SECTIONS block.
+    let kernel_state_x = KERNEL_STATE_X_TEMPLATE.replace("{output_region}", output_region);
+    File::create(out.join("kernel_state.x"))?.write_all(kernel_state_x.as_bytes())?;
+
     // Emit tombstone.x for the .noinit SECTIONS block (PanicTombstone).
     let tombstone_x = TOMBSTONE_X_TEMPLATE.replace("{output_region}", output_region);
     File::create(out.join("tombstone.x"))?.write_all(tombstone_x.as_bytes())?;
@@ -133,6 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rustc-link-arg=-Tdevice.x");
+    println!("cargo:rustc-link-arg=-Tkernel_state.x");
     println!("cargo:rustc-link-arg=-Ttombstone.x");
 
     // Only emit memory.x (QEMU memory map) and -Tlink.x when the qemu feature is active.

@@ -88,8 +88,8 @@ CUSTOM_IVT_EXAMPLES=(
 # unprivileged partition execution (CONTROL.nPRIV=1).
 DYNAMIC_MPU_EXAMPLES=(
     # Disabled pending boot sentinel-MPU fix (precompute_mpu_cache rejects size=0):
-    # buf_lend_rw_test buf_lend_ro_test buf_transfer_test buf_deadline_test peripheral_buf_lend_test
-    buf_lend_addr_test buf_error_test buf_align_boot_test
+    # buf_lend_rw_test buf_lend_ro_test buf_transfer_test buf_deadline_test peripheral_buf_lend_test buf_error_test
+    buf_lend_addr_test buf_align_boot_test
     pendsv_primask_dynamic_test
     plib_dev_read_timed_test
     single_periph_boot_test

@@ -79,7 +79,8 @@ run_examples() {
                 echo "  stdout: (empty)" >&2
             fi
             if [[ -s "$OUTDIR/${ex}.stderr" ]]; then
-                echo "  stderr: $(tail -5 "$OUTDIR/${ex}.stderr")" >&2
+                echo "  stderr (last 20 lines):" >&2
+                tail -20 "$OUTDIR/${ex}.stderr" >&2
             fi
             FAIL=$((FAIL + 1))
             FAILED="$FAILED $ex"
