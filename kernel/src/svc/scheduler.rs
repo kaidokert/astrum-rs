@@ -233,6 +233,7 @@ where
                                 "[sched] advance_tick: Ready→Running failed for active pid {}",
                                 ap
                             );
+                            kernel.active_partition = None;
                         }
                     }
                 }
