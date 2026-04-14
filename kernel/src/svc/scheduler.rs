@@ -222,12 +222,18 @@ where
                     {
                         // Waiting→Ready succeeded; complete to Running since
                         // this partition remains active.
-                        try_transition(
+                        if try_transition(
                             kernel.partitions_mut(),
                             PartitionId::new(ap as u32),
                             PartitionState::Running,
-                        );
-                        kernel.set_next_partition(ap);
+                        ) {
+                            kernel.set_next_partition(ap);
+                        } else {
+                            crate::klog!(
+                                "[sched] advance_tick: Ready→Running failed for active pid {}",
+                                ap
+                            );
+                        }
                     }
                 }
                 return ScheduleEvent::None;

@@ -58,9 +58,13 @@ macro_rules! define_memmanage_handler {
                                 if ready {
                                     if pcb.transition($crate::partition::PartitionState::Running).is_err() {
                                         $crate::klog!("[MemManage] Ready→Running transition failed for pid {}", pid);
+                                        None
+                                    } else {
+                                        k.partition_sp().get(pid).copied()
                                     }
+                                } else {
+                                    k.partition_sp().get(pid).copied()
                                 }
-                                k.partition_sp().get(pid).copied()
                             } else {
                                 None
                             }
